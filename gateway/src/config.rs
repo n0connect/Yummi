@@ -1,0 +1,236 @@
+//! Configuration file parsing for gateway.
+
+use ipnet::IpNet;
+use serde::Deserialize;
+use std::path::Path;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("failed to read config file: {0}")]
+    Read(#[from] std::io::Error),
+    #[error("failed to parse config: {0}")]
+    Parse(#[from] serde_yaml::Error),
+}
+
+/// Top-level gateway configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayConfig {
+    pub scope: ScopeConfig,
+    #[serde(default)]
+    pub policy: PolicyConfig,
+    pub logging: LoggingConfig,
+    pub ipc: IpcConfig,
+    #[serde(default)]
+    pub watchdog: WatchdogConfig,
+    #[serde(default)]
+    pub network: NetworkConfig,
+}
+
+/// Policy engine settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyConfig {
+    #[serde(default)]
+    pub default_allow: bool,
+    #[serde(default)]
+    pub observe_only: bool,
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            default_allow: false,
+            observe_only: false,
+        }
+    }
+}
+
+/// Network controller settings.
+///
+/// gateway is Linux-only. It manages nftables FORWARD-chain rules on the Docker
+/// bridge so sandbox's outbound traffic is gated at the network level.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NetworkConfig {
+    #[serde(default = "default_table_name")]
+    pub table_name: String,
+    /// Chain name for the FORWARD hook (filters sandbox's outbound traffic).
+    #[serde(default = "default_forward_chain")]
+    pub forward_chain: String,
+    /// Chain name for the POSTROUTING/NAT hook (masquerades sandbox's packets).
+    #[serde(default = "default_nat_chain")]
+    pub nat_chain: String,
+    /// Egress interface (optional; empty = any).
+    #[serde(default)]
+    pub interface: String,
+    /// sandbox container IP address (e.g. "172.20.0.10").
+    /// When set, only traffic sourced from this IP is filtered; other containers
+    /// are unaffected. Leave empty to filter ALL forwarded traffic.
+    #[serde(default)]
+    pub sandbox_ip: String,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            table_name:    default_table_name(),
+            forward_chain: default_forward_chain(),
+            nat_chain:     default_nat_chain(),
+            interface:     String::new(),
+            sandbox_ip:    String::new(),
+        }
+    }
+}
+
+/// Scope rules: which networks are allowed/blocked.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScopeConfig {
+    #[serde(default)]
+    pub allow: Vec<IpNet>,
+    #[serde(default)]
+    pub block: Vec<IpNet>,
+}
+
+/// Logging and audit configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default = "default_audit_db")]
+    pub audit_db: String,
+}
+
+/// IPC socket configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IpcConfig {
+    #[serde(default = "default_socket_path")]
+    pub socket_path: String,
+    #[serde(default = "default_socket_mode")]
+    pub socket_mode: u32,
+}
+
+/// Watchdog configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WatchdogConfig {
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval_secs: u64,
+    #[serde(default = "default_max_memory_mb")]
+    pub max_memory_mb: u64,
+    #[serde(default = "default_heartbeat_path")]
+    pub heartbeat_path: String,
+}
+
+impl Default for WatchdogConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_secs: default_heartbeat_interval(),
+            max_memory_mb: default_max_memory_mb(),
+            heartbeat_path: default_heartbeat_path(),
+        }
+    }
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+fn default_audit_db() -> String {
+    "/var/lib/yummi/gateway/audit.db".to_string()
+}
+fn default_socket_path() -> String {
+    "/run/yummi/gateway.sock".to_string()
+}
+fn default_socket_mode() -> u32 {
+    0o600
+}
+fn default_heartbeat_interval() -> u64 {
+    5
+}
+fn default_max_memory_mb() -> u64 {
+    256
+}
+fn default_heartbeat_path() -> String {
+    "/var/run/yummi/gateway.heartbeat".to_string()
+}
+fn default_table_name() -> String {
+    "yummi_gateway".to_string()
+}
+fn default_forward_chain() -> String {
+    "yummi_forward".to_string()
+}
+fn default_nat_chain() -> String {
+    "yummi_nat".to_string()
+}
+
+impl GatewayConfig {
+    /// Load configuration from a YAML file.
+    /// Returns defaults for missing fields.
+    pub fn load(path: &str) -> Result<Self, ConfigError> {
+        let contents = std::fs::read_to_string(Path::new(path))?;
+        let cfg: Self = serde_yaml::from_str(&contents)?;
+        Ok(cfg)
+    }
+
+    /// Create a config suitable for testing.
+    pub fn test_default() -> Self {
+        Self {
+            scope: ScopeConfig {
+                allow: vec![],
+                block: vec![
+                    "127.0.0.0/8".parse().expect("valid CIDR"),
+                    "169.254.0.0/16".parse().expect("valid CIDR"),
+                    "224.0.0.0/4".parse().expect("valid CIDR"),
+                ],
+            },
+            policy: PolicyConfig::default(),
+            logging: LoggingConfig {
+                level: "debug".to_string(),
+                audit_db: ":memory:".to_string(),
+            },
+            ipc: IpcConfig {
+                socket_path: "/tmp/yummi-gateway-test.sock".to_string(),
+                socket_mode: 0o600,
+            },
+            watchdog: WatchdogConfig::default(),
+            network: NetworkConfig {
+                sandbox_ip: "172.20.0.10".to_string(),
+                ..NetworkConfig::default()
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let cfg = GatewayConfig::test_default();
+        assert_eq!(cfg.logging.level, "debug");
+        assert_eq!(cfg.scope.block.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_yaml() {
+        let yaml = r#"
+scope:
+  allow:
+    - 10.0.0.0/8
+    - 192.168.1.0/24
+  block:
+    - 127.0.0.0/8
+logging:
+  level: info
+  audit_db: /tmp/test.db
+ipc:
+  socket_path: /tmp/test.sock
+  socket_mode: 384
+network:
+  sandbox_ip: "172.20.0.10"
+"#;
+        let cfg: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.scope.allow.len(), 2);
+        assert_eq!(cfg.scope.block.len(), 1);
+        assert_eq!(cfg.ipc.socket_mode, 384);
+        assert_eq!(cfg.network.sandbox_ip, "172.20.0.10");
+    }
+}

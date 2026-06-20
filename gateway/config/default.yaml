@@ -1,0 +1,44 @@
+# Yummi gateway — trust boundary configuration
+# gateway runs as a dedicated Linux container with CAP_NET_ADMIN.
+# It installs fail-closed nftables FORWARD rules so sandbox's outbound
+# traffic is blocked by default and only explicitly allowed targets
+# can be reached.
+
+scope:
+  # Default allowed CIDRs — empty means nothing external is reachable
+  # until an operator approves targets via n1's approval flow.
+  allow: []
+  # Always-blocked CIDRs (loopback, link-local, private ranges).
+  # These protect against SSRF and scope bleed.
+  block:
+    - "127.0.0.0/8"
+    - "169.254.0.0/16"
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+policy:
+  default_allow: false
+  observe_only: false
+
+logging:
+  level: "info"
+  audit_db: "/var/lib/yummi/gateway/audit.db"
+
+ipc:
+  socket_path: "/run/yummi/gateway.sock"
+  socket_mode: 384  # 0o600
+
+watchdog:
+  heartbeat_path: "/run/yummi/gateway.heartbeat"
+  heartbeat_interval_secs: 5
+  max_memory_mb: 512
+
+network:
+  table_name: "yummi_gateway"
+  forward_chain: "yummi_forward"
+  nat_chain: "yummi_nat"
+  interface: ""
+  # sandbox container IP — only this source IP is subject to FORWARD filtering.
+  # Other containers (orchestrator, gateway itself) are unaffected.
+  sandbox_ip: "172.20.0.10"

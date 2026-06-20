@@ -1,0 +1,294 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// Message is a single chat turn (role: system | user | assistant).
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Options controls inference behaviour for the Ollama request.
+// Zero values use Ollama's built-in defaults except where noted.
+type Options struct {
+	Temperature   float64 // 0.0 = deterministic (default)
+	TopP          float64 // nucleus sampling (0 = ollama default)
+	TopK          int     // top-k sampling (0 = ollama default)
+	RepeatPenalty float64 // repetition penalty (0 = ollama default)
+	NumCtx        int     // context window tokens (0 = model default)
+	NumGPU        int     // GPU layers (-1 = auto, 0 = CPU only)
+	NumThread     int     // CPU threads (0 = ollama auto)
+	MMap          *bool   // memory-mapped I/O (nil = ollama default)
+	MLock         *bool   // lock model in RAM, prevent swap (nil = default)
+	F16KV         *bool   // fp16 KV cache — saves VRAM (nil = default)
+	Think         *bool   // Qwen3 thinking mode (nil = model default)
+}
+
+// DefaultQwen3Options returns performance-tuned options for qwen3 models.
+// Keeps the model resident in RAM, disables thinking mode, and uses a
+// 16K context window with fp16 KV cache to balance VRAM and quality.
+func DefaultQwen3Options() Options {
+	f := false
+	t := true
+	return Options{
+		Temperature:   0.0,
+		TopP:          0.9,
+		TopK:          40,
+		RepeatPenalty: 1.1,
+		NumCtx:        16384,
+		NumGPU:        99, // push all layers to GPU; Ollama caps at model max
+		MMap:          &f, // load fully into RAM instead of mmap
+		MLock:         &t, // prevent swap eviction
+		F16KV:         &t, // fp16 KV cache
+		Think:         &f, // disable Qwen3 extended thinking
+	}
+}
+
+// Client communicates with the Ollama /api/chat endpoint.
+type Client struct {
+	baseURL    string
+	model      string
+	keepAlive  any // Ollama keep_alive: integer -1 = never unload, or string "5m"
+	opts       Options
+	httpClient *http.Client
+}
+
+// NewClient creates an Ollama client with Qwen3-optimised defaults.
+func NewClient(baseURL, model string) *Client {
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	if model == "" {
+		model = "qwen3:8b"
+	}
+	return &Client{
+		baseURL:    baseURL,
+		model:      model,
+		keepAlive:  -1, // integer -1: Ollama never unloads the model from VRAM
+		opts:       DefaultQwen3Options(),
+		httpClient: &http.Client{Timeout: 180 * time.Second},
+	}
+}
+
+// WithOptions returns a shallow copy of the client with replaced options.
+func (c *Client) WithOptions(opts Options) *Client {
+	cp := *c
+	cp.opts = opts
+	return &cp
+}
+
+// WithKeepAlive returns a copy with a custom keep_alive value.
+// Pass -1 (integer) to keep the model loaded indefinitely, 0 to unload
+// immediately, or a duration string like "5m". Ollama parses integer -1
+// as "never unload"; duration strings must include a unit suffix ("5m", "1h").
+func (c *Client) WithKeepAlive(v any) *Client {
+	cp := *c
+	cp.keepAlive = v
+	return &cp
+}
+
+// Model returns the configured model tag.
+func (c *Client) Model() string {
+	if c == nil {
+		return ""
+	}
+	return c.model
+}
+
+// Chat sends a system prompt + single user message to Ollama and returns
+// the assistant content as a string.
+func (c *Client) Chat(ctx context.Context, system, user string) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("ollama client not configured")
+	}
+	msgs := []Message{
+		{Role: "system", Content: c.prepareSystem(system)},
+		{Role: "user", Content: user},
+	}
+	return c.do(ctx, msgs)
+}
+
+// ChatHistory sends a system prompt followed by a full conversation history.
+func (c *Client) ChatHistory(ctx context.Context, system string, history []Message) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("ollama client not configured")
+	}
+	msgs := make([]Message, 0, len(history)+1)
+	msgs = append(msgs, Message{Role: "system", Content: c.prepareSystem(system)})
+	msgs = append(msgs, history...)
+	return c.do(ctx, msgs)
+}
+
+// Preload warms the model into VRAM by sending an empty prompt to /api/generate.
+// Ollama loads the model without producing tokens; keep_alive="-1" ensures it
+// stays resident indefinitely. Call once at startup — before serving requests —
+// to guarantee a single cold-start and eliminate per-request load latency.
+func (c *Client) Preload(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("ollama client not configured")
+	}
+	type preloadReq struct {
+		Model     string `json:"model"`
+		Prompt    string `json:"prompt"`
+		Stream    bool   `json:"stream"`
+		KeepAlive any    `json:"keep_alive"`
+	}
+	body, err := json.Marshal(preloadReq{
+		Model:     c.model,
+		Prompt:    "", // empty prompt: load model, generate nothing
+		Stream:    false,
+		KeepAlive: c.keepAlive,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal preload request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build preload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("preload request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ollama preload http %d: %s", resp.StatusCode, string(b))
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+// Ping checks whether Ollama is reachable by fetching the model list.
+func (c *Client) Ping(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("ollama client not configured")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("http request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// prepareSystem returns the system prompt unchanged.
+// Qwen3 thinking mode is controlled via the top-level "think" field in the
+// ollamaRequest — not via a /no_think prefix in the system prompt.
+func (c *Client) prepareSystem(system string) string {
+	return system
+}
+
+// ── internal Ollama request types ────────────────────────────────────────────
+
+type ollamaOptions struct {
+	Temperature   float64 `json:"temperature"`
+	TopP          float64 `json:"top_p,omitempty"`
+	TopK          int     `json:"top_k,omitempty"`
+	RepeatPenalty float64 `json:"repeat_penalty,omitempty"`
+	NumCtx        int     `json:"num_ctx,omitempty"`
+	NumGPU        int     `json:"num_gpu,omitempty"`
+	NumThread     int     `json:"num_thread,omitempty"`
+	MMap          *bool   `json:"mmap,omitempty"`
+	MLock         *bool   `json:"mlock,omitempty"`
+	F16KV         *bool   `json:"f16_kv,omitempty"`
+	// Note: "think" does NOT belong here. Ollama ignores it inside options.
+	// Qwen3 thinking mode is controlled via the top-level "think" field below.
+}
+
+type ollamaRequest struct {
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	Stream    bool      `json:"stream"`
+	Format    string    `json:"format,omitempty"`
+	KeepAlive any       `json:"keep_alive,omitempty"`
+	// Think controls Qwen3 extended thinking mode. Must be top-level, NOT inside
+	// options — Ollama's template renderer reads it here and gates <think> tokens.
+	// false = fast responses (no hidden reasoning chain); true = deeper but slower.
+	Think   *bool         `json:"think,omitempty"`
+	Options ollamaOptions `json:"options"`
+}
+
+type ollamaResponse struct {
+	Message Message `json:"message"`
+	Done    bool    `json:"done"`
+	Error   string  `json:"error,omitempty"`
+}
+
+func (c *Client) do(ctx context.Context, messages []Message) (string, error) {
+	o := c.opts
+	payload := ollamaRequest{
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    false,
+		Format:    "json",
+		KeepAlive: c.keepAlive,
+		Think:     o.Think, // top-level: Ollama gates Qwen3 <think> tokens here
+		Options: ollamaOptions{
+			Temperature:   o.Temperature,
+			TopP:          o.TopP,
+			TopK:          o.TopK,
+			RepeatPenalty: o.RepeatPenalty,
+			NumCtx:        o.NumCtx,
+			NumGPU:        o.NumGPU,
+			NumThread:     o.NumThread,
+			MMap:          o.MMap,
+			MLock:         o.MLock,
+			F16KV:         o.F16KV,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ollama request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ollama http %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result ollamaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if result.Error != "" {
+		return "", fmt.Errorf("ollama: %s", result.Error)
+	}
+	// An empty/whitespace-only message is a model or transport hiccup, not a
+	// usable reply. Surface it as an error so callers retry (with backoff) rather
+	// than feeding an empty string into a downstream parser.
+	if strings.TrimSpace(result.Message.Content) == "" {
+		return "", fmt.Errorf("ollama returned an empty message")
+	}
+	return result.Message.Content, nil
+}

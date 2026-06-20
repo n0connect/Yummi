@@ -1,0 +1,28 @@
+version: "0.1"
+tier: "standard"
+model: "qwen3:8b"
+
+description: >
+  Balanced tier with reliable reasoning for most penetration testing workflows.
+  Good context retention and consistent structured output.
+
+capabilities:
+  context_window: 16384
+  thinking_mode: false
+  strengths:
+    - "Consistent structured JSON output"
+    - "Multi-step reasoning for common engagement patterns"
+    - "Good context retention across a session"
+    - "Reliable risk classification"
+  limitations:
+    - "Complex adversarial planning may lack depth"
+    - "Very long context sessions may degrade consistency"
+
+behavior_adjustments:
+  - "Suitable for multi-step proposals within a single phase"
+  - "Can chain operations with reasonable operator guidance"
+
+recommended_for:
+  - "Standard web and network assessments"
+  - "Typical authorized penetration tests"
+  - "Multi-target scoping with moderate complexity"

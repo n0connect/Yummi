@@ -1,0 +1,5 @@
+package api
+
+// Placeholder for static assets embedded via go:embed.
+// Static files (vendor/htmx.min.js, vendor/xterm.js, css/yummi.css)
+// will be added when the terminal integration is implemented.
