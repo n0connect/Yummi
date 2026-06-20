@@ -91,7 +91,7 @@ make start
 ## Developer workflow
 
 ```bash
-make build           # All binaries (CLI + orchestrator + gateway)
+make build           # All binaries and UI assets (CLI + orchestrator + gateway + UI)
 make test            # All test suites (Go + Rust + UI)
 make lint            # golangci-lint (root + orchestrator)
 
