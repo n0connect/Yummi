@@ -232,6 +232,26 @@ func (r *Runner) Approve(taskID, proposalID string, approved bool, reason string
 	return r.gate.Resolve(taskID, proposalID, approved, reason)
 }
 
+// ApprovalMode returns the mode new task states are built with.
+func (r *Runner) ApprovalMode() ApprovalMode {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cfg.ApprovalMode
+}
+
+// SetApprovalMode changes the mode applied to tasks started from this point
+// on; tasks already mid-loop keep the mode they were built with (cfg is
+// copied by value into GraphState in buildState).
+func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
+	if mode != ModeAskPermission && mode != ModeAuto {
+		return fmt.Errorf("invalid approval mode: %q", mode)
+	}
+	r.mu.Lock()
+	r.cfg.ApprovalMode = mode
+	r.mu.Unlock()
+	return nil
+}
+
 // ── Internal ─────────────────────────────────────────────────────────────────
 
 // buildState constructs GraphState for a task, restoring from checkpoint if one exists.

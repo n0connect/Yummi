@@ -73,6 +73,10 @@ func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Eng
 		r.Post("/chat", HandleChat(assistant, approvals, sm, taskRunner, taskStore))
 		r.Post("/chat/approve", HandleChatApprove(approvals, executions, sm))
 
+		// Agent approval mode
+		r.Get("/agent/mode", HandleGetApprovalMode(taskRunner))
+		r.Post("/agent/mode", HandleSetApprovalMode(taskRunner))
+
 		// Agent tasks
 		r.Post("/tasks", HandleCreateTask(taskRunner))
 		r.Get("/tasks/{id}", HandleGetTask(taskStore))
