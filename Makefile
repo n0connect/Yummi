@@ -70,14 +70,14 @@ endef
 #  USER COMMANDS  (the ones you run every day)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## build   Build native binaries (CLI + orchestrator + gateway). UI is built via `make _build-ui` or docker.
-build: _build-cli _build-orchestrator _build-gateway
+## build   Build native binaries and UI (CLI + orchestrator + gateway + UI).
+build: _build-cli _build-ui _build-orchestrator _build-gateway
 	$(call log_section,Build Complete)
 	$(call log_ok,yummi,$(BIN_DIR)/$(BINARY))
 	$(call log_ok,yummi-orchestrator,$(BIN_DIR)/$(ORCHESTRATOR_BINARY))
 	$(call log_ok,gateway,$(GATEWAY_DIR)/target/release/yummi-gateway)
+	$(call log_ok,ui,$(UI_DIST_DIR))
 	@printf "\n$(DIM)  version $(VERSION)  git $(GIT_SHA)  $(BUILD_DATE)$(RESET)\n"
-	$(call log_warn,UI,not built by this target — run 'make _build-ui' or 'make docker-ui')
 	@printf "\n"
 
 ## start   Start Ollama + runtime services via docker compose
@@ -291,7 +291,7 @@ help:
 	@printf "\n$(BOLD)$(CYAN)  YUMMI$(RESET)  $(DIM)$(VERSION) · $(GIT_SHA)$(RESET)\n"
 	@printf "$(DIM)  Privacy-first AI pentest conductor$(RESET)\n\n"
 	@printf "$(BOLD)  User commands$(RESET)\n"
-	@printf "  $(CYAN)make build$(RESET)       Build native binaries (CLI + orchestrator + gateway; UI separate)\n"
+	@printf "  $(CYAN)make build$(RESET)       Build native binaries and UI (CLI + orchestrator + gateway + UI)\n"
 	@printf "  $(CYAN)make start$(RESET)       Start runtime services (docker compose)\n"
 	@printf "  $(CYAN)make stop$(RESET)        Stop runtime services\n"
 	@printf "  $(CYAN)make clean$(RESET)       Remove all build artifacts\n"
