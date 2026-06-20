@@ -1,0 +1,183 @@
+// Package gateway implements the client for communicating with gateway over Unix socket.
+package gateway
+
+import (
+	"crypto/tls"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"time"
+)
+
+// Client connects to gateway IPC socket.
+type Client struct {
+	socketPath string
+	timeout    time.Duration
+	tlsConfig  *tls.Config
+}
+
+// NewClient creates a new gateway client.
+func NewClient(socketPath string) *Client {
+	return &Client{
+		socketPath: socketPath,
+		timeout:    5 * time.Second,
+	}
+}
+
+// WithTLS returns a new Client that wraps each connection with the given
+// TLS config. The server name must match the certificate used by gateway.
+func (c *Client) WithTLS(cfg *tls.Config) *Client {
+	copy := *c
+	copy.tlsConfig = cfg
+	return &copy
+}
+
+// CheckScope asks gateway if an IP is in scope.
+func (c *Client) CheckScope(ip string) (bool, error) {
+	resp, err := c.send(Request{
+		Type: "check_scope",
+		IP:   ip,
+	})
+	if err != nil {
+		return false, err
+	}
+	return resp.InScope, nil
+}
+
+// GetStatus retrieves gateway status.
+func (c *Client) GetStatus() (*StatusResponse, error) {
+	resp, err := c.send(Request{Type: "get_status"})
+	if err != nil {
+		return nil, err
+	}
+	return &StatusResponse{
+		Level:       resp.Level,
+		RulesActive: resp.RulesActive,
+		UptimeSecs:  resp.UptimeSecs,
+	}, nil
+}
+
+// Ping checks if gateway is alive.
+func (c *Client) Ping() error {
+	resp, err := c.send(Request{Type: "ping"})
+	if err != nil {
+		return err
+	}
+	if resp.Type != "pong" {
+		return fmt.Errorf("unexpected response: %s", resp.Type)
+	}
+	return nil
+}
+
+// AddTemporaryRule adds a temporary allow rule with TTL.
+func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description string) (string, int64, error) {
+	desc := &description
+	resp, err := c.send(Request{
+		Type:        "add_temporary_rule",
+		Network:     network,
+		TTLSecs:     ttlSecs,
+		Description: desc,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if resp.Type != "rule_added" {
+		return "", 0, fmt.Errorf("unexpected response: %s", resp.Type)
+	}
+	return resp.RuleID, resp.ExpiresAt, nil
+}
+
+// RemoveRule removes a rule by ID.
+func (c *Client) RemoveRule(ruleID string) error {
+	resp, err := c.send(Request{
+		Type:   "remove_rule",
+		RuleID: ruleID,
+	})
+	if err != nil {
+		return err
+	}
+	if resp.Type != "rule_removed" {
+		return fmt.Errorf("unexpected response: %s", resp.Type)
+	}
+	return nil
+}
+
+func (c *Client) send(req Request) (*Response, error) {
+	rawConn, err := net.DialTimeout("unix", c.socketPath, c.timeout)
+	if err != nil {
+		return nil, fmt.Errorf("connect to gateway: %w", err)
+	}
+
+	// Optionally upgrade to mTLS.
+	var conn = rawConn
+	if c.tlsConfig != nil {
+		tlsConn := tls.Client(rawConn, c.tlsConfig)
+		if err := tlsConn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("set deadline: %w", err)
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("mTLS handshake: %w", err)
+		}
+		conn = tlsConn
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+
+	// Write length-prefixed JSON
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	lenBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(lenBuf, uint32(len(data)))
+	if err := writeAll(conn, lenBuf); err != nil {
+		return nil, fmt.Errorf("write length: %w", err)
+	}
+	if err := writeAll(conn, data); err != nil {
+		return nil, fmt.Errorf("write payload: %w", err)
+	}
+
+	// Read response
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return nil, fmt.Errorf("read response length: %w", err)
+	}
+	respLen := binary.BigEndian.Uint32(lenBuf)
+	if respLen > 1048576 {
+		return nil, fmt.Errorf("response too large: %d bytes", respLen)
+	}
+
+	respBuf := make([]byte, respLen)
+	if _, err := io.ReadFull(conn, respBuf); err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	var resp Response
+	if err := json.Unmarshal(respBuf, &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if resp.Type == "error" {
+		return nil, fmt.Errorf("gateway error: %s", resp.Message)
+	}
+
+	return &resp, nil
+}
+
+func writeAll(conn net.Conn, buf []byte) error {
+	for len(buf) > 0 {
+		n, err := conn.Write(buf)
+		if err != nil {
+			return err
+		}
+		buf = buf[n:]
+	}
+	return nil
+}

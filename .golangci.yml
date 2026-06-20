@@ -1,0 +1,34 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Writes to stdout/stderr can't fail in any actionable way for a CLI/log.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    paths:
+      # Third-party Go vendored inside the UI's node_modules — not our source.
+      - ui/node_modules
+      # Manual dev/integration harnesses (run by hand against a live model +
+      # sandbox), not part of the shipped binaries — held to a looser bar.
+      - orchestrator/cmd/test_
+      - cmd/test_
+    rules:
+      # Unchecked errors in tests are low-risk: a failing call surfaces as a
+      # test failure anyway. Keep errcheck strict on production code only.
+      - path: _test\.go
+        linters:
+          - errcheck
+formatters:
+  enable:
+    - gofmt

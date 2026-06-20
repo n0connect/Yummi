@@ -1,0 +1,32 @@
+version: "0.1"
+tier: "expert"
+model: "qwen3:32b"
+
+description: >
+  Expert tier for maximum reasoning depth on high-stakes engagements.
+  Enables extended thinking for adversarial planning and complex scenarios.
+
+capabilities:
+  context_window: 32768
+  thinking_mode: true
+  strengths:
+    - "Extended chain-of-thought reasoning (thinking mode enabled)"
+    - "Highest accuracy for complex, ambiguous scenarios"
+    - "Strong adversarial perspective modeling"
+    - "Excellent handling of edge cases and unusual constraints"
+    - "Reliable across very long engagement contexts"
+  limitations:
+    - "Requires significant VRAM (~20GB+)"
+    - "Higher latency due to thinking pass"
+    - "Workstation-grade hardware recommended"
+
+behavior_adjustments:
+  - "Thinking mode is active — responses may include internal reasoning before JSON output"
+  - "Use for scenarios where reasoning quality outweighs speed"
+  - "Suitable for red team exercise planning and complex attack chain design"
+
+recommended_for:
+  - "Critical infrastructure assessments"
+  - "Adversarial simulation and red team exercises"
+  - "Complex multi-stage attack planning"
+  - "High-stakes engagements requiring maximum judgment quality"

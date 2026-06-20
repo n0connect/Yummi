@@ -1,0 +1,22 @@
+[Unit]
+Description=Yummi Gateway Trust Boundary
+After=network.target
+Requires=docker.service
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/yummi-gateway --config /etc/yummi/gateway.yaml
+Restart=on-failure
+RestartSec=5s
+User=yummi
+Group=yummi
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+MemoryDenyWriteExecute=yes
+RestrictNamespaces=yes
+WatchdogSec=10s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yummi /var/run/yummi /var/log/yummi
+
+[Install]
+WantedBy=multi-user.target

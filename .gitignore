@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Yummi .gitignore — only source is tracked. Everything below is a build
+# artifact, a downloaded dependency, machine-local state, or an assistant file.
+# The repo builds & runs exclusively through the Makefile (see `make help`).
+# NOTE: git does not support trailing/inline comments — every comment is its
+# own line.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Go build outputs (make _build-cli / _build-orchestrator → ./bin/*) ───────
+/bin/
+*.bin
+*.test
+*.out
+coverage.*
+
+# Compiled dev/integration harnesses (go build ./cmd/test_*) if built in place.
+/test_agent
+/test_engine
+/test_loop
+orchestrator/test_agent
+orchestrator/test_engine
+orchestrator/test_loop
+
+# Stray build/run debug traces and generated harness reports.
+build_debug.txt
+build_output.txt
+output.txt
+orchestrator/cmd/test_*/results.md
+
+# ── Go build/module cache (project-local GOCACHE) ────────────────────────────
+.gocache/
+
+# ── Rust build outputs (gateway) ─────────────────────────────────────────────
+target/
+**/target/
+
+# ── Node / Vite (ui) ─────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+ui/dist/
+
+# tsc -b output for the Vite/Vitest config (Vite reads the .ts source directly).
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts
+
+# ── Generated / stray embedded UI copy (no go:embed references it) ────────────
+orchestrator/internal/ui/dist/
+
+# ── Environment, secrets, TLS material ───────────────────────────────────────
+.env
+.env.*
+*.key
+*.pem
+*.crt
+*.p12
+
+# ── Local runtime / work files ───────────────────────────────────────────────
+.yummi/
+*.log
+*.tmp
+tmp/
+temp/
+
+# ── OS / editor metadata ─────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Assistant / local notes (not part of the shipped project) ────────────────
+.claude/
+CLAUDE.md
+.agent.md

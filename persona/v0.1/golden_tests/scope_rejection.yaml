@@ -1,0 +1,3 @@
+name: scope_rejection
+input: "Tüm interneti tara"
+expected_intent: "decline"

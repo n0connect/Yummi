@@ -1,0 +1,169 @@
+services:
+
+  # ── gateway — trust boundary ───────────────────────────────────────────────────
+  # Dedicated container that installs fail-closed nftables FORWARD rules on the
+  # Docker bridge. All of sandbox's outbound traffic is routed through gateway. sandbox stays
+  # blocked by default; orchestrator's approval flow dynamically opens targets via IPC.
+  #
+  # Requires CAP_NET_ADMIN for nftables and net.ipv4.ip_forward for routing.
+  gateway:
+    container_name: yummi-gateway
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: yummi/gateway:local
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: 1
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - gateway_ipc:/run/yummi:rw
+      - gateway_data:/var/lib/yummi/gateway:rw
+    networks:
+      yummi_internal:
+        ipv4_address: 172.20.0.2
+      yummi_external:
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/yummi/gateway.sock"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # ── sandbox — Kali pentest container ───────────────────────────────────────────────
+  # Isolated Kali box. Only on yummi_internal — external traffic is gated through
+  # gateway. sandbox sets its default gateway to gateway (172.20.0.2) at startup.
+  sandbox:
+    container_name: yummi-sandbox
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    image: yummi/sandbox:local
+    command: ["/usr/local/bin/entrypoint.sh"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /run:size=64m,mode=755
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:false
+    volumes:
+      - ${HOME}/.yummi/wordlists:/wordlists:ro
+      - ${HOME}/.yummi/workspace:/workspace:rw
+      - ${HOME}/.yummi/payloads:/payloads:ro
+    networks:
+      yummi_internal:
+        ipv4_address: 172.20.0.10
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nmap --version > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── orchestrator — orchestrator ─────────────────────────────────────────────────────────
+  # Go API server. Talks to gateway via IPC socket and to sandbox via docker exec.
+  # On yummi_external for Ollama access (host.docker.internal).
+  orchestrator:
+    container_name: yummi-orchestrator
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    image: yummi/orchestrator:local
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      YUMMI_ORCHESTRATOR_HOST: "0.0.0.0"
+      YUMMI_ORCHESTRATOR_PORT: "9080"
+      YUMMI_DB_PATH: "/var/lib/yummi/orchestrator/sessions.db"
+      YUMMI_GATEWAY_SOCKET: "/run/yummi/gateway.sock"
+      YUMMI_SANDBOX_CONTAINER: "yummi-sandbox"
+      YUMMI_PERSONA_DIR: "/persona/v0.1"
+      YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
+      YUMMI_OLLAMA_MODEL: "qwen3:8b"
+      YUMMI_OLLAMA_TIER: "standard"
+      PENTEST_SCOPE_ALLOW: "192.168.1.0/24,10.0.0.0/24,45.33.32.156"
+    ports:
+      - "127.0.0.1:9080:9080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - gateway_ipc:/run/yummi:ro
+      - orchestrator_data:/var/lib/yummi/orchestrator:rw
+      - ./persona:/persona:ro
+    networks:
+      yummi_internal:
+        ipv4_address: 172.20.0.3
+      yummi_external:
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── yummi-ui — React dashboard ────────────────────────────────────────────────
+  yummi-ui:
+    container_name: yummi-ui
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    image: yummi/ui:local
+    ports:
+      - "127.0.0.1:3000:80"
+    networks:
+      yummi_internal:
+        ipv4_address: 172.20.0.4
+      yummi_external:
+    restart: unless-stopped
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  gateway_ipc:
+    name: yummi_gateway_ipc
+  gateway_data:
+    name: yummi_gateway_data
+  orchestrator_data:
+    name: yummi_orchestrator_data
+
+networks:
+  yummi_internal:
+    name: yummi_internal
+    driver: bridge
+    # internal: true means no external connectivity for containers on this network.
+    # sandbox is ONLY on this network — it reaches external via gateway (its gateway).
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+  yummi_external:
+    name: yummi_external
+    driver: bridge
