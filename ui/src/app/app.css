@@ -151,14 +151,6 @@ body::before {
   gap: 9px;
   flex-shrink: 0;
 }
-.logo::before {
-  content: '';
-  width: 9px; height: 9px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  box-shadow: 0 0 12px var(--accent-glow);
-  animation: pulse 2.4s ease-in-out infinite;
-}
 
 .status-separator { display: none; }   /* replaced by spacing */
 
@@ -556,6 +548,28 @@ body::before {
    INPUT & BUTTONS
    ═══════════════════════════════════════════════════════════════════════════ */
 .chat-input-area { padding: var(--space-md) var(--space-lg) var(--space-lg); display: flex; gap: var(--space-sm); border-top: 1px solid var(--border-subtle); }
+
+.mode-select {
+  display: flex; align-items: center; gap: 2px;
+  margin: 0 var(--space-lg) var(--space-md);
+  padding: 3px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  width: fit-content;
+}
+.mode-option {
+  background: transparent; color: var(--text-tertiary); border: none;
+  padding: 6px 14px; border-radius: var(--radius-sm); cursor: pointer;
+  font-family: var(--font-sans); font-size: var(--text-xs); font-weight: 600;
+  letter-spacing: var(--tracking-label); text-transform: uppercase;
+  transition: all var(--transition-fast);
+}
+.mode-option:hover { color: var(--text-secondary); background: rgba(255,255,255,0.04); box-shadow: none; }
+.mode-option.active {
+  color: var(--accent-hover); background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(45,212,191,0.25);
+}
 
 input {
   flex: 1; background: var(--bg-base); border: 1px solid var(--border);

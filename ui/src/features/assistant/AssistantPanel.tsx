@@ -22,6 +22,9 @@ type ChatResponse = {
   }
 }
 
+// Mirrors orchestrator/internal/agent.ApprovalMode — exactly two modes.
+type ApprovalMode = 'ask_permission' | 'auto'
+
 type MessageRole = 'user' | 'assistant' | 'system' | 'execution' | 'task'
 
 type Message = {
@@ -37,6 +40,7 @@ type Message = {
 
 const STORAGE_MSGS = 'yummi:chat:messages'
 const STORAGE_SID  = 'yummi:chat:sessionId'
+const STORAGE_MODE = 'yummi:agent:approvalMode'
 const WELCOME: Omit<Message, 'id'> = {
   role: 'system',
   content: 'Hazırım. Hedefini ya da görevini bir cümleyle yaz.',
@@ -58,6 +62,18 @@ function loadSessionID(): string {
   return sessionStorage.getItem(STORAGE_SID) ?? 'default'
 }
 
+function loadApprovalMode(): ApprovalMode {
+  try {
+    return localStorage.getItem(STORAGE_MODE) === 'auto' ? 'auto' : 'ask_permission'
+  } catch {
+    return 'ask_permission'
+  }
+}
+
+function saveApprovalMode(mode: ApprovalMode): void {
+  try { localStorage.setItem(STORAGE_MODE, mode) } catch { /* unavailable — UI cache only */ }
+}
+
 // Terminal statuses where the task is no longer active.
 const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'])
 
@@ -71,6 +87,7 @@ export function AssistantPanel(): JSX.Element {
   const [isLoading, setIsLoading] = useState(false)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
+  const [approvalMode, setApprovalModeState] = useState<ApprovalMode>(loadApprovalMode)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef       = useRef<HTMLInputElement>(null)
@@ -90,6 +107,19 @@ export function AssistantPanel(): JSX.Element {
   }, [messages, activeTask])
 
   useEffect(() => { inputRef.current?.focus() }, [])
+
+  // Sync with the orchestrator's actual mode once on mount — it's the source
+  // of truth (governs the agent task loop), localStorage is just a UI cache.
+  useEffect(() => {
+    fetchJSON<{ mode: ApprovalMode }>('/api/v1/agent/mode')
+      .then(res => {
+        if (res.mode === 'auto' || res.mode === 'ask_permission') {
+          setApprovalModeState(res.mode)
+          saveApprovalMode(res.mode)
+        }
+      })
+      .catch(() => { /* backend unreachable — keep local cache */ })
+  }, [])
 
   // ── Context metrics ────────────────────────────────────────────────────────
 
@@ -245,6 +275,23 @@ export function AssistantPanel(): JSX.Element {
     }
   }, [appendMessage])
 
+  const setApprovalMode = useCallback(async (mode: ApprovalMode) => {
+    const previous = approvalMode
+    setApprovalModeState(mode)
+    saveApprovalMode(mode)
+    try {
+      await fetchJSON('/api/v1/agent/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+    } catch {
+      setApprovalModeState(previous)
+      saveApprovalMode(previous)
+      appendMessage({ role: 'system', content: 'Mod değiştirilemedi.' })
+    }
+  }, [approvalMode, appendMessage])
+
   // ── Chat API ───────────────────────────────────────────────────────────────
 
   const sendChat = async () => {
@@ -315,6 +362,13 @@ export function AssistantPanel(): JSX.Element {
       inputRef.current?.focus()
     }
   }
+
+  // Auto mode: run single-command proposals as they arrive instead of waiting
+  // for a click. Ask-permission mode leaves them in the bar for the operator.
+  useEffect(() => {
+    if (approvalMode !== 'auto' || proposals.length === 0 || isLoading) return
+    void approveProposal(proposals[0])
+  }, [approvalMode, proposals, isLoading])
 
   const rejectProposal  = (p: ChatProposal) => setProposals(prev => prev.filter(x => x.id !== p.id))
   const copyCommand     = (cmd: string) => {
@@ -512,6 +566,30 @@ export function AssistantPanel(): JSX.Element {
               {proposals.length > 0 ? 'Çalıştır' : 'Gönder'}
             </button>
           )}
+        </div>
+
+        {/* Approval mode */}
+        <div className="mode-select" role="radiogroup" aria-label="Onay modu">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={approvalMode === 'ask_permission'}
+            className={`mode-option ${approvalMode === 'ask_permission' ? 'active' : ''}`}
+            onClick={() => void setApprovalMode('ask_permission')}
+            title="Her komut için onay iste"
+          >
+            Ask Permission
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={approvalMode === 'auto'}
+            className={`mode-option ${approvalMode === 'auto' ? 'active' : ''}`}
+            onClick={() => void setApprovalMode('auto')}
+            title="Komutları otomatik onayla"
+          >
+            Auto
+          </button>
         </div>
 
         {/* Context bar */}

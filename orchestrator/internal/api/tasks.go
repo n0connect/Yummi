@@ -78,6 +78,41 @@ func HandleStopTask(runner *agent.Runner) http.HandlerFunc {
 	}
 }
 
+// HandleGetApprovalMode returns the agent's current approval mode.
+// GET /api/v1/agent/mode
+func HandleGetApprovalMode(runner *agent.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if runner == nil {
+			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"mode": string(runner.ApprovalMode())})
+	}
+}
+
+// HandleSetApprovalMode switches the agent between ask_permission and auto.
+// POST /api/v1/agent/mode  {"mode":"auto"|"ask_permission"}
+func HandleSetApprovalMode(runner *agent.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if runner == nil {
+			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
+			return
+		}
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request", err)
+			return
+		}
+		if err := runner.SetApprovalMode(agent.ApprovalMode(req.Mode)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid mode", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"mode": req.Mode})
+	}
+}
+
 // HandleApproveTask resolves the pending risk-gate verdict.
 // POST /api/v1/tasks/{id}/approve {"proposal_id":"...","approved":true,"reason":""}
 func HandleApproveTask(runner *agent.Runner, store *agent.Store) http.HandlerFunc {
