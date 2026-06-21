@@ -1,4 +1,4 @@
-//! IPC server — Unix domain socket for n1 communication.
+//! IPC server — Unix domain socket for orchestrator communication.
 //!
 //! Security model:
 //! - Read-only ops (Ping, CheckScope, GetStatus) are open to any local process.
@@ -23,7 +23,7 @@ use crate::policy::PolicyEngine;
 /// Maximum concurrent IPC connections. Prevents file-descriptor exhaustion.
 const MAX_CONNECTIONS: usize = 32;
 
-/// IPC server exposing policy queries to n1.
+/// IPC server exposing policy queries to orchestrator.
 pub struct IpcServer {
     socket_path: String,
     policy: PolicyEngine,
@@ -203,7 +203,7 @@ fn process_request(
                     let desc = description.unwrap_or_else(|| format!("Temporary rule: {}", network));
                     let (rule_id, expires_at) = policy.add_temporary_allow(net.clone(), ttl_secs, desc);
 
-                    // Also unlock at the nftables kernel level so n0's packets actually reach the target.
+                    // Also unlock at the nftables kernel level so sandbox's packets actually reach the target.
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
                             warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");

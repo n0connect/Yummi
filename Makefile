@@ -80,9 +80,12 @@ build: _build-cli _build-ui _build-orchestrator _build-gateway
 	@printf "\n$(DIM)  version $(VERSION)  git $(GIT_SHA)  $(BUILD_DATE)$(RESET)\n"
 	@printf "\n"
 
-## start   Start Ollama + runtime services via docker compose
+## start   Start Ollama + runtime services via docker compose (always rebuilds
+##         images first so source changes are never silently skipped)
 start: _ollama-ensure
 	$(call log_section,Starting Services)
+	$(call log_step,docker compose,building images)
+	@set -o pipefail; docker compose build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /'
 	$(call log_step,docker compose,bringing up all services)
 	@set -o pipefail; docker compose up -d gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /'
 	$(call log_ok,services,running — UI on http://localhost:3000)
@@ -113,6 +116,8 @@ force-restart:
 	$(call log_step,memory,killing lingering yummi processes)
 	@-killall -9 yummi yummi-orchestrator 2>/dev/null || true
 	@$(MAKE) _ollama-ensure
+	$(call log_step,docker compose,building images)
+	@set -o pipefail; docker compose build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /'
 	$(call log_step,docker compose,bringing up all services)
 	@set -o pipefail; docker compose up -d gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /'
 	$(call log_ok,force-restart,services restarted)

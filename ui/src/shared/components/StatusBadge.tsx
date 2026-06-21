@@ -1,4 +1,5 @@
 import type { ModuleStatus } from '../../entities/types'
+import { dotClass } from '../lib/statusDot'
 
 type Props = { status: ModuleStatus['status'] }
 
@@ -10,14 +11,4 @@ export function StatusBadge({ status }: Props): JSX.Element {
       {status.replace('_', ' ')}
     </span>
   )
-}
-
-function dotClass(status: string): string {
-  switch (status) {
-    case 'healthy':       return 'dot dot-ok'
-    case 'degraded':      return 'dot dot-warn'
-    case 'down':          return 'dot dot-err'
-    case 'not_connected': return 'dot dot-muted'
-    default:              return 'dot dot-dim'
-  }
 }

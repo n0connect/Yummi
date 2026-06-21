@@ -1,6 +1,6 @@
 # persona — AI Assistant Behavior
 
-YAML and JSON configuration files that define the AI assistant's identity, methodology, safety boundaries, and tool knowledge. The conductor engine (`n1/internal/conductor/`) loads these at startup.
+YAML and JSON configuration files that define the AI assistant's identity, methodology, safety boundaries, and tool knowledge. The conductor engine (`orchestrator/internal/conductor/`) loads these at startup.
 
 ## Layout
 
@@ -36,12 +36,12 @@ Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Setting `YUMMI_OLLAMA_TIE
 ## Adding a new tier
 
 1. Copy an existing file from `tier_capabilities/` to `tier_capabilities/<name>.yaml`
-2. Update `n1/internal/conductor/tier.go` — add to `tierPresets` map
-3. Test: `cd n1 && go test ./internal/conductor -run TestTier`
+2. Update `orchestrator/internal/conductor/tier.go` — add to `tierPresets` map
+3. Test: `cd orchestrator && go test ./internal/conductor -run TestTier`
 
 ## Adding tool knowledge
 
-Edit `tool_knowledge.yaml`. Each entry provides the LLM with context about when and how to use a tool — this supplements the allowlist in `n1/internal/conductor/validator.go`.
+Edit `tool_knowledge.yaml`. Each entry provides the LLM with context about when and how to use a tool — this supplements the allowlist in `orchestrator/internal/conductor/validator.go`.
 
 ```yaml
 tools:
@@ -69,4 +69,4 @@ tools:
   expected_tool: "nmap"
 ```
 
-Run: `cd n1 && go test ./internal/conductor -run TestGolden`
+Run: `cd orchestrator && go test ./internal/conductor -run TestGolden`

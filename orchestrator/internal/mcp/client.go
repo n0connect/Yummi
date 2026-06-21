@@ -2,7 +2,7 @@
 //
 // The MCP wire format is JSON-RPC 2.0 over stdio: each message is a single
 // JSON object on one line terminated by \n. This is the stdio transport; we
-// don't implement the HTTP/SSE transport here because n1 spawns the server
+// don't implement the HTTP/SSE transport here because orchestrator spawns the server
 // as a child process and talks to it over pipes.
 //
 // The surface is intentionally small: open a server, call a method, close it.

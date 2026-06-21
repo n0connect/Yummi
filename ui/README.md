@@ -1,6 +1,6 @@
 # ui — Frontend
 
-React 18 + Vite single-page application. Served by nginx on port 3000 in Docker; proxies `/api/` and `/ws/` to n1 at port 9080.
+React 18 + Vite single-page application. Served by nginx on port 3000 in Docker; proxies `/api/` and `/ws/` to orchestrator at port 9080.
 
 ## Stack
 
@@ -39,7 +39,7 @@ src/
 ## Development
 
 ```bash
-# Local dev server (HMR on :3000, proxies to n1 on :9080)
+# Local dev server (HMR on :3000, proxies to orchestrator on :9080)
 make dev-ui
 # or directly:
 cd ui && npm run dev
@@ -77,7 +77,7 @@ cd ui && npm test
 
 ## API contract
 
-The UI communicates with n1 via:
+The UI communicates with orchestrator via:
 
 | Endpoint | Method | Purpose |
 |---|---|---|

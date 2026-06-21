@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-YUMMI_HOME="${HOME}/.yummi"
+YUMMI_HOME="${YUMMI_HOME:-${HOME}/.yummi}"
 mkdir -p "${YUMMI_HOME}/wordlists" "${YUMMI_HOME}/workspace" "${YUMMI_HOME}/payloads" "${YUMMI_HOME}/logs"
 
 if [[ ! -f "${YUMMI_HOME}/config.yaml" ]]; then
@@ -18,18 +18,18 @@ fi
 if [[ ! -f "${YUMMI_HOME}/wordlists/.README" ]]; then
   cat > "${YUMMI_HOME}/wordlists/.README" <<'TXT'
 Place your custom wordlists in this directory.
-This directory is mounted read-only into n0 at /wordlists.
+This directory is mounted read-only into the sandbox at /wordlists.
 TXT
 fi
 
 if [[ ! -f "${YUMMI_HOME}/payloads/.README" ]]; then
   cat > "${YUMMI_HOME}/payloads/.README" <<'TXT'
 Place payload collections (e.g., PayloadsAllTheThings subsets) here.
-This directory is mounted read-only into n0 at /payloads.
+This directory is mounted read-only into the sandbox at /payloads.
 TXT
 fi
 
-docker compose build n0
+docker compose build sandbox
 
 # ── Install UI dependencies ──────────────────────────────────────────────────
 echo "Installing UI dependencies..."
@@ -51,7 +51,7 @@ if ! command -v ollama &>/dev/null; then
   fi
 fi
 
-OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-llama3.1:8b}"
+OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:8b}"
 if ! ollama list 2>/dev/null | grep -q "${OLLAMA_MODEL%%:*}"; then
   echo "Pulling ${OLLAMA_MODEL} (this may take a few minutes)..."
   ollama pull "${OLLAMA_MODEL}"

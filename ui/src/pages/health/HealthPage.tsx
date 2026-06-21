@@ -5,11 +5,11 @@ import { ModuleStatusPanel } from './components/ModuleStatusPanel'
 import './HealthPage.css'
 
 const WINDOWS = ['5m', '15m', '1h'] as const
-type Window = typeof WINDOWS[number]
+type MetricWindow = typeof WINDOWS[number]
 
 export function HealthPage() {
-  const [window, setWindow] = useState<Window>('5m')
-  const data = useHealthMetrics(window)
+  const [timeWindow, setTimeWindow] = useState<MetricWindow>('5m')
+  const data = useHealthMetrics(timeWindow)
   const samples = data?.samples ?? []
   const latest = samples[samples.length - 1]
 
@@ -21,8 +21,8 @@ export function HealthPage() {
           {WINDOWS.map(w => (
             <button
               key={w}
-              className={`window-btn ${window === w ? 'active' : ''}`}
-              onClick={() => setWindow(w)}
+              className={`window-btn ${timeWindow === w ? 'active' : ''}`}
+              onClick={() => setTimeWindow(w)}
             >
               {w}
             </button>

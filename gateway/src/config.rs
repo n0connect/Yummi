@@ -186,7 +186,7 @@ impl GatewayConfig {
                 audit_db: ":memory:".to_string(),
             },
             ipc: IpcConfig {
-                socket_path: "/tmp/yummi-gateway-test.sock".to_string(),
+                socket_path: std::env::temp_dir().join("yummi-gateway-test.sock").to_string_lossy().to_string(),
                 socket_mode: 0o600,
             },
             watchdog: WatchdogConfig::default(),
@@ -211,7 +211,9 @@ mod tests {
 
     #[test]
     fn test_parse_yaml() {
-        let yaml = r#"
+        let tmp = std::env::temp_dir();
+        let yaml = format!(
+            r#"
 scope:
   allow:
     - 10.0.0.0/8
@@ -220,14 +222,17 @@ scope:
     - 127.0.0.0/8
 logging:
   level: info
-  audit_db: /tmp/test.db
+  audit_db: {audit_db}
 ipc:
-  socket_path: /tmp/test.sock
+  socket_path: {socket_path}
   socket_mode: 384
 network:
   sandbox_ip: "172.20.0.10"
-"#;
-        let cfg: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+"#,
+            audit_db = tmp.join("test.db").to_string_lossy(),
+            socket_path = tmp.join("test.sock").to_string_lossy(),
+        );
+        let cfg: GatewayConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(cfg.scope.allow.len(), 2);
         assert_eq!(cfg.scope.block.len(), 1);
         assert_eq!(cfg.ipc.socket_mode, 384);

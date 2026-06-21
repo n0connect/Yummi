@@ -6,7 +6,7 @@
 
 scope:
   # Default allowed CIDRs — empty means nothing external is reachable
-  # until an operator approves targets via n1's approval flow.
+  # until an operator approves targets via orchestrator's approval flow.
   allow: []
   # Always-blocked CIDRs (loopback, link-local, private ranges).
   # These protect against SSRF and scope bleed.

@@ -52,7 +52,7 @@ func commandTool(cmd string) string {
 }
 
 func main() {
-	logPath := "/Users/n0n0/Desktop/coding/Yummi/orchestrator/cmd/test_engine/results.md"
+	logPath := "cmd/test_engine/results.md"
 
 	// Use currently installed model - auto-detect from env or default
 	ollamaModel := os.Getenv("YUMMI_OLLAMA_MODEL")
@@ -60,9 +60,12 @@ func main() {
 		ollamaModel = "hermes3:8b" // Default to hermes3:8b
 	}
 
+	personaDir := envOr("YUMMI_PERSONA_DIR", "../persona/v0.1")
+	ollamaURL := envOr("YUMMI_OLLAMA_URL", "http://127.0.0.1:11434")
+
 	eng, err := conductor.NewEngine(
-		"/Users/n0n0/Desktop/coding/Yummi/persona/v0.1",
-		"http://127.0.0.1:11434",
+		personaDir,
+		ollamaURL,
 		ollamaModel,
 	)
 	if err != nil {
@@ -411,4 +414,11 @@ func firstProposalTool(resp conductor.ChatResponse) string {
 		return "-"
 	}
 	return commandTool(resp.Proposals[0].Command)
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

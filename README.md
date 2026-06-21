@@ -97,7 +97,7 @@ make lint            # golangci-lint (root + orchestrator)
 
 # Granular
 make _build-cli      # yummi CLI only
-make _build-orchestrator       # orchestrator orchestrator only
+make _build-orchestrator       # orchestrator binary only
 make _build-gateway    # gateway Rust binary only
 make _build-ui       # React/Vite UI assets only
 

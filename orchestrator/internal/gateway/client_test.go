@@ -70,7 +70,7 @@ func TestClientPingChunkedResponse(t *testing.T) {
 	}
 }
 
-func TestClientReturnsPStarError(t *testing.T) {
+func TestClientReturnsGatewayError(t *testing.T) {
 	socket := startTestServer(t, false, func(req Request) Response {
 		return Response{Type: "error", Message: "denied by policy"}
 	})
@@ -78,7 +78,7 @@ func TestClientReturnsPStarError(t *testing.T) {
 	c := NewClient(socket)
 	err := c.Ping()
 	if err == nil {
-		t.Fatal("expected p* error")
+		t.Fatal("expected gateway error")
 	}
 	if !strings.Contains(err.Error(), "denied by policy") {
 		t.Fatalf("expected policy error, got: %v", err)

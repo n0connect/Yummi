@@ -2,7 +2,7 @@ import { useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import type { AgentTask, ChatProposal, ExecutionRecord } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
-import { ContextBar } from './ContextBar'
+import { ContextBar, type ApprovalMode } from './ContextBar'
 import { TaskTracker } from '../tasks/TaskTracker'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -22,9 +22,6 @@ type ChatResponse = {
   }
 }
 
-// Mirrors orchestrator/internal/agent.ApprovalMode — exactly two modes.
-type ApprovalMode = 'ask_permission' | 'auto'
-
 type MessageRole = 'user' | 'assistant' | 'system' | 'execution' | 'task'
 
 type Message = {
@@ -41,21 +38,21 @@ type Message = {
 const STORAGE_MSGS = 'yummi:chat:messages'
 const STORAGE_SID  = 'yummi:chat:sessionId'
 const STORAGE_MODE = 'yummi:agent:approvalMode'
-const WELCOME: Omit<Message, 'id'> = {
+const WELCOME: Omit<Message, 'id' | 'timestamp'> = {
   role: 'system',
   content: 'Hazırım. Hedefini ya da görevini bir cümleyle yaz.',
-  timestamp: new Date().toISOString(),
 }
 
 let _id = 0
 const nextId = () => `msg-${++_id}`
+const freshWelcome = (): Message => ({ ...WELCOME, id: nextId(), timestamp: new Date().toISOString() })
 
 function loadMessages(): Message[] {
   try {
     const raw = sessionStorage.getItem(STORAGE_MSGS)
     if (raw) return JSON.parse(raw) as Message[]
   } catch { /* corrupted — fall through */ }
-  return [{ ...WELCOME, id: nextId() }]
+  return [freshWelcome()]
 }
 
 function loadSessionID(): string {
@@ -137,8 +134,7 @@ export function AssistantPanel(): JSX.Element {
   }, [])
 
   const clearChat = useCallback(() => {
-    const welcome: Message = { ...WELCOME, id: nextId(), timestamp: new Date().toISOString() }
-    setMessages([welcome])
+    setMessages([freshWelcome()])
     setProposals([])
     setActiveTask(null)
     setSessionID('default')
@@ -335,7 +331,7 @@ export function AssistantPanel(): JSX.Element {
         if (newProposals.length > 0) setProposals(newProposals)
       }
     } catch {
-      appendMessage({ role: 'system', content: 'Bağlantı hatası. n1 çalışıyor mu?' })
+      appendMessage({ role: 'system', content: 'Bağlantı hatası. Orchestrator çalışıyor mu?' })
     } finally {
       setIsLoading(false)
       inputRef.current?.focus()
@@ -373,7 +369,8 @@ export function AssistantPanel(): JSX.Element {
   const rejectProposal  = (p: ChatProposal) => setProposals(prev => prev.filter(x => x.id !== p.id))
   const copyCommand     = (cmd: string) => {
     navigator.clipboard.writeText(cmd)
-    appendMessage({ role: 'system', content: 'Panoya kopyalandı' })
+      .then(() => appendMessage({ role: 'system', content: 'Panoya kopyalandı' }))
+      .catch(() => appendMessage({ role: 'system', content: 'Panoya kopyalanamadı' }))
   }
 
   // ── Keyboard navigation ────────────────────────────────────────────────────
@@ -441,7 +438,6 @@ export function AssistantPanel(): JSX.Element {
               return (
                 <div key={msg.id} className="msg-task-card">
                   <TaskTracker
-                    taskID={msg.taskID}
                     liveTask={displayTask}
                     onClose={() => setActiveTask(null)}
                     onApprove={(pid, approved) => approveTaskGate(msg.taskID!, pid, approved)}
@@ -568,36 +564,14 @@ export function AssistantPanel(): JSX.Element {
           )}
         </div>
 
-        {/* Approval mode */}
-        <div className="mode-select" role="radiogroup" aria-label="Onay modu">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={approvalMode === 'ask_permission'}
-            className={`mode-option ${approvalMode === 'ask_permission' ? 'active' : ''}`}
-            onClick={() => void setApprovalMode('ask_permission')}
-            title="Her komut için onay iste"
-          >
-            Ask Permission
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={approvalMode === 'auto'}
-            className={`mode-option ${approvalMode === 'auto' ? 'active' : ''}`}
-            onClick={() => void setApprovalMode('auto')}
-            title="Komutları otomatik onayla"
-          >
-            Auto
-          </button>
-        </div>
-
         {/* Context bar */}
         <ContextBar
           charCount={charCount}
           sessionID={sessionID}
           messageCount={messages.length}
           isLoading={isBlocked}
+          approvalMode={approvalMode}
+          onApprovalModeChange={mode => void setApprovalMode(mode)}
         />
       </div>
     </section>

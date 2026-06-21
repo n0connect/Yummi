@@ -1,6 +1,6 @@
 # gateway — Trust Boundary
 
-gateway (`p*`) is the Rust daemon that enforces fail-closed network isolation between the Kali execution container (sandbox) and the external network. It is the only component that can permit outbound traffic from sandbox.
+gateway is the Rust daemon that enforces fail-closed network isolation between the Kali execution container (sandbox) and the external network. It is the only component that can permit outbound traffic from sandbox.
 
 ## Design principle
 

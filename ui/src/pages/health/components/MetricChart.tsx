@@ -49,8 +49,8 @@ export function MetricChart({ samples, dataKey, label, color, unit = '', formatV
           />
           <Tooltip
             contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', fontSize: 11 }}
-            labelFormatter={(ts: any) => fmtTime(ts)}
-            formatter={(v: any) => [formatValue ? formatValue(v) : `${v}${unit}`, label]}
+            labelFormatter={(ts) => fmtTime(Number(ts))}
+            formatter={(v) => [formatValue ? formatValue(Number(v)) : `${v}${unit}`, label]}
           />
           <Area
             type="monotone"

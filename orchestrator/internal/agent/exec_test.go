@@ -114,11 +114,11 @@ func TestStoreExecer_Cancel(t *testing.T) {
 	}
 }
 
-// TestStoreExecerIntegration exercises real Docker exec via the n0 bridge.
-// Requires the n0 container to be running.
+// TestStoreExecerIntegration exercises real Docker exec via the sandbox bridge.
+// Requires the sandbox container to be running.
 func TestStoreExecerIntegration(t *testing.T) {
 	if testing.Short() {
-		t.Skip("integration: requires n0 container (run without -short)")
+		t.Skip("integration: requires sandbox container (run without -short)")
 	}
-	t.Skip("integration test: run manually with n0 container running")
+	t.Skip("integration test: run manually with sandbox container running")
 }

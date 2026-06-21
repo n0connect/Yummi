@@ -1,6 +1,6 @@
 version: "0.1"
 
-# Document-driven persona for the AUTONOMOUS AGENT loop (n1/internal/agent).
+# Document-driven persona for the AUTONOMOUS AGENT loop (orchestrator/internal/agent).
 # The Go code holds NO model-facing prose — it loads this file and assembles it
 # with the runtime protocol contract. Deliberately model- and context-
 # INDEPENDENT: it encodes a WAY OF REASONING — the disposition and guardrails of

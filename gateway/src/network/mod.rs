@@ -1,7 +1,7 @@
 //! Network controller — Linux/nftables only.
 //!
 //! gateway is designed exclusively for Linux (Docker). It manages nftables FORWARD
-//! chain rules on the Docker bridge so that n0's outbound traffic is filtered
+//! chain rules on the Docker bridge so that sandbox's outbound traffic is filtered
 //! at the network level before reaching external targets.
 //!
 //! There is no cross-platform abstraction: this module compiles and runs only

@@ -1,6 +1,6 @@
 // test_loop: LLM + Execution Feedback Loop Integration Test
 //
-// Gerçek n0 (Kali) container komutlarını çalıştırır, çıktıyı AppendObservation
+// Gerçek sandbox (Kali) container komutlarını çalıştırır, çıktıyı AppendObservation
 // ile LLM history'e besler ve LLM'in bağlamı koruyup korumadığını, semantik
 // olarak doğru adımlar önerip önermediğini ölçer.
 //
@@ -39,9 +39,9 @@ type loopScenario struct {
 	// Phase 1: kullanıcının sorusu → LLM'in önereceği komut
 	prompt string
 
-	// Phase 2: n0'da çalıştırılacak gerçek komut (LLM'in önerisi yerine
+	// Phase 2: sandbox'da çalıştırılacak gerçek komut (LLM'in önerisi yerine
 	// belirlenmiş komut kullanılır — test tekrarlanabilir olsun diye)
-	n0Command string
+	sandboxCommand string
 
 	// Phase 3: gözlem inject edildikten sonra sorulacak soru
 	followUp string
@@ -68,7 +68,7 @@ var scenarios = []loopScenario{
 		id:           "L-01",
 		category:     "SysRecon",
 		prompt:       "Bu Kali sistemde çalışan kullanıcı kim ve hangi OS var?",
-		n0Command:    "whoami && id && uname -a && cat /etc/os-release | head -5",
+		sandboxCommand:    "whoami && id && uname -a && cat /etc/os-release | head -5",
 		followUp:     "Çıktıyı gördün, bu sistemde hangi ayrıcalıklar var? Sonraki adım ne?",
 		wantProposal: true,
 		wantTools:    []string{"whoami", "id", "uname", "cat", "hostnamectl"},
@@ -82,7 +82,7 @@ var scenarios = []loopScenario{
 		id:           "L-02",
 		category:     "NetRecon",
 		prompt:       "Sistemin ağ arayüzlerini ve IP adreslerini göster",
-		n0Command:    "ip a 2>/dev/null || ifconfig 2>/dev/null",
+		sandboxCommand:    "ip a 2>/dev/null || ifconfig 2>/dev/null",
 		followUp:     "Bu IP yapısını gördün. Hangi subnet'ler var ve ne taramalısın?",
 		wantProposal: true,
 		wantTools:    []string{"ip", "ifconfig", "netstat", "ss"},
@@ -96,7 +96,7 @@ var scenarios = []loopScenario{
 		id:           "L-03",
 		category:     "PortEnum",
 		prompt:       "Bu sistemde dinleyen servisleri ve açık portları listele",
-		n0Command:    "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
+		sandboxCommand:    "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
 		followUp:     "Dinleyen portları gördün. Hangisi en ilginç ve neden?",
 		wantProposal: true,
 		wantTools:    []string{"ss", "netstat", "nmap", "lsof"},
@@ -110,7 +110,7 @@ var scenarios = []loopScenario{
 		id:                   "L-04",
 		category:             "FileRecon",
 		prompt:               "Sistemde hassas dosyalar veya yapılandırma dosyaları nerede?",
-		n0Command:            "find /etc -name '*.conf' -maxdepth 2 2>/dev/null | head -20 && ls /home 2>/dev/null && ls /root 2>/dev/null",
+		sandboxCommand:            "find /etc -name '*.conf' -maxdepth 2 2>/dev/null | head -20 && ls /home 2>/dev/null && ls /root 2>/dev/null",
 		followUp:             "Bu dosyaları gördün. Hangisi pentest açısından en değerli?",
 		wantProposal:         true,
 		wantTools:            []string{"find", "ls", "cat", "grep"},
@@ -123,7 +123,7 @@ var scenarios = []loopScenario{
 		id:                   "L-05",
 		category:             "ProcEnum",
 		prompt:               "Sistemde hangi süreçler çalışıyor, root yetkisiyle ne var?",
-		n0Command:            "ps aux --sort=-%cpu | head -20",
+		sandboxCommand:            "ps aux --sort=-%cpu | head -20",
 		followUp:             "Süreç listesini gördün. Şüpheli veya exploit edilebilir bir şey var mı?",
 		wantProposal:         true,
 		wantTools:            []string{"ps", "top", "htop", "pgrep"},
@@ -136,7 +136,7 @@ var scenarios = []loopScenario{
 		id:           "L-06",
 		category:     "ErrorHandling",
 		prompt:       "192.168.1.1 hedefine agresif nmap taraması yap",
-		n0Command:    "nmap --invalid-flag-that-does-not-exist 2>&1 || echo 'NMAP_ERROR: invalid option'",
+		sandboxCommand:    "nmap --invalid-flag-that-does-not-exist 2>&1 || echo 'NMAP_ERROR: invalid option'",
 		followUp:     "Komut hata verdi. Ne yapmalıyım?",
 		wantProposal: true,
 		wantTools:    []string{"nmap", "masscan", "ping"},
@@ -153,7 +153,7 @@ var scenarios = []loopScenario{
 		id:           "L-07",
 		category:     "Truncation",
 		prompt:       "Sistemdeki tüm dosyaları bul",
-		n0Command:    "find / -not -path '*/proc/*' -not -path '*/sys/*' 2>/dev/null | head -500",
+		sandboxCommand:    "find / -not -path '*/proc/*' -not -path '*/sys/*' 2>/dev/null | head -500",
 		followUp:     "Çok büyük bir çıktı geldi. Özet olarak ne gördün?",
 		wantProposal: false, // Bu bir explain/summary bekleniyor
 		wantKeywordsAfterObs: []string{
@@ -168,7 +168,7 @@ var scenarios = []loopScenario{
 		id:           "L-08",
 		category:     "ChainCoherence",
 		prompt:       "Hedef: 127.0.0.1. Hızlı port taraması yap.",
-		n0Command:    "nmap -F 127.0.0.1 2>&1",
+		sandboxCommand:    "nmap -F 127.0.0.1 2>&1",
 		followUp:     "Port taraması bitti. Açık port buldun mu? Sırada ne var?",
 		wantProposal: true,
 		wantTools:    []string{"nmap", "curl", "nc", "telnet", "openssl", "ssh", "ftp", "nikto", "gobuster"},
@@ -281,29 +281,29 @@ func runScenario(eng *conductor.Engine, bridge *sandbox.Bridge, sc loopScenario)
 		evidence = append(evidence, fmt.Sprintf("Phase1 öneri: %s", phase1.Proposals[0].Command))
 	}
 
-	// ── Aşama 2: n0'da komutu çalıştır ──────────────────────────────────────
+	// ── Aşama 2: sandbox'da komutu çalıştır ──────────────────────────────────────
 	ctx2, c2 := context.WithTimeout(context.Background(), 60*time.Second)
 	defer c2()
 
-	n0Out, n0Err := bridge.Exec(ctx2, sc.n0Command)
+	sandboxOut, sandboxErr := bridge.Exec(ctx2, sc.sandboxCommand)
 	rawOutput := ""
 	errText := ""
-	if n0Out != nil {
-		rawOutput = n0Out.Stdout
-		if n0Out.Stderr != "" && rawOutput == "" {
-			rawOutput = n0Out.Stderr
+	if sandboxOut != nil {
+		rawOutput = sandboxOut.Stdout
+		if sandboxOut.Stderr != "" && rawOutput == "" {
+			rawOutput = sandboxOut.Stderr
 		}
 	}
-	if n0Err != nil {
-		errText = n0Err.Error()
-		evidence = append(evidence, fmt.Sprintf("n0 exec hatası: %s", errText))
+	if sandboxErr != nil {
+		errText = sandboxErr.Error()
+		evidence = append(evidence, fmt.Sprintf("sandbox exec hatası: %s", errText))
 	} else {
 		lines := strings.Count(rawOutput, "\n")
-		evidence = append(evidence, fmt.Sprintf("n0 çıktı: %d satır, %d byte", lines, len(rawOutput)))
+		evidence = append(evidence, fmt.Sprintf("sandbox çıktı: %d satır, %d byte", lines, len(rawOutput)))
 	}
 
 	// ── Aşama 3: Çıktıyı history'e besle → LLM'e follow-up sor ─────────────
-	eng.AppendObservation(sessionID, sc.n0Command, rawOutput, errText)
+	eng.AppendObservation(sessionID, sc.sandboxCommand, rawOutput, errText)
 
 	ctx3, c3 := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer c3()
@@ -375,7 +375,7 @@ func buildReport(results []result, model, tier string, total time.Duration) stri
 	sb.WriteString(fmt.Sprintf("**Tier:** `%s`  \n", tier))
 	sb.WriteString(fmt.Sprintf("**Tarih:** %s  \n", time.Now().Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("**Toplam süre:** %s  \n\n", total.Round(time.Second)))
-	sb.WriteString("> Her senaryo 3 aşamalı: (1) LLM önerir → (2) n0 Kali'de çalışır → ")
+	sb.WriteString("> Her senaryo 3 aşamalı: (1) LLM önerir → (2) sandbox Kali'de çalışır → ")
 	sb.WriteString("(3) çıktı history'e beslenir, LLM analiz eder.\n\n---\n\n")
 
 	for _, r := range results {
