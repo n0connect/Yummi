@@ -15,7 +15,7 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 		t.Fatalf("expected version 1, got %d", cfg.Version)
 	}
 	if cfg.Runtime.SandboxService == "" {
-		t.Fatal("expected default n0 service")
+		t.Fatal("expected default sandbox service")
 	}
 }
 

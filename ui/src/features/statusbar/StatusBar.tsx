@@ -1,20 +1,13 @@
 import { NavLink } from 'react-router-dom'
 import { useSystemStatus } from '../system/useSystemStatus'
-
-function dotClass(status: string): string {
-  if (status === 'healthy')       return 'dot dot-ok'
-  if (status === 'degraded')      return 'dot dot-warn'
-  if (status === 'down')          return 'dot dot-err'
-  if (status === 'not_connected') return 'dot dot-muted'
-  return 'dot dot-dim'
-}
+import { dotClass } from '../../shared/lib/statusDot'
 
 export function StatusBar(): JSX.Element {
   const data = useSystemStatus()
 
   const modules = data?.modules ?? []
   const getStatus = (name: string) =>
-    modules.find((m: any) => m.name === name)?.status ?? 'checking'
+    modules.find(m => m.name === name)?.status ?? 'checking'
 
   return (
     <div className="status-bar">

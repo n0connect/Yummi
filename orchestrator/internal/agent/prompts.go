@@ -94,7 +94,7 @@ func BuildPlanPrompt(persona AgentPersona, goal, scopeSummary string) (system, u
 }
 
 // scopeBlock renders the authorized-scope section. With no scope configured the
-// agent operates freely — the real network boundary is enforced by p* — so no
+// agent operates freely — the real network boundary is enforced by gateway — so no
 // restrictive language is injected.
 func scopeBlock(scopeSummary string) string {
 	if strings.TrimSpace(scopeSummary) == "" {

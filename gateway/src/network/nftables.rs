@@ -280,7 +280,7 @@ mod tests {
                 audit_db: ":memory:".to_string(),
             },
             ipc: IpcConfig {
-                socket_path: "/tmp/test.sock".to_string(),
+                socket_path: std::env::temp_dir().join("yummi-test.sock").to_string_lossy().to_string(),
                 socket_mode: 0o600,
             },
             watchdog: WatchdogConfig::default(),

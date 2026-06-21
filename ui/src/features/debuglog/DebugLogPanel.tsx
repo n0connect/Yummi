@@ -30,16 +30,11 @@ export function DebugLogPanel(): JSX.Element {
     autoScroll.current = scrollHeight - scrollTop - clientHeight < 40
   }, [])
 
-  const clearLogs = () => {
-    // Note: This only clears the view, not the actual log stream
-    // Real implementation would need a clear function in useLogStream
-  }
-
   return (
     <>
       <div className="panel-header">
         <span className="panel-header-title">Debug Log</span>
-        <span className="panel-header-actions" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+        <span className="panel-header-actions log-count">
           {visible.length}/{entries.length} lines
         </span>
       </div>
@@ -58,12 +53,7 @@ export function DebugLogPanel(): JSX.Element {
           placeholder="Filter..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{
-            marginLeft: 'auto',
-            width: '120px',
-            padding: '2px 8px',
-            fontSize: '10px'
-          }}
+          className="log-search-input"
         />
       </div>
       <div className="log-list" ref={listRef} onScroll={onScroll}>
@@ -72,7 +62,7 @@ export function DebugLogPanel(): JSX.Element {
             {entries.length === 0 ? 'No log entries yet...' : 'No matching entries'}
           </div>
         ) : (
-          visible.map((e, i) => <LogLine key={i} entry={e} />)
+          visible.map(e => <LogLine key={e._id} entry={e} />)
         )}
       </div>
     </>

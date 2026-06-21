@@ -1,11 +1,11 @@
-//! IPC protocol — message types for n1 ↔ gateway communication.
+//! IPC protocol — message types for orchestrator ↔ gateway communication.
 //!
 //! Length-prefixed JSON over Unix domain socket.
-//! These types must serialize identically to n1/internal/gateway/protocol.go.
+//! These types must serialize identically to orchestrator/internal/gateway/protocol.go.
 
 use serde::{Deserialize, Serialize};
 
-/// Request from n1 to gateway.
+/// Request from orchestrator to gateway.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IpcRequest {
@@ -31,7 +31,7 @@ pub enum IpcRequest {
     },
 }
 
-/// Response from gateway to n1.
+/// Response from gateway to orchestrator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IpcResponse {

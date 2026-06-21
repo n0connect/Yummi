@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-YUMMI_HOME="${HOME}/.yummi"
+YUMMI_HOME="${YUMMI_HOME:-${HOME}/.yummi}"
 status=0
 
 check_cmd() {
@@ -50,7 +50,7 @@ done
 
 # ── Ollama single-model checks ────────────────────────────────────────────────
 OLLAMA_URL="${YUMMI_OLLAMA_URL:-http://localhost:11434}"
-OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:14b}"
+OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:8b}"
 
 if curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
   echo "[ok] ollama reachable at ${OLLAMA_URL}"

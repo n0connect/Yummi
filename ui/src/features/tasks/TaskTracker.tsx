@@ -48,14 +48,13 @@ function PlanTimeline({ plan }: { plan: PlanStep[] }): JSX.Element {
 }
 
 type Props = {
-  taskID: string
   liveTask: AgentTask
   onClose: () => void
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
 }
 
-export function TaskTracker({ taskID: _taskID, liveTask: t, onClose, onApprove, onStop }: Props): JSX.Element {
+export function TaskTracker({ liveTask: t, onClose, onApprove, onStop }: Props): JSX.Element {
   const pct      = t.step_budget > 0 ? Math.min(100, (t.steps_used / t.step_budget) * 100) : 0
   const terminal = isTerminal(t.status)
 

@@ -3,9 +3,15 @@ import type { LogEntry, LogLevel } from '../../entities/types'
 
 const MAX_ENTRIES = 500
 
-export function useLogStream(): LogEntry[] {
-  const [entries, setEntries] = useState<LogEntry[]>([])
+// Streamed entries get a stable id so React list keys survive the front-of-
+// array trim in MAX_ENTRIES — array index alone would shift under entries
+// that stay on screen, causing key reuse across different log lines.
+export type StreamedLogEntry = LogEntry & { _id: number }
+
+export function useLogStream(): StreamedLogEntry[] {
+  const [entries, setEntries] = useState<StreamedLogEntry[]>([])
   const esRef = useRef<EventSource | null>(null)
+  const idRef = useRef(0)
 
   useEffect(() => {
     let retryTimer: ReturnType<typeof setTimeout> | null = null
@@ -17,7 +23,7 @@ export function useLogStream(): LogEntry[] {
 
       es.onmessage = (ev) => {
         try {
-          const entry = JSON.parse(ev.data) as LogEntry
+          const entry: StreamedLogEntry = { ...(JSON.parse(ev.data) as LogEntry), _id: ++idRef.current }
           setEntries(prev => {
             const next = [...prev, entry]
             return next.length > MAX_ENTRIES ? next.slice(next.length - MAX_ENTRIES) : next
@@ -47,7 +53,7 @@ export function useLogStream(): LogEntry[] {
   return entries
 }
 
-export function filterEntries(entries: LogEntry[], level: LogLevel | 'ALL'): LogEntry[] {
+export function filterEntries<T extends LogEntry>(entries: T[], level: LogLevel | 'ALL'): T[] {
   if (level === 'ALL') return entries
   const levels: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 }
   const minLevel = levels[level] ?? 0

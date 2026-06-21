@@ -32,7 +32,7 @@ func TestParsePlanRejectsEmpty(t *testing.T) {
 
 func TestBuildStepPromptContainsState(t *testing.T) {
 	task := Task{
-		Goal:       "enumerate n0",
+		Goal:       "enumerate sandbox",
 		StepsUsed:  3,
 		StepBudget: 15,
 		Plan: []PlanStep{
@@ -41,7 +41,7 @@ func TestBuildStepPromptContainsState(t *testing.T) {
 		},
 	}
 	prompt := BuildStepPrompt(task, "[TOOL OUTPUT]\nuid=1000\n", "")
-	for _, want := range []string{"enumerate n0", "s1", "s2", "3/15", "uid=1000"} {
+	for _, want := range []string{"enumerate sandbox", "s1", "s2", "3/15", "uid=1000"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("step prompt missing %q", want)
 		}

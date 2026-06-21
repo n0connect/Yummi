@@ -7,7 +7,9 @@ export function LogLine({ entry }: Props): JSX.Element {
 
   let formattedMsg = entry.msg
   if (entry.msg === 'http' && entry.attrs) {
-    const { method, path, status, duration_ms } = entry.attrs as any
+    const { method, path, status, duration_ms } = entry.attrs as {
+      method?: string; path?: string; status?: number; duration_ms?: number
+    }
     formattedMsg = `${method} ${path} [${status}] (${duration_ms}ms)`
   } else if (entry.attrs && Object.keys(entry.attrs).length > 0) {
     const attrStr = Object.entries(entry.attrs)

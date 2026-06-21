@@ -210,7 +210,7 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 					"id":     rec.ID,
 					"status": rec.Status,
 				}
-				assistantMessage = "Approved. Running in n0; result will appear in chat shortly."
+				assistantMessage = "Approved. Running in sandbox; result will appear in chat shortly."
 			}
 		}
 

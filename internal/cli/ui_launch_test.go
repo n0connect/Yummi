@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+// TestDefaultUIURLMatchesOrchestratorPort guards against the default drifting
+// from the orchestrator's own default port (YUMMI_ORCHESTRATOR_PORT, see
+// orchestrator/internal/config/config.go) — they live in separate Go modules
+// so nothing else catches that mismatch at compile time.
+func TestDefaultUIURLMatchesOrchestratorPort(t *testing.T) {
+	const want = "http://127.0.0.1:9080"
+	if defaultUIURL != want {
+		t.Fatalf("defaultUIURL = %q, want %q (must match orchestrator's default port)", defaultUIURL, want)
+	}
+}
+
 func TestJoinURL(t *testing.T) {
 	got, err := joinURL("http://127.0.0.1:8080", "/api/v1/sandbox/status")
 	if err != nil {

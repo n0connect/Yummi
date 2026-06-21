@@ -1,6 +1,6 @@
 # sandbox — Kali Execution Container
 
-sandbox is the Dockerized Kali Linux environment where all pentest commands run. It is isolated from the external network by the p* trust boundary — it can only reach targets that p* has explicitly allowed.
+sandbox is the Dockerized Kali Linux environment where all pentest commands run. It is isolated from the external network by the gateway trust boundary — it can only reach targets that gateway has explicitly allowed.
 
 ## Security constraints
 
@@ -37,7 +37,7 @@ After adding the tool, also register it in the orchestrator tool allowlist:
 ## Entrypoint
 
 `entrypoint.sh` runs as the container's PID 1. It:
-1. Waits for p* to become healthy (socket present)
+1. Waits for gateway to become healthy (socket present)
 2. Starts a long-lived `sleep infinity` so orchestrator can `docker exec` into it
 
 Commands are never run via a persistent shell — each `docker exec` call is a fresh, scoped subprocess.
@@ -60,4 +60,4 @@ sandbox (172.20.0.10) ──── yummi_internal ──── gateway (172.20.0
                                          External Network
 ```
 
-All traffic from sandbox to external hosts is intercepted by gateway. Bypassing p* from sandbox is not possible without `CAP_NET_ADMIN` and direct nftables access, which sandbox does not have.
+All traffic from sandbox to external hosts is intercepted by gateway. Bypassing gateway from sandbox is not possible without `CAP_NET_ADMIN` and direct nftables access, which sandbox does not have.

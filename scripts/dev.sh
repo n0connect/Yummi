@@ -4,6 +4,6 @@ IFS=$'\n\t'
 
 ./scripts/install.sh
 
-docker compose up -d n0
+docker compose up -d sandbox
 
-echo "n0 is running in development mode"
+echo "sandbox is running in development mode"

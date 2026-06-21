@@ -1,9 +1,3 @@
-export type InfraState = {
-  sandboxStatus: string
-  gatewayStatus: string
-  gatewayLevel: string
-}
-
 export type ChatProposal = {
   id?: string
   command?: string

@@ -13,7 +13,7 @@ import (
 )
 
 // TestRunnerLive_RealModelRealContainer is a manual end-to-end smoke test against
-// the REAL qwen3:8b model (Ollama) and the REAL n0 Kali container (docker exec).
+// the REAL qwen3:8b model (Ollama) and the REAL sandbox Kali container (docker exec).
 // It is skipped unless YUMMI_LIVE=1 so it never runs in the normal suite.
 //
 // Run with:
@@ -21,7 +21,7 @@ import (
 //	YUMMI_LIVE=1 YUMMI_OLLAMA_URL=http://localhost:11434 \
 //	YUMMI_OLLAMA_MODEL=qwen3:8b go test ./internal/agent/ -run TestRunnerLive -v -timeout 15m
 //
-// p* is intentionally bypassed (the host has no pstar socket); the validator
+// gateway is intentionally bypassed (the host has no gateway socket); the validator
 // still enforces scope and the goal targets only the local container.
 func TestRunnerLive_RealModelRealContainer(t *testing.T) {
 	if os.Getenv("YUMMI_LIVE") != "1" {
@@ -31,13 +31,13 @@ func TestRunnerLive_RealModelRealContainer(t *testing.T) {
 	model := envOrDefault("YUMMI_OLLAMA_MODEL", "qwen3:8b")
 	container := envOrDefault("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox")
 
-	// Precondition: the n0 container must be reachable, or the run is meaningless
+	// Precondition: the sandbox container must be reachable, or the run is meaningless
 	// (every docker exec would fail with "No such container").
 	if err := osexec.Command("docker", "exec", container, "true").Run(); err != nil {
 		t.Skipf("live smoke: container %q not reachable (%v); start the stack first", container, err)
 	}
 
-	// Real n0 executor: run the command inside the Kali container via docker exec.
+	// Real sandbox executor: run the command inside the Kali container via docker exec.
 	es := execution.NewStore()
 	es.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
 		out, err := osexec.CommandContext(ctx, "docker", "exec", container, "sh", "-c", rec.Command).CombinedOutput()

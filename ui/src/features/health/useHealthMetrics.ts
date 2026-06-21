@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 export type MetricSample = {
   ts: number
@@ -20,7 +20,6 @@ const POLL_MS = 5_000
 
 export function useHealthMetrics(window: string = '5m'): HealthMetricsResponse | null {
   const [data, setData] = useState<HealthMetricsResponse | null>(null)
-  const lastRef = useRef<HealthMetricsResponse | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -29,13 +28,10 @@ export function useHealthMetrics(window: string = '5m'): HealthMetricsResponse |
       try {
         const res = await fetch(`/api/v1/system/health-metrics?window=${window}`)
         if (res.ok && !cancelled) {
-          const json = await res.json()
-          lastRef.current = json
-          setData(json)
+          setData(await res.json())
         }
       } catch {
-        // retain last known value on network error
-        if (!cancelled && lastRef.current) setData(lastRef.current)
+        // network error — `data` already holds the last successful value
       }
     }
 

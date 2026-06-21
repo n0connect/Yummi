@@ -1,6 +1,6 @@
 # orchestrator — Orchestrator
 
-orchestrator is the Go orchestrator for Yummi. It exposes the REST + WebSocket API, drives the AI conductor, manages the agentic task loop, and bridges commands to the Kali container (sandbox) through the trust boundary (p*).
+orchestrator is the Go orchestrator for Yummi. It exposes the REST + WebSocket API, drives the AI conductor, manages the agentic task loop, and bridges commands to the Kali container (sandbox) through the trust boundary (gateway).
 
 ## Module
 
@@ -11,7 +11,7 @@ github.com/n0connect/yummi/orchestrator
 ## Quick start
 
 ```bash
-# Run locally (requires p* socket and sandbox container running, or degraded mode)
+# Run locally (requires gateway socket and sandbox container running, or degraded mode)
 cd orchestrator && go run ./cmd/orchestrator
 
 # Or via Makefile from repo root
@@ -30,7 +30,7 @@ internal/
     handlers.go           Shared helpers: writeJSON, writeError, wsUpgrader
     handlers_session.go   Session / target / finding / audit CRUD
     handlers_execution.go Execution lifecycle (list, get, cancel)
-    handlers_system.go    p* + sandbox status and direct exec endpoint
+    handlers_system.go    gateway + sandbox status and direct exec endpoint
     handlers_chat.go      Chat, proposal approval, events WebSocket
     routes.go             Chi mux route registration
     system.go             System info aggregator, log ring buffer, SSE endpoint
@@ -50,11 +50,11 @@ internal/
     tier.go      Ollama model tier registry (lite/pro/expert/standard)
     persona.go   Persona YAML loader
   execution/      Command execution lifecycle store
-  executor/       Processor: execution.Store → p* scope check → sandbox bridge
+  executor/       Processor: execution.Store → gateway scope check → sandbox bridge
   session/        SQLite CRUD for sessions, targets, findings, audit trail
   llm/            Ollama HTTP client
   sandbox/             Docker exec bridge to Kali container
-  gateway/          IPC client to p* trust boundary daemon (Unix socket)
+  gateway/          IPC client to gateway trust boundary daemon (Unix socket)
   health/         Ring-buffer health metrics + component pinger
   mcp/            JSON-RPC 2.0 stdio client for MCP servers
   tlsutil/        mTLS certificate generation (ECDSA P-256)
@@ -106,7 +106,7 @@ runner.runCommand() → validator risk ≥ medium
 | `YUMMI_OLLAMA_MODEL` | `qwen3:8b` | Model name (overridden by tier) |
 | `YUMMI_OLLAMA_TIER` | _(empty)_ | `lite`/`pro`/`expert`/`standard` |
 | `YUMMI_SANDBOX_CONTAINER` | `yummi-sandbox` | Kali container name |
-| `YUMMI_GATEWAY_SOCKET` | `/run/yummi/gateway.sock` | p* Unix socket path |
+| `YUMMI_GATEWAY_SOCKET` | `/run/yummi/gateway.sock` | gateway Unix socket path |
 | `YUMMI_PERSONA_DIR` | `persona/v0.1` | Persona YAML directory |
 | `PENTEST_SCOPE_ALLOW` | _(empty)_ | CSV of allowed IPs/CIDRs/domains |
 | `PENTEST_SCOPE_BLOCK` | _(empty)_ | CSV of blocked IPs/CIDRs/domains |
@@ -131,7 +131,7 @@ cd orchestrator && go test -race ./...
 1. Add handler factory in the relevant domain file:
    - session/target/finding → `handlers_session.go`
    - execution lifecycle → `handlers_execution.go`
-   - p*/sandbox system → `handlers_system.go`
+   - gateway/sandbox system → `handlers_system.go`
    - chat/agentic → `handlers_chat.go`
 2. Register route in `routes.go`
 3. Add test in `handlers_test.go` or `chat_test.go`

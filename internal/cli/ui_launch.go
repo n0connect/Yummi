@@ -20,7 +20,10 @@ import (
 )
 
 const (
-	defaultUIURL          = "http://127.0.0.1:8080"
+	// defaultUIURL must match the orchestrator's default bind address/port
+	// (YUMMI_ORCHESTRATOR_HOST/PORT, see orchestrator/internal/config/config.go) —
+	// the orchestrator binary serves both the API and the embedded UI assets.
+	defaultUIURL          = "http://127.0.0.1:9080"
 	readinessTimeout      = 20 * time.Second
 	readinessPollInterval = 500 * time.Millisecond
 )

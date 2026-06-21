@@ -122,23 +122,6 @@ export function TerminalPanel(): JSX.Element {
     }
   }, [])
 
-  // ── LLM proposal "Run" event ──────────────────────────────────────────────
-  // AssistantPanel dispatches 'terminal:exec' with the proposed command.
-  // We send it as a PTY input line — identical to the user pressing Enter.
-  useEffect(() => {
-    const handleExec = (e: Event) => {
-      const cmd = (e as CustomEvent<string>).detail
-      const s = socketRef.current
-      if (s?.readyState === WebSocket.OPEN) {
-        s.send(new TextEncoder().encode(cmd + '\n'))
-      } else {
-        termRef.current?.write('\r\n\x1b[31m[Terminal offline — cannot execute proposal]\x1b[0m\r\n')
-      }
-    }
-    window.addEventListener('terminal:exec', handleExec)
-    return () => window.removeEventListener('terminal:exec', handleExec)
-  }, [])
-
   return (
     <section className="panel">
       <div className="panel-header">

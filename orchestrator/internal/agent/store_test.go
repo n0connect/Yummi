@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3" // driver used across n1 (session/execution)
+	_ "github.com/mattn/go-sqlite3" // driver used across orchestrator (session/execution)
 )
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -23,7 +23,7 @@ func TestStoreCreateGetUpdate(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 
-	task, err := s.Create("sess-1", "enumerate the n0 host", 15)
+	task, err := s.Create("sess-1", "enumerate the sandbox host", 15)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

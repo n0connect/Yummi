@@ -1,5 +1,5 @@
 // Command test_agent runs end-to-end agentic task scenarios against a live
-// Ollama + n0 stack. Usage (from the n1/ directory):
+// Ollama + sandbox stack. Usage (from the orchestrator/ directory):
 //
 //	YUMMI_OLLAMA_URL=http://localhost:11434 go run ./cmd/test_agent
 //
@@ -32,13 +32,13 @@ type scenario struct {
 var scenarios = []scenario{
 	{
 		id:           "A-01-SysRecon",
-		goal:         "Bu n0 sisteminde hangi kullanıcıyla çalıştığımızı ve işletim sistemi sürümünü tespit et, sonra özetle.",
+		goal:         "Bu sandbox sisteminde hangi kullanıcıyla çalıştığımızı ve işletim sistemi sürümünü tespit et, sonra özetle.",
 		wantKeywords: []string{"pentester"},
 		maxSteps:     6,
 	},
 	{
 		id:           "A-02-MultiStep",
-		goal:         "Identify the running processes and listening sockets on the n0 container, then summarize anything notable.",
+		goal:         "Identify the running processes and listening sockets on the sandbox container, then summarize anything notable.",
 		wantKeywords: []string{},
 		maxSteps:     8,
 	},
