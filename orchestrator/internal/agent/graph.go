@@ -172,14 +172,6 @@ func (s *GraphState) failureLimit() int {
 	return 3
 }
 
-// scopeSummary returns the validator's scope summary, handling a nil validator.
-func (s *GraphState) scopeSummary() string {
-	if s.validator == nil {
-		return ""
-	}
-	return s.validator.ScopeSummary()
-}
-
 // validate runs the proposal through the validator, returning an allow-all response when nil.
 func (s *GraphState) validate(proposal conductor.Proposal) conductor.ChatResponse {
 	if s.validator == nil {
@@ -290,6 +282,17 @@ func markStepStatus(store *Store, taskID, stepID string, status StepStatus, deta
 // edgeIsError on failure (both route back to the step node).
 func observeResult(s *GraphState, result ToolResult) string {
 	outcome, reason := Verify(result)
+	if outcome == OutcomeBlocked {
+		s.consecutiveFailures++
+		body := s.pendingCommand + "\nreason: " + reason +
+			"\nGateway rejected this target — it is out of network scope. " +
+			"Choose a different, in-scope target, or ask the operator if you believe this is wrong."
+		obs := Wrap("COMMAND_BLOCKED", body)
+		s.memCtx.AddObservation(obs)
+		s.lastObs = obs
+		markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
+		return edgeIsError
+	}
 	if outcome == OutcomeFailure {
 		s.consecutiveFailures++
 		body := s.pendingCommand + "\nreason: " + reason + "\n" + CompressObservation(result.Content)

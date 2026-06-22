@@ -35,7 +35,7 @@ func TestLiveEval_Quality(t *testing.T) {
 	}
 	model := envOrDefault("YUMMI_OLLAMA_MODEL", "qwen3:8b")
 	client := llm.NewClient(envOrDefault("YUMMI_OLLAMA_URL", "http://127.0.0.1:11434"), model)
-	validator := conductor.NewValidator(conductor.ValidationConfig{})
+	validator := conductor.NewValidator()
 
 	tasks := []struct{ id, goal string }{
 		{"E1-hostname", "Bu sistemin hostname'ini öğren ve söyle."},

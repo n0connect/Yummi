@@ -49,7 +49,7 @@ func TestBuildStepPromptContainsState(t *testing.T) {
 }
 
 func TestStepSystemPromptIncludesProtocol(t *testing.T) {
-	p := StepSystemPrompt(testPersona, "")
+	p := StepSystemPrompt(testPersona)
 	for _, tag := range []string{"[RUN_COMMAND]", "[TOOL_FAILED]", "[STOP_TASK]", "[UNKNOWN]"} {
 		if !strings.Contains(p, tag) {
 			t.Errorf("system prompt missing %s", tag)

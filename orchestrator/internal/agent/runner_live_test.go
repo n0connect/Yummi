@@ -50,7 +50,7 @@ func TestRunnerLive_RealModelRealContainer(t *testing.T) {
 	}
 	store, _ := NewStore(openTestDB(t))
 	client := llm.NewClient(url, model)
-	validator := conductor.NewValidator(conductor.ValidationConfig{})
+	validator := conductor.NewValidator()
 	runner := NewRunner(store, client, validator, NewStoreExecer(es, 5*time.Minute),
 		Config{StepBudget: 6, ApprovalTimeout: 90 * time.Second, SoftTimeout: 90 * time.Second,
 			ApprovalMode: ModeAuto, Persona: persona})

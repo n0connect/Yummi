@@ -36,7 +36,7 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		return edgeBudgetOut, nil
 	}
 
-	system := StepSystemPrompt(s.cfg.Persona, s.scopeSummary())
+	system := StepSystemPrompt(s.cfg.Persona)
 	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary)
 
 	raw, err := s.llm.Chat(ctx, system, prompt)

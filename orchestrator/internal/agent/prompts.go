@@ -76,14 +76,13 @@ func ParsePlan(raw string) ([]PlanStep, error) {
 }
 
 // BuildPlanPrompt returns system and user prompts for the planning call.
-func BuildPlanPrompt(persona AgentPersona, goal, scopeSummary string) (system, user string) {
+// Network scope is no longer surfaced here — gateway is the sole authority and
+// enforces scope transparently at execution time.
+func BuildPlanPrompt(persona AgentPersona, goal string) (system, user string) {
 	var b strings.Builder
 	b.WriteString(persona.Identity)
 	if p := strings.TrimSpace(persona.Principles); p != "" {
 		b.WriteString("\n\nREASONING PRINCIPLES:\n" + p)
-	}
-	if block := scopeBlock(scopeSummary); block != "" {
-		b.WriteString("\n\n" + block)
 	}
 	if p := strings.TrimSpace(persona.Planning); p != "" {
 		b.WriteString("\n\n" + p)
@@ -91,16 +90,6 @@ func BuildPlanPrompt(persona AgentPersona, goal, scopeSummary string) (system, u
 	b.WriteString("\n\nOUTPUT: reply with ONLY this JSON, nothing else:\n" +
 		`{"steps":[{"id":"s1","description":"<concrete action>"},{"id":"s2","description":"..."}]}`)
 	return b.String(), "GOAL: " + goal
-}
-
-// scopeBlock renders the authorized-scope section. With no scope configured the
-// agent operates freely — the real network boundary is enforced by gateway — so no
-// restrictive language is injected.
-func scopeBlock(scopeSummary string) string {
-	if strings.TrimSpace(scopeSummary) == "" {
-		return ""
-	}
-	return "AUTHORIZED SCOPE (these targets are explicitly pre-approved):\n" + scopeSummary
 }
 
 // EstimateTokens returns a rough token count for text (chars / 4).
@@ -215,15 +204,13 @@ PROTOCOL in the system prompt), followed by its JSON body. Example:
 
 // StepSystemPrompt is the system prompt for per-turn step calls. The model-facing
 // persona prose comes entirely from the persona document; the code appends only
-// the runtime scope (if any) and the protocol contract.
-func StepSystemPrompt(persona AgentPersona, scopeSummary string) string {
+// the protocol contract. Network scope is enforced transparently by gateway and
+// is no longer injected into the prompt.
+func StepSystemPrompt(persona AgentPersona) string {
 	var b strings.Builder
 	b.WriteString(persona.Identity)
 	if p := strings.TrimSpace(persona.Principles); p != "" {
 		b.WriteString("\n\nREASONING PRINCIPLES:\n" + p)
-	}
-	if block := scopeBlock(scopeSummary); block != "" {
-		b.WriteString("\n\n" + block)
 	}
 	b.WriteString("\n\n" + ProtocolReference())
 	return b.String()

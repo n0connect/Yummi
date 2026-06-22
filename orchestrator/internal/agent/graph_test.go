@@ -302,6 +302,35 @@ I should finish since the goal seems straightforward.
 	}
 }
 
+// TestObserveResultTagsGatewayBlockedDistinctly verifies that a gateway scope
+// rejection (surfaced as a GATEWAY_BLOCKED-prefixed error on the ToolResult) is
+// tagged COMMAND_BLOCKED — distinct from a generic TOOL_FAILED — and routes back
+// to the step node via edgeIsError.
+func TestObserveResultTagsGatewayBlockedDistinctly(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "scan a host")
+
+	s := &GraphState{
+		taskID:         task.ID,
+		store:          store,
+		gate:           NewGate(),
+		cfg:            fastRetryCfg(),
+		pendingCommand: "nmap -sV 8.8.8.8",
+		pendingAct:     Action{StepID: "s1"},
+	}
+
+	edge := observeResult(s, ToolResult{
+		IsError: true,
+		Content: `GATEWAY_BLOCKED: target "8.8.8.8" is not in scope`,
+	})
+	if edge != edgeIsError {
+		t.Fatalf("expected edgeIsError, got %s", edge)
+	}
+	if !strings.Contains(s.lastObs, "COMMAND_BLOCKED") {
+		t.Fatalf("expected COMMAND_BLOCKED tag, got: %s", s.lastObs)
+	}
+}
+
 // TestIsStuckSlidingWindow tests stuck detection without any LLM or exec.
 func TestIsStuckSlidingWindow(t *testing.T) {
 	// Three identical commands → stuck.
