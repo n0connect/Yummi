@@ -82,6 +82,26 @@ func HandleGatewayRemoveRule(c *gateway.Client) http.HandlerFunc {
 	}
 }
 
+// HandleGatewayFingerprintConfig returns the gateway's fingerprint-masking configuration.
+func HandleGatewayFingerprintConfig(c *gateway.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "not_configured"})
+			return
+		}
+		cfg, err := c.GetFingerprintConfig()
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "unreachable", "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ttl_normalize":     cfg.TTLNormalize,
+			"mac_randomization": cfg.MACRandomization,
+			"status":            "connected",
+		})
+	}
+}
+
 // HandleGatewayAudit returns the most recent N audit log rows plus the
 // chain-verification result.
 func HandleGatewayAudit(c *gateway.Client) http.HandlerFunc {

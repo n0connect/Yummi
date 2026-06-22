@@ -42,6 +42,8 @@ pub enum IpcRequest {
         ttl_secs: u64,
         reason: String,
     },
+    /// Read the gateway's current fingerprint-masking configuration.
+    GetFingerprintConfig,
 }
 
 /// Response from gateway to orchestrator.
@@ -73,6 +75,11 @@ pub enum IpcResponse {
     RuleList { rules: Vec<RuleView> },
     /// Result of GetAuditLog.
     AuditLog { rows: Vec<AuditRowView>, chain_verified: bool },
+    /// Result of GetFingerprintConfig — the gateway's fingerprint-masking settings.
+    FingerprintConfig {
+        ttl_normalize: Option<u8>,
+        mac_randomization: bool,
+    },
 }
 
 /// Read-only view of a policy rule, returned by ListRules.

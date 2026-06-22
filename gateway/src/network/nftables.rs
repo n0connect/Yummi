@@ -166,6 +166,16 @@ impl NftablesController {
         }
     }
 
+    /// Read the configured TTL-normalization value (None = disabled).
+    pub fn ttl_normalize(&self) -> Option<u8> {
+        self.ttl_normalize
+    }
+
+    /// Whether egress MAC randomization is enabled.
+    pub fn mac_randomization(&self) -> bool {
+        self.mac_randomization
+    }
+
     // ── Internal ──────────────────────────────────────────────────────────────
 
     /// Dynamically add a target CIDR to the allowed_targets set with TTL.
