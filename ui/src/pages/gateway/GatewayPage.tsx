@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule } from '../../features/gateway/useGatewayData'
 import './GatewayPage.css'
 
@@ -10,6 +10,14 @@ export function GatewayPage(): JSX.Element {
   const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [fingerprint, setFingerprint] = useState<{ ttl_normalize: number | null; mac_randomization: boolean } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/v1/gateway/fingerprint')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (data) setFingerprint(data) })
+      .catch(() => {})
+  }, [])
 
   const canSubmit = network.trim() !== '' && reason.trim() !== '' && !submitting
 
@@ -67,6 +75,18 @@ export function GatewayPage(): JSX.Element {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="gateway-card">
+        <h3>Fingerprint Masking</h3>
+        {fingerprint ? (
+          <ul className="gateway-fingerprint-list">
+            <li>TTL normalization: {fingerprint.ttl_normalize ?? 'off'}</li>
+            <li>MAC randomization: {fingerprint.mac_randomization ? 'on' : 'off'}</li>
+          </ul>
+        ) : (
+          <span className="gateway-empty">unavailable</span>
+        )}
       </div>
 
       <div className="gateway-card">

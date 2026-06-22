@@ -143,6 +143,29 @@ func TestClientAddManualRule(t *testing.T) {
 	}
 }
 
+func TestClientGetFingerprintConfig(t *testing.T) {
+	ttl := uint8(64)
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "get_fingerprint_config" {
+			return Response{Type: "error", Message: "unexpected request type"}
+		}
+		return Response{
+			Type:             "fingerprint_config",
+			TTLNormalize:     &ttl,
+			MACRandomization: true,
+		}
+	})
+
+	c := NewClient(socket)
+	cfg, err := c.GetFingerprintConfig()
+	if err != nil {
+		t.Fatalf("get fingerprint config: %v", err)
+	}
+	if cfg.TTLNormalize == nil || *cfg.TTLNormalize != 64 || !cfg.MACRandomization {
+		t.Fatalf("unexpected fingerprint config: %+v", cfg)
+	}
+}
+
 func TestClientAddManualRuleRequiresReason(t *testing.T) {
 	c := NewClient("/nonexistent") // never reaches the socket — fails client-side
 	_, _, err := c.AddManualRule("10.0.0.5/32", 600, "")

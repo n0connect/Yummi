@@ -147,6 +147,24 @@ func (c *Client) AddManualRule(network string, ttlSecs uint64, reason string) (s
 	return resp.RuleID, resp.ExpiresAt, nil
 }
 
+// FingerprintConfig reports the gateway's current fingerprint-masking settings.
+type FingerprintConfig struct {
+	TTLNormalize     *uint8 `json:"ttl_normalize"`
+	MACRandomization bool   `json:"mac_randomization"`
+}
+
+// GetFingerprintConfig returns the gateway's current fingerprint-masking configuration.
+func (c *Client) GetFingerprintConfig() (*FingerprintConfig, error) {
+	resp, err := c.send(Request{Type: "get_fingerprint_config"})
+	if err != nil {
+		return nil, err
+	}
+	return &FingerprintConfig{
+		TTLNormalize:     resp.TTLNormalize,
+		MACRandomization: resp.MACRandomization,
+	}, nil
+}
+
 func (c *Client) send(req Request) (*Response, error) {
 	rawConn, err := net.DialTimeout("unix", c.socketPath, c.timeout)
 	if err != nil {

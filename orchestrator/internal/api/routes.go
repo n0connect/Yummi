@@ -64,6 +64,7 @@ func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Eng
 		r.Post("/gateway/rules", HandleGatewayAddRule(pc))
 		r.Delete("/gateway/rules/{id}", HandleGatewayRemoveRule(pc))
 		r.Get("/gateway/audit", HandleGatewayAudit(pc))
+		r.Get("/gateway/fingerprint", HandleGatewayFingerprintConfig(pc))
 
 		// sandbox status & direct exec
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))

@@ -233,6 +233,10 @@ fn process_request(
                 message: format!("audit log read failed: {e}"),
             },
         },
+        IpcRequest::GetFingerprintConfig => IpcResponse::FingerprintConfig {
+            ttl_normalize: ctrl.and_then(|c| c.ttl_normalize()),
+            mac_randomization: ctrl.map(|c| c.mac_randomization()).unwrap_or(false),
+        },
 
         // ── Write ops — require allowlisted UID ───────────────────────────
         IpcRequest::AddTemporaryRule { network, ttl_secs, description } => {
@@ -492,6 +496,52 @@ mod tests {
         match resp {
             IpcResponse::Error { message } => assert!(message.contains("reason is required")),
             other => panic!("expected reason-required error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_get_fingerprint_config_reflects_controller_state() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let mut cfg = crate::config::GatewayConfig::test_default();
+        cfg.network.ttl_normalize = Some(64);
+        cfg.network.mac_randomization = true;
+        let ctrl = NftablesController::new(&cfg);
+        let resp = process_request(
+            IpcRequest::GetFingerprintConfig,
+            &policy,
+            None,
+            &[0],
+            Some(&ctrl),
+            &audit,
+        );
+        match resp {
+            IpcResponse::FingerprintConfig { ttl_normalize, mac_randomization } => {
+                assert_eq!(ttl_normalize, Some(64));
+                assert!(mac_randomization);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_get_fingerprint_config_defaults_off_without_controller() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(
+            IpcRequest::GetFingerprintConfig,
+            &policy,
+            None,
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::FingerprintConfig { ttl_normalize, mac_randomization } => {
+                assert_eq!(ttl_normalize, None);
+                assert!(!mac_randomization);
+            }
+            other => panic!("unexpected response: {other:?}"),
         }
     }
 

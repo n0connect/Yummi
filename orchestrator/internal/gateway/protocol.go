@@ -27,6 +27,9 @@ type Response struct {
 	Rules         []RuleView     `json:"rules,omitempty"`
 	AuditRows     []AuditRowView `json:"rows,omitempty"`
 	ChainVerified bool           `json:"chain_verified,omitempty"`
+
+	TTLNormalize     *uint8 `json:"ttl_normalize,omitempty"`
+	MACRandomization bool   `json:"mac_randomization,omitempty"`
 }
 
 // StatusResponse is a structured gateway status.
