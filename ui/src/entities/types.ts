@@ -63,6 +63,32 @@ export type AgentTask = {
   updated_at?: number
 }
 
+// ─── Gateway types (from /api/v1/gateway/rules + /audit + gateway.status WS) ──
+
+export type GatewayRule = {
+  id: string
+  action: 'allow' | 'block'
+  network: string
+  description: string
+  expires_at: number | null
+  source: 'config' | 'agent' | 'manual'
+}
+
+export type GatewayAuditRow = {
+  id: number
+  timestamp: number
+  src_ip: string
+  dst_ip: string
+  decision: string
+  reason: string
+}
+
+export type GatewayStatus = {
+  level: number
+  rules_active: boolean
+  status: 'connected' | 'disconnected' | 'not_configured'
+}
+
 // ─── System Status types (from /api/v1/system/status) ────────────────────────
 
 export type ModuleStatus = {

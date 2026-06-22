@@ -1,0 +1,103 @@
+import { useState } from 'react'
+import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule } from '../../features/gateway/useGatewayData'
+import './GatewayPage.css'
+
+export function GatewayPage(): JSX.Element {
+  const { rules, status, refresh: refreshRules } = useGatewayRules()
+  const { rows, chainVerified } = useGatewayAudit(50)
+  const [network, setNetwork] = useState('')
+  const [ttl, setTtl] = useState('600')
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const canSubmit = network.trim() !== '' && reason.trim() !== '' && !submitting
+
+  async function handleAddRule() {
+    setSubmitting(true)
+    setFormError(null)
+    try {
+      await addGatewayRule(network.trim(), Number(ttl), reason.trim())
+      setNetwork('')
+      setReason('')
+      await refreshRules()
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'failed to add rule')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleRemove(id: string) {
+    await removeGatewayRule(id)
+    await refreshRules()
+  }
+
+  if (status === 'disconnected') {
+    return (
+      <div className="gateway-page">
+        <div className="gateway-card gateway-unreachable">Gateway unreachable.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="gateway-page">
+      <div className="gateway-header">
+        <h2 className="gateway-title">Gateway</h2>
+        <span className={`gateway-status-badge ${status}`}>{status}</span>
+      </div>
+
+      <div className="gateway-card">
+        <h3>Active Rules</h3>
+        <table className="gateway-rules-table">
+          <thead>
+            <tr><th>Network</th><th>Action</th><th>Source</th><th>Reason</th><th>Expires</th><th></th></tr>
+          </thead>
+          <tbody>
+            {rules.map(rule => (
+              <tr key={rule.id}>
+                <td>{rule.network}</td>
+                <td>{rule.action}</td>
+                <td><span className={`source-badge ${rule.source}`}>{rule.source}</span></td>
+                <td>{rule.description}</td>
+                <td>{rule.expires_at ? new Date(rule.expires_at * 1000).toLocaleTimeString() : 'permanent'}</td>
+                <td><button onClick={() => handleRemove(rule.id)}>Remove</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="gateway-card">
+        <h3>Add Manual Rule</h3>
+        <div className="gateway-add-form">
+          <input placeholder="CIDR (e.g. 10.0.0.5/32)" value={network} onChange={e => setNetwork(e.target.value)} />
+          <input placeholder="TTL seconds" value={ttl} onChange={e => setTtl(e.target.value)} type="number" min="1" />
+          <input placeholder="Reason (required)" value={reason} onChange={e => setReason(e.target.value)} />
+          <button disabled={!canSubmit} onClick={handleAddRule}>Add Rule</button>
+        </div>
+        {formError && <div className="gateway-form-error">{formError}</div>}
+      </div>
+
+      <div className="gateway-card">
+        <h3>Audit Log <span className={`chain-badge ${chainVerified ? 'verified' : 'broken'}`}>{chainVerified ? '✓ verified' : '✗ broken'}</span></h3>
+        <table className="gateway-audit-table">
+          <thead>
+            <tr><th>Time</th><th>Decision</th><th>Target</th><th>Reason</th></tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.id}>
+                <td>{new Date(row.timestamp / 1_000_000).toLocaleTimeString()}</td>
+                <td>{row.decision}</td>
+                <td>{row.dst_ip}</td>
+                <td>{row.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
