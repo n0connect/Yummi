@@ -59,6 +59,12 @@ func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Eng
 		// gateway status
 		r.Get("/gateway/status", HandleGatewayStatus(pc))
 
+		// gateway rule management & audit log
+		r.Get("/gateway/rules", HandleGatewayRules(pc))
+		r.Post("/gateway/rules", HandleGatewayAddRule(pc))
+		r.Delete("/gateway/rules/{id}", HandleGatewayRemoveRule(pc))
+		r.Get("/gateway/audit", HandleGatewayAudit(pc))
+
 		// sandbox status & direct exec
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))
 		r.Post("/sandbox/exec", HandleSandboxExec(bridge, pc, sm))
@@ -88,7 +94,7 @@ func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Eng
 
 	// WebSocket
 	r.Get("/ws/terminal", HandleTerminalWSBridge(bridge))
-	r.Get("/ws/events", HandleEventsWS(executions, taskStore))
+	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg))
 
 	return r
 }

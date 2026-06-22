@@ -14,6 +14,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
+	"github.com/n0connect/yummi/orchestrator/internal/health"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
@@ -231,7 +232,7 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 	}
 }
 
-func HandleEventsWS(executions *execution.Store, tasks *agent.Store) http.HandlerFunc {
+func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if executions == nil {
 			http.Error(w, "execution store unavailable", http.StatusServiceUnavailable)
@@ -271,6 +272,17 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store) http.Handle
 			}
 		}
 
+		// Gateway rule-change events share this websocket too. A nil aggregator
+		// (or a failed subscribe) simply means no gateway channel.
+		var gatewayEvents <-chan health.GatewayEvent
+		if agg != nil {
+			gwSubID, ch, gerr := agg.SubscribeGateway(64)
+			if gerr == nil {
+				gatewayEvents = ch
+				defer agg.UnsubscribeGateway(gwSubID)
+			}
+		}
+
 		pingTicker := time.NewTicker(20 * time.Second)
 		defer pingTicker.Stop()
 
@@ -305,6 +317,20 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store) http.Handle
 					"event":     evt.Type,
 					"timestamp": evt.Timestamp,
 					"data":      evt.Task,
+				}
+				if err := conn.WriteJSON(payload); err != nil {
+					return
+				}
+			case evt, ok := <-gatewayEvents:
+				if !ok {
+					gatewayEvents = nil
+					continue
+				}
+				payload := map[string]any{
+					"type":      "gateway.status",
+					"event":     evt.Type,
+					"timestamp": evt.Timestamp,
+					"data":      evt.Rules,
 				}
 				if err := conn.WriteJSON(payload); err != nil {
 					return
