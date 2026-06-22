@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -102,6 +103,48 @@ func (c *Client) RemoveRule(ruleID string) error {
 		return fmt.Errorf("unexpected response: %s", resp.Type)
 	}
 	return nil
+}
+
+// ListRules returns all currently active policy rules.
+func (c *Client) ListRules() ([]RuleView, error) {
+	resp, err := c.send(Request{Type: "list_rules"})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Rules, nil
+}
+
+// GetAuditLog returns the most recent `limit` audit rows, oldest first, plus
+// whether the tamper-evident hash chain currently verifies.
+func (c *Client) GetAuditLog(limit int) ([]AuditRowView, bool, error) {
+	resp, err := c.send(Request{Type: "get_audit_log", Limit: limit})
+	if err != nil {
+		return nil, false, err
+	}
+	return resp.AuditRows, resp.ChainVerified, nil
+}
+
+// AddManualRule adds an operator-issued temporary allow rule, distinct from
+// AddTemporaryRule (used by the agent/executor path). reason is mandatory —
+// the gateway rejects an empty reason, but we also fail fast client-side to
+// avoid an unnecessary round trip.
+func (c *Client) AddManualRule(network string, ttlSecs uint64, reason string) (string, int64, error) {
+	if strings.TrimSpace(reason) == "" {
+		return "", 0, fmt.Errorf("reason is required for manual rules")
+	}
+	resp, err := c.send(Request{
+		Type:    "add_manual_rule",
+		Network: network,
+		TTLSecs: ttlSecs,
+		Reason:  reason,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if resp.Type != "rule_added" {
+		return "", 0, fmt.Errorf("unexpected response: %s", resp.Type)
+	}
+	return resp.RuleID, resp.ExpiresAt, nil
 }
 
 func (c *Client) send(req Request) (*Response, error) {
