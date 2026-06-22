@@ -54,9 +54,15 @@ orchestrator communicates with gateway over a Unix domain socket (`/run/yummi/ga
 
 Rules are evaluated in order: Block rules take precedence over Allow rules. Rules with a TTL expire automatically. The engine holds a `RwLock` so reads (scope checks) never block each other.
 
-```
-PENTEST_SCOPE_ALLOW=192.168.1.0/24,example.com
-PENTEST_SCOPE_BLOCK=192.168.1.1,admin.example.com
+Network scope is configured in the gateway's own YAML config (parsed by `src/config.rs` `ScopeConfig`) — the gateway is the sole scope authority:
+
+```yaml
+scope:
+  allow:
+    - "192.168.1.0/24"
+  block:
+    - "192.168.1.1"
+    - "127.0.0.0/8"
 ```
 
 ## Audit log

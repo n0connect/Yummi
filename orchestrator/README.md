@@ -108,8 +108,10 @@ runner.runCommand() → validator risk ≥ medium
 | `YUMMI_SANDBOX_CONTAINER` | `yummi-sandbox` | Kali container name |
 | `YUMMI_GATEWAY_SOCKET` | `/run/yummi/gateway.sock` | gateway Unix socket path |
 | `YUMMI_PERSONA_DIR` | `persona/v0.1` | Persona YAML directory |
-| `PENTEST_SCOPE_ALLOW` | _(empty)_ | CSV of allowed IPs/CIDRs/domains |
-| `PENTEST_SCOPE_BLOCK` | _(empty)_ | CSV of blocked IPs/CIDRs/domains |
+
+Network scope is no longer an orchestrator concern. It is configured exclusively
+via the gateway's own YAML config (`scope.allow` / `scope.block` in
+`gateway/config/default.yaml`); the gateway is the sole scope authority.
 
 ## Testing
 

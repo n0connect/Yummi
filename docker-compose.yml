@@ -98,7 +98,9 @@ services:
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
       YUMMI_OLLAMA_MODEL: "qwen3:8b"
       YUMMI_OLLAMA_TIER: "standard"
-      PENTEST_SCOPE_ALLOW: "192.168.1.0/24,10.0.0.0/24,45.33.32.156"
+      # Network scope is configured exclusively via the gateway's own YAML
+      # config (scope.allow / scope.block in gateway/config/default.yaml) —
+      # the orchestrator no longer reads any PENTEST_SCOPE_*/YUMMI_SCOPE_* vars.
     ports:
       - "127.0.0.1:9080:9080"
     volumes:

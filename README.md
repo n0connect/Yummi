@@ -121,9 +121,11 @@ make close           # Stop everything + kill Ollama
 ```bash
 YUMMI_OLLAMA_URL=http://localhost:11434   # Ollama endpoint (empty = rule engine only)
 YUMMI_OLLAMA_TIER=standard               # lite | pro | expert | standard
-PENTEST_SCOPE_ALLOW=192.168.1.0/24       # Comma-separated allowed targets
-PENTEST_SCOPE_BLOCK=192.168.1.1          # Comma-separated blocked targets
 ```
+
+Network scope is configured exclusively via the gateway's own YAML config
+(`scope.allow` / `scope.block` in `gateway/config/default.yaml`) — the
+orchestrator no longer reads scope env vars.
 
 Full variable reference: [`orchestrator/README.md`](orchestrator/README.md#configuration)
 
