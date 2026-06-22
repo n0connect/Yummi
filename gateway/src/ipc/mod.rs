@@ -190,6 +190,19 @@ fn process_request(
         },
         IpcRequest::Ping => IpcResponse::Pong,
 
+        // Temporary stubs — real dispatch lands once PolicyEngine::list_rules /
+        // add_manual_allow (Task 2) and AuditLog::recent_rows (Task 3) exist.
+        // Task 4 replaces these three arms with the real implementation.
+        IpcRequest::ListRules => IpcResponse::Error {
+            message: "not yet implemented".to_string(),
+        },
+        IpcRequest::GetAuditLog { .. } => IpcResponse::Error {
+            message: "not yet implemented".to_string(),
+        },
+        IpcRequest::AddManualRule { .. } => IpcResponse::Error {
+            message: "not yet implemented".to_string(),
+        },
+
         // ── Write ops — require allowlisted UID ───────────────────────────
         IpcRequest::AddTemporaryRule { network, ttl_secs, description } => {
             if !is_write_authorized(peer_uid, allowed_uids) {

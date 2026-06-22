@@ -29,6 +29,19 @@ pub enum IpcRequest {
         /// Rule ID returned from AddTemporaryRule
         rule_id: String,
     },
+    /// List all active policy rules (read-only, no auth required).
+    ListRules,
+    /// Fetch the most recent N audit log rows plus a chain-verification result.
+    GetAuditLog { limit: usize },
+    /// Add a manually-operator-issued temporary allow rule. Distinct from
+    /// AddTemporaryRule (used by the agent/executor path) so the gateway can
+    /// hard-code `source: Manual` on the resulting PolicyRule without trusting
+    /// any client-supplied label.
+    AddManualRule {
+        network: String,
+        ttl_secs: u64,
+        reason: String,
+    },
 }
 
 /// Response from gateway to orchestrator.
@@ -56,6 +69,32 @@ pub enum IpcResponse {
     },
     /// Success response for rule removal.
     RuleRemoved { rule_id: String },
+    /// Result of ListRules.
+    RuleList { rules: Vec<RuleView> },
+    /// Result of GetAuditLog.
+    AuditLog { rows: Vec<AuditRowView>, chain_verified: bool },
+}
+
+/// Read-only view of a policy rule, returned by ListRules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleView {
+    pub id: String,
+    pub action: String,       // "allow" | "block"
+    pub network: String,
+    pub description: String,
+    pub expires_at: Option<i64>,
+    pub source: String,       // "config" | "agent" | "manual"
+}
+
+/// Read-only view of one audit log row, returned by GetAuditLog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditRowView {
+    pub id: i64,
+    pub timestamp: i64,
+    pub src_ip: String,
+    pub dst_ip: String,
+    pub decision: String,
+    pub reason: String,
 }
 
 /// Decision event streamed to subscribers.
@@ -108,5 +147,52 @@ mod tests {
         let req = IpcRequest::Ping;
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("ping"));
+    }
+}
+
+#[cfg(test)]
+mod gateway_mgmt_tests {
+    use super::*;
+
+    #[test]
+    fn test_list_rules_request_serializes() {
+        let req = IpcRequest::ListRules;
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"list_rules"}"#);
+    }
+
+    #[test]
+    fn test_add_manual_rule_request_round_trips() {
+        let req = IpcRequest::AddManualRule {
+            network: "10.0.0.5/32".to_string(),
+            ttl_secs: 600,
+            reason: "emergency access for finding F-12".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: IpcRequest = serde_json::from_str(&json).unwrap();
+        match back {
+            IpcRequest::AddManualRule { network, ttl_secs, reason } => {
+                assert_eq!(network, "10.0.0.5/32");
+                assert_eq!(ttl_secs, 600);
+                assert_eq!(reason, "emergency access for finding F-12");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_rule_list_response_serializes() {
+        let resp = IpcResponse::RuleList {
+            rules: vec![RuleView {
+                id: "temp-1".to_string(),
+                action: "allow".to_string(),
+                network: "10.0.0.0/24".to_string(),
+                description: "[manual] test".to_string(),
+                expires_at: Some(1000),
+                source: "manual".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"source\":\"manual\""));
     }
 }
