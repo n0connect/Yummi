@@ -42,3 +42,11 @@ network:
   # sandbox container IP — only this source IP is subject to FORWARD filtering.
   # Other containers (orchestrator, gateway itself) are unaffected.
   sandbox_ip: "172.20.0.10"
+  # Fingerprint masking (both default OFF):
+  #   ttl_normalize: rewrite the IP TTL of sandbox-originated forwarded packets
+  #     to a fixed value, defeating simple OS fingerprinting (p0f, `nmap -O`).
+  #   mac_randomization: assign a random locally-administered MAC to the egress
+  #     interface at startup (meaningful on shared-L2 / internal engagements).
+  # L7 HTTP header masking is an explicit non-goal (would require an L7 proxy).
+  # ttl_normalize: 64
+  # mac_randomization: false
