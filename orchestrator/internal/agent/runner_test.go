@@ -84,7 +84,7 @@ func TestRunnerE2E_ApprovalGate(t *testing.T) {
 	store, _ := NewStore(openTestDB(t))
 	es := realShellStore(t)
 	// A real validator computes RequiresApproval from the model's risk_level.
-	validator := conductor.NewValidator(conductor.ValidationConfig{})
+	validator := conductor.NewValidator()
 	ollama := newFakeOllama(t,
 		`{"steps":[{"id":"s1","description":"run a scan that needs approval"}]}`,
 		"[RUN_COMMAND]\n{\"command\":\"echo scanning\",\"step_id\":\"s1\",\"risk_level\":\"medium\"}",

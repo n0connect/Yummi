@@ -31,13 +31,8 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		if reason == "" {
 			reason = "command rejected by validator"
 		}
-		scopeLine := "No scope is configured, so the target was rejected by a block rule or is a " +
-			"disallowed address (loopback/multicast/link-local)."
-		if scope := s.scopeSummary(); scope != "" {
-			scopeLine = "Authorized targets:\n" + scope
-		}
-		obs := Wrap("COMMAND_BLOCKED", reason+"\n"+scopeLine+
-			"\nRe-issue the command against an authorized, in-scope target.")
+		obs := Wrap("COMMAND_BLOCKED", reason+
+			"\nThe command was empty or malformed after normalization. Propose a concrete, well-formed command.")
 		s.memCtx.AddObservation(obs)
 		s.lastObs = obs
 		return edgeIsError, nil

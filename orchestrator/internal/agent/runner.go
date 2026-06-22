@@ -149,11 +149,7 @@ func (r *Runner) CreateAndPlan(ctx context.Context, sessionID, goal string) (Tas
 		return Task{}, err
 	}
 
-	scopeSummary := ""
-	if r.validator != nil {
-		scopeSummary = r.validator.ScopeSummary()
-	}
-	system, user := BuildPlanPrompt(r.cfg.Persona, goal, scopeSummary)
+	system, user := BuildPlanPrompt(r.cfg.Persona, goal)
 	raw, err := r.llm.Chat(ctx, system, user)
 	if err == nil {
 		if _, perr := ParsePlan(raw); perr != nil {

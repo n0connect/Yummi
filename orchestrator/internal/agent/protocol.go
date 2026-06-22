@@ -35,7 +35,7 @@ var Registry = []Tag{
 	{"TOOL_RESPONSE_TRUNCATED", AgentToLLM, "Output too long; head+tail shown. Reply [SEND_FULL] for the complete output.", "compressed head+tail"},
 	{"TOOL_RESPONSE_FULL", AgentToLLM, "Complete output you requested via [SEND_FULL].", "full output"},
 	{"TOOL_FAILED", AgentToLLM, "Command ran but FAILED. Reason included. Do NOT repeat it — adapt.", "reason + output"},
-	{"COMMAND_BLOCKED", AgentToLLM, "Validator/scope rejected the command. Use an in-scope target.", "reason + authorized scope"},
+	{"COMMAND_BLOCKED", AgentToLLM, "Command was malformed, or gateway rejected its target as out of network scope.", "reason"},
 	{"DUPLICATE_BLOCKED", AgentToLLM, "You just ran this exact command. Choose a different one.", "command"},
 	{"REPEATED_FAILURE", AgentToLLM, "Several commands failed in a row. STOP repeating — switch tool/route, check `--help`, replan, or finish/ask.", "failure count + reason + output"},
 	{"STUCK", AgentToLLM, "Repeated pattern detected.", "recent commands"},

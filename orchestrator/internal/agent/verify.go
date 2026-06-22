@@ -8,7 +8,14 @@ type Outcome int
 const (
 	OutcomeSuccess Outcome = iota
 	OutcomeFailure
+	OutcomeBlocked
 )
+
+// gatewayBlockedMarker is the stable prefix executor.RunScopedCommand puts on
+// an out-of-scope error's message. Detecting it here — rather than in the Go
+// executor package — keeps the agent's tagging logic colocated with the
+// rest of its result-classification rules.
+const gatewayBlockedMarker = "GATEWAY_BLOCKED:"
 
 // failurePatterns downgrade a zero-exit result to failure. They are
 // conservative substring checks (lowercased) covering the common cases where
@@ -28,6 +35,9 @@ var failurePatterns = []string{
 func Verify(result ToolResult) (Outcome, string) {
 	if result.IsError {
 		reason := strings.TrimSpace(firstLine(result.Content))
+		if strings.HasPrefix(reason, gatewayBlockedMarker) {
+			return OutcomeBlocked, strings.TrimSpace(strings.TrimPrefix(reason, gatewayBlockedMarker))
+		}
 		if reason == "" {
 			reason = "command exited with an error"
 		}
