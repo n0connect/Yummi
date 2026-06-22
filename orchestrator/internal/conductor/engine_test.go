@@ -72,7 +72,7 @@ func TestAppendObservationNoOps(t *testing.T) {
 func TestEngineNoLLMDeclines(t *testing.T) {
 	e := &Engine{
 		persona:   Persona{},
-		validator: NewValidatorFromEnv(),
+		validator: NewValidator(),
 		// llmClient is nil — no LLM configured
 	}
 
@@ -90,7 +90,7 @@ func TestEngineNoLLMDeclines(t *testing.T) {
 func TestEngineEmptyMessage(t *testing.T) {
 	e := &Engine{
 		persona:   Persona{},
-		validator: NewValidatorFromEnv(),
+		validator: NewValidator(),
 	}
 
 	resp := e.Chat(context.Background(), "")
@@ -103,7 +103,7 @@ func TestEngineEmptyMessage(t *testing.T) {
 func TestEngineEmptyMessageWithHistory(t *testing.T) {
 	e := &Engine{
 		persona:   Persona{},
-		validator: NewValidatorFromEnv(),
+		validator: NewValidator(),
 		history:   make(map[string][]llm.Message),
 	}
 
@@ -154,7 +154,7 @@ func TestEngineOllamaModelReporting(t *testing.T) {
 func TestEngineFinalizeAddsRiskWarning(t *testing.T) {
 	e := &Engine{
 		persona:   Persona{},
-		validator: NewValidatorFromEnv(),
+		validator: NewValidator(),
 	}
 
 	resp := e.finalize(ChatResponse{
