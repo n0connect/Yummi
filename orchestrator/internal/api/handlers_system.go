@@ -2,11 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"github.com/n0connect/yummi/orchestrator/internal/executor"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
-	"github.com/n0connect/yummi/orchestrator/internal/scope"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
@@ -92,54 +93,24 @@ func HandleSandboxExec(bridge *sandbox.Bridge, pc *gateway.Client, sm *session.M
 
 		sessionID := normalizeSessionID(req.SessionID)
 
-		// gateway scope check is fail-closed: if gateway is unavailable, reject the command.
-		if target := scope.ExtractTarget(req.Command); target != "" {
-			if pc == nil {
+		// All scope decisions and the nftables unlock happen inside
+		// RunScopedCommand — gateway is the sole authority. This is fail-closed:
+		// if gateway is unavailable, the command is rejected.
+		result, err := executor.RunScopedCommand(r.Context(), bridge, pc, req.Command)
+		if err != nil {
+			if errors.Is(err, executor.ErrOutOfScope) {
 				appendAuditSafe(sm, sessionID, "sandbox.exec.blocked", "gateway", map[string]any{
 					"command": req.Command,
-					"target":  target,
-					"error":   "gateway client not configured",
-				})
-				writeError(w, http.StatusServiceUnavailable, "gateway scope check unavailable", nil)
-				return
-			}
-			inScope, err := pc.CheckScope(target)
-			if err != nil {
-				appendAuditSafe(sm, sessionID, "sandbox.exec.blocked", "gateway", map[string]any{
-					"command": req.Command,
-					"target":  target,
 					"error":   err.Error(),
-				})
-				writeError(w, http.StatusServiceUnavailable, "gateway scope check unavailable", err)
-				return
-			}
-			if !inScope {
-				appendAuditSafe(sm, sessionID, "sandbox.exec.blocked", "gateway", map[string]any{
-					"command": req.Command,
-					"target":  target,
 				})
 				writeError(w, http.StatusForbidden, "target is not in scope", nil)
 				return
 			}
-		}
-
-		result, err := bridge.Exec(r.Context(), req.Command)
-		if err != nil {
-			appendAuditSafe(sm, sessionID, "sandbox.exec.error", "orchestrator", map[string]any{
+			appendAuditSafe(sm, sessionID, "sandbox.exec.blocked", "gateway", map[string]any{
 				"command": req.Command,
 				"error":   err.Error(),
 			})
-			if result != nil {
-				writeJSON(w, http.StatusOK, map[string]any{
-					"exit_code":   result.ExitCode,
-					"stdout":      result.Stdout,
-					"stderr":      result.Stderr,
-					"duration_ms": result.Duration,
-					"error":       err.Error(),
-				})
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "exec failed", err)
+			writeError(w, http.StatusServiceUnavailable, "gateway scope check unavailable", err)
 			return
 		}
 
