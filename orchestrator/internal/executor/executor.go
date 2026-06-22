@@ -4,6 +4,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -14,6 +15,56 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
+
+// ErrOutOfScope marks a command's target as rejected by gateway's scope
+// policy. The returned error also carries a "GATEWAY_BLOCKED:" prefix in its
+// message — that prefix is the stable marker agent/verify.go checks for to
+// distinguish a scope rejection from a generic execution failure when only
+// the error string (not the Go error value) survives into the execution
+// record. errors.Is(err, ErrOutOfScope) is the correct check in Go code that
+// still has the typed error.
+var ErrOutOfScope = errors.New("target not in scope")
+
+// RunScopedCommand is the single call path that asks gateway whether a
+// command's target is in scope, opens the corresponding nftables allow rule
+// if so, and only then runs the command in the sandbox. Every Go code path
+// that executes a pentest command — the agent/chat pipeline (ProcessFunc,
+// below) and the API's direct-exec endpoint — must route through this
+// function. Gateway is the only component that decides "is this target
+// reachable"; this function never makes that decision itself, only asks.
+func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.Client, command string) (*sandbox.Result, error) {
+	if bridge == nil {
+		return nil, fmt.Errorf("sandbox bridge not configured")
+	}
+
+	if target := scope.ExtractTarget(command); target != "" {
+		if pc == nil {
+			return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
+		}
+		inScope, err := pc.CheckScope(target)
+		if err != nil {
+			slog.Error("RunScopedCommand: gateway scope check error — blocking execution (fail-closed)",
+				"target", target, "error", err)
+			return nil, fmt.Errorf("gateway scope check unavailable: %w", err)
+		}
+		if !inScope {
+			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
+		}
+
+		network := hostNetwork(target)
+		if network == "" {
+			slog.Warn("RunScopedCommand: target is not an IP, skipping nftables unlock (gateway needs a resolved IP)",
+				"target", target)
+		} else if _, _, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
+			slog.Warn("RunScopedCommand: gateway nftables unlock failed (proceeding — check gateway logs)",
+				"target", target, "error", nftErr)
+		} else {
+			slog.Info("RunScopedCommand: nftables allow rule added", "target", network)
+		}
+	}
+
+	return bridge.Exec(ctx, command)
+}
 
 // Executor connects approved commands to the sandbox container via gateway scope checks.
 type Executor struct {
@@ -33,57 +84,18 @@ func New(bridge *sandbox.Bridge, pc *gateway.Client) *Executor {
 // on the execution store via SetProcessor.
 func (e *Executor) ProcessFunc() execution.ProcessFunc {
 	return func(ctx context.Context, rec execution.Record) (string, error) {
-		if e.bridge == nil {
-			return "", fmt.Errorf("sandbox bridge not configured")
-		}
-
 		slog.Info("executor: running command",
 			"execution_id", rec.ID,
 			"session_id", rec.SessionID,
 			"command", rec.Command,
 		)
 
-		// Extract target from command for scope check (fail-closed).
-		// If gateway is unreachable the command is blocked — the trust boundary must
-		// be healthy before any execution is permitted.
-		if target := scope.ExtractTarget(rec.Command); target != "" {
-			if e.gateway == nil {
-				return "", fmt.Errorf("gateway scope check unavailable: client not configured")
-			}
-			inScope, err := e.gateway.CheckScope(target)
-			if err != nil {
-				slog.Error("executor: gateway scope check error — blocking execution (fail-closed)",
-					"target", target, "error", err)
-				return "", fmt.Errorf("gateway scope check unavailable: %w", err)
-			}
-			if !inScope {
-				return "", fmt.Errorf("target %q is not in scope (blocked by gateway)", target)
-			}
-
-			// Unlock the target in gateway's nftables FORWARD chain so sandbox's packets
-			// actually reach it. TTL 3600s — rule expires even if orchestrator crashes.
-			// The gateway only accepts IP/CIDR networks (it has no resolver), so we
-			// turn the host into its single-address prefix (/32 for IPv4, /128 for
-			// IPv6). A bare hostname has no CIDR form and would already have been
-			// rejected by CheckScope above, so reaching here implies an IP.
-			network := hostNetwork(target)
-			if network == "" {
-				slog.Warn("executor: target is not an IP, skipping nftables unlock (gateway needs a resolved IP)",
-					"target", target)
-			} else if _, _, nftErr := e.gateway.AddTemporaryRule(network, 3600, "approved execution: "+rec.Command); nftErr != nil {
-				slog.Warn("executor: gateway nftables unlock failed (proceeding — check gateway logs)",
-					"target", target, "error", nftErr)
-			} else {
-				slog.Info("executor: nftables allow rule added", "target", network)
-			}
-		}
-
-		result, err := e.bridge.Exec(ctx, rec.Command)
+		result, err := RunScopedCommand(ctx, e.bridge, e.gateway, rec.Command)
 		if err != nil {
 			if result != nil {
 				return result.Stderr, fmt.Errorf("command failed: %w", err)
 			}
-			return "", fmt.Errorf("exec error: %w", err)
+			return "", err
 		}
 
 		// Build output combining stdout and stderr.

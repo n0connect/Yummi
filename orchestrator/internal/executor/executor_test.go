@@ -2,12 +2,54 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
+	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 )
+
+func TestRunScopedCommandBlocksOutOfScope(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, InScope: false}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge("yummi-sandbox-test-nonexistent")
+
+	_, err := RunScopedCommand(context.Background(), bridge, pc, "nmap -sV 8.8.8.8")
+	if err == nil {
+		t.Fatal("expected an out-of-scope error")
+	}
+	if !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("expected ErrOutOfScope, got: %v", err)
+	}
+}
+
+func TestRunScopedCommandFailsClosedWhenGatewayUnreachable(t *testing.T) {
+	pc := gateway.NewClient("/nonexistent/socket")
+	bridge := sandbox.NewBridge("yummi-sandbox-test-nonexistent")
+
+	_, err := RunScopedCommand(context.Background(), bridge, pc, "nmap -sV 8.8.8.8")
+	if err == nil {
+		t.Fatal("expected an error when gateway is unreachable (fail-closed)")
+	}
+	if errors.Is(err, ErrOutOfScope) {
+		t.Fatal("gateway-unreachable should not be classified as ErrOutOfScope — it's a different failure mode")
+	}
+}
+
+func TestRunScopedCommandRejectsNilBridge(t *testing.T) {
+	pc := gateway.NewClient("/nonexistent/socket")
+	_, err := RunScopedCommand(context.Background(), nil, pc, "echo hi")
+	if err == nil {
+		t.Fatal("expected error for nil bridge")
+	}
+}
 
 func TestNewExecutor(t *testing.T) {
 	e := New(nil, nil)
