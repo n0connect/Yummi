@@ -154,7 +154,7 @@ func main() {
 	agg := health.New(
 		cfg.OllamaURL,
 		func(c context.Context) bool { return bridge.Ping(c) == nil },
-		func(c context.Context) bool { return gatewayClient.Ping() == nil },
+		gatewayClient,
 	)
 	go agg.Start(ctx)
 
