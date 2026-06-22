@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 )
 
 const (
@@ -36,20 +38,107 @@ type Aggregator struct {
 	head  int // next write index
 	count int // samples stored (capped at ringSize)
 
-	ollamaURL   string
-	sandboxPing Pinger
-	gatewayPing Pinger
-	httpClient  *http.Client
+	ollamaURL     string
+	sandboxPing   Pinger
+	gatewayClient *gateway.Client
+	httpClient    *http.Client
+
+	gwSubsMu  sync.RWMutex
+	gwSubs    map[int]chan GatewayEvent
+	gwNextID  int
+	lastRules []gateway.RuleView
 }
 
-// New creates an Aggregator. Pass nil pingers to mark those services as always down.
-func New(ollamaURL string, sandboxPing, gatewayPing Pinger) *Aggregator {
+// GatewayEvent is broadcast to /ws/events subscribers when the gateway's
+// active rule set changes.
+type GatewayEvent struct {
+	Type      string             `json:"type"`
+	Timestamp int64              `json:"timestamp"`
+	Rules     []gateway.RuleView `json:"rules"`
+}
+
+// New constructs a health Aggregator. gatewayClient may be nil if the
+// gateway is unconfigured (degrades to no rule-change broadcasting, matching
+// the project's nil-safe degradation pattern). A nil sandboxPing marks the
+// sandbox as always down.
+func New(ollamaURL string, sandboxPing Pinger, gatewayClient *gateway.Client) *Aggregator {
 	return &Aggregator{
-		ollamaURL:   ollamaURL,
-		sandboxPing: sandboxPing,
-		gatewayPing: gatewayPing,
-		httpClient:  &http.Client{Timeout: 2 * time.Second},
+		ollamaURL:     ollamaURL,
+		sandboxPing:   sandboxPing,
+		gatewayClient: gatewayClient,
+		httpClient:    &http.Client{Timeout: 2 * time.Second},
 	}
+}
+
+// SubscribeGateway registers a new subscriber for gateway rule-change events.
+func (a *Aggregator) SubscribeGateway(bufferSize int) (int, <-chan GatewayEvent, error) {
+	a.gwSubsMu.Lock()
+	defer a.gwSubsMu.Unlock()
+	if a.gwSubs == nil {
+		a.gwSubs = make(map[int]chan GatewayEvent)
+	}
+	a.gwNextID++
+	id := a.gwNextID
+	ch := make(chan GatewayEvent, bufferSize)
+	a.gwSubs[id] = ch
+	return id, ch, nil
+}
+
+// UnsubscribeGateway removes a subscriber and closes its channel.
+func (a *Aggregator) UnsubscribeGateway(id int) {
+	a.gwSubsMu.Lock()
+	defer a.gwSubsMu.Unlock()
+	if ch, ok := a.gwSubs[id]; ok {
+		close(ch)
+		delete(a.gwSubs, id)
+	}
+}
+
+// diffAndPublishRules compares the new rule snapshot against the last known
+// one and broadcasts a gateway.rules_changed event to all subscribers if
+// anything changed (by rule count or any rule's id/expiry/source).
+func (a *Aggregator) diffAndPublishRules(rules []gateway.RuleView) {
+	a.mu.Lock()
+	changed := rulesDiffer(a.lastRules, rules)
+	a.lastRules = rules
+	a.mu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	evt := GatewayEvent{
+		Type:      "gateway.rules_changed",
+		Timestamp: time.Now().Unix(),
+		Rules:     rules,
+	}
+
+	a.gwSubsMu.RLock()
+	defer a.gwSubsMu.RUnlock()
+	for _, ch := range a.gwSubs {
+		select {
+		case ch <- evt:
+		default: // slow subscriber — drop rather than block the poll loop
+		}
+	}
+}
+
+func rulesDiffer(a, b []gateway.RuleView) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Source != b[i].Source {
+			return true
+		}
+		if (a[i].ExpiresAt == nil) != (b[i].ExpiresAt == nil) {
+			return true
+		}
+		if a[i].ExpiresAt != nil && b[i].ExpiresAt != nil && *a[i].ExpiresAt != *b[i].ExpiresAt {
+			return true
+		}
+	}
+	return false
 }
 
 // Start collects metrics on every tick until ctx is cancelled.
@@ -135,10 +224,14 @@ func (a *Aggregator) collect(ctx context.Context) {
 		sample.SandboxUp = a.sandboxPing(pingCtx)
 		cancel()
 	}
-	if a.gatewayPing != nil {
-		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		sample.GatewayUp = a.gatewayPing(pingCtx)
-		cancel()
+	if a.gatewayClient != nil {
+		gatewayUp := a.gatewayClient.Ping() == nil
+		sample.GatewayUp = gatewayUp
+		if gatewayUp {
+			if rules, err := a.gatewayClient.ListRules(); err == nil {
+				a.diffAndPublishRules(rules)
+			}
+		}
 	}
 
 	a.mu.Lock()
