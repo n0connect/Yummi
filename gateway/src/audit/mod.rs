@@ -305,5 +305,15 @@ mod tests {
         }
         let (rows, _verified) = log.recent_rows(2).expect("recent rows");
         assert_eq!(rows.len(), 2);
+        // Must be the 2 MOST RECENT rows (timestamps 1003, 1004), not the oldest 2 —
+        // and returned oldest-first (chronological order).
+        assert_eq!(
+            rows[0].timestamp, 1003,
+            "expected the second-most-recent row first (oldest-first ordering)"
+        );
+        assert_eq!(
+            rows[1].timestamp, 1004,
+            "expected the most recent row last"
+        );
     }
 }
