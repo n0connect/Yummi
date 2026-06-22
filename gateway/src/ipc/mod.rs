@@ -15,9 +15,10 @@ use tokio::net::UnixListener;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
-use self::protocol::{IpcRequest, IpcResponse};
+use self::protocol::{AuditRowView, IpcRequest, IpcResponse, RuleView};
 use crate::audit::AuditLog;
 use crate::network::NftablesController;
+use crate::policy::rules::{RuleAction, RuleSource};
 use crate::policy::PolicyEngine;
 
 /// Maximum concurrent IPC connections. Prevents file-descriptor exhaustion.
@@ -121,7 +122,7 @@ impl IpcServer {
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
     policy: PolicyEngine,
-    _audit: AuditLog,
+    audit: AuditLog,
     allowed_uids: Vec<u32>,
     ctrl: Option<Arc<NftablesController>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -144,7 +145,7 @@ async fn handle_connection(
         stream.read_exact(&mut buf).await?;
 
         let request: IpcRequest = serde_json::from_slice(&buf)?;
-        let response = process_request(request, &policy, peer_uid, &allowed_uids, ctrl.as_deref());
+        let response = process_request(request, &policy, peer_uid, &allowed_uids, ctrl.as_deref(), &audit);
 
         let resp_bytes = serde_json::to_vec(&response)?;
         let resp_len = (resp_bytes.len() as u32).to_be_bytes();
@@ -171,6 +172,7 @@ fn process_request(
     peer_uid: Option<u32>,
     allowed_uids: &[u32],
     ctrl: Option<&NftablesController>,
+    audit: &AuditLog,
 ) -> IpcResponse {
     match req {
         // ── Read-only ops — no UID check ──────────────────────────────────
@@ -190,17 +192,46 @@ fn process_request(
         },
         IpcRequest::Ping => IpcResponse::Pong,
 
-        // Temporary stubs — real dispatch lands once PolicyEngine::list_rules /
-        // add_manual_allow (Task 2) and AuditLog::recent_rows (Task 3) exist.
-        // Task 4 replaces these three arms with the real implementation.
-        IpcRequest::ListRules => IpcResponse::Error {
-            message: "not yet implemented".to_string(),
-        },
-        IpcRequest::GetAuditLog { .. } => IpcResponse::Error {
-            message: "not yet implemented".to_string(),
-        },
-        IpcRequest::AddManualRule { .. } => IpcResponse::Error {
-            message: "not yet implemented".to_string(),
+        IpcRequest::ListRules => {
+            let rules: Vec<RuleView> = policy
+                .list_rules()
+                .into_iter()
+                .map(|r| RuleView {
+                    id: r.id,
+                    action: match r.action {
+                        RuleAction::Allow => "allow".to_string(),
+                        RuleAction::Block => "block".to_string(),
+                    },
+                    network: r.network.to_string(),
+                    description: r.description,
+                    expires_at: r.expires_at,
+                    source: match r.source {
+                        RuleSource::Config => "config".to_string(),
+                        RuleSource::Agent => "agent".to_string(),
+                        RuleSource::Manual => "manual".to_string(),
+                    },
+                })
+                .collect();
+            IpcResponse::RuleList { rules }
+        }
+        IpcRequest::GetAuditLog { limit } => match audit.recent_rows(limit) {
+            Ok((rows, chain_verified)) => IpcResponse::AuditLog {
+                rows: rows
+                    .into_iter()
+                    .map(|r| AuditRowView {
+                        id: r.id,
+                        timestamp: r.timestamp,
+                        src_ip: r.src_ip,
+                        dst_ip: r.dst_ip,
+                        decision: r.decision,
+                        reason: r.reason,
+                    })
+                    .collect(),
+                chain_verified,
+            },
+            Err(e) => IpcResponse::Error {
+                message: format!("audit log read failed: {e}"),
+            },
         },
 
         // ── Write ops — require allowlisted UID ───────────────────────────
@@ -214,13 +245,21 @@ fn process_request(
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
                     let desc = description.unwrap_or_else(|| format!("Temporary rule: {}", network));
-                    let (rule_id, expires_at) = policy.add_temporary_allow(net.clone(), ttl_secs, desc);
+                    let (rule_id, expires_at) = policy.add_temporary_allow(net.clone(), ttl_secs, desc.clone());
 
                     // Also unlock at the nftables kernel level so sandbox's packets actually reach the target.
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
                             warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
                         }
+                    }
+
+                    let now_ns = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos() as i64;
+                    if let Err(e) = audit.record_rule_event(now_ns, &network, "rule_added", &format!("[agent] {desc}")) {
+                        warn!(error = %e, "failed to audit agent rule add (rule itself succeeded)");
                     }
 
                     IpcResponse::RuleAdded { rule_id, expires_at }
@@ -238,11 +277,54 @@ fn process_request(
                 };
             }
             if policy.remove_rule(&rule_id) {
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as i64;
+                if let Err(e) = audit.record_rule_event(now_ns, &rule_id, "rule_removed", "[removed]") {
+                    warn!(error = %e, "failed to audit rule removal (removal itself succeeded)");
+                }
                 IpcResponse::RuleRemoved { rule_id }
             } else {
                 IpcResponse::Error {
                     message: format!("rule not found: {rule_id}"),
                 }
+            }
+        }
+
+        // ── Write op — requires allowlisted UID ───────────────────────────
+        IpcRequest::AddManualRule { network, ttl_secs, reason } => {
+            if !is_write_authorized(peer_uid, allowed_uids) {
+                warn!(peer_uid, "AddManualRule denied: UID not allowlisted");
+                return IpcResponse::Error {
+                    message: "permission denied: UID not allowlisted for write operations".to_string(),
+                };
+            }
+            if reason.trim().is_empty() {
+                return IpcResponse::Error {
+                    message: "reason is required for manual rules".to_string(),
+                };
+            }
+            match network.parse::<ipnet::IpNet>() {
+                Ok(net) => {
+                    let (rule_id, expires_at) = policy.add_manual_allow(net.clone(), ttl_secs, reason.clone());
+                    if let Some(c) = ctrl {
+                        if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
+                            warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
+                        }
+                    }
+                    let now_ns = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos() as i64;
+                    if let Err(e) = audit.record_rule_event(now_ns, &network, "rule_added", &format!("[manual] {reason}")) {
+                        warn!(error = %e, "failed to audit manual rule add (rule itself succeeded)");
+                    }
+                    IpcResponse::RuleAdded { rule_id, expires_at }
+                }
+                Err(_) => IpcResponse::Error {
+                    message: format!("invalid network CIDR: {network}"),
+                },
             }
         }
     }
@@ -287,12 +369,14 @@ mod tests {
     #[test]
     fn test_process_scope_check() {
         let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
             IpcRequest::CheckScope { ip: "10.0.0.1".to_string() },
             &policy,
             None,
             &[],
             None,
+            &audit,
         );
         match resp {
             IpcResponse::ScopeResult { in_scope, .. } => assert!(in_scope),
@@ -303,13 +387,15 @@ mod tests {
     #[test]
     fn test_process_ping() {
         let policy = make_policy();
-        let resp = process_request(IpcRequest::Ping, &policy, None, &[], None);
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(IpcRequest::Ping, &policy, None, &[], None, &audit);
         assert!(matches!(resp, IpcResponse::Pong));
     }
 
     #[test]
     fn test_write_denied_unknown_uid() {
         let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
         // UID 9999 is not in the allowlist [0]
         let resp = process_request(
             IpcRequest::AddTemporaryRule {
@@ -321,6 +407,7 @@ mod tests {
             Some(9999),
             &[0u32],
             None,
+            &audit,
         );
         assert!(matches!(resp, IpcResponse::Error { .. }));
     }
@@ -328,6 +415,7 @@ mod tests {
     #[test]
     fn test_write_allowed_root() {
         let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
             IpcRequest::AddTemporaryRule {
                 network: "1.2.3.0/24".to_string(),
@@ -338,6 +426,7 @@ mod tests {
             Some(0),
             &[0u32],
             None, // no live controller in unit tests
+            &audit,
         );
         assert!(matches!(resp, IpcResponse::RuleAdded { .. }));
     }
@@ -348,5 +437,83 @@ mod tests {
         assert!(is_write_authorized(Some(1000), &[0, 1000]));
         assert!(!is_write_authorized(Some(9999), &[0]));
         assert!(is_write_authorized(None, &[])); // no restriction
+    }
+
+    #[test]
+    fn test_list_rules_no_auth_required() {
+        let policy = make_policy();
+        policy.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(IpcRequest::ListRules, &policy, None, &[0], None, &audit);
+        match resp {
+            IpcResponse::RuleList { rules } => assert_eq!(rules.len(), 1),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_add_manual_rule_denied_without_allowlisted_uid() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(
+            IpcRequest::AddManualRule {
+                network: "10.0.0.1/32".to_string(),
+                ttl_secs: 600,
+                reason: "test".to_string(),
+            },
+            &policy,
+            Some(9999), // not in allowed_uids
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::Error { message } => assert!(message.contains("permission denied")),
+            other => panic!("expected permission denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_add_manual_rule_rejects_empty_reason() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(
+            IpcRequest::AddManualRule {
+                network: "10.0.0.1/32".to_string(),
+                ttl_secs: 600,
+                reason: "  ".to_string(),
+            },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::Error { message } => assert!(message.contains("reason is required")),
+            other => panic!("expected reason-required error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_add_manual_rule_writes_audit_row() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let _ = process_request(
+            IpcRequest::AddManualRule {
+                network: "10.0.0.1/32".to_string(),
+                ttl_secs: 600,
+                reason: "emergency".to_string(),
+            },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+        );
+        let (rows, _) = audit.recent_rows(10).expect("recent rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].decision, "rule_added");
+        assert!(rows[0].reason.starts_with("[manual]"));
     }
 }
