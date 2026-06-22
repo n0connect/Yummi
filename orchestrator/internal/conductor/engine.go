@@ -53,7 +53,7 @@ func NewEngine(personaDir, ollamaURL, ollamaModel string) (*Engine, error) {
 
 	return &Engine{
 		persona:   persona,
-		validator: NewValidatorFromEnv(),
+		validator: NewValidator(),
 		llmClient: client,
 		tier:      tier,
 		history:   make(map[string][]llm.Message),
@@ -305,14 +305,10 @@ func (e *Engine) buildSystemPrompt() string {
 		}
 	}
 
-	// Collect configured scope so the model knows which targets are pre-approved.
-	scopeLines := e.validator.ScopeSummary()
-	scopeSection := ""
-	if scopeLines != "" {
-		scopeSection = "\nAUTHORIZED SCOPE (pre-approved targets — no need to ask):\n" + scopeLines
-	} else {
-		scopeSection = "\nAUTHORIZED SCOPE: not configured — ask the operator for target and scope before any active operation.\n"
-	}
+	// Network scope is enforced transparently by the gateway — the orchestrator
+	// no longer reasons about a configured allow/block list. The model proposes
+	// targets freely; gateway rejects out-of-scope ones at execution time.
+	scopeSection := "\nNETWORK SCOPE: enforced transparently by the gateway. Propose targets freely — if one is out of scope, you'll be told at execution time. Do not try to pre-judge reachability yourself.\n"
 
 	prompt := fmt.Sprintf(`You are %s, an elite Red Team penetration testing AI assistant.
 
