@@ -67,6 +67,17 @@ pub struct NetworkConfig {
     /// are unaffected. Leave empty to filter ALL forwarded traffic.
     #[serde(default)]
     pub sandbox_ip: String,
+    /// Normalize the IP TTL of all sandbox-originated forwarded packets to
+    /// this value, defeating simple OS-fingerprinting (p0f, `nmap -O`) that
+    /// relies on the real Linux default TTL. None = no normalization.
+    #[serde(default)]
+    pub ttl_normalize: Option<u8>,
+    /// Assign a random locally-administered MAC to `interface` at startup.
+    /// Only meaningful when sandbox traffic shares an L2 segment with the
+    /// target (internal/on-prem engagements) — has no effect on traffic
+    /// already NATed onto a routed network.
+    #[serde(default)]
+    pub mac_randomization: bool,
 }
 
 impl Default for NetworkConfig {
@@ -77,6 +88,8 @@ impl Default for NetworkConfig {
             nat_chain:     default_nat_chain(),
             interface:     String::new(),
             sandbox_ip:    String::new(),
+            ttl_normalize: None,
+            mac_randomization: false,
         }
     }
 }
@@ -237,5 +250,28 @@ network:
         assert_eq!(cfg.scope.block.len(), 1);
         assert_eq!(cfg.ipc.socket_mode, 384);
         assert_eq!(cfg.network.sandbox_ip, "172.20.0.10");
+    }
+
+    #[test]
+    fn test_network_config_fingerprint_fields_default_off() {
+        let cfg = NetworkConfig::default();
+        assert_eq!(cfg.ttl_normalize, None);
+        assert!(!cfg.mac_randomization);
+    }
+
+    #[test]
+    fn test_network_config_parses_fingerprint_fields_from_yaml() {
+        let yaml = r#"
+table_name: yummi_gw
+forward_chain: yummi_forward
+nat_chain: yummi_nat
+interface: eth0
+sandbox_ip: "172.20.0.10"
+ttl_normalize: 64
+mac_randomization: true
+"#;
+        let cfg: NetworkConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.ttl_normalize, Some(64));
+        assert!(cfg.mac_randomization);
     }
 }
