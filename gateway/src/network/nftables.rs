@@ -20,6 +20,32 @@ use crate::network::NetworkError;
 
 const NFT_BIN: &str = "/usr/sbin/nft";
 
+/// Generate a random locally-administered, unicast MAC address suitable for
+/// masking a real vendor OUI (e.g. avoiding a recognizable Docker/cloud
+/// pattern on a shared L2 segment). Setting bit 1 of the first octet marks
+/// it locally-administered; clearing bit 0 marks it unicast (not multicast).
+fn random_locally_administered_mac() -> [u8; 6] {
+    let mut mac = [0u8; 6];
+    for b in mac.iter_mut() {
+        *b = rand_byte();
+    }
+    mac[0] = (mac[0] | 0b0000_0010) & 0b1111_1110;
+    mac
+}
+
+fn rand_byte() -> u8 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // Crate already depends on no extra RNG crate for this one-shot, best-effort
+    // value — nanosecond-jitter mixing is sufficient since this is a fingerprint
+    // mask, not a cryptographic secret.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
+    (nanos ^ nanos.rotate_left(13)) as u8
+}
+
+fn format_mac(mac: [u8; 6]) -> String {
+    mac.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":")
+}
+
 /// Linux nftables-based network controller.
 ///
 /// Installs and manages an `inet` table with two chains:
@@ -34,6 +60,8 @@ pub struct NftablesController {
     allow_cidrs:   Vec<String>,
     block_cidrs:   Vec<String>,
     ttl_normalize: Option<u8>,
+    mac_randomization: bool,
+    interface:     String,
     active:        AtomicBool,
 }
 
@@ -47,6 +75,8 @@ impl NftablesController {
             allow_cidrs:   cfg.scope.allow.iter().map(|n| n.to_string()).collect(),
             block_cidrs:   cfg.scope.block.iter().map(|n| n.to_string()).collect(),
             ttl_normalize: cfg.network.ttl_normalize,
+            mac_randomization: cfg.network.mac_randomization,
+            interface:     cfg.network.interface.clone(),
             active:        AtomicBool::new(false),
         }
     }
@@ -54,6 +84,10 @@ impl NftablesController {
     /// Install fail-closed FORWARD-chain rules.
     /// Idempotent: flushes and recreates the table each time.
     pub fn install_rules(&self) -> Result<(), NetworkError> {
+        if self.mac_randomization {
+            self.randomize_egress_mac(&self.interface);
+        }
+
         // Atomically replace — delete first (ignore failure if not present).
         let _ = Command::new(NFT_BIN)
             .args(["delete", "table", "inet", &self.table_name])
@@ -100,6 +134,36 @@ impl NftablesController {
         let active = out.status.success();
         self.active.store(active, Ordering::SeqCst);
         Ok(active)
+    }
+
+    /// Best-effort: assign a random locally-administered MAC to the
+    /// configured egress interface. Never fails startup — a missing
+    /// interface name, insufficient capability, or busy device degrades to
+    /// "less stealthy", not "less safe". Fail-closed (DROP-all) is about
+    /// network reachability, not fingerprint masking, and this runs before
+    /// `install_rules()` swaps the FORWARD chain in, consistent with that
+    /// ordering invariant.
+    fn randomize_egress_mac(&self, interface: &str) {
+        if interface.is_empty() {
+            tracing::warn!("mac_randomization enabled but network.interface is empty — skipped");
+            return;
+        }
+        let mac = format_mac(random_locally_administered_mac());
+        let out = Command::new("ip")
+            .args(["link", "set", interface, "address", &mac])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                tracing::info!(interface, mac, "egress MAC randomized");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                tracing::warn!(interface, mac, error = %stderr, "MAC randomization failed — continuing with existing MAC");
+            }
+            Err(e) => {
+                tracing::warn!(interface, error = %e, "MAC randomization failed to execute — continuing with existing MAC");
+            }
+        }
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
@@ -364,6 +428,21 @@ mod tests {
         let ruleset = ctrl.build_ruleset();
         assert!(ruleset.contains("masquerade"));
         assert!(ruleset.contains("ip saddr 172.20.0.10 masquerade"));
+    }
+
+    #[test]
+    fn test_random_mac_is_locally_administered_and_unicast() {
+        for _ in 0..20 {
+            let mac = random_locally_administered_mac();
+            assert_eq!(mac[0] & 0b0000_0010, 0b0000_0010, "locally-administered bit must be set");
+            assert_eq!(mac[0] & 0b0000_0001, 0, "unicast bit must be clear");
+        }
+    }
+
+    #[test]
+    fn test_format_mac_produces_colon_separated_hex() {
+        let formatted = format_mac([0x02, 0xAB, 0x00, 0x11, 0xFF, 0x9c]);
+        assert_eq!(formatted, "02:ab:00:11:ff:9c");
     }
 
     #[test]
