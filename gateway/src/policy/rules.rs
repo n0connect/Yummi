@@ -12,6 +12,7 @@ pub struct PolicyRule {
     pub description: String,
     /// Rule expiration (Unix timestamp). None = permanent.
     pub expires_at: Option<i64>,
+    pub source: RuleSource,
 }
 
 /// Action to take when a rule matches.
@@ -20,6 +21,20 @@ pub struct PolicyRule {
 pub enum RuleAction {
     Allow,
     Block,
+}
+
+/// Where a temporary rule originated — drives the audit trail and the
+/// management UI's "source" badge. Config = loaded from gateway's own YAML
+/// config at startup (PolicyEngine::new). Agent = added automatically by the
+/// executor on approved command execution (add_temporary_allow). Manual =
+/// added by an operator through the gateway management UI, independent of
+/// the approval flow (add_manual_allow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleSource {
+    Config,
+    Agent,
+    Manual,
 }
 
 impl PolicyRule {
@@ -41,6 +56,7 @@ mod tests {
             network: "10.0.0.0/8".parse().unwrap(),
             description: "test rule".to_string(),
             expires_at: Some(1000),
+            source: RuleSource::Agent,
         };
 
         assert!(!rule.is_expired(500));
@@ -55,6 +71,7 @@ mod tests {
             network: "127.0.0.0/8".parse().unwrap(),
             description: "block localhost".to_string(),
             expires_at: None,
+            source: RuleSource::Agent,
         };
 
         assert!(!rule.is_expired(999999));

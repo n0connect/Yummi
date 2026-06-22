@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ipnet::IpNet;
 
 use crate::config::ScopeConfig;
-use self::rules::{PolicyRule, RuleAction};
+use self::rules::{PolicyRule, RuleAction, RuleSource};
 
 /// Policy decision for a traffic flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +68,7 @@ impl PolicyEngine {
                 network: *net,
                 description: format!("Initial allow rule: {}", net),
                 expires_at: None,
+                source: RuleSource::Config,
             })
             .collect();
 
@@ -81,6 +82,7 @@ impl PolicyEngine {
                 network: *net,
                 description: format!("Initial block rule: {}", net),
                 expires_at: None,
+                source: RuleSource::Config,
             })
             .collect();
 
@@ -160,6 +162,7 @@ impl PolicyEngine {
             network: net,
             description,
             expires_at: Some(expires_at),
+            source: RuleSource::Agent,
         };
 
         let mut state = self.state.write().unwrap();
@@ -167,6 +170,50 @@ impl PolicyEngine {
         tracing::info!(%net, rule_id, expires_at, "temporary allow rule added");
 
         (rule_id, expires_at)
+    }
+
+    /// Add a manually-issued temporary allow rule (operator UI path).
+    /// Always tagged `source: Manual` — the caller cannot override this.
+    pub fn add_manual_allow(&self, net: IpNet, ttl_secs: u64, reason: String) -> (String, i64) {
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let expires_at = now_unix + ttl_secs as i64;
+        let rule_id = format!("manual-{}-{}", now_unix, uuid::Uuid::new_v4());
+
+        let rule = PolicyRule {
+            id: rule_id.clone(),
+            action: RuleAction::Allow,
+            network: net,
+            description: reason,
+            expires_at: Some(expires_at),
+            source: RuleSource::Manual,
+        };
+
+        let mut state = self.state.write().unwrap();
+        state.allow_rules.push(rule);
+        tracing::info!(%net, rule_id, expires_at, "manual allow rule added");
+
+        (rule_id, expires_at)
+    }
+
+    /// Snapshot of all active (non-expired) allow and block rules, for the
+    /// management UI / ListRules IPC request.
+    pub fn list_rules(&self) -> Vec<PolicyRule> {
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let state = self.state.read().unwrap();
+        state
+            .allow_rules
+            .iter()
+            .chain(state.block_rules.iter())
+            .filter(|r| !r.is_expired(now_unix))
+            .cloned()
+            .collect()
     }
 
     /// Remove a rule by ID. Returns true if the rule was found and removed.
@@ -327,5 +374,42 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
+    }
+
+    #[test]
+    fn test_add_manual_allow_tags_source_manual() {
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let (rule_id, _expires) = engine.add_manual_allow(
+            "10.0.0.5/32".parse().unwrap(),
+            600,
+            "operator-supplied reason".to_string(),
+        );
+        let rules = engine.list_rules();
+        let rule = rules.iter().find(|r| r.id == rule_id).expect("rule present");
+        assert_eq!(rule.source, RuleSource::Manual);
+        assert_eq!(rule.description, "operator-supplied reason");
+    }
+
+    #[test]
+    fn test_list_rules_excludes_expired() {
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        engine.add_manual_allow("10.0.0.1/32".parse().unwrap(), 0, "expires immediately".to_string());
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let rules = engine.list_rules();
+        assert!(rules.is_empty(), "expired rule should not appear in list_rules");
+    }
+
+    #[test]
+    fn test_list_rules_includes_both_allow_and_block() {
+        // block-1 comes from ScopeConfig (loaded at construction, source: Config).
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec!["127.0.0.0/8".parse().unwrap()],
+        });
+        engine.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
+        let rules = engine.list_rules();
+        assert_eq!(rules.len(), 2);
+        assert!(rules.iter().any(|r| r.source == RuleSource::Config && r.action == RuleAction::Block));
+        assert!(rules.iter().any(|r| r.source == RuleSource::Manual));
     }
 }
