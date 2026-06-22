@@ -100,7 +100,7 @@ services:
       YUMMI_OLLAMA_TIER: "standard"
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
-      # the orchestrator no longer reads any PENTEST_SCOPE_*/YUMMI_SCOPE_* vars.
+      # the orchestrator no longer reads any scope env vars.
     ports:
       - "127.0.0.1:9080:9080"
     volumes:
