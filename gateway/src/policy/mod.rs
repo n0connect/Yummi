@@ -56,6 +56,24 @@ impl std::fmt::Debug for PolicyState {
     }
 }
 
+/// Address classes that are never a legitimate remote target, regardless of
+/// any configured allow/block list. This is the single unconditional safety
+/// floor in the system — orchestrator's conductor no longer performs an
+/// equivalent check (see docs/superpowers/specs/2026-06-22-scope-centralization-design.md).
+fn is_always_blocked(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_multicast() || v4.is_link_local() || v4.is_unspecified()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xffc0 == 0xfe80) // fe80::/10 link-local
+        }
+    }
+}
+
 impl PolicyEngine {
     pub fn new(scope: &ScopeConfig) -> Self {
         let allow_rules: Vec<PolicyRule> = scope
@@ -104,6 +122,10 @@ impl PolicyEngine {
     ///
     /// Expired rules are skipped automatically.
     pub fn evaluate(&self, dst: IpAddr) -> (Decision, &'static str) {
+        if is_always_blocked(dst) {
+            return (Decision::Block, "always_blocked_address_class");
+        }
+
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -276,7 +298,37 @@ mod tests {
         let engine = PolicyEngine::new(&test_scope());
         let (decision, reason) = engine.evaluate("127.0.0.1".parse().unwrap());
         assert_eq!(decision, Decision::Block);
-        assert_eq!(reason, "blocked_range");
+        assert_eq!(reason, "always_blocked_address_class"); // was "blocked_range"
+    }
+
+    #[test]
+    fn test_always_blocks_loopback_even_with_no_block_rule_configured() {
+        let scope = ScopeConfig { allow: vec![], block: vec![] }; // no block rules at all
+        let engine = PolicyEngine::new(&scope);
+        let (decision, reason) = engine.evaluate("127.0.0.1".parse().unwrap());
+        assert_eq!(decision, Decision::Block);
+        assert_eq!(reason, "always_blocked_address_class");
+    }
+
+    #[test]
+    fn test_always_blocks_link_local_even_when_in_allow_list() {
+        // Configured allow list deliberately includes the link-local range —
+        // the floor must still win.
+        let scope = ScopeConfig {
+            allow: vec!["169.254.0.0/16".parse().unwrap()],
+            block: vec![],
+        };
+        let engine = PolicyEngine::new(&scope);
+        let (decision, _) = engine.evaluate("169.254.1.1".parse().unwrap());
+        assert_eq!(decision, Decision::Block);
+    }
+
+    #[test]
+    fn test_always_blocks_multicast_and_unspecified() {
+        let scope = ScopeConfig { allow: vec![], block: vec![] };
+        let engine = PolicyEngine::new(&scope);
+        assert_eq!(engine.evaluate("224.0.0.1".parse().unwrap()).0, Decision::Block);
+        assert_eq!(engine.evaluate("0.0.0.0".parse().unwrap()).0, Decision::Block);
     }
 
     #[test]
