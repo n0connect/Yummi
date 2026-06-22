@@ -33,6 +33,7 @@ pub struct NftablesController {
     sandbox_ip:    String,
     allow_cidrs:   Vec<String>,
     block_cidrs:   Vec<String>,
+    ttl_normalize: Option<u8>,
     active:        AtomicBool,
 }
 
@@ -45,6 +46,7 @@ impl NftablesController {
             sandbox_ip:    cfg.network.sandbox_ip.clone(),
             allow_cidrs:   cfg.scope.allow.iter().map(|n| n.to_string()).collect(),
             block_cidrs:   cfg.scope.block.iter().map(|n| n.to_string()).collect(),
+            ttl_normalize: cfg.network.ttl_normalize,
             active:        AtomicBool::new(false),
         }
     }
@@ -161,6 +163,19 @@ impl NftablesController {
         s.push_str(&format!("  chain {} {{\n", self.forward_chain));
         // policy accept: we only drop sandbox's unauthorized traffic, not everything.
         s.push_str("    type filter hook forward priority 0; policy accept;\n");
+
+        // Fingerprint minimization: normalize TTL on all sandbox-originated
+        // packets before any verdict is reached. This is a bare statement
+        // (no accept/drop) so it falls through to the rest of the chain
+        // unchanged — every later rule still applies, just with a rewritten
+        // TTL on matching packets.
+        if let Some(ttl) = self.ttl_normalize {
+            if !self.sandbox_ip.is_empty() {
+                if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
+                    s.push_str(&format!("    ip saddr {} ip ttl set {}\n", ip, ttl));
+                }
+            }
+        }
 
         // Pass through traffic NOT originating from sandbox (other containers, host).
         if !self.sandbox_ip.is_empty() {
@@ -290,6 +305,8 @@ mod tests {
                 nat_chain:     "yummi_nat".to_string(),
                 interface:     String::new(),
                 sandbox_ip:    "172.20.0.10".to_string(),
+                ttl_normalize: None,
+                mac_randomization: false,
             },
         }
     }
@@ -347,6 +364,26 @@ mod tests {
         let ruleset = ctrl.build_ruleset();
         assert!(ruleset.contains("masquerade"));
         assert!(ruleset.contains("ip saddr 172.20.0.10 masquerade"));
+    }
+
+    #[test]
+    fn test_build_ruleset_includes_ttl_normalize_when_configured() {
+        let mut cfg = test_config();
+        cfg.network.sandbox_ip = "172.20.0.10".to_string();
+        cfg.network.ttl_normalize = Some(64);
+        let ctrl = NftablesController::new(&cfg);
+        let ruleset = ctrl.build_ruleset();
+        assert!(ruleset.contains("ip saddr 172.20.0.10 ip ttl set 64"));
+    }
+
+    #[test]
+    fn test_build_ruleset_omits_ttl_normalize_when_unset() {
+        let mut cfg = test_config();
+        cfg.network.sandbox_ip = "172.20.0.10".to_string();
+        cfg.network.ttl_normalize = None;
+        let ctrl = NftablesController::new(&cfg);
+        let ruleset = ctrl.build_ruleset();
+        assert!(!ruleset.contains("ip ttl set"));
     }
 
     #[test]
