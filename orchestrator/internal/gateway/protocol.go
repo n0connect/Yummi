@@ -9,19 +9,24 @@ type Request struct {
 	TTLSecs     uint64  `json:"ttl_secs,omitempty"`
 	Description *string `json:"description,omitempty"`
 	RuleID      string  `json:"rule_id,omitempty"`
+	Reason      string  `json:"reason,omitempty"`
+	Limit       int     `json:"limit,omitempty"`
 }
 
 // Response mirrors gateway/src/ipc/protocol.rs IpcResponse.
 type Response struct {
-	Type        string `json:"type"`
-	IP          string `json:"ip,omitempty"`
-	InScope     bool   `json:"in_scope,omitempty"`
-	Level       int    `json:"level,omitempty"`
-	RulesActive bool   `json:"rules_active,omitempty"`
-	UptimeSecs  uint64 `json:"uptime_secs,omitempty"`
-	Message     string `json:"message,omitempty"`
-	RuleID      string `json:"rule_id,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"`
+	Type          string         `json:"type"`
+	IP            string         `json:"ip,omitempty"`
+	InScope       bool           `json:"in_scope,omitempty"`
+	Level         int            `json:"level,omitempty"`
+	RulesActive   bool           `json:"rules_active,omitempty"`
+	UptimeSecs    uint64         `json:"uptime_secs,omitempty"`
+	Message       string         `json:"message,omitempty"`
+	RuleID        string         `json:"rule_id,omitempty"`
+	ExpiresAt     int64          `json:"expires_at,omitempty"`
+	Rules         []RuleView     `json:"rules,omitempty"`
+	AuditRows     []AuditRowView `json:"rows,omitempty"`
+	ChainVerified bool           `json:"chain_verified,omitempty"`
 }
 
 // StatusResponse is a structured gateway status.
@@ -29,4 +34,24 @@ type StatusResponse struct {
 	Level       int    `json:"level"`
 	RulesActive bool   `json:"rules_active"`
 	UptimeSecs  uint64 `json:"uptime_secs"`
+}
+
+// RuleView mirrors gateway/src/ipc/protocol.rs RuleView.
+type RuleView struct {
+	ID          string `json:"id"`
+	Action      string `json:"action"`
+	Network     string `json:"network"`
+	Description string `json:"description"`
+	ExpiresAt   *int64 `json:"expires_at"`
+	Source      string `json:"source"`
+}
+
+// AuditRowView mirrors gateway/src/ipc/protocol.rs AuditRowView.
+type AuditRowView struct {
+	ID        int64  `json:"id"`
+	Timestamp int64  `json:"timestamp"`
+	SrcIP     string `json:"src_ip"`
+	DstIP     string `json:"dst_ip"`
+	Decision  string `json:"decision"`
+	Reason    string `json:"reason"`
 }
