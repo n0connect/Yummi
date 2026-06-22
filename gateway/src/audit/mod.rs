@@ -142,6 +142,71 @@ impl AuditLog {
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+
+    /// Record a rule lifecycle event (add/remove) into the same tamper-evident
+    /// chain used for network decisions. `event` is "rule_added" or
+    /// "rule_removed"; `reason` is prefixed with the rule's source so the audit
+    /// trail distinguishes operator-issued from agent-issued rules without a
+    /// schema change.
+    pub fn record_rule_event(
+        &self,
+        timestamp_ns: i64,
+        network: &str,
+        event: &str,
+        source_prefixed_reason: &str,
+    ) -> Result<(), AuditError> {
+        self.record_decision(
+            timestamp_ns,
+            None,
+            "gateway",
+            network,
+            None,
+            None,
+            "rule",
+            event,
+            source_prefixed_reason,
+        )
+    }
+
+    /// Fetch the most recent `limit` audit rows (oldest first, for chronological
+    /// display) plus whether the full chain currently verifies.
+    pub fn recent_rows(&self, limit: usize) -> Result<(Vec<AuditRow>, bool), AuditError> {
+        let conn = self.conn.lock().map_err(|_| AuditError::LockPoisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, src_ip, dst_ip, decision, reason
+             FROM decisions ORDER BY id DESC LIMIT ?1",
+        )?;
+        let mut rows: Vec<AuditRow> = stmt
+            .query_map([limit as i64], |row| {
+                Ok(AuditRow {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    src_ip: row.get(2)?,
+                    dst_ip: row.get(3)?,
+                    decision: row.get(4)?,
+                    reason: row.get(5)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        rows.reverse(); // oldest first
+        drop(stmt);
+        drop(conn);
+        let verified = self.verify_chain().is_ok();
+        Ok((rows, verified))
+    }
+}
+
+/// A single audit row read back for display (e.g. in the gateway management
+/// UI's recent-activity tail). Distinct from `ipc::protocol::AuditRowView`,
+/// which is the IPC wire type — a later task converts between them.
+#[derive(Debug, Clone)]
+pub struct AuditRow {
+    pub id: i64,
+    pub timestamp: i64,
+    pub src_ip: String,
+    pub dst_ip: String,
+    pub decision: String,
+    pub reason: String,
 }
 
 fn compute_hash(
@@ -217,5 +282,28 @@ mod tests {
         let h2 = compute_hash(100, "1.2.3.4", "5.6.7.8", "allow", "test", GENESIS_HASH);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64); // SHA256 hex = 64 chars
+    }
+
+    #[test]
+    fn test_record_rule_event_then_recent_rows() {
+        let log = AuditLog::open(":memory:").expect("open audit log");
+        log.record_rule_event(1000, "10.0.0.5/32", "rule_added", "[manual] test reason")
+            .expect("record rule event");
+        let (rows, verified) = log.recent_rows(10).expect("recent rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].decision, "rule_added");
+        assert_eq!(rows[0].reason, "[manual] test reason");
+        assert!(verified);
+    }
+
+    #[test]
+    fn test_recent_rows_respects_limit() {
+        let log = AuditLog::open(":memory:").expect("open audit log");
+        for i in 0..5 {
+            log.record_rule_event(1000 + i, "10.0.0.1/32", "rule_added", "[agent] test")
+                .expect("record");
+        }
+        let (rows, _verified) = log.recent_rows(2).expect("recent rows");
+        assert_eq!(rows.len(), 2);
     }
 }
