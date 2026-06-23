@@ -18,8 +18,8 @@ use tracing::{error, info, warn};
 use self::protocol::{AuditRowView, IpcRequest, IpcResponse, RuleView};
 use crate::audit::AuditLog;
 use crate::network::NftablesController;
-use crate::policy::rules::{RuleAction, RuleSource};
-use crate::policy::PolicyEngine;
+use crate::policy::rules::{EgressMode, RuleAction, RuleSource};
+use crate::policy::{EgressVerdict, PolicyEngine};
 
 /// Maximum concurrent IPC connections. Prevents file-descriptor exhaustion.
 const MAX_CONNECTIONS: usize = 32;
@@ -178,8 +178,17 @@ fn process_request(
         // ── Read-only ops — no UID check ──────────────────────────────────
         IpcRequest::CheckScope { ip } => match ip.parse::<std::net::IpAddr>() {
             Ok(addr) => {
-                let in_scope = policy.is_in_scope(addr);
-                IpcResponse::ScopeResult { ip, in_scope }
+                let verdict = policy.check_egress(addr);
+                let verdict_str = match verdict {
+                    EgressVerdict::Allow => "allow",
+                    EgressVerdict::Block => "block",
+                    EgressVerdict::NeedsApproval => "needs_approval",
+                };
+                IpcResponse::ScopeResult {
+                    ip,
+                    in_scope: verdict == EgressVerdict::Allow,
+                    verdict: verdict_str.to_string(),
+                }
             }
             Err(_) => IpcResponse::Error {
                 message: format!("invalid IP address: {ip}"),
@@ -236,6 +245,9 @@ fn process_request(
         IpcRequest::GetFingerprintConfig => IpcResponse::FingerprintConfig {
             ttl_normalize: ctrl.and_then(|c| c.ttl_normalize()),
             mac_randomization: ctrl.map(|c| c.mac_randomization()).unwrap_or(false),
+        },
+        IpcRequest::GetEgressMode => IpcResponse::EgressMode {
+            mode: policy.egress_mode().as_str().to_string(),
         },
 
         // ── Write ops — require allowlisted UID ───────────────────────────
@@ -330,6 +342,43 @@ fn process_request(
                     message: format!("invalid network CIDR: {network}"),
                 },
             }
+        }
+
+        // ── Write op — requires allowlisted UID ───────────────────────────
+        IpcRequest::SetEgressMode { mode } => {
+            if !is_write_authorized(peer_uid, allowed_uids) {
+                warn!(peer_uid, "SetEgressMode denied: UID not allowlisted");
+                return IpcResponse::Error {
+                    message: "permission denied: UID not allowlisted for write operations".to_string(),
+                };
+            }
+            let m = match EgressMode::parse(&mode) {
+                Some(m) => m,
+                None => {
+                    return IpcResponse::Error {
+                        message: format!("invalid egress mode: {mode} (expected block|allow|ask)"),
+                    };
+                }
+            };
+            // Update the policy engine first, then re-apply the kernel ruleset so
+            // the controller's own copy stays in sync with PolicyEngine. The
+            // controller keeps its OWN egress-mode copy purely for ruleset
+            // generation — keeping both setters in lock-step here is what keeps
+            // them consistent.
+            policy.set_egress_mode(m);
+            if let Some(c) = ctrl {
+                if let Err(e) = c.set_egress_mode(m) {
+                    warn!(mode = %mode, error = %e, "nftables egress-mode re-apply failed (policy updated, kernel ruleset NOT re-applied)");
+                }
+            }
+            let now_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64;
+            if let Err(e) = audit.record_rule_event(now_ns, "-", "egress_mode_set", &format!("[operator] mode={mode}")) {
+                warn!(error = %e, "failed to audit egress mode change (mode change itself succeeded)");
+            }
+            IpcResponse::EgressMode { mode: m.as_str().to_string() }
         }
     }
 }
@@ -543,6 +592,149 @@ mod tests {
             }
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_set_egress_mode_denied_without_allowlisted_uid() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(
+            IpcRequest::SetEgressMode { mode: "allow".to_string() },
+            &policy,
+            Some(9999), // not in allowed_uids
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::Error { message } => assert!(message.contains("permission denied")),
+            other => panic!("expected permission denied, got {other:?}"),
+        }
+        // mode must be unchanged (still default Block)
+        assert_eq!(policy.egress_mode(), EgressMode::Block);
+    }
+
+    #[test]
+    fn test_set_egress_mode_accepted_with_allowlisted_uid() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(
+            IpcRequest::SetEgressMode { mode: "allow".to_string() },
+            &policy,
+            Some(0),
+            &[0],
+            None, // no live controller in unit tests
+            &audit,
+        );
+        match resp {
+            IpcResponse::EgressMode { mode } => assert_eq!(mode, "allow"),
+            other => panic!("expected EgressMode, got {other:?}"),
+        }
+        assert_eq!(policy.egress_mode(), EgressMode::Allow);
+    }
+
+    #[test]
+    fn test_set_egress_mode_rejects_invalid_mode() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(
+            IpcRequest::SetEgressMode { mode: "wide-open".to_string() },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::Error { message } => assert!(message.contains("invalid egress mode")),
+            other => panic!("expected error, got {other:?}"),
+        }
+        assert_eq!(policy.egress_mode(), EgressMode::Block);
+    }
+
+    #[test]
+    fn test_get_egress_mode_returns_current() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit);
+        match resp {
+            IpcResponse::EgressMode { mode } => assert_eq!(mode, "block"),
+            other => panic!("expected EgressMode, got {other:?}"),
+        }
+        policy.set_egress_mode(EgressMode::Ask);
+        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit);
+        match resp {
+            IpcResponse::EgressMode { mode } => assert_eq!(mode, "ask"),
+            other => panic!("expected EgressMode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_check_scope_verdict_allow_after_set_allow_mode() {
+        // make_policy() allows 10.0.0.0/8 only; 8.8.8.8 is out of scope, so in
+        // Block (default) it blocks. After switching to Allow, the verdict for
+        // 8.8.8.8 becomes "allow".
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+
+        let resp = process_request(
+            IpcRequest::CheckScope { ip: "8.8.8.8".to_string() },
+            &policy,
+            None,
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::ScopeResult { verdict, in_scope, .. } => {
+                assert_eq!(verdict, "block");
+                assert!(!in_scope);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        let _ = process_request(
+            IpcRequest::SetEgressMode { mode: "allow".to_string() },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+        );
+
+        let resp = process_request(
+            IpcRequest::CheckScope { ip: "8.8.8.8".to_string() },
+            &policy,
+            None,
+            &[0],
+            None,
+            &audit,
+        );
+        match resp {
+            IpcResponse::ScopeResult { verdict, in_scope, .. } => {
+                assert_eq!(verdict, "allow");
+                assert!(in_scope);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_set_egress_mode_writes_audit_row() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let _ = process_request(
+            IpcRequest::SetEgressMode { mode: "ask".to_string() },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+        );
+        let (rows, _) = audit.recent_rows(10).expect("recent rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].decision, "egress_mode_set");
+        assert!(rows[0].reason.contains("mode=ask"));
     }
 
     #[test]
