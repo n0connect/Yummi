@@ -102,6 +102,55 @@ func HandleGatewayFingerprintConfig(c *gateway.Client) http.HandlerFunc {
 	}
 }
 
+// HandleGatewayEgressMode returns the gateway's current egress mode.
+func HandleGatewayEgressMode(c *gateway.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "not_configured"})
+			return
+		}
+		mode, err := c.GetEgressMode()
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "unreachable", "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "status": "connected"})
+	}
+}
+
+type setEgressModeRequest struct {
+	Mode string `json:"mode"`
+}
+
+// HandleGatewaySetEgressMode sets the gateway's egress mode. The body is
+// {"mode":"block"|"allow"|"ask"}; an invalid mode is rejected with 400 before
+// reaching the gateway.
+func HandleGatewaySetEgressMode(c *gateway.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setEgressModeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body", err)
+			return
+		}
+		switch req.Mode {
+		case "block", "allow", "ask":
+		default:
+			writeError(w, http.StatusBadRequest, "mode must be one of block, allow, ask", nil)
+			return
+		}
+		if c == nil {
+			writeError(w, http.StatusServiceUnavailable, "gateway not configured", nil)
+			return
+		}
+		mode, err := c.SetEgressMode(req.Mode)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "failed to set egress mode", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"mode": mode})
+	}
+}
+
 // HandleGatewayAudit returns the most recent N audit log rows plus the
 // chain-verification result.
 func HandleGatewayAudit(c *gateway.Client) http.HandlerFunc {

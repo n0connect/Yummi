@@ -47,6 +47,63 @@ func (c *Client) CheckScope(ip string) (bool, error) {
 	return resp.InScope, nil
 }
 
+// GetEgressMode returns the gateway's current egress mode ("block"|"allow"|"ask").
+func (c *Client) GetEgressMode() (string, error) {
+	resp, err := c.send(Request{Type: "get_egress_mode"})
+	if err != nil {
+		return "", err
+	}
+	if resp.Type != "egress_mode" {
+		return "", fmt.Errorf("unexpected response: %s", resp.Type)
+	}
+	return resp.Mode, nil
+}
+
+// SetEgressMode sets the gateway's egress mode. mode must be one of
+// "block"/"allow"/"ask"; an invalid value is rejected client-side before the
+// socket round-trip. Returns the mode the gateway reports it is now in.
+func (c *Client) SetEgressMode(mode string) (string, error) {
+	if !validEgressMode(mode) {
+		return "", fmt.Errorf("invalid egress mode %q: must be one of block, allow, ask", mode)
+	}
+	resp, err := c.send(Request{Type: "set_egress_mode", Mode: mode})
+	if err != nil {
+		return "", err
+	}
+	if resp.Type != "egress_mode" {
+		return "", fmt.Errorf("unexpected response: %s", resp.Type)
+	}
+	return resp.Mode, nil
+}
+
+// CheckEgress asks gateway for the egress verdict on an IP, returning one of
+// "allow"|"block"|"needs_approval". It sends the same check_scope request as
+// CheckScope but reads the richer verdict field. If the gateway is older and
+// returns no verdict, it degrades safely by mapping in_scope→"allow"/"block".
+func (c *Client) CheckEgress(ip string) (string, error) {
+	resp, err := c.send(Request{Type: "check_scope", IP: ip})
+	if err != nil {
+		return "", err
+	}
+	if resp.Verdict != "" {
+		return resp.Verdict, nil
+	}
+	// Fail-safe fallback for an older gateway that doesn't send a verdict.
+	if resp.InScope {
+		return "allow", nil
+	}
+	return "block", nil
+}
+
+func validEgressMode(mode string) bool {
+	switch mode {
+	case "block", "allow", "ask":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetStatus retrieves gateway status.
 func (c *Client) GetStatus() (*StatusResponse, error) {
 	resp, err := c.send(Request{Type: "get_status"})

@@ -11,6 +11,7 @@ type Request struct {
 	RuleID      string  `json:"rule_id,omitempty"`
 	Reason      string  `json:"reason,omitempty"`
 	Limit       int     `json:"limit,omitempty"`
+	Mode        string  `json:"mode,omitempty"`
 }
 
 // Response mirrors gateway/src/ipc/protocol.rs IpcResponse.
@@ -30,6 +31,9 @@ type Response struct {
 
 	TTLNormalize     *uint8 `json:"ttl_normalize,omitempty"`
 	MACRandomization bool   `json:"mac_randomization,omitempty"`
+
+	Mode    string `json:"mode,omitempty"`
+	Verdict string `json:"verdict,omitempty"`
 }
 
 // StatusResponse is a structured gateway status.

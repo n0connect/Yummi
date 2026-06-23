@@ -65,6 +65,8 @@ func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Eng
 		r.Delete("/gateway/rules/{id}", HandleGatewayRemoveRule(pc))
 		r.Get("/gateway/audit", HandleGatewayAudit(pc))
 		r.Get("/gateway/fingerprint", HandleGatewayFingerprintConfig(pc))
+		r.Get("/gateway/egress-mode", HandleGatewayEgressMode(pc))
+		r.Post("/gateway/egress-mode", HandleGatewaySetEgressMode(pc))
 
 		// sandbox status & direct exec
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))
