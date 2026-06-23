@@ -167,6 +167,23 @@ impl PolicyEngine {
         }
     }
 
+    /// Egress verdict for a target the gateway cannot parse as an IP (a bare
+    /// hostname like "google.com"). The gateway has no resolver, so the
+    /// per-IP allow/block list and the always-blocked floor cannot be applied
+    /// here — the answer is purely the operator-set mode: Allow → Allow (the
+    /// FORWARD chain blanket-accepts sandbox egress, so the hostname is
+    /// reachable and the sandbox does its own DNS), Block → Block, Ask →
+    /// NeedsApproval (the orchestrator resolves the hostname to IP(s) at
+    /// approval time and opens those). This is what lets `ping google.com`
+    /// work in Allow mode instead of failing with "invalid IP address".
+    pub fn check_egress_unresolved(&self) -> EgressVerdict {
+        match self.egress_mode() {
+            EgressMode::Block => EgressVerdict::Block,
+            EgressMode::Allow => EgressVerdict::Allow,
+            EgressMode::Ask => EgressVerdict::NeedsApproval,
+        }
+    }
+
     /// Evaluate a destination IP against policy rules.
     ///
     /// Order of evaluation (all checks within a **single read-lock** to
@@ -524,6 +541,19 @@ mod tests {
         let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
         engine.set_egress_mode(EgressMode::Allow);
         assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Allow);
+    }
+
+    #[test]
+    fn test_check_egress_unresolved_follows_mode() {
+        // A bare hostname (non-IP) is decided purely by the egress mode, never
+        // an "invalid IP" error — this is what makes `ping google.com` work in
+        // Allow mode and queue for approval in Ask mode.
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Block); // default
+        engine.set_egress_mode(EgressMode::Allow);
+        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Allow);
+        engine.set_egress_mode(EgressMode::Ask);
+        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::NeedsApproval);
     }
 
     #[test]

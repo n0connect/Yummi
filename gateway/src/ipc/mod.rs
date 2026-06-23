@@ -176,24 +176,26 @@ fn process_request(
 ) -> IpcResponse {
     match req {
         // ── Read-only ops — no UID check ──────────────────────────────────
-        IpcRequest::CheckScope { ip } => match ip.parse::<std::net::IpAddr>() {
-            Ok(addr) => {
-                let verdict = policy.check_egress(addr);
-                let verdict_str = match verdict {
-                    EgressVerdict::Allow => "allow",
-                    EgressVerdict::Block => "block",
-                    EgressVerdict::NeedsApproval => "needs_approval",
-                };
-                IpcResponse::ScopeResult {
-                    ip,
-                    in_scope: verdict == EgressVerdict::Allow,
-                    verdict: verdict_str.to_string(),
-                }
+        IpcRequest::CheckScope { ip } => {
+            // A non-IP target (bare hostname) is not an error: the gateway has
+            // no resolver, so the verdict for it is decided purely by the
+            // egress mode (check_egress_unresolved). This lets Allow mode pass
+            // hostnames like "google.com" through instead of rejecting them.
+            let verdict = match ip.parse::<std::net::IpAddr>() {
+                Ok(addr) => policy.check_egress(addr),
+                Err(_) => policy.check_egress_unresolved(),
+            };
+            let verdict_str = match verdict {
+                EgressVerdict::Allow => "allow",
+                EgressVerdict::Block => "block",
+                EgressVerdict::NeedsApproval => "needs_approval",
+            };
+            IpcResponse::ScopeResult {
+                ip,
+                in_scope: verdict == EgressVerdict::Allow,
+                verdict: verdict_str.to_string(),
             }
-            Err(_) => IpcResponse::Error {
-                message: format!("invalid IP address: {ip}"),
-            },
-        },
+        }
         IpcRequest::GetStatus => IpcResponse::Status {
             level: 0,
             rules_active: true,
