@@ -14,9 +14,11 @@
 use std::io::Write as IoWrite;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 
 use crate::config::GatewayConfig;
 use crate::network::NetworkError;
+use crate::policy::rules::EgressMode;
 
 const NFT_BIN: &str = "/usr/sbin/nft";
 
@@ -63,6 +65,12 @@ pub struct NftablesController {
     mac_randomization: bool,
     interface:     String,
     active:        AtomicBool,
+    /// The controller's OWN copy of the operator egress mode, used purely for
+    /// ruleset generation. The IPC handler keeps it in sync with PolicyEngine
+    /// by calling both `PolicyEngine::set_egress_mode` and
+    /// `NftablesController::set_egress_mode` together. Defaults to `Block`
+    /// (fail-closed) and does not persist across restarts.
+    egress_mode:   RwLock<EgressMode>,
 }
 
 impl NftablesController {
@@ -78,7 +86,17 @@ impl NftablesController {
             mac_randomization: cfg.network.mac_randomization,
             interface:     cfg.network.interface.clone(),
             active:        AtomicBool::new(false),
+            egress_mode:   RwLock::new(EgressMode::Block),
         }
+    }
+
+    /// Set the controller's egress mode and re-apply the kernel ruleset.
+    /// `install_rules()` is idempotent (it deletes + recreates the table), so
+    /// this safely swaps the FORWARD chain to reflect the new mode. The
+    /// fail-closed final drop is preserved in every mode.
+    pub fn set_egress_mode(&self, m: EgressMode) -> Result<(), NetworkError> {
+        *self.egress_mode.write().unwrap() = m;
+        self.install_rules()
     }
 
     /// Install fail-closed FORWARD-chain rules.
@@ -297,6 +315,17 @@ impl NftablesController {
         // DNS is always permitted so sandbox can resolve target hostnames.
         s.push_str("    udp dport 53 accept\n");
 
+        // Egress mode = Allow: blanket-accept all remaining sandbox-originated
+        // egress. Sits AFTER the block rules (so explicit denies + the
+        // always-blocked floor still win) and BEFORE the final fail-closed drop,
+        // which is preserved. Block/Ask modes add no blanket accept — Ask relies
+        // on per-target @allowed_targets and Block drops everything.
+        if *self.egress_mode.read().unwrap() == EgressMode::Allow && !self.sandbox_ip.is_empty() {
+            if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
+                s.push_str(&format!("    ip saddr {} accept\n", ip));
+            }
+        }
+
         // Rate-limited log + drop for everything else.
         s.push_str("    limit rate 5/minute log prefix \"yummi_gateway_drop: \" drop\n");
 
@@ -473,6 +502,38 @@ mod tests {
         let ctrl = NftablesController::new(&cfg);
         let ruleset = ctrl.build_ruleset();
         assert!(!ruleset.contains("ip ttl set"));
+    }
+
+    #[test]
+    fn test_blanket_accept_only_in_allow_mode() {
+        // Block (default): no blanket sandbox-saddr accept.
+        let ctrl = NftablesController::new(&test_config());
+        let blanket = "ip saddr 172.20.0.10 accept";
+        assert!(
+            !ctrl.build_ruleset().contains(blanket),
+            "Block mode must NOT emit a blanket sandbox accept"
+        );
+
+        // Ask: still no blanket accept.
+        *ctrl.egress_mode.write().unwrap() = EgressMode::Ask;
+        assert!(
+            !ctrl.build_ruleset().contains(blanket),
+            "Ask mode must NOT emit a blanket sandbox accept"
+        );
+
+        // Allow: blanket accept present, and it precedes the final drop.
+        *ctrl.egress_mode.write().unwrap() = EgressMode::Allow;
+        let ruleset = ctrl.build_ruleset();
+        assert!(
+            ruleset.contains(blanket),
+            "Allow mode must emit a blanket sandbox accept"
+        );
+        let accept_pos = ruleset.find(blanket).unwrap();
+        let drop_pos = ruleset.find("yummi_gateway_drop").unwrap();
+        assert!(
+            accept_pos < drop_pos,
+            "blanket accept must precede the fail-closed final drop"
+        );
     }
 
     #[test]

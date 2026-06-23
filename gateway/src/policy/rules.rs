@@ -23,6 +23,53 @@ pub enum RuleAction {
     Block,
 }
 
+/// Operator-controlled, gateway-enforced master egress switch that sits *above*
+/// the per-IP scope allow/block list:
+///
+/// - `Block` (default): no external sandbox egress at all (fail-closed).
+/// - `Allow`: all external egress permitted (blanket accept above the drop).
+/// - `Ask`: each new external destination needs operator approval; already-opened
+///   destinations (static allow / temporary rules) are permitted.
+///
+/// **Does NOT persist across gateway restarts.** A fresh gateway always resets to
+/// `Block`, which preserves the fail-closed invariant: a restarted gateway with no
+/// operator action permits no external egress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EgressMode {
+    Block,
+    Allow,
+    Ask,
+}
+
+impl EgressMode {
+    /// Parse the operator-supplied mode string ("block"/"allow"/"ask").
+    /// Returns `None` for any other value so the caller can reject it.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "block" => Some(EgressMode::Block),
+            "allow" => Some(EgressMode::Allow),
+            "ask" => Some(EgressMode::Ask),
+            _ => None,
+        }
+    }
+
+    /// Lowercase wire string, matching the serde representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EgressMode::Block => "block",
+            EgressMode::Allow => "allow",
+            EgressMode::Ask => "ask",
+        }
+    }
+}
+
+impl std::fmt::Display for EgressMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Where a temporary rule originated — drives the audit trail and the
 /// management UI's "source" badge. Config = loaded from gateway's own YAML
 /// config at startup (PolicyEngine::new). Agent = added automatically by the

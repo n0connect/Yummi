@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ipnet::IpNet;
 
 use crate::config::ScopeConfig;
-use self::rules::{PolicyRule, RuleAction, RuleSource};
+use self::rules::{EgressMode, PolicyRule, RuleAction, RuleSource};
 
 /// Policy decision for a traffic flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +19,15 @@ pub enum Decision {
     Allow,
     /// Block traffic (RST connection, log).
     Block,
+}
+
+/// Egress-mode-aware verdict for a destination. Unlike `Decision` (allow/block),
+/// this carries the `NeedsApproval` state that `Ask` mode can produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressVerdict {
+    Allow,
+    Block,
+    NeedsApproval,
 }
 
 impl std::fmt::Display for Decision {
@@ -37,6 +46,9 @@ impl std::fmt::Display for Decision {
 struct PolicyState {
     allow_rules: Vec<PolicyRule>,
     block_rules: Vec<PolicyRule>,
+    /// Operator-controlled master egress switch. Defaults to `Block`
+    /// (fail-closed); does NOT persist across restarts.
+    egress_mode: EgressMode,
 }
 
 /// Policy engine evaluates traffic against scope rules.
@@ -108,7 +120,50 @@ impl PolicyEngine {
             state: Arc::new(RwLock::new(PolicyState {
                 allow_rules,
                 block_rules,
+                // Fail-closed default — no external egress until an operator
+                // explicitly switches the mode. Resets to Block on restart.
+                egress_mode: EgressMode::Block,
             })),
+        }
+    }
+
+    /// Current operator-set egress mode. Takes (and releases) a read-lock.
+    pub fn egress_mode(&self) -> EgressMode {
+        self.state.read().unwrap().egress_mode
+    }
+
+    /// Set the operator-controlled egress mode. Takes a write-lock.
+    pub fn set_egress_mode(&self, mode: EgressMode) {
+        let mut state = self.state.write().unwrap();
+        state.egress_mode = mode;
+        tracing::info!(mode = %mode, "egress mode set");
+    }
+
+    /// Egress-mode-aware destination check — the entry point the IPC
+    /// `CheckScope` handler uses. The always-blocked floor is checked first in
+    /// **every** mode (Allow does not override it). Then:
+    /// - `Block` → `Block` (no external egress)
+    /// - `Allow` → `Allow` (blanket egress)
+    /// - `Ask`   → run the existing allow/block-list `evaluate()`; an allow
+    ///   (static allow rule or already-opened temporary rule) → `Allow`,
+    ///   otherwise → `NeedsApproval`.
+    ///
+    /// `evaluate()` already performs its own `is_always_blocked` floor, but we
+    /// keep the explicit check here so Allow mode short-circuits the floor too.
+    pub fn check_egress(&self, dst: IpAddr) -> EgressVerdict {
+        if is_always_blocked(dst) {
+            return EgressVerdict::Block;
+        }
+        // Read the mode once and release its lock before calling evaluate()
+        // (which takes its own read-lock) — avoids re-entrant double-locking.
+        let mode = self.egress_mode();
+        match mode {
+            EgressMode::Block => EgressVerdict::Block,
+            EgressMode::Allow => EgressVerdict::Allow,
+            EgressMode::Ask => match self.evaluate(dst).0 {
+                Decision::Allow => EgressVerdict::Allow,
+                Decision::Block => EgressVerdict::NeedsApproval,
+            },
         }
     }
 
@@ -449,6 +504,65 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(1));
         let rules = engine.list_rules();
         assert!(rules.is_empty(), "expired rule should not appear in list_rules");
+    }
+
+    #[test]
+    fn test_egress_mode_defaults_to_block() {
+        let engine = PolicyEngine::new(&test_scope());
+        assert_eq!(engine.egress_mode(), EgressMode::Block);
+    }
+
+    #[test]
+    fn test_check_egress_block_mode_blocks_external() {
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        // default mode is Block
+        assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Block);
+    }
+
+    #[test]
+    fn test_check_egress_allow_mode_allows_external() {
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        engine.set_egress_mode(EgressMode::Allow);
+        assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Allow);
+    }
+
+    #[test]
+    fn test_check_egress_ask_mode_unlisted_needs_approval() {
+        // allow list configured but does NOT include 8.8.8.8
+        let scope = ScopeConfig {
+            allow: vec!["10.0.0.0/8".parse().unwrap()],
+            block: vec![],
+        };
+        let engine = PolicyEngine::new(&scope);
+        engine.set_egress_mode(EgressMode::Ask);
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::NeedsApproval
+        );
+    }
+
+    #[test]
+    fn test_check_egress_ask_mode_listed_allows() {
+        let scope = ScopeConfig {
+            allow: vec!["8.8.8.0/24".parse().unwrap()],
+            block: vec![],
+        };
+        let engine = PolicyEngine::new(&scope);
+        engine.set_egress_mode(EgressMode::Ask);
+        assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Allow);
+    }
+
+    #[test]
+    fn test_check_egress_always_blocked_floor_wins_in_all_modes() {
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        for mode in [EgressMode::Block, EgressMode::Allow, EgressMode::Ask] {
+            engine.set_egress_mode(mode);
+            assert_eq!(
+                engine.check_egress("127.0.0.1".parse().unwrap()),
+                EgressVerdict::Block,
+                "loopback must be blocked in {mode} mode"
+            );
+        }
     }
 
     #[test]

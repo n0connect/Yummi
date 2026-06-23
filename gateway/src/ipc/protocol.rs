@@ -44,6 +44,11 @@ pub enum IpcRequest {
     },
     /// Read the gateway's current fingerprint-masking configuration.
     GetFingerprintConfig,
+    /// Set the operator-controlled egress mode ("block"/"allow"/"ask").
+    /// Write op — UID-gated; re-applies the nftables ruleset on change.
+    SetEgressMode { mode: String },
+    /// Read the current egress mode (read-only, no auth required).
+    GetEgressMode,
 }
 
 /// Response from gateway to orchestrator.
@@ -51,7 +56,10 @@ pub enum IpcRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IpcResponse {
     /// Result of a scope check.
-    ScopeResult { ip: String, in_scope: bool },
+    ///
+    /// `verdict` is the egress-mode-aware result ("allow"|"block"|"needs_approval").
+    /// `in_scope` is kept for backward compatibility — `true` iff `verdict == "allow"`.
+    ScopeResult { ip: String, in_scope: bool, verdict: String },
     /// Current gateway status.
     Status {
         level: u8,
@@ -80,6 +88,9 @@ pub enum IpcResponse {
         ttl_normalize: Option<u8>,
         mac_randomization: bool,
     },
+    /// Current/updated egress mode ("block"|"allow"|"ask"). Returned by both
+    /// GetEgressMode and a successful SetEgressMode.
+    EgressMode { mode: String },
 }
 
 /// Read-only view of a policy rule, returned by ListRules.
@@ -143,10 +154,12 @@ mod tests {
         let resp = IpcResponse::ScopeResult {
             ip: "10.0.0.1".to_string(),
             in_scope: true,
+            verdict: "allow".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("scope_result"));
         assert!(json.contains("true"));
+        assert!(json.contains("allow"));
     }
 
     #[test]
