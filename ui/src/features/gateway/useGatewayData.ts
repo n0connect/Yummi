@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import type { GatewayRule, GatewayAuditRow, GatewayStatus } from '../../entities/types'
+import type { GatewayRule, GatewayAuditRow, GatewayStatus, GatewayEgressMode, GatewayEgressModeResponse } from '../../entities/types'
 
 const POLL_MS = 5_000
 
@@ -53,6 +53,50 @@ export function useGatewayAudit(limit = 50) {
   }, [refresh])
 
   return { rows, chainVerified, refresh }
+}
+
+export function useEgressMode() {
+  const [mode, setModeState] = useState<GatewayEgressMode>('block')
+  const [status, setStatus] = useState<GatewayEgressModeResponse['status']>('not_configured')
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/gateway/egress-mode')
+      if (res.ok) {
+        const data: GatewayEgressModeResponse = await res.json()
+        if (data.mode) setModeState(data.mode)
+        setStatus(data.status ?? 'connected')
+      }
+    } catch {
+      setStatus('unreachable')
+    }
+  }, [])
+
+  const setMode = useCallback(async (m: GatewayEgressMode) => {
+    await setEgressMode(m)
+    setModeState(m) // optimistic
+    await refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, POLL_MS)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  return { mode, status, setMode }
+}
+
+export async function setEgressMode(mode: GatewayEgressMode): Promise<void> {
+  const res = await fetch('/api/v1/gateway/egress-mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode })
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`failed to set egress mode: ${text}`)
+  }
 }
 
 export async function addGatewayRule(network: string, ttlSecs: number, reason: string): Promise<void> {

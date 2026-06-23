@@ -89,6 +89,13 @@ export type GatewayStatus = {
   status: 'connected' | 'disconnected' | 'not_configured'
 }
 
+export type GatewayEgressMode = 'block' | 'allow' | 'ask'
+
+export type GatewayEgressModeResponse = {
+  mode: GatewayEgressMode
+  status: 'connected' | 'unreachable' | 'not_configured'
+}
+
 // ─── System Status types (from /api/v1/system/status) ────────────────────────
 
 export type ModuleStatus = {

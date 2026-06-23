@@ -1,10 +1,34 @@
 import { useState, useEffect } from 'react'
-import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule } from '../../features/gateway/useGatewayData'
+import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode } from '../../features/gateway/useGatewayData'
+import type { GatewayEgressMode } from '../../entities/types'
 import './GatewayPage.css'
+
+const EGRESS_MODES: { mode: GatewayEgressMode; label: string; hint: string }[] = [
+  { mode: 'block', label: 'Tümü Engellensin', hint: 'Sandbox dış ağa erişemez (fail-closed).' },
+  { mode: 'allow', label: 'Tümüne İzin Ver', hint: 'Sandbox dış ağa serbestçe erişebilir.' },
+  { mode: 'ask', label: 'Her Erişimde Sor', hint: 'Her dış erişim için operatör onayı istenir.' }
+]
 
 export function GatewayPage(): JSX.Element {
   const { rules, status, refresh: refreshRules } = useGatewayRules()
   const { rows, chainVerified } = useGatewayAudit(50)
+  const { mode: egressMode, status: egressStatus, setMode: setEgress } = useEgressMode()
+  const [egressBusy, setEgressBusy] = useState(false)
+  const [egressError, setEgressError] = useState<string | null>(null)
+  const egressReachable = egressStatus === 'connected'
+
+  async function handleEgressChange(m: GatewayEgressMode) {
+    if (m === egressMode || egressBusy) return
+    setEgressBusy(true)
+    setEgressError(null)
+    try {
+      await setEgress(m)
+    } catch (err) {
+      setEgressError(err instanceof Error ? err.message : 'failed to set egress mode')
+    } finally {
+      setEgressBusy(false)
+    }
+  }
   const [network, setNetwork] = useState('')
   const [ttl, setTtl] = useState('600')
   const [reason, setReason] = useState('')
@@ -54,6 +78,34 @@ export function GatewayPage(): JSX.Element {
       <div className="gateway-header">
         <h2 className="gateway-title">Gateway</h2>
         <span className={`gateway-status-badge ${status}`}>{status}</span>
+      </div>
+
+      <div className="gateway-card gateway-egress-card">
+        <h3>Egress Mode</h3>
+        <div className="gateway-egress-selector" role="group" aria-label="Egress mode">
+          {EGRESS_MODES.map(({ mode, label }) => (
+            <button
+              key={mode}
+              type="button"
+              className={`gateway-egress-btn ${egressMode === mode ? 'active' : ''}`}
+              disabled={!egressReachable || egressBusy}
+              aria-pressed={egressMode === mode}
+              onClick={() => handleEgressChange(mode)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {egressReachable ? (
+          <p className="gateway-egress-hint">
+            {EGRESS_MODES.find(m => m.mode === egressMode)?.hint}
+          </p>
+        ) : (
+          <p className="gateway-egress-status">
+            {egressStatus === 'not_configured' ? 'Gateway yapılandırılmamış.' : 'Gateway erişilemez.'}
+          </p>
+        )}
+        {egressError && <div className="gateway-form-error">{egressError}</div>}
       </div>
 
       <div className="gateway-card">
