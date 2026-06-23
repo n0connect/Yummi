@@ -65,6 +65,16 @@ scope:
     - "127.0.0.0/8"
 ```
 
+### Egress mode
+
+Above the per-IP scope list sits a runtime **egress mode** — an operator-controlled master switch (set from the dashboard GATEWAY tab via the `set_egress_mode` IPC / `POST /api/v1/gateway/egress-mode`):
+
+- `block` — **default, fail-closed**: no external egress at all.
+- `allow` — the FORWARD chain blanket-accepts sandbox egress; hostnames (e.g. `google.com`) work without per-IP resolution.
+- `ask` — each new external destination requires operator approval.
+
+`check_scope` returns a `verdict` (`allow` / `block` / `needs_approval`) derived from the mode; a non-IP target (hostname) is decided by the mode rather than rejected. The mode is **not persisted** — it resets to `block` on restart. It is independent of the agent's command-approval mode (`auto`/`ask_permission`).
+
 ## Audit log
 
 Every scope check, rule change, and connection event is written to `~/.yummi/logs/audit.db` (SQLite WAL). Each row includes a SHA-256 hash of the previous row — creating a tamper-evident chain.
