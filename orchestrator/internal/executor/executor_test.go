@@ -14,7 +14,7 @@ import (
 func TestRunScopedCommandBlocksOutOfScope(t *testing.T) {
 	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
 		if req.Type == "check_scope" {
-			return gateway.Response{Type: "scope_check_result", IP: req.IP, InScope: false}
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "block"}
 		}
 		return gateway.Response{Type: "error", Message: "unexpected request"}
 	})
@@ -27,6 +27,28 @@ func TestRunScopedCommandBlocksOutOfScope(t *testing.T) {
 	}
 	if !errors.Is(err, ErrOutOfScope) {
 		t.Fatalf("expected ErrOutOfScope, got: %v", err)
+	}
+}
+
+func TestRunScopedCommandHoldsOnApprovalRequired(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "needs_approval"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge("yummi-sandbox-test-nonexistent")
+
+	_, err := RunScopedCommand(context.Background(), bridge, pc, "nmap -sV 8.8.8.8")
+	if err == nil {
+		t.Fatal("expected an egress-approval-required error")
+	}
+	if !errors.Is(err, ErrEgressApprovalRequired) {
+		t.Fatalf("expected ErrEgressApprovalRequired, got: %v", err)
+	}
+	if errors.Is(err, ErrOutOfScope) {
+		t.Fatal("needs_approval should not be classified as ErrOutOfScope — it's a hold, not a hard block")
 	}
 }
 

@@ -25,6 +25,14 @@ import (
 // still has the typed error.
 var ErrOutOfScope = errors.New("target not in scope")
 
+// ErrEgressApprovalRequired marks a command whose target the gateway placed in
+// the "needs_approval" egress verdict (Ask mode, no open rule yet). The command
+// is held/blocked for now; the operator-approval round-trip is a later task.
+// The returned error also carries an "EGRESS_APPROVAL_REQUIRED:" message prefix
+// for callers that only have the error string. This is distinct from
+// ErrOutOfScope (a hard block) — fail-closed either way.
+var ErrEgressApprovalRequired = errors.New("egress approval required")
+
 // RunScopedCommand is the single call path that asks gateway whether a
 // command's target is in scope, opens the corresponding nftables allow rule
 // if so, and only then runs the command in the sandbox. Every Go code path
@@ -41,14 +49,24 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 		if pc == nil {
 			return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
 		}
-		inScope, err := pc.CheckScope(target)
+		verdict, err := pc.CheckEgress(target)
 		if err != nil {
-			slog.Error("RunScopedCommand: gateway scope check error — blocking execution (fail-closed)",
+			slog.Error("RunScopedCommand: gateway egress check error — blocking execution (fail-closed)",
 				"target", target, "error", err)
 			return nil, fmt.Errorf("gateway scope check unavailable: %w", err)
 		}
-		if !inScope {
+		switch verdict {
+		case "allow":
+			// proceed to nftables unlock + exec below
+		case "block":
 			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
+		case "needs_approval":
+			return nil, fmt.Errorf("EGRESS_APPROVAL_REQUIRED: %q needs operator approval: %w", target, ErrEgressApprovalRequired)
+		default:
+			// Unknown/empty verdict: fail closed rather than proceed to exec.
+			slog.Error("RunScopedCommand: unknown gateway egress verdict — blocking execution (fail-closed)",
+				"target", target, "verdict", verdict)
+			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
 		}
 
 		network := hostNetwork(target)

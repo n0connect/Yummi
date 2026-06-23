@@ -74,6 +74,62 @@ func TestHandleGatewayAddRuleSucceeds(t *testing.T) {
 	}
 }
 
+func TestHandleGatewayEgressModeGet(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type != "get_egress_mode" {
+			return gateway.Response{Type: "error", Message: "unexpected request type"}
+		}
+		return gateway.Response{Type: "egress_mode", Mode: "ask"}
+	})
+	c := gateway.NewClient(socket)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/egress-mode", nil)
+	w := httptest.NewRecorder()
+	HandleGatewayEgressMode(c).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ask") {
+		t.Fatalf("expected mode in body, got: %s", w.Body.String())
+	}
+}
+
+func TestHandleGatewaySetEgressModeSucceeds(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type != "set_egress_mode" || req.Mode != "allow" {
+			return gateway.Response{Type: "error", Message: "unexpected request"}
+		}
+		return gateway.Response{Type: "egress_mode", Mode: req.Mode}
+	})
+	c := gateway.NewClient(socket)
+
+	body := strings.NewReader(`{"mode":"allow"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/egress-mode", body)
+	w := httptest.NewRecorder()
+	HandleGatewaySetEgressMode(c).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "allow") {
+		t.Fatalf("expected mode in body, got: %s", w.Body.String())
+	}
+}
+
+func TestHandleGatewaySetEgressModeRejectsInvalid(t *testing.T) {
+	c := gateway.NewClient("/nonexistent/socket") // must reject before reaching the socket
+
+	body := strings.NewReader(`{"mode":"turbo"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/egress-mode", body)
+	w := httptest.NewRecorder()
+	HandleGatewaySetEgressMode(c).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid mode, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleGatewayAuditDegradesWhenUnreachable(t *testing.T) {
 	c := gateway.NewClient("/nonexistent/socket")
 

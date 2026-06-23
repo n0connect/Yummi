@@ -47,6 +47,7 @@ type Aggregator struct {
 	gwSubs    map[int]chan GatewayEvent
 	gwNextID  int
 	lastRules []gateway.RuleView
+	lastMode  string
 }
 
 // GatewayEvent is broadcast to /ws/events subscribers when the gateway's
@@ -55,6 +56,7 @@ type GatewayEvent struct {
 	Type      string             `json:"type"`
 	Timestamp int64              `json:"timestamp"`
 	Rules     []gateway.RuleView `json:"rules"`
+	Mode      string             `json:"mode,omitempty"`
 }
 
 // New constructs a health Aggregator. gatewayClient may be nil if the
@@ -97,10 +99,11 @@ func (a *Aggregator) UnsubscribeGateway(id int) {
 // diffAndPublishRules compares the new rule snapshot against the last known
 // one and broadcasts a gateway.rules_changed event to all subscribers if
 // anything changed (by rule count or any rule's id/expiry/source).
-func (a *Aggregator) diffAndPublishRules(rules []gateway.RuleView) {
+func (a *Aggregator) diffAndPublishRules(rules []gateway.RuleView, mode string) {
 	a.mu.Lock()
-	changed := rulesDiffer(a.lastRules, rules)
+	changed := rulesDiffer(a.lastRules, rules) || mode != a.lastMode
 	a.lastRules = rules
+	a.lastMode = mode
 	a.mu.Unlock()
 
 	if !changed {
@@ -111,6 +114,7 @@ func (a *Aggregator) diffAndPublishRules(rules []gateway.RuleView) {
 		Type:      "gateway.rules_changed",
 		Timestamp: time.Now().Unix(),
 		Rules:     rules,
+		Mode:      mode,
 	}
 
 	a.gwSubsMu.RLock()
@@ -229,7 +233,10 @@ func (a *Aggregator) collect(ctx context.Context) {
 		sample.GatewayUp = gatewayUp
 		if gatewayUp {
 			if rules, err := a.gatewayClient.ListRules(); err == nil {
-				a.diffAndPublishRules(rules)
+				// Egress mode is best-effort: an older gateway may not support
+				// it, in which case we publish the rule diff with an empty mode.
+				mode, _ := a.gatewayClient.GetEgressMode()
+				a.diffAndPublishRules(rules, mode)
 			}
 		}
 	}

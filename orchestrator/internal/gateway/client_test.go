@@ -166,6 +166,94 @@ func TestClientGetFingerprintConfig(t *testing.T) {
 	}
 }
 
+func TestClientGetEgressMode(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "get_egress_mode" {
+			return Response{Type: "error", Message: "unexpected request type"}
+		}
+		return Response{Type: "egress_mode", Mode: "ask"}
+	})
+
+	c := NewClient(socket)
+	mode, err := c.GetEgressMode()
+	if err != nil {
+		t.Fatalf("get egress mode: %v", err)
+	}
+	if mode != "ask" {
+		t.Fatalf("expected mode 'ask', got %q", mode)
+	}
+}
+
+func TestClientSetEgressMode(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "set_egress_mode" || req.Mode != "allow" {
+			return Response{Type: "error", Message: "unexpected request"}
+		}
+		return Response{Type: "egress_mode", Mode: req.Mode}
+	})
+
+	c := NewClient(socket)
+	mode, err := c.SetEgressMode("allow")
+	if err != nil {
+		t.Fatalf("set egress mode: %v", err)
+	}
+	if mode != "allow" {
+		t.Fatalf("expected mode 'allow', got %q", mode)
+	}
+}
+
+func TestClientSetEgressModeRejectsInvalid(t *testing.T) {
+	c := NewClient("/nonexistent") // never reaches the socket — fails client-side
+	_, err := c.SetEgressMode("turbo")
+	if err == nil {
+		t.Fatal("expected client-side rejection of invalid mode")
+	}
+	if !strings.Contains(err.Error(), "invalid egress mode") {
+		t.Fatalf("expected invalid-mode error, got: %v", err)
+	}
+}
+
+func TestClientCheckEgress(t *testing.T) {
+	cases := map[string]string{
+		"10.0.0.5": "allow",
+		"8.8.8.8":  "block",
+		"1.1.1.1":  "needs_approval",
+	}
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "check_scope" {
+			return Response{Type: "error", Message: "unexpected request type"}
+		}
+		return Response{Type: "scope_check_result", IP: req.IP, Verdict: cases[req.IP]}
+	})
+
+	c := NewClient(socket)
+	for ip, want := range cases {
+		got, err := c.CheckEgress(ip)
+		if err != nil {
+			t.Fatalf("check egress %s: %v", ip, err)
+		}
+		if got != want {
+			t.Fatalf("check egress %s: got %q, want %q", ip, got, want)
+		}
+	}
+}
+
+func TestClientCheckEgressFallsBackToInScope(t *testing.T) {
+	// An older gateway that returns no verdict — CheckEgress must degrade to
+	// in_scope→allow/block so it never silently proceeds.
+	socket := StartTestServer(t, false, func(req Request) Response {
+		return Response{Type: "scope_check_result", IP: req.IP, InScope: req.IP == "10.0.0.5"}
+	})
+
+	c := NewClient(socket)
+	if v, _ := c.CheckEgress("10.0.0.5"); v != "allow" {
+		t.Fatalf("expected fallback 'allow', got %q", v)
+	}
+	if v, _ := c.CheckEgress("8.8.8.8"); v != "block" {
+		t.Fatalf("expected fallback 'block', got %q", v)
+	}
+}
+
 func TestClientAddManualRuleRequiresReason(t *testing.T) {
 	c := NewClient("/nonexistent") // never reaches the socket — fails client-side
 	_, _, err := c.AddManualRule("10.0.0.5/32", 600, "")
@@ -173,4 +261,3 @@ func TestClientAddManualRuleRequiresReason(t *testing.T) {
 		t.Fatal("expected error for empty reason")
 	}
 }
-
