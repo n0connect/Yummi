@@ -73,3 +73,49 @@
 .gateway-unreachable {
   color: var(--text-secondary);
 }
+
+.gateway-egress-selector {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.gateway-egress-btn {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-primary, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, var(--radius-lg));
+  color: var(--text-secondary);
+  font-size: var(--text-sm, inherit);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.gateway-egress-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.gateway-egress-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary, #fff);
+}
+
+.gateway-egress-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gateway-egress-hint {
+  margin: var(--space-sm) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm, inherit);
+}
+
+.gateway-egress-status {
+  margin: var(--space-sm) 0 0;
+  color: var(--danger, #e53935);
+  font-size: var(--text-sm, inherit);
+}
