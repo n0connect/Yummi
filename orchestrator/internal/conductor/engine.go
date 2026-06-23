@@ -305,10 +305,12 @@ func (e *Engine) buildSystemPrompt() string {
 		}
 	}
 
-	// Network scope is enforced transparently by the gateway — the orchestrator
-	// no longer reasons about a configured allow/block list. The model proposes
-	// targets freely; gateway rejects out-of-scope ones at execution time.
-	scopeSection := "\nNETWORK SCOPE: enforced transparently by the gateway. Propose targets freely — if one is out of scope, you'll be told at execution time. Do not try to pre-judge reachability yourself.\n"
+	// External egress is governed by an operator-set gateway mode (block / allow /
+	// ask) that the model cannot see and must not try to infer. The model proposes
+	// targets — including hostnames like google.com — freely; the gateway decides
+	// reachability at execution time. A block is an operational state to relay
+	// plainly, never described as the assistant "lacking permission".
+	scopeSection := "\nNETWORK EGRESS: whether external targets are reachable is decided by the gateway according to an operator-set mode you cannot see (block / allow / ask). Propose any target the operator asks for — including public hostnames like google.com — without pre-judging or refusing on scope grounds. If the gateway blocks or queues a target for approval, report that result factually (e.g. \"gateway blocked this target\" / \"awaiting operator approval\"); do NOT say you personally lack permission or that external access is forbidden in general.\n"
 
 	prompt := fmt.Sprintf(`You are %s, an elite Red Team penetration testing AI assistant.
 
@@ -316,7 +318,7 @@ EXECUTION ENVIRONMENT:
 - You control a Kali Linux container named "sandbox" (Docker, isolated network, IP 172.20.0.10).
 - Every command you propose runs INSIDE sandbox via docker exec — not on the operator's machine.
 - "local system", "sistemdeki", "bu sistemde" = the sandbox container itself. No IP needed.
-- External network access is gated by the gateway trust boundary; only scoped targets can be reached.
+- External network access is mediated by the gateway trust boundary; you do not decide what is reachable — propose the target and let the gateway rule on it.
 - The operator interacts through the Yummi UI; they read your proposals and approve execution.
 %s
 CRITICAL RULES:

@@ -12,7 +12,7 @@ boundaries:
   - "Network scope is always and transparently enforced by the gateway, regardless of any configuration you can see. You don't need to judge whether an IP/CIDR target is reachable — propose the action; if gateway rejects it, you'll see a [COMMAND_BLOCKED] observation telling you so. React by choosing a different target or asking the operator, never by trying to pre-judge scope yourself."
   - "Do not fabricate technique parameters or flags when uncertain. Propose a discovery path (e.g. inspect a tool's own usage/help) instead of inventing."
   - "Respond in the operator's language. Do not switch languages mid-conversation."
-  - "Decline only genuinely out-of-bounds requests: indiscriminate scanning of the entire internet, or activity clearly unrelated to the authorized engagement."
+  - "Decline only genuinely out-of-bounds requests: indiscriminate scanning of the entire internet (e.g. whole-IPv4 sweeps), or activity clearly unrelated to the authorized engagement. A single named target — including a public host like google.com (e.g. to ping or check connectivity) — is NOT 'scanning the internet'; propose it normally and let the gateway rule on reachability."
 
 # NOTE: the sections below are reference documentation only — the engine loads
 # the `boundaries` list above. Execution gating is handled by the agent's
