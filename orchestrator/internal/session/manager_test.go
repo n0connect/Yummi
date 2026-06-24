@@ -72,52 +72,8 @@ func TestSessionCRUD(t *testing.T) {
 	}
 }
 
-func TestTargetCRUD(t *testing.T) {
-	sm := testDB(t)
-	now := time.Now().Unix()
-
-	sm.Create(&Session{ID: "s1", Name: "S1", CreatedAt: now, UpdatedAt: now, Status: "active"})
-
-	target := &Target{
-		ID: "t1", SessionID: "s1", Value: "192.168.1.1",
-		InScope: true, Notes: "web server", CreatedAt: now,
-	}
-	if err := sm.CreateTarget(target); err != nil {
-		t.Fatalf("create target: %v", err)
-	}
-
-	targets, err := sm.ListTargets("s1")
-	if err != nil {
-		t.Fatalf("list targets: %v", err)
-	}
-	if len(targets) != 1 || targets[0].Value != "192.168.1.1" {
-		t.Fatalf("unexpected targets: %+v", targets)
-	}
-}
-
-func TestFindingCRUD(t *testing.T) {
-	sm := testDB(t)
-	now := time.Now().Unix()
-
-	sm.Create(&Session{ID: "s1", Name: "S1", CreatedAt: now, UpdatedAt: now, Status: "active"})
-
-	finding := &Finding{
-		ID: "f1", SessionID: "s1", Severity: "high",
-		Title: "SQL Injection", Description: "Found in login form",
-		CreatedAt: now,
-	}
-	if err := sm.CreateFinding(finding); err != nil {
-		t.Fatalf("create finding: %v", err)
-	}
-
-	findings, err := sm.ListFindings("s1")
-	if err != nil {
-		t.Fatalf("list findings: %v", err)
-	}
-	if len(findings) != 1 || findings[0].Title != "SQL Injection" {
-		t.Fatalf("unexpected findings: %+v", findings)
-	}
-}
+// Target and finding persistence moved to internal/knowledge; see that
+// package's tests. session retains sessions, audit, and executions only.
 
 func TestOpenDBCreatesDir(t *testing.T) {
 	dir := t.TempDir()

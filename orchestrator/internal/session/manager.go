@@ -20,26 +20,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     gateway_level INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS targets (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    value TEXT NOT NULL,
-    in_scope INTEGER NOT NULL DEFAULT 1,
-    notes TEXT,
-    created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS findings (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    target_id TEXT REFERENCES targets(id),
-    severity TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT,
-    evidence TEXT,
-    created_at INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT,
@@ -62,8 +42,6 @@ CREATE TABLE IF NOT EXISTS executions (
     updated_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_targets_session ON targets(session_id);
-CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
 CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
 CREATE INDEX IF NOT EXISTS idx_executions_session ON executions(session_id);
 `
@@ -76,28 +54,6 @@ type Session struct {
 	UpdatedAt    int64  `json:"updated_at"`
 	Status       string `json:"status"`
 	GatewayLevel int    `json:"gateway_level"`
-}
-
-// Target represents a pentest target.
-type Target struct {
-	ID        string `json:"id"`
-	SessionID string `json:"session_id"`
-	Value     string `json:"value"`
-	InScope   bool   `json:"in_scope"`
-	Notes     string `json:"notes"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-// Finding represents a security finding.
-type Finding struct {
-	ID          string `json:"id"`
-	SessionID   string `json:"session_id"`
-	TargetID    string `json:"target_id,omitempty"`
-	Severity    string `json:"severity"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Evidence    string `json:"evidence"`
-	CreatedAt   int64  `json:"created_at"`
 }
 
 // AuditEvent represents a normalized audit log entry.
@@ -190,72 +146,6 @@ func (m *Manager) Update(s *Session) error {
 // Delete soft-deletes a session (sets status to 'closed').
 func (m *Manager) Delete(id string) error {
 	_, err := m.db.Exec("UPDATE sessions SET status = 'closed' WHERE id = ?", id)
-	return err
-}
-
-// --- Targets ---
-
-func (m *Manager) ListTargets(sessionID string) ([]Target, error) {
-	rows, err := m.db.Query(
-		"SELECT id, session_id, value, in_scope, notes, created_at FROM targets WHERE session_id = ? ORDER BY created_at",
-		sessionID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var targets []Target
-	for rows.Next() {
-		var t Target
-		if err := rows.Scan(&t.ID, &t.SessionID, &t.Value, &t.InScope, &t.Notes, &t.CreatedAt); err != nil {
-			return nil, err
-		}
-		targets = append(targets, t)
-	}
-	return targets, rows.Err()
-}
-
-func (m *Manager) CreateTarget(t *Target) error {
-	inScope := 0
-	if t.InScope {
-		inScope = 1
-	}
-	_, err := m.db.Exec(
-		"INSERT INTO targets (id, session_id, value, in_scope, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		t.ID, t.SessionID, t.Value, inScope, t.Notes, t.CreatedAt,
-	)
-	return err
-}
-
-// --- Findings ---
-
-func (m *Manager) ListFindings(sessionID string) ([]Finding, error) {
-	rows, err := m.db.Query(
-		"SELECT id, session_id, COALESCE(target_id,''), severity, title, COALESCE(description,''), COALESCE(evidence,''), created_at FROM findings WHERE session_id = ? ORDER BY created_at DESC",
-		sessionID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var findings []Finding
-	for rows.Next() {
-		var f Finding
-		if err := rows.Scan(&f.ID, &f.SessionID, &f.TargetID, &f.Severity, &f.Title, &f.Description, &f.Evidence, &f.CreatedAt); err != nil {
-			return nil, err
-		}
-		findings = append(findings, f)
-	}
-	return findings, rows.Err()
-}
-
-func (m *Manager) CreateFinding(f *Finding) error {
-	_, err := m.db.Exec(
-		"INSERT INTO findings (id, session_id, target_id, severity, title, description, evidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		f.ID, f.SessionID, f.TargetID, f.Severity, f.Title, f.Description, f.Evidence, f.CreatedAt,
-	)
 	return err
 }
 

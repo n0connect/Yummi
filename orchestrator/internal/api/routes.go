@@ -13,13 +13,14 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/health"
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
 // NewRouter creates the Chi router with all routes.
-func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, agg *health.Aggregator, taskStore *agent.Store, taskRunner *agent.Runner) http.Handler {
+func NewRouter(sm *session.Manager, ks *knowledge.Store, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, agg *health.Aggregator, taskStore *agent.Store, taskRunner *agent.Runner) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -44,13 +45,13 @@ func NewRouter(sm *session.Manager, cfg *config.Config, assistant *conductor.Eng
 		r.Patch("/sessions/{id}", HandleUpdateSession(sm))
 		r.Delete("/sessions/{id}", HandleDeleteSession(sm))
 
-		// Targets
-		r.Get("/sessions/{sessionID}/targets", HandleListTargets(sm))
-		r.Post("/sessions/{sessionID}/targets", HandleCreateTarget(sm))
+		// Targets (owned by the knowledge store)
+		r.Get("/sessions/{sessionID}/targets", HandleListTargets(ks))
+		r.Post("/sessions/{sessionID}/targets", HandleCreateTarget(ks))
 
-		// Findings
-		r.Get("/sessions/{sessionID}/findings", HandleListFindings(sm))
-		r.Post("/sessions/{sessionID}/findings", HandleCreateFinding(sm))
+		// Findings (owned by the knowledge store)
+		r.Get("/sessions/{sessionID}/findings", HandleListFindings(ks))
+		r.Post("/sessions/{sessionID}/findings", HandleCreateFinding(ks))
 		r.Get("/sessions/{sessionID}/audit", HandleListAudit(sm))
 		r.Get("/sessions/{sessionID}/executions", HandleListExecutions(executions))
 		r.Get("/executions/{id}", HandleGetExecution(executions))

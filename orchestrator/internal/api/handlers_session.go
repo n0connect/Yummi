@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
@@ -119,19 +120,14 @@ func HandleDeleteSession(sm *session.Manager) http.HandlerFunc {
 
 // --- Target Handlers ---
 
-func HandleListTargets(sm *session.Manager) http.HandlerFunc {
+func HandleListTargets(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
-		targets, err := sm.ListTargets(sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list targets", err)
-			return
-		}
-		writeJSON(w, http.StatusOK, targets)
+		writeJSON(w, http.StatusOK, ks.ListTargets(sessionID))
 	}
 }
 
-func HandleCreateTarget(sm *session.Manager) http.HandlerFunc {
+func HandleCreateTarget(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
 		var req struct {
@@ -148,7 +144,7 @@ func HandleCreateTarget(sm *session.Manager) http.HandlerFunc {
 			return
 		}
 
-		t := session.Target{
+		t := knowledge.Target{
 			ID:        uuid.New().String(),
 			SessionID: sessionID,
 			Value:     req.Value,
@@ -157,7 +153,7 @@ func HandleCreateTarget(sm *session.Manager) http.HandlerFunc {
 			CreatedAt: time.Now().Unix(),
 		}
 
-		if err := sm.CreateTarget(&t); err != nil {
+		if err := ks.CreateTarget(r.Context(), t); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create target", err)
 			return
 		}
@@ -167,19 +163,14 @@ func HandleCreateTarget(sm *session.Manager) http.HandlerFunc {
 
 // --- Finding Handlers ---
 
-func HandleListFindings(sm *session.Manager) http.HandlerFunc {
+func HandleListFindings(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
-		findings, err := sm.ListFindings(sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list findings", err)
-			return
-		}
-		writeJSON(w, http.StatusOK, findings)
+		writeJSON(w, http.StatusOK, ks.ListFindings(sessionID))
 	}
 }
 
-func HandleCreateFinding(sm *session.Manager) http.HandlerFunc {
+func HandleCreateFinding(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
 		var req struct {
@@ -201,17 +192,18 @@ func HandleCreateFinding(sm *session.Manager) http.HandlerFunc {
 			return
 		}
 
-		f := session.Finding{
+		f := knowledge.Finding{
 			ID:          uuid.New().String(),
 			SessionID:   sessionID,
 			Severity:    req.Severity,
 			Title:       req.Title,
 			Description: req.Description,
 			Evidence:    req.Evidence,
+			Source:      "manual",
 			CreatedAt:   time.Now().Unix(),
 		}
 
-		if err := sm.CreateFinding(&f); err != nil {
+		if err := ks.RecordFinding(r.Context(), f); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create finding", err)
 			return
 		}
