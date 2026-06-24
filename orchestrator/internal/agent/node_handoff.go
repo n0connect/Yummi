@@ -28,7 +28,8 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 	}
 
 	task, _ := s.store.Get(s.taskID)
-	res, err := sub.RunSubtask(ctx, task.SessionID, subgoal)
+	s.emit(ActHandoffIn, role+": "+subgoal, "")
+	res, err := sub.RunSubtask(ctx, task.SessionID, subgoal, s.taskID)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -50,5 +51,6 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 		}
 	}
 	s.lastObs = Wrap("TOOL_RESPONSE", b.String())
+	s.emit(ActHandoffOut, role+" → "+orDefault(res.Summary, "completed"), "")
 	return edgeOK, nil
 }
