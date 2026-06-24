@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 )
 
 // stepNode asks the LLM for the next control action and routes on its tag.
@@ -37,7 +39,7 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 	}
 
 	system := StepSystemPrompt(s.cfg.Persona)
-	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary)
+	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary, s.buildMemory(ctx, task))
 
 	raw, err := s.llm.Chat(ctx, system, prompt)
 	if err != nil {
@@ -119,4 +121,39 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		s.retryCtx = RetryContext{Caller: nodeStep}
 		return edgeLLMError, nil
 	}
+}
+
+// buildMemory queries the retrieval strategy for facts/tactics relevant to the
+// current task and renders a compact MEMORY block (empty string when nothing,
+// or when retrieval is not configured).
+func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
+	if s.cfg.Retrieval == nil {
+		return ""
+	}
+	items, err := s.cfg.Retrieval.Retrieve(ctx, knowledge.Query{
+		SessionID: task.SessionID, Tools: recentTools(task), Limit: 5,
+	})
+	if err != nil || len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("MEMORY (prior knowledge — use it, don't rediscover):\n")
+	for _, it := range items {
+		fmt.Fprintf(&b, "  • %s\n", it.Text)
+	}
+	return b.String()
+}
+
+// recentTools returns the distinct tool names mentioned across the plan-step
+// descriptions, used to scope procedural retrieval.
+func recentTools(task Task) []string {
+	seen := map[string]bool{}
+	var tools []string
+	for _, st := range task.Plan {
+		if f := strings.Fields(st.Description); len(f) > 0 && !seen[f[0]] {
+			seen[f[0]] = true
+			tools = append(tools, f[0])
+		}
+	}
+	return tools
 }
