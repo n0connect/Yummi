@@ -21,6 +21,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/executor"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/health"
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
@@ -68,6 +69,14 @@ func main() {
 
 	sm := session.NewManager(db)
 
+	// knowledge owns the world model (targets, findings, procedural memory).
+	// It creates/migrates its tables here so every writer shares one store.
+	ks, err := knowledge.NewStore(db)
+	if err != nil {
+		slog.Error("knowledge store init failed", "error", err)
+		os.Exit(1)
+	}
+
 	assistant, err := conductor.NewEngine(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel)
 	if err != nil {
 		slog.Warn("assistant persona load failed; running without conductor", "error", err, "persona_dir", cfg.PersonaDir)
@@ -109,7 +118,7 @@ func main() {
 	// output back into the conductor's session history. This closes the
 	// agentic loop: LLM proposes → user approves → command runs → LLM sees
 	// the result on the next turn → LLM proposes the next step.
-	exec := executor.New(bridge, gatewayClient)
+	exec := executor.New(bridge, gatewayClient, ks)
 	baseProcessor := exec.ProcessFunc()
 	executionStore.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
 		output, err := baseProcessor(ctx, rec)
@@ -144,7 +153,11 @@ func main() {
 				assistant.LLM(),
 				assistant.Validator(),
 				agent.NewStoreExecer(executionStore, 10*time.Minute),
-				agent.Config{Persona: agentPersona}, // defaults: budget 15, ask_permission mode
+				agent.Config{ // defaults: budget 15, ask_permission mode
+					Persona:   agentPersona,
+					Knowledge: ks,
+					Retrieval: knowledge.NewStructuredRetrieval(ks),
+				},
 			)
 		}
 	}
@@ -158,7 +171,7 @@ func main() {
 	)
 	go agg.Start(ctx)
 
-	router := api.NewRouter(sm, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, agg, taskStore, taskRunner)
+	router := api.NewRouter(sm, ks, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, agg, taskStore, taskRunner)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	srv := &http.Server{
