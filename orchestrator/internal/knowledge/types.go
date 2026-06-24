@@ -44,3 +44,14 @@ type Tactic struct {
 	LastUsedAt     int64    `json:"last_used_at"`
 	CreatedAt      int64    `json:"created_at"`
 }
+
+// PersistentContext stores long-term memory elements like source-code connection graphs,
+// documentation mappings, and module interactions that outlive a single task's sliding window.
+type PersistentContext struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Key       string `json:"key"`   // e.g., "auth_module_connections", "file:/src/main.go"
+	Value     string `json:"value"` // The memory content (JSON graph, markdown map, etc)
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}

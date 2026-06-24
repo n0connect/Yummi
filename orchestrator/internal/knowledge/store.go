@@ -18,6 +18,7 @@ type Store struct {
 	findings map[string]Finding // id -> finding (mirror of DB for nil-db path)
 	targets  map[string]Target
 	tactics  map[string]Tactic
+	contexts map[string]PersistentContext
 	db       *sql.DB
 }
 
@@ -53,9 +54,18 @@ CREATE TABLE IF NOT EXISTS procedural_memory (
     last_used_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS persistent_context (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_k_targets_session ON targets(session_id);
 CREATE INDEX IF NOT EXISTS idx_k_findings_session ON findings(session_id);
 CREATE INDEX IF NOT EXISTS idx_k_procedural_tool ON procedural_memory(tool);
+CREATE INDEX IF NOT EXISTS idx_k_context_session ON persistent_context(session_id);
 `
 
 // NewStore creates a knowledge store. db may be nil (map-backed, tests).
@@ -66,6 +76,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 		findings: make(map[string]Finding),
 		targets:  make(map[string]Target),
 		tactics:  make(map[string]Tactic),
+		contexts: make(map[string]PersistentContext),
 		db:       db,
 	}
 	if db != nil {
@@ -209,4 +220,67 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+// RecordContext stores or updates a persistent memory element for the session.
+func (s *Store) RecordContext(ctx context.Context, pc PersistentContext) error {
+	if pc.ID == "" {
+		pc.ID = uuid.NewString()
+	}
+	now := time.Now().Unix()
+	if pc.CreatedAt == 0 {
+		pc.CreatedAt = now
+	}
+	pc.UpdatedAt = now
+
+	if s.db != nil {
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO persistent_context(id,session_id,key,value,created_at,updated_at)
+			 VALUES(?,?,?,?,?,?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   value=excluded.value,
+			   updated_at=excluded.updated_at`,
+			pc.ID, pc.SessionID, pc.Key, pc.Value, pc.CreatedAt, pc.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("record context: %w", err)
+		}
+	}
+	s.mu.Lock()
+	s.contexts[pc.ID] = pc
+	s.mu.Unlock()
+	return nil
+}
+
+// ListContexts returns all persistent contexts for a session.
+func (s *Store) ListContexts(sessionID string) []PersistentContext {
+	if s.db != nil {
+		rows, err := s.db.Query(
+			`SELECT id,session_id,key,value,created_at,updated_at
+			 FROM persistent_context WHERE session_id=? ORDER BY updated_at DESC`, sessionID)
+		if err != nil {
+			slog.Error("knowledge: list contexts", "error", err)
+			return nil
+		}
+		defer func() { _ = rows.Close() }()
+		out := make([]PersistentContext, 0)
+		for rows.Next() {
+			var pc PersistentContext
+			if err := rows.Scan(&pc.ID, &pc.SessionID, &pc.Key, &pc.Value, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
+				slog.Warn("knowledge: scan context", "error", err)
+				continue
+			}
+			out = append(out, pc)
+		}
+		return out
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]PersistentContext, 0)
+	for _, pc := range s.contexts {
+		if pc.SessionID == sessionID {
+			out = append(out, pc)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	return out
 }
