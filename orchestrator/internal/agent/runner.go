@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -148,6 +149,18 @@ func (r *Runner) Handoffs() map[string]Agent {
 		out[role] = sub
 	}
 	return out
+}
+
+// Roles returns the sorted sub-agent role names available for delegation
+// (empty for a plain runner). Used by the read API / TRACE view.
+func (r *Runner) Roles() []string {
+	hs := r.Handoffs()
+	roles := make([]string, 0, len(hs))
+	for k := range hs {
+		roles = append(roles, k)
+	}
+	sort.Strings(roles)
+	return roles
 }
 
 // SubResult is what a sub-agent returns to the orchestrator after a handoff.

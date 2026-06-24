@@ -143,6 +143,9 @@ func main() {
 		os.Exit(1)
 	}
 	var taskRunner *agent.Runner
+	// skillReg is also exposed read-only via the TRACE API, so it lives at this
+	// scope (nil-safe: skill.Registry methods tolerate a nil receiver).
+	var skillReg *skill.Registry
 	if assistant != nil && assistant.LLM() != nil {
 		// The agent persona is document-driven (no hard-coded prose). Without it
 		// the loop cannot run, so disable the agent rather than improvise.
@@ -151,7 +154,8 @@ func main() {
 			slog.Error("agent persona load failed; agent loop disabled", "error", perr, "persona_dir", cfg.PersonaDir)
 		} else {
 			// Skills: declarative playbooks injected into prompts (no exec path).
-			skillReg, serr := skill.LoadDir(filepath.Join(cfg.PersonaDir, "skills"))
+			var serr error
+			skillReg, serr = skill.LoadDir(filepath.Join(cfg.PersonaDir, "skills"))
 			if serr != nil {
 				slog.Warn("skills load failed; continuing without skills", "error", serr)
 				skillReg = skill.New(nil)
@@ -209,7 +213,7 @@ func main() {
 	)
 	go agg.Start(ctx)
 
-	router := api.NewRouter(sm, ks, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, agg, taskStore, taskRunner)
+	router := api.NewRouter(sm, ks, skillReg, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, agg, taskStore, taskRunner)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	srv := &http.Server{
