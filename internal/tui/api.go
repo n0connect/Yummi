@@ -9,106 +9,151 @@ import (
 	"time"
 )
 
-// APIClient wraps interactions with the local Yummi orchestrator.
-type APIClient struct {
-	BaseURL    string
-	SessionID  string
-	HTTPClient *http.Client
+// Client talks to the orchestrator REST API. Base is the orchestrator root
+// (e.g. http://127.0.0.1:9080); all paths hang off /api/v1.
+type Client struct {
+	Base      string
+	SessionID string
+	http      *http.Client
 }
 
-type SessionCreateReq struct {
-	TaskGoal string `json:"task_goal"`
+// NewClient builds a client with an LLM-friendly timeout.
+func NewClient(base string) *Client {
+	return &Client{Base: base, http: &http.Client{Timeout: 90 * time.Second}}
 }
 
-type SessionCreateResp struct {
+// ── Wire types (match the real orchestrator contract) ────────────────────────
+
+// Proposal is one suggested command from the conductor.
+type Proposal struct {
+	ID         string `json:"id"`
+	Command    string `json:"command"`
+	Rationale  string `json:"rationale"`
+	RiskLevel  string `json:"risk_level"`
+	TargetTool string `json:"target_tool"`
+}
+
+// ChatResult is the flattened, TUI-friendly result of a chat turn.
+type ChatResult struct {
+	Reply     string
+	Intent    string
+	Proposals []Proposal
+	TaskID    string
+	TaskGoal  string
+}
+
+// chatEnvelope mirrors the server response: {reply, session_id, data:{...}}.
+type chatEnvelope struct {
+	Reply     string `json:"reply"`
 	SessionID string `json:"session_id"`
+	Data      struct {
+		Intent    string     `json:"intent"`
+		Message   string     `json:"message"`
+		Proposals []Proposal `json:"proposals"`
+		TaskID    string     `json:"task_id"`
+		TaskGoal  string     `json:"task_goal"`
+	} `json:"data"`
 }
 
-type ChatReq struct {
-	Goal string `json:"goal"`
+func (c *Client) postJSON(ctx context.Context, path string, body any, out any) error {
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Base+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, path)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
 }
 
-type ChatResp struct {
-	Reply string `json:"reply"`
+// CreateSession opens a session and stores its id. The server returns the
+// Session object whose id field is the session id (NOT "session_id").
+func (c *Client) CreateSession() error {
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := c.postJSON(context.Background(), "/api/v1/sessions", map[string]string{"name": "TUI"}, &out); err != nil {
+		return err
+	}
+	if out.ID == "" {
+		return fmt.Errorf("session create returned empty id")
+	}
+	c.SessionID = out.ID
+	return nil
 }
 
-type NodeStatus struct {
+// Chat sends a message to the conductor and returns the flattened result.
+func (c *Client) Chat(msg string) (ChatResult, error) {
+	if c.SessionID == "" {
+		return ChatResult{}, fmt.Errorf("no active session")
+	}
+	var env chatEnvelope
+	err := c.postJSON(context.Background(), "/api/v1/chat",
+		map[string]string{"message": msg, "session_id": c.SessionID}, &env)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	reply := env.Reply
+	if reply == "" {
+		reply = env.Data.Message
+	}
+	return ChatResult{
+		Reply:     reply,
+		Intent:    env.Data.Intent,
+		Proposals: env.Data.Proposals,
+		TaskID:    env.Data.TaskID,
+		TaskGoal:  env.Data.TaskGoal,
+	}, nil
+}
+
+// Approve runs a pending single-command proposal.
+func (c *Client) Approve(proposalID string) error {
+	return c.postJSON(context.Background(), "/api/v1/chat/approve",
+		map[string]string{"session_id": c.SessionID, "proposal_id": proposalID}, nil)
+}
+
+// ApproveTask resolves an agent task's approval gate.
+func (c *Client) ApproveTask(taskID, proposalID string, approved bool) error {
+	reason := ""
+	if !approved {
+		reason = "operator rejected"
+	}
+	return c.postJSON(context.Background(), "/api/v1/tasks/"+taskID+"/approve",
+		map[string]any{"proposal_id": proposalID, "approved": approved, "reason": reason}, nil)
+}
+
+// Module is one component health row (subset of the system status payload).
+type Module struct {
+	Name   string `json:"name"`
 	Status string `json:"status"`
 }
 
-func NewAPIClient(baseURL string) *APIClient {
-	return &APIClient{
-		BaseURL: baseURL,
-		HTTPClient: &http.Client{
-			Timeout: 60 * time.Second, // Long timeout for LLM responses
-		},
-	}
-}
-
-func (c *APIClient) Ping() error {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.BaseURL+"/api/v1/sandbox/status", nil)
+// Health fetches component status (best-effort; empty slice on any error).
+func (c *Client) Health() []Module {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.Base+"/api/v1/system/status", nil)
 	if err != nil {
-		return err
+		return nil
 	}
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status: %d", resp.StatusCode)
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Modules []Module `json:"modules"`
 	}
-	return nil
-}
-
-func (c *APIClient) CreateSession() error {
-	reqBody := SessionCreateReq{TaskGoal: "TUI Initialization"}
-	b, _ := json.Marshal(reqBody)
-	
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.BaseURL+"/api/v1/sessions", bytes.NewReader(b))
-	if err != nil {
-		return err
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	
-	var out SessionCreateResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return err
-	}
-	c.SessionID = out.SessionID
-	return nil
-}
-
-func (c *APIClient) SendChat(msg string) (string, error) {
-	if c.SessionID == "" {
-		return "", fmt.Errorf("no active session")
-	}
-	
-	reqBody := ChatReq{Goal: msg}
-	b, _ := json.Marshal(reqBody)
-	
-	u := fmt.Sprintf("%s/api/v1/sessions/%s/chat", c.BaseURL, c.SessionID)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u, bytes.NewReader(b))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	
-	var out ChatResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	return out.Reply, nil
+	return out.Modules
 }
