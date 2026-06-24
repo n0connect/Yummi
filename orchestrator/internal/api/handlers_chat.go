@@ -272,6 +272,16 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 			}
 		}
 
+		// Agent activity events (the legible TRACE timeline) share this websocket.
+		var activityEvents <-chan agent.ActivityEnvelope
+		if tasks != nil {
+			actSubID, ch, aerr := tasks.SubscribeActivity(128)
+			if aerr == nil {
+				activityEvents = ch
+				defer tasks.UnsubscribeActivity(actSubID)
+			}
+		}
+
 		// Gateway rule-change events share this websocket too. A nil aggregator
 		// (or a failed subscribe) simply means no gateway channel.
 		var gatewayEvents <-chan health.GatewayEvent
@@ -319,6 +329,21 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 					"data":      evt.Task,
 				}
 				if err := conn.WriteJSON(payload); err != nil {
+					return
+				}
+			case env, ok := <-activityEvents:
+				if !ok {
+					activityEvents = nil
+					continue
+				}
+				if sessionFilter != "" && env.Event.SessionID != sessionFilter {
+					continue
+				}
+				if err := conn.WriteJSON(map[string]any{
+					"type":      "agent.activity",
+					"timestamp": env.Event.Timestamp,
+					"data":      env.Event,
+				}); err != nil {
 					return
 				}
 			case evt, ok := <-gatewayEvents:
