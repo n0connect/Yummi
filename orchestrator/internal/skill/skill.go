@@ -19,11 +19,11 @@ import (
 
 // Skill is one declarative playbook.
 type Skill struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Triggers    []string `yaml:"triggers"` // lowercase keywords matched against goal + tools
-	Tools       []string `yaml:"tools"`    // recommended sandbox tools (informational)
-	Knowledge   string   `yaml:"knowledge"`
+	Name        string   `yaml:"name" json:"name"`
+	Description string   `yaml:"description" json:"description"`
+	Triggers    []string `yaml:"triggers" json:"triggers"` // lowercase keywords matched against goal + tools
+	Tools       []string `yaml:"tools" json:"tools"`       // recommended sandbox tools (informational)
+	Knowledge   string   `yaml:"knowledge" json:"knowledge"`
 }
 
 // Registry holds the loaded skill set.
