@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/n0connect/yummi/internal/config"
+	"github.com/n0connect/yummi/internal/tui"
 )
 
 const (
@@ -99,6 +100,47 @@ func runUI(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  %s  %s\n", dim("orchestrator log"), ctx.LogPath)
 	}
 	fmt.Fprintln(stdout)
+	return 0
+}
+
+func runTUI(stdout, stderr io.Writer) int {
+	ctx := &launchContext{UIURL: uiURL()}
+	logger := newLaunchLogger(stderr)
+
+	sectionHeader(stdout, "Yummi TUI Pre-flight")
+	if !runPreflightChecks(stdout, stderr) {
+		fmt.Fprintln(stderr)
+		fmt.Fprintf(stderr, "%s\n", boldRed("  Pre-flight failed. Run 'yummi --doctor' for details."))
+		return 1
+	}
+
+	stepInfo(stdout, "orchestrator", "checking…")
+	startedCmd, startedLogPath, err := ensureOrchestratorRunning(ctx.UIURL, logger)
+	if err != nil {
+		stepFail(stdout, "orchestrator", err.Error())
+		return 1
+	}
+	if startedCmd != nil {
+		ctx.OrchestratorStarted = true
+		ctx.LogPath = startedLogPath
+	}
+
+	stepInfo(stdout, "health probes", "sandbox + gateway (timeout 20s)…")
+	readyErr := waitUntilReady(ctx.UIURL, readinessTimeout, nil)
+	if readyErr != nil {
+		if startedCmd != nil {
+			stopSpawnedProcess(startedCmd, logger)
+		}
+		stepFail(stdout, "health probes", readyErr.Error())
+		return 1
+	}
+
+	// Transfer control to the Bubble Tea TUI
+	if err := tui.Run(ctx.UIURL); err != nil {
+		fmt.Fprintf(stderr, "TUI error: %v\n", err)
+		return 1
+	}
+
 	return 0
 }
 
