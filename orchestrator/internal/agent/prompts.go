@@ -153,9 +153,17 @@ func llmParseRetryHint(attempt int) string {
 
 // BuildStepPrompt renders the full task state + last observation into the
 // per-turn prompt. summary is the compressed history from MemoryContext (may be "").
-func BuildStepPrompt(task Task, lastObservation, summary string) string {
+func BuildStepPrompt(task Task, lastObservation, summary, memory string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "GOAL: %s\n\n", task.Goal)
+
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString(memory)
+		if !strings.HasSuffix(memory, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
 
 	if summary != "" {
 		fmt.Fprintf(&b, "PRIOR CONTEXT (compressed):\n%s\n\n", summary)
