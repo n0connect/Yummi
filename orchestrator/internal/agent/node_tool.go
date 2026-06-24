@@ -70,6 +70,10 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		return edgeIsError, nil
 	}
 
+	// The command passed validation, stuck, and duplicate checks — it is about
+	// to run (now in auto mode, or after approval). Surface it on the timeline.
+	s.emit(ActCommand, p.Command, p.Rationale)
+
 	// Approval is mode-driven, not risk-driven: in ask_permission mode EVERY
 	// command gates on the operator; in auto mode none do.
 	if s.cfg.ApprovalMode == ModeAskPermission {
