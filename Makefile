@@ -104,6 +104,8 @@ clean:
 	@rm -rf $(BIN_DIR)
 	$(call log_step,removing,$(UI_DIST_DIR))
 	@rm -rf $(UI_DIST_DIR)
+	$(call log_step,removing,databases)
+	@find . -name "*.db" -type f -delete 2>/dev/null || true
 	$(call log_ok,clean,workspace is tidy)
 
 ## force-restart  Stop services, kill memory hogs (ollama), and restart
