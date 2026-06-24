@@ -1,0 +1,116 @@
+import { useState } from 'react'
+import type { ActivityEvent, ActivityKind } from '../../entities/types'
+import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
+
+const KIND_META: Record<ActivityKind, [string, string]> = {
+  plan:              ['🗺️', 'plan'],
+  command:           ['⚡', 'komut'],
+  command_result:    ['✓', 'sonuç'],
+  memory_recalled:   ['🧠', 'hatırlandı'],
+  skill_applied:     ['📘', 'skill'],
+  handoff_started:   ['🤝', 'devredildi'],
+  handoff_completed: ['↩︎', 'döndü'],
+  finding:           ['🔎', 'bulgu'],
+  context_saved:     ['💾', 'bellek'],
+  ask:               ['❓', 'soru'],
+  finish:            ['🏁', 'bitti'],
+}
+
+function ActivityRow({ ev }: { ev: ActivityEvent }): JSX.Element {
+  const [icon, label] = KIND_META[ev.kind] ?? ['•', ev.kind]
+  const nested = Boolean(ev.parent_task_id)
+  return (
+    <div className="trace-row" style={{ paddingLeft: nested ? 22 : 0 }}>
+      {nested && <span className="trace-thread">└</span>}
+      <span className="trace-ico">{icon}</span>
+      <span className="trace-kind">{label}</span>
+      <span className="trace-summary" title={ev.detail || ''}>{ev.summary}</span>
+    </div>
+  )
+}
+
+function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }): JSX.Element {
+  return (
+    <div className="trace-section">
+      <div className="trace-section-head">
+        <span className="trace-section-title">{title}</span>
+        <span className="trace-section-count">{count}</span>
+      </div>
+      {count === 0 ? <div className="trace-empty">— henüz yok —</div> : children}
+    </div>
+  )
+}
+
+export function TracePage(): JSX.Element {
+  const [sessionID] = useState(resolveSessionID)
+  const { activity, findings, tactics, context, skills, roles, refresh } = useTraceData(sessionID)
+
+  return (
+    <main className="trace-page">
+      <div className="trace-header">
+        <span className="trace-page-title">TRACE</span>
+        <span className="trace-page-sub">agent'ın yaptığı ve öğrendiği her şey</span>
+        <button className="small-button" onClick={refresh}>Yenile</button>
+      </div>
+
+      <div className="trace-grid">
+        {/* Live trace */}
+        <Section title="Aktivite" count={activity.length}>
+          <div className="trace-list">
+            {activity.map(ev => <ActivityRow key={ev.id} ev={ev} />)}
+          </div>
+        </Section>
+
+        {/* Findings */}
+        <Section title="Bulgular" count={findings.length}>
+          {findings.map(f => (
+            <div key={f.id} className={`trace-finding sev-${f.severity}`}>
+              <span className="trace-sev">{f.severity}</span>
+              <span className="trace-finding-title">{f.title}</span>
+              {f.source && <span className="trace-src">{f.source}</span>}
+              {f.description && <div className="trace-finding-desc">{f.description}</div>}
+            </div>
+          ))}
+        </Section>
+
+        {/* Procedural memory */}
+        <Section title="Öğrenilmiş taktikler" count={tactics.length}>
+          {tactics.map(t => (
+            <div key={t.id} className="trace-tactic">
+              <code className="trace-cmd">{t.command_pattern}</code>
+              <span className={`trace-outcome out-${t.outcome}`}>{t.outcome}</span>
+              <span className="trace-hits">{t.hit_count}×</span>
+            </div>
+          ))}
+        </Section>
+
+        {/* Persistent context / code maps */}
+        <Section title="Kalıcı bellek (haritalar)" count={context.length}>
+          {context.map(c => (
+            <details key={c.id} className="trace-context">
+              <summary>{c.key}</summary>
+              <pre className="trace-context-val">{c.value}</pre>
+            </details>
+          ))}
+        </Section>
+
+        {/* Skills */}
+        <Section title="Skill'ler" count={skills.length}>
+          {skills.map(s => (
+            <div key={s.name} className="trace-skill">
+              <span className="trace-skill-name">{s.name}</span>
+              {s.description && <span className="trace-skill-desc">{s.description}</span>}
+            </div>
+          ))}
+        </Section>
+
+        {/* Sub-agent roles */}
+        <Section title="Sub-agent rolleri" count={roles.length}>
+          <div className="trace-roles">
+            {roles.map(r => <span key={r} className="trace-role">{r}</span>)}
+          </div>
+        </Section>
+      </div>
+    </main>
+  )
+}
