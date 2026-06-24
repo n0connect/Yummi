@@ -150,6 +150,9 @@ type GraphState struct {
 	exec      Execer
 	gate      *Gate
 	cfg       Config
+	// parentTaskID is set when this state belongs to a sub-agent run, so its
+	// emitted activity events nest under the orchestrator's handoff span.
+	parentTaskID string
 
 	// Mutable per-run state
 	retryCtx        RetryContext
@@ -165,6 +168,8 @@ type GraphState struct {
 	consultBody     string             // consult content for the LLM
 	consultCaller   string             // node that triggered the consult (for CONTINUE routing)
 	lastErr         string             // error text for askNode to record in task.LastError
+	lastSkillsSig   string             // last emitted skill set (de-dupes per-step skill_applied events)
+	lastMemorySig   string             // last emitted memory signature (de-dupes memory_recalled events)
 	finishOutcome   finishOutcome      // how finishNode terminates the task
 	finishMsg       string             // summary (completed/stopped) or error (failed) for finishNode
 
@@ -338,12 +343,21 @@ func observeResult(s *GraphState, result ToolResult) string {
 	s.memCtx.AddObservation(result.Content)
 	s.lastObs = obs
 	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepDone, obs)
+	s.emit(ActCommandDone, s.pendingCommand, compressed)
 	if findings := filterEmpty(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
 		_ = s.store.Update(s.taskID, func(t *Task) {
 			t.Findings = append(t.Findings, findings...)
 		})
 		if task, ok := s.store.Get(s.taskID); ok {
 			recordTaskFindings(context.Background(), s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
+		}
+		for _, f := range findings {
+			s.emit(ActFinding, f, "")
+		}
+		for _, d := range s.pendingAct.FindingsDetail {
+			if d.Title != "" {
+				s.emit(ActFinding, d.Title, d.Description)
+			}
 		}
 	}
 	return edgeOK
@@ -356,6 +370,23 @@ func lastFullObservation(s *GraphState) string {
 		return s.memCtx.Observations[n-1]
 	}
 	return s.lastObs
+}
+
+// emit records a legible activity event for this task (best-effort, never
+// fatal). Observational only — it never touches the execution path.
+func (s *GraphState) emit(kind ActivityKind, summary, detail string) {
+	if s.store == nil {
+		return
+	}
+	task, _ := s.store.Get(s.taskID)
+	s.store.RecordActivity(ActivityEvent{
+		SessionID:    task.SessionID,
+		TaskID:       s.taskID,
+		ParentTaskID: s.parentTaskID,
+		Kind:         kind,
+		Summary:      summary,
+		Detail:       detail,
+	})
 }
 
 // Execute runs the state machine starting at startNode until a terminal node is reached.

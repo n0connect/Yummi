@@ -170,6 +170,7 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		if task, ok := s.store.Get(s.taskID); ok {
 			recordTaskFindings(ctx, s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
 		}
+		s.emit(ActFinish, summary, "")
 	case outcomeStopped:
 		_ = s.store.Transition(s.taskID, StatusStopped, func(t *Task) {
 			t.Summary = s.finishMsg
@@ -242,5 +243,6 @@ func askNode(ctx context.Context, s *GraphState) (string, error) {
 			t.LastError = s.lastErr
 		}
 	})
+	s.emit(ActAsk, question, "")
 	return edgeDone, nil
 }

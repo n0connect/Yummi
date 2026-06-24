@@ -159,7 +159,18 @@ func (s *GraphState) buildSkills(task Task) string {
 	if s.cfg.Skills == nil {
 		return ""
 	}
-	return s.cfg.Skills.Render(s.cfg.Skills.Select(task.Goal, toolsFromCommands(s.recentCmds), 3))
+	sel := s.cfg.Skills.Select(task.Goal, toolsFromCommands(s.recentCmds), 3)
+	if len(sel) > 0 {
+		names := make([]string, len(sel))
+		for i, sk := range sel {
+			names[i] = sk.Name
+		}
+		if sig := strings.Join(names, ", "); sig != s.lastSkillsSig {
+			s.lastSkillsSig = sig
+			s.emit(ActSkill, sig, "")
+		}
+	}
+	return s.cfg.Skills.Render(sel)
 }
 
 // buildDelegation lists the sub-agent roles the orchestrator may hand off to.
@@ -195,6 +206,10 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 	b.WriteString("MEMORY (prior knowledge — use it, don't rediscover):\n")
 	for _, it := range items {
 		fmt.Fprintf(&b, "  • %s\n", it.Text)
+	}
+	if sig := items[0].Text; sig != s.lastMemorySig {
+		s.lastMemorySig = sig
+		s.emit(ActMemory, items[0].Text, "")
 	}
 	return b.String()
 }

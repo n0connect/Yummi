@@ -72,6 +72,10 @@ type Config struct {
 	// is typically given a Subset scoped to its role.
 	Skills *skill.Registry
 
+	// ParentTaskID nests this runner's activity under a parent task (set for
+	// sub-agent runs by the handoff path; empty for the orchestrator).
+	ParentTaskID string
+
 	// SubAgents maps a role name to a specialized sub-agent Runner the brain may
 	// hand a focused subtask to via [HANDOFF]. Empty/nil disables delegation —
 	// and sub-agents themselves are built with an empty map, capping handoff
@@ -228,6 +232,10 @@ func (r *Runner) CreateAndPlan(ctx context.Context, sessionID, goal string) (Tas
 		return Task{}, err
 	}
 	task, _ = r.store.Get(task.ID)
+	r.store.RecordActivity(ActivityEvent{
+		SessionID: task.SessionID, TaskID: task.ID, ParentTaskID: r.cfg.ParentTaskID,
+		Kind: ActPlan, Summary: fmt.Sprintf("%d steps planned", len(steps)),
+	})
 	return task, nil
 }
 
@@ -316,9 +324,10 @@ func (r *Runner) buildState(taskID string) *GraphState {
 		llm:       r.llm,
 		validator: r.validator,
 		exec:      r.exec,
-		gate:      r.gate,
-		cfg:       r.cfg,
-		memCtx:    MemoryContext{TokenBudget: r.cfg.TokenBudget},
+		gate:         r.gate,
+		cfg:          r.cfg,
+		parentTaskID: r.cfg.ParentTaskID,
+		memCtx:       MemoryContext{TokenBudget: r.cfg.TokenBudget},
 	}
 	// Restore from checkpoint on crash-recovery resume.
 	if task.Checkpoint.CurrentNode != "" {
