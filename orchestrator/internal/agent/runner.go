@@ -339,11 +339,11 @@ func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 func (r *Runner) buildState(taskID string) *GraphState {
 	task, _ := r.store.Get(taskID)
 	s := &GraphState{
-		taskID:    taskID,
-		store:     r.store,
-		llm:       r.llm,
-		validator: r.validator,
-		exec:      r.exec,
+		taskID:       taskID,
+		store:        r.store,
+		llm:          r.llm,
+		validator:    r.validator,
+		exec:         r.exec,
 		gate:         r.gate,
 		cfg:          r.cfg,
 		parentTaskID: r.cfg.ParentTaskID,

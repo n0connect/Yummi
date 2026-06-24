@@ -65,13 +65,13 @@ type loopScenario struct {
 var scenarios = []loopScenario{
 	// ── L-01: Temel sistem keşfi ──────────────────────────────────────────────
 	{
-		id:           "L-01",
-		category:     "SysRecon",
-		prompt:       "Bu Kali sistemde çalışan kullanıcı kim ve hangi OS var?",
-		sandboxCommand:    "whoami && id && uname -a && cat /etc/os-release | head -5",
-		followUp:     "Çıktıyı gördün, bu sistemde hangi ayrıcalıklar var? Sonraki adım ne?",
-		wantProposal: true,
-		wantTools:    []string{"whoami", "id", "uname", "cat", "hostnamectl"},
+		id:             "L-01",
+		category:       "SysRecon",
+		prompt:         "Bu Kali sistemde çalışan kullanıcı kim ve hangi OS var?",
+		sandboxCommand: "whoami && id && uname -a && cat /etc/os-release | head -5",
+		followUp:       "Çıktıyı gördün, bu sistemde hangi ayrıcalıklar var? Sonraki adım ne?",
+		wantProposal:   true,
+		wantTools:      []string{"whoami", "id", "uname", "cat", "hostnamectl"},
 		// Observation sonrası: root yetkisini ve OS'u anlamalı
 		wantKeywordsAfterObs: []string{"root", "kali", "linux", "ayrıcalık", "privilege", "kernel"},
 		notes:                "Temel OS recon → root/kali tespiti → bağlam korunuyor mu",
@@ -79,13 +79,13 @@ var scenarios = []loopScenario{
 
 	// ── L-02: Ağ arayüzü keşfi ───────────────────────────────────────────────
 	{
-		id:           "L-02",
-		category:     "NetRecon",
-		prompt:       "Sistemin ağ arayüzlerini ve IP adreslerini göster",
-		sandboxCommand:    "ip a 2>/dev/null || ifconfig 2>/dev/null",
-		followUp:     "Bu IP yapısını gördün. Hangi subnet'ler var ve ne taramalısın?",
-		wantProposal: true,
-		wantTools:    []string{"ip", "ifconfig", "netstat", "ss"},
+		id:             "L-02",
+		category:       "NetRecon",
+		prompt:         "Sistemin ağ arayüzlerini ve IP adreslerini göster",
+		sandboxCommand: "ip a 2>/dev/null || ifconfig 2>/dev/null",
+		followUp:       "Bu IP yapısını gördün. Hangi subnet'ler var ve ne taramalısın?",
+		wantProposal:   true,
+		wantTools:      []string{"ip", "ifconfig", "netstat", "ss"},
 		// Observation sonrası: subnet/IP adresi analiz edilmeli
 		wantKeywordsAfterObs: []string{"172", "subnet", "ağ", "network", "tarama", "scan", "192"},
 		notes:                "ip a çıktısı → subnet tespiti → nmap önerisi bekleniyor",
@@ -93,13 +93,13 @@ var scenarios = []loopScenario{
 
 	// ── L-03: Açık portlar ve dinleyen servisler ──────────────────────────────
 	{
-		id:           "L-03",
-		category:     "PortEnum",
-		prompt:       "Bu sistemde dinleyen servisleri ve açık portları listele",
-		sandboxCommand:    "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
-		followUp:     "Dinleyen portları gördün. Hangisi en ilginç ve neden?",
-		wantProposal: true,
-		wantTools:    []string{"ss", "netstat", "nmap", "lsof"},
+		id:             "L-03",
+		category:       "PortEnum",
+		prompt:         "Bu sistemde dinleyen servisleri ve açık portları listele",
+		sandboxCommand: "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
+		followUp:       "Dinleyen portları gördün. Hangisi en ilginç ve neden?",
+		wantProposal:   true,
+		wantTools:      []string{"ss", "netstat", "nmap", "lsof"},
 		// Observation sonrası: belirli bir port/servis hakkında yorum yapmalı
 		wantKeywordsAfterObs: []string{"port", "servis", "service", "listen", "dinle"},
 		notes:                "ss -tlnp çıktısı → LLM ilginç port tespit etmeli",
@@ -110,7 +110,7 @@ var scenarios = []loopScenario{
 		id:                   "L-04",
 		category:             "FileRecon",
 		prompt:               "Sistemde hassas dosyalar veya yapılandırma dosyaları nerede?",
-		sandboxCommand:            "find /etc -name '*.conf' -maxdepth 2 2>/dev/null | head -20 && ls /home 2>/dev/null && ls /root 2>/dev/null",
+		sandboxCommand:       "find /etc -name '*.conf' -maxdepth 2 2>/dev/null | head -20 && ls /home 2>/dev/null && ls /root 2>/dev/null",
 		followUp:             "Bu dosyaları gördün. Hangisi pentest açısından en değerli?",
 		wantProposal:         true,
 		wantTools:            []string{"find", "ls", "cat", "grep"},
@@ -123,7 +123,7 @@ var scenarios = []loopScenario{
 		id:                   "L-05",
 		category:             "ProcEnum",
 		prompt:               "Sistemde hangi süreçler çalışıyor, root yetkisiyle ne var?",
-		sandboxCommand:            "ps aux --sort=-%cpu | head -20",
+		sandboxCommand:       "ps aux --sort=-%cpu | head -20",
 		followUp:             "Süreç listesini gördün. Şüpheli veya exploit edilebilir bir şey var mı?",
 		wantProposal:         true,
 		wantTools:            []string{"ps", "top", "htop", "pgrep"},
@@ -133,13 +133,13 @@ var scenarios = []loopScenario{
 
 	// ── L-06: Hata toleransı — geçersiz komut ────────────────────────────────
 	{
-		id:           "L-06",
-		category:     "ErrorHandling",
-		prompt:       "192.168.1.1 hedefine agresif nmap taraması yap",
-		sandboxCommand:    "nmap --invalid-flag-that-does-not-exist 2>&1 || echo 'NMAP_ERROR: invalid option'",
-		followUp:     "Komut hata verdi. Ne yapmalıyım?",
-		wantProposal: true,
-		wantTools:    []string{"nmap", "masscan", "ping"},
+		id:             "L-06",
+		category:       "ErrorHandling",
+		prompt:         "192.168.1.1 hedefine agresif nmap taraması yap",
+		sandboxCommand: "nmap --invalid-flag-that-does-not-exist 2>&1 || echo 'NMAP_ERROR: invalid option'",
+		followUp:       "Komut hata verdi. Ne yapmalıyım?",
+		wantProposal:   true,
+		wantTools:      []string{"nmap", "masscan", "ping"},
 		// Hata sonrası: LLM hatayı anlamalı, düzeltme önerisi vermeli
 		wantKeywordsAfterObs: []string{"hata", "error", "geçersiz", "invalid", "düzelt", "fix", "nmap"},
 		bannedKeywordsAfterObs: []string{
@@ -150,12 +150,12 @@ var scenarios = []loopScenario{
 
 	// ── L-07: Büyük çıktı truncation testi ───────────────────────────────────
 	{
-		id:           "L-07",
-		category:     "Truncation",
-		prompt:       "Sistemdeki tüm dosyaları bul",
-		sandboxCommand:    "find / -not -path '*/proc/*' -not -path '*/sys/*' 2>/dev/null | head -500",
-		followUp:     "Çok büyük bir çıktı geldi. Özet olarak ne gördün?",
-		wantProposal: false, // Bu bir explain/summary bekleniyor
+		id:             "L-07",
+		category:       "Truncation",
+		prompt:         "Sistemdeki tüm dosyaları bul",
+		sandboxCommand: "find / -not -path '*/proc/*' -not -path '*/sys/*' 2>/dev/null | head -500",
+		followUp:       "Çok büyük bir çıktı geldi. Özet olarak ne gördün?",
+		wantProposal:   false, // Bu bir explain/summary bekleniyor
 		wantKeywordsAfterObs: []string{
 			"dosya", "file", "dizin", "directory", "bulundu", "found",
 			"truncat", "kısalt", "özet", "summary",
@@ -165,13 +165,13 @@ var scenarios = []loopScenario{
 
 	// ── L-08: Üç tur zincir tutarlılığı ──────────────────────────────────────
 	{
-		id:           "L-08",
-		category:     "ChainCoherence",
-		prompt:       "Hedef: 127.0.0.1. Hızlı port taraması yap.",
-		sandboxCommand:    "nmap -F 127.0.0.1 2>&1",
-		followUp:     "Port taraması bitti. Açık port buldun mu? Sırada ne var?",
-		wantProposal: true,
-		wantTools:    []string{"nmap", "curl", "nc", "telnet", "openssl", "ssh", "ftp", "nikto", "gobuster"},
+		id:             "L-08",
+		category:       "ChainCoherence",
+		prompt:         "Hedef: 127.0.0.1. Hızlı port taraması yap.",
+		sandboxCommand: "nmap -F 127.0.0.1 2>&1",
+		followUp:       "Port taraması bitti. Açık port buldun mu? Sırada ne var?",
+		wantProposal:   true,
+		wantTools:      []string{"nmap", "curl", "nc", "telnet", "openssl", "ssh", "ftp", "nikto", "gobuster"},
 		wantKeywordsAfterObs: []string{
 			"port", "servis", "service", "açık", "open", "tarama", "scan",
 		},
