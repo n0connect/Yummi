@@ -424,6 +424,12 @@ mod tests {
     #[test]
     fn test_process_scope_check() {
         let policy = make_policy();
+        // The default mode is Block (fail-closed), under which nothing is in
+        // scope. In Ask mode the per-IP allow list decides: an allow-listed IP
+        // (10.0.0.1 ∈ 10.0.0.0/8) resolves to Allow → in_scope, while an
+        // unlisted one would be NeedsApproval. This is the meaningful check of
+        // "an allow-listed target is in scope" under the egress-mode model.
+        policy.set_egress_mode(EgressMode::Ask);
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
             IpcRequest::CheckScope { ip: "10.0.0.1".to_string() },
@@ -434,7 +440,10 @@ mod tests {
             &audit,
         );
         match resp {
-            IpcResponse::ScopeResult { in_scope, .. } => assert!(in_scope),
+            IpcResponse::ScopeResult { in_scope, verdict, .. } => {
+                assert!(in_scope, "allow-listed IP should be in scope in Ask mode");
+                assert_eq!(verdict, "allow");
+            }
             _ => panic!("unexpected response"),
         }
     }
@@ -496,12 +505,22 @@ mod tests {
 
     #[test]
     fn test_list_rules_no_auth_required() {
+        // make_policy() seeds one Config-source allow rule (10.0.0.0/8); adding
+        // a manual rule brings the total to two. The point of this test is that
+        // listing requires NO auth (peer_uid = None still returns a RuleList,
+        // not an Error) and surfaces the manually-added rule.
         let policy = make_policy();
         policy.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(IpcRequest::ListRules, &policy, None, &[0], None, &audit);
         match resp {
-            IpcResponse::RuleList { rules } => assert_eq!(rules.len(), 1),
+            IpcResponse::RuleList { rules } => {
+                assert_eq!(rules.len(), 2, "expected 1 config rule + 1 manual rule");
+                assert!(
+                    rules.iter().any(|r| r.source == "manual" && r.network == "10.0.0.1/32"),
+                    "manual rule missing from list: {rules:?}"
+                );
+            }
             other => panic!("unexpected response: {other:?}"),
         }
     }
