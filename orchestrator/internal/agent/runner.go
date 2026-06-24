@@ -9,6 +9,7 @@ import (
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
 
 // LLM is the minimal model interface the runner needs.
@@ -65,6 +66,17 @@ type Config struct {
 	// Retrieval selects prior memory injected into the step prompt. Nil disables
 	// memory injection. Typically knowledge.NewStructuredRetrieval(Knowledge).
 	Retrieval knowledge.RetrievalStrategy
+
+	// Skills is the declarative playbook registry; relevant skills are injected
+	// into the plan and step prompts. Nil disables skill injection. A sub-agent
+	// is typically given a Subset scoped to its role.
+	Skills *skill.Registry
+
+	// SubAgents maps a role name to a specialized sub-agent Runner the brain may
+	// hand a focused subtask to via [HANDOFF]. Empty/nil disables delegation —
+	// and sub-agents themselves are built with an empty map, capping handoff
+	// depth at exactly 1 (no recursion).
+	SubAgents map[string]*Runner
 }
 
 // Runner drives agentic task loops. One goroutine per running task.
@@ -121,8 +133,41 @@ func NewRunner(store *Store, llm LLM, validator *conductor.Validator, exec Exece
 // Name returns the agent's stable identifier.
 func (r *Runner) Name() string { return "yummi" }
 
-// Handoffs returns nil for single-agent use; future orchestrators populate this.
-func (r *Runner) Handoffs() map[string]Agent { return nil }
+// Handoffs returns the configured sub-agents as the delegation set, or nil when
+// none are configured (single-agent use, and every sub-agent).
+func (r *Runner) Handoffs() map[string]Agent {
+	if len(r.cfg.SubAgents) == 0 {
+		return nil
+	}
+	out := make(map[string]Agent, len(r.cfg.SubAgents))
+	for role, sub := range r.cfg.SubAgents {
+		out[role] = sub
+	}
+	return out
+}
+
+// SubResult is what a sub-agent returns to the orchestrator after a handoff.
+type SubResult struct {
+	Summary  string
+	Findings []string
+}
+
+// RunSubtask creates, plans, and synchronously runs a focused subtask on this
+// runner, returning the resulting task's summary and findings. The handoff node
+// uses it to delegate to a specialized sub-agent. The sub-agent shares the
+// caller's Store and Knowledge, so its findings/tactics join the one world
+// model automatically.
+func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal string) (SubResult, error) {
+	task, err := r.CreateAndPlan(ctx, sessionID, goal)
+	if err != nil {
+		return SubResult{}, err
+	}
+	if err := r.Run(ctx, &task); err != nil {
+		return SubResult{}, err
+	}
+	t, _ := r.store.Get(task.ID)
+	return SubResult{Summary: t.Summary, Findings: t.Findings}, nil
+}
 
 // Run executes a task synchronously, blocking until completion.
 // The task must already be in StatusPlanned or StatusPaused.
@@ -157,7 +202,11 @@ func (r *Runner) CreateAndPlan(ctx context.Context, sessionID, goal string) (Tas
 		return Task{}, err
 	}
 
-	system, user := BuildPlanPrompt(r.cfg.Persona, goal)
+	var skills string
+	if r.cfg.Skills != nil {
+		skills = r.cfg.Skills.Render(r.cfg.Skills.Select(goal, nil, 3))
+	}
+	system, user := BuildPlanPrompt(r.cfg.Persona, skills, goal)
 	raw, err := r.llm.Chat(ctx, system, user)
 	if err == nil {
 		if _, perr := ParsePlan(raw); perr != nil {
