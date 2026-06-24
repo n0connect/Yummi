@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -282,5 +283,56 @@ func (s *Store) ListContexts(sessionID string) []PersistentContext {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	return out
+}
+
+// FindContext returns the persistent context for (sessionID, key), if any —
+// used to update a code map in place instead of duplicating it.
+func (s *Store) FindContext(sessionID, key string) (PersistentContext, bool) {
+	for _, c := range s.ListContexts(sessionID) {
+		if c.Key == key {
+			return c, true
+		}
+	}
+	return PersistentContext{}, false
+}
+
+// ListAllTactics returns the most-used procedural tactics across all tools.
+func (s *Store) ListAllTactics(limit int) []Tactic {
+	if limit <= 0 {
+		limit = 50
+	}
+	if s.db == nil {
+		s.mu.RLock()
+		out := make([]Tactic, 0, len(s.tactics))
+		for _, t := range s.tactics {
+			out = append(out, t)
+		}
+		s.mu.RUnlock()
+		sort.Slice(out, func(i, j int) bool { return out[i].HitCount > out[j].HitCount })
+		if len(out) > limit {
+			out = out[:limit]
+		}
+		return out
+	}
+	rows, err := s.db.Query(
+		`SELECT id,tool,command_pattern,outcome,COALESCE(context_tags,''),COALESCE(note,''),hit_count,last_used_at,created_at
+		 FROM procedural_memory ORDER BY hit_count DESC, last_used_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]Tactic, 0)
+	for rows.Next() {
+		var t Tactic
+		var tags string
+		if err := rows.Scan(&t.ID, &t.Tool, &t.CommandPattern, &t.Outcome, &tags, &t.Note, &t.HitCount, &t.LastUsedAt, &t.CreatedAt); err != nil {
+			continue
+		}
+		if tags != "" {
+			_ = json.Unmarshal([]byte(tags), &t.ContextTags)
+		}
+		out = append(out, t)
+	}
 	return out
 }
