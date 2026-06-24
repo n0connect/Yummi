@@ -12,6 +12,7 @@ import (
 
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
@@ -86,15 +87,33 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 
 // Executor connects approved commands to the sandbox container via gateway scope checks.
 type Executor struct {
-	bridge  *sandbox.Bridge
-	gateway *gateway.Client
+	bridge    *sandbox.Bridge
+	gateway   *gateway.Client
+	knowledge *knowledge.Store
 }
 
-// New creates an Executor with the given sandbox bridge and gateway client.
-func New(bridge *sandbox.Bridge, pc *gateway.Client) *Executor {
+// New creates an Executor with the given sandbox bridge, gateway client, and
+// knowledge store (knowledge may be nil to disable procedural capture).
+func New(bridge *sandbox.Bridge, pc *gateway.Client, ks *knowledge.Store) *Executor {
 	return &Executor{
-		bridge:  bridge,
-		gateway: pc,
+		bridge:    bridge,
+		gateway:   pc,
+		knowledge: ks,
+	}
+}
+
+// recordTacticOutcome derives a mechanical worked/failed outcome from an
+// execution and records a target-scrubbed tactic. Nil store is a no-op.
+func recordTacticOutcome(ctx context.Context, ks *knowledge.Store, command string, ok bool) {
+	if ks == nil || command == "" {
+		return
+	}
+	outcome := "failed"
+	if ok {
+		outcome = "worked"
+	}
+	if err := ks.RecordTactic(ctx, command, outcome, nil, ""); err != nil {
+		slog.Warn("executor: record tactic failed", "error", err)
 	}
 }
 
@@ -110,6 +129,7 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 
 		result, err := RunScopedCommand(ctx, e.bridge, e.gateway, rec.Command)
 		if err != nil {
+			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
 			if result != nil {
 				return result.Stderr, fmt.Errorf("command failed: %w", err)
 			}
@@ -129,8 +149,10 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 		}
 
 		if result.ExitCode != 0 {
+			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
 			return out.String(), fmt.Errorf("exit code %d", result.ExitCode)
 		}
+		recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
 
 		slog.Info("executor: command completed",
 			"execution_id", rec.ID,

@@ -66,7 +66,7 @@ func main() {
 	pc := gateway.NewClient(envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"))
 
 	execStore := execution.NewStore()
-	execStore.SetProcessor(executor.New(bridge, pc).ProcessFunc())
+	execStore.SetProcessor(executor.New(bridge, pc, nil).ProcessFunc())
 
 	agentPersona, err := agent.LoadAgentPersona(personaDir)
 	if err != nil {

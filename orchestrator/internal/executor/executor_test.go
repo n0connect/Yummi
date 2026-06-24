@@ -8,8 +8,24 @@ import (
 
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 )
+
+func TestRecordTacticOutcome(t *testing.T) {
+	ks, _ := knowledge.NewStore(nil)
+	recordTacticOutcome(context.Background(), ks, "nmap -sV 10.0.0.5", true)
+	recordTacticOutcome(context.Background(), ks, "gobuster dir -u http://10.0.0.5", false)
+
+	worked := ks.ListTactics("nmap", 10)
+	if len(worked) != 1 || worked[0].Outcome != "worked" {
+		t.Fatalf("nmap tactic not recorded as worked: %+v", worked)
+	}
+	failed := ks.ListTactics("gobuster", 10)
+	if len(failed) != 1 || failed[0].Outcome != "failed" {
+		t.Fatalf("gobuster tactic not recorded as failed: %+v", failed)
+	}
+}
 
 func TestRunScopedCommandBlocksOutOfScope(t *testing.T) {
 	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
@@ -74,7 +90,7 @@ func TestRunScopedCommandRejectsNilBridge(t *testing.T) {
 }
 
 func TestNewExecutor(t *testing.T) {
-	e := New(nil, nil)
+	e := New(nil, nil, nil)
 	if e == nil {
 		t.Fatal("expected non-nil executor")
 	}
@@ -103,7 +119,7 @@ func TestHostNetwork(t *testing.T) {
 }
 
 func TestProcessBlocksTargetedCommandWhenGatewayUnavailable(t *testing.T) {
-	e := New(sandbox.NewBridge("unused-container"), nil)
+	e := New(sandbox.NewBridge("unused-container"), nil, nil)
 	_, err := e.ProcessFunc()(context.Background(), execution.Record{
 		ID:        "exec-1",
 		SessionID: "s1",
