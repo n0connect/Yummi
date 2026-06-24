@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
 	"github.com/n0connect/yummi/orchestrator/internal/tlsutil"
 )
 
@@ -148,6 +150,40 @@ func main() {
 		if perr != nil {
 			slog.Error("agent persona load failed; agent loop disabled", "error", perr, "persona_dir", cfg.PersonaDir)
 		} else {
+			// Skills: declarative playbooks injected into prompts (no exec path).
+			skillReg, serr := skill.LoadDir(filepath.Join(cfg.PersonaDir, "skills"))
+			if serr != nil {
+				slog.Warn("skills load failed; continuing without skills", "error", serr)
+				skillReg = skill.New(nil)
+			}
+			retrieval := knowledge.NewStructuredRetrieval(ks)
+
+			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
+			// execution pipeline. Built with no SubAgents of their own, capping
+			// handoff depth at 1 (no recursion).
+			subAgents := map[string]*agent.Runner{}
+			subDefs, derr := agent.LoadSubAgentDefs(filepath.Join(cfg.PersonaDir, "subagents"))
+			if derr != nil {
+				slog.Warn("sub-agent defs load failed; continuing without delegation", "error", derr)
+			}
+			for _, d := range subDefs {
+				subAgents[d.Role] = agent.NewRunner(
+					taskStore,
+					assistant.LLM(),
+					assistant.Validator(),
+					agent.NewStoreExecer(executionStore, 10*time.Minute),
+					agent.Config{
+						Persona:   d.Persona(),
+						Knowledge: ks,
+						Retrieval: retrieval,
+						Skills:    skillReg.Subset(d.Skills),
+					},
+				)
+			}
+			if len(subAgents) > 0 {
+				slog.Info("sub-agents registered", "roles", len(subAgents))
+			}
+
 			taskRunner = agent.NewRunner(
 				taskStore,
 				assistant.LLM(),
@@ -156,7 +192,9 @@ func main() {
 				agent.Config{ // defaults: budget 15, ask_permission mode
 					Persona:   agentPersona,
 					Knowledge: ks,
-					Retrieval: knowledge.NewStructuredRetrieval(ks),
+					Retrieval: retrieval,
+					Skills:    skillReg,
+					SubAgents: subAgents,
 				},
 			)
 		}
