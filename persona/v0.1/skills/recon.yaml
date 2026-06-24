@@ -1,0 +1,24 @@
+name: recon
+description: Host and network enumeration — discover what is alive and what it runs.
+triggers:
+  - recon
+  - reconnaissance
+  - enumerate
+  - enumeration
+  - scan
+  - ports
+  - port
+  - nmap
+  - discover
+  - footprint
+tools:
+  - nmap
+  - rustscan
+  - masscan
+  - ping
+knowledge: |
+  Enumerate before you exploit. Start passive/light, escalate only as needed:
+  1. Confirm reachability, then `nmap -sV -sC <target>` for service + version + default scripts.
+  2. For wide ranges, a fast port sweep first (rustscan/masscan), then targeted -sV on open ports.
+  3. Record every open port and service version as a structured finding (it becomes shared memory).
+  4. Avoid `-A`/aggressive timing on production unless the engagement allows it — it is loud.
