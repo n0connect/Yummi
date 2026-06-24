@@ -114,6 +114,12 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 			return edgeLLMError, nil
 		}
 		return edgeHandoff, nil
+	case "REMEMBER":
+		if strings.TrimSpace(msg.Action.MemKey) == "" || strings.TrimSpace(msg.Action.MemValue) == "" {
+			s.retryCtx = RetryContext{Caller: nodeStep}
+			return edgeLLMError, nil
+		}
+		return edgeRemember, nil
 	case "ASK_OPERATOR":
 		if strings.TrimSpace(msg.Action.Question) == "" {
 			s.retryCtx = RetryContext{Caller: nodeStep}

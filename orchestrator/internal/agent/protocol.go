@@ -53,6 +53,7 @@ var Registry = []Tag{
 	{"UPDATE_PLAN", LLMToAgent, "Revise the plan.", `{"steps":[...],"reason"}`},
 	{"FINISH", LLMToAgent, "Goal achieved.", `{"summary","findings"}`},
 	{"HANDOFF", LLMToAgent, "Delegate a focused subtask to a named specialist sub-agent.", `{"role","subgoal"}`},
+	{"REMEMBER", LLMToAgent, "Persist a structured memory (e.g. a code/connection map) under a key — never forgotten.", `{"key","value"}`},
 	{"ASK_OPERATOR", LLMToAgent, "Blocked; need a human.", `{"question"}`},
 	{"SEND_FULL", LLMToAgent, "Resend the last truncated output in full.", `{}`},
 	{"CONTINUE", LLMToAgent, "Keep waiting / proceed (reply to a consult).", `{}`},
@@ -171,6 +172,8 @@ func inferControlTag(a Action) string {
 		return "RUN_COMMAND"
 	case strings.TrimSpace(a.Role) != "" && strings.TrimSpace(a.Subgoal) != "":
 		return "HANDOFF"
+	case strings.TrimSpace(a.MemKey) != "" && strings.TrimSpace(a.MemValue) != "":
+		return "REMEMBER"
 	case len(a.Steps) > 0:
 		return "UPDATE_PLAN"
 	case strings.TrimSpace(a.Question) != "":

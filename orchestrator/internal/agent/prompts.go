@@ -25,6 +25,10 @@ type Action struct {
 	Role    string `json:"role,omitempty"`
 	Subgoal string `json:"subgoal,omitempty"`
 
+	// MemKey/MemValue carry a [REMEMBER]: persist MemValue under MemKey.
+	MemKey   string `json:"key,omitempty"`
+	MemValue string `json:"value,omitempty"`
+
 	// FindingsDetail is the optional rich form of findings. The brain MAY emit
 	// these; when absent, freetext Findings are wrapped as info notes instead.
 	FindingsDetail []FindingDetail `json:"findings_detail,omitempty"`

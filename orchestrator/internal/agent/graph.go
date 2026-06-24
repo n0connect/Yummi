@@ -21,6 +21,7 @@ const (
 	nodeFinish    = "finish"
 	nodeAsk       = "ask"
 	nodeHandoff   = "handoff"
+	nodeRemember  = "remember"
 )
 
 // Edge name constants.
@@ -42,6 +43,7 @@ const (
 	edgeDenied           = "denied"
 	edgeDone             = "done"
 	edgeHandoff          = "handoff"
+	edgeRemember         = "remember"
 	// Live-control edges (consult channel).
 	edgeLongRunning = "long_running"
 	edgeContinue    = "continue"
@@ -68,9 +70,13 @@ var graphEdges = map[string]map[string]string{
 		edgeSendFull:    nodeStep,
 		edgeStopTask:    nodeFinish,
 		edgeHandoff:     nodeHandoff,
+		edgeRemember:    nodeRemember,
 		edgeLLMError:    nodeRetry,
 	},
 	nodeHandoff: {
+		edgeOK: nodeStep,
+	},
+	nodeRemember: {
 		edgeOK: nodeStep,
 	},
 	nodeTool: {
@@ -122,6 +128,7 @@ func init() {
 		nodeFinish:    finishNode,
 		nodeAsk:       askNode,
 		nodeHandoff:   handoffNode,
+		nodeRemember:  rememberNode,
 	}
 }
 
