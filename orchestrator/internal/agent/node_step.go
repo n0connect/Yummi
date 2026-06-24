@@ -131,7 +131,7 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 		return ""
 	}
 	items, err := s.cfg.Retrieval.Retrieve(ctx, knowledge.Query{
-		SessionID: task.SessionID, Tools: recentTools(task), Limit: 5,
+		SessionID: task.SessionID, Tools: toolsFromCommands(s.recentCmds), Limit: 5,
 	})
 	if err != nil || len(items) == 0 {
 		return ""
@@ -144,16 +144,21 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 	return b.String()
 }
 
-// recentTools returns the distinct tool names mentioned across the plan-step
-// descriptions, used to scope procedural retrieval.
-func recentTools(task Task) []string {
+// toolsFromCommands returns the distinct tool names (first token) of the most
+// recently EXECUTED commands. This is keyed the same way the executor records
+// tactics (also the command's first token), so procedural retrieval lines up
+// with what was actually learned — unlike plan-step descriptions, which are
+// natural-language and rarely start with a real tool name.
+func toolsFromCommands(cmds []string) []string {
 	seen := map[string]bool{}
 	var tools []string
-	for _, st := range task.Plan {
-		if f := strings.Fields(st.Description); len(f) > 0 && !seen[f[0]] {
-			seen[f[0]] = true
-			tools = append(tools, f[0])
+	for _, c := range cmds {
+		f := strings.Fields(c)
+		if len(f) == 0 || seen[f[0]] {
+			continue
 		}
+		seen[f[0]] = true
+		tools = append(tools, f[0])
 	}
 	return tools
 }
