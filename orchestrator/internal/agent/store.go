@@ -30,11 +30,13 @@ type Event struct {
 
 // Store keeps agent tasks with optional SQLite persistence.
 type Store struct {
-	mu          sync.RWMutex
-	items       map[string]Task
-	db          *sql.DB // nil = in-memory only
-	subscribers map[int]chan Event
-	nextSubID   int
+	mu           sync.RWMutex
+	items        map[string]Task
+	db           *sql.DB // nil = in-memory only
+	subscribers  map[int]chan Event
+	nextSubID    int
+	activitySubs map[int]chan ActivityEnvelope
+	nextActSubID int
 }
 
 const schema = `
@@ -60,9 +62,10 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
 // On startup, tasks left in a non-terminal state are marked interrupted.
 func NewStore(db *sql.DB) (*Store, error) {
 	s := &Store{
-		items:       make(map[string]Task),
-		db:          db,
-		subscribers: make(map[int]chan Event),
+		items:        make(map[string]Task),
+		db:           db,
+		subscribers:  make(map[int]chan Event),
+		activitySubs: make(map[int]chan ActivityEnvelope),
 	}
 	if db != nil {
 		if _, err := db.Exec(schema); err != nil {
@@ -72,6 +75,11 @@ func NewStore(db *sql.DB) (*Store, error) {
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN checkpoint TEXT`)
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0`)
 		_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON agent_tasks(session_id)`)
+		_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS agent_activity (
+			id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_id TEXT NOT NULL,
+			parent_task_id TEXT, kind TEXT NOT NULL, summary TEXT NOT NULL,
+			detail TEXT, timestamp INTEGER NOT NULL)`)
+		_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_activity_session ON agent_activity(session_id)`)
 		if err := s.loadFromDB(); err != nil {
 			return nil, fmt.Errorf("agent load: %w", err)
 		}
@@ -257,6 +265,96 @@ func (s *Store) persist(t Task) {
 	if err != nil {
 		slog.Error("agent: persist failed", "task", t.ID, "error", err)
 	}
+}
+
+// RecordActivity persists (best-effort) and publishes one activity event.
+// A nil/failed persist is logged, never fatal — observability must not break
+// the loop. ID and Timestamp are filled when empty.
+func (s *Store) RecordActivity(ev ActivityEvent) {
+	if ev.ID == "" {
+		ev.ID = uuid.NewString()
+	}
+	if ev.Timestamp == 0 {
+		ev.Timestamp = time.Now().UnixMilli()
+	}
+	if s.db != nil {
+		if _, err := s.db.Exec(
+			`INSERT INTO agent_activity(id,session_id,task_id,parent_task_id,kind,summary,detail,timestamp)
+			 VALUES(?,?,?,?,?,?,?,?)`,
+			ev.ID, ev.SessionID, ev.TaskID, nullActStr(ev.ParentTaskID), string(ev.Kind), ev.Summary, ev.Detail, ev.Timestamp); err != nil {
+			slog.Warn("agent: activity persist failed", "error", err)
+		}
+	}
+	env := ActivityEnvelope{Type: "agent.activity", Event: ev}
+	s.mu.RLock()
+	sinks := make([]chan ActivityEnvelope, 0, len(s.activitySubs))
+	for _, ch := range s.activitySubs {
+		sinks = append(sinks, ch)
+	}
+	s.mu.RUnlock()
+	for _, ch := range sinks {
+		select {
+		case ch <- env:
+		default: // drop on slow consumer; history is queryable via ListActivity
+		}
+	}
+}
+
+// ListActivity returns a session's activity oldest-first (chronological trace).
+func (s *Store) ListActivity(sessionID string, limit int) []ActivityEvent {
+	if limit <= 0 {
+		limit = 200
+	}
+	if s.db == nil {
+		return []ActivityEvent{}
+	}
+	rows, err := s.db.Query(
+		`SELECT id,session_id,task_id,COALESCE(parent_task_id,''),kind,summary,COALESCE(detail,''),timestamp
+		 FROM agent_activity WHERE session_id=? ORDER BY timestamp ASC LIMIT ?`, sessionID, limit)
+	if err != nil {
+		slog.Error("agent: list activity", "error", err)
+		return []ActivityEvent{}
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ActivityEvent, 0)
+	for rows.Next() {
+		var e ActivityEvent
+		var kind string
+		if err := rows.Scan(&e.ID, &e.SessionID, &e.TaskID, &e.ParentTaskID, &kind, &e.Summary, &e.Detail, &e.Timestamp); err != nil {
+			continue
+		}
+		e.Kind = ActivityKind(kind)
+		out = append(out, e)
+	}
+	return out
+}
+
+// SubscribeActivity registers a listener for activity events (mirrors Subscribe).
+func (s *Store) SubscribeActivity(buffer int) (int, <-chan ActivityEnvelope, error) {
+	if buffer <= 0 {
+		buffer = 64
+	}
+	ch := make(chan ActivityEnvelope, buffer)
+	s.mu.Lock()
+	id := s.nextActSubID
+	s.nextActSubID++
+	s.activitySubs[id] = ch
+	s.mu.Unlock()
+	return id, ch, nil
+}
+
+// UnsubscribeActivity removes an activity listener.
+func (s *Store) UnsubscribeActivity(id int) {
+	s.mu.Lock()
+	delete(s.activitySubs, id)
+	s.mu.Unlock()
+}
+
+func nullActStr(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
 }
 
 func (s *Store) loadFromDB() error {
