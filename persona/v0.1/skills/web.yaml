@@ -1,0 +1,28 @@
+name: web
+description: Web service assessment — fingerprint, map, and probe HTTP(S) targets.
+triggers:
+  - web
+  - http
+  - https
+  - website
+  - webserver
+  - web server
+  - nginx
+  - apache
+  - port 80
+  - port 443
+  - url
+  - api
+tools:
+  - whatweb
+  - curl
+  - gobuster
+  - feroxbuster
+  - nikto
+knowledge: |
+  Assess web targets methodically:
+  1. Fingerprint: `whatweb <url>` and `curl -sI <url>` for server, framework, headers.
+  2. Map content: `gobuster dir -u <url> -w <wordlist>` (or feroxbuster) for hidden paths.
+  3. Known issues: `nikto -h <url>` for outdated software / misconfig signatures.
+  4. Inspect security headers (CSP, HSTS, X-Frame-Options) and cookie flags.
+  5. Record each distinct issue as its own structured finding with the evidence (response snippet).
