@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -10,211 +11,329 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type errMsg error
+// ── Command result messages ──────────────────────────────────────────────────
 
-type message struct {
-	role    string
-	content string
-}
-
-type chatMsg struct {
-	content string
-}
-
-type initSessionMsg struct{}
 type sessionCreatedMsg struct{ err error }
+type chatResultMsg struct {
+	res ChatResult
+	err error
+}
+type approveDoneMsg struct{ err error }
+type healthMsg struct{ mods []Module }
+type healthTickMsg struct{}
 
+// model is the TUI operator console state.
 type model struct {
-	client       *APIClient
-	viewport     viewport.Model
-	textInput    textinput.Model
-	messages     []message
-	err          error
-	ready        bool
-	loading      bool
-	width        int
-	height       int
+	client *Client
+	base   string
+	stream chan tea.Msg
+
+	viewport viewport.Model
+	input    textinput.Model
+
+	lines     []string   // rendered timeline lines
+	proposals []Proposal // active single-command proposals (first is acted on)
+	pendingID string     // agent task awaiting approval
+	pendingPr string     // its proposal id
+	pendingCm string     // its command (banner)
+
+	modules []Module
+	loading bool
+	ready   bool
+	width   int
+	height  int
 }
 
-// Run starts the Bubble Tea TUI program
+// Run starts the Bubble Tea operator console against the orchestrator at apiURL.
 func Run(apiURL string) error {
 	ti := textinput.New()
-	ti.Placeholder = "Tell Yummi what to do..."
+	ti.Placeholder = "Tell Yummi what to do…"
 	ti.Focus()
 	ti.CharLimit = 500
-	ti.Width = 60
-	ti.PromptStyle = InputPromptStyle
-	ti.TextStyle = InputTextStyle
+	ti.Prompt = "❯ "
+	ti.PromptStyle = inputPrompt
+	ti.TextStyle = inputTextStyle
 
 	m := model{
-		client:    NewAPIClient(apiURL),
-		textInput: ti,
-		messages:  []message{{role: "system", content: "Welcome to Yummi TUI. Initializing session..."}},
+		client: NewClient(apiURL),
+		base:   apiURL,
+		input:  ti,
+		lines:  []string{renderSystem("Yummi terminal console — connecting…")},
 	}
-
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		return err
-	}
-	return nil
+	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	return err
 }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
-		func() tea.Msg { return initSessionMsg{} },
+		func() tea.Msg { return sessionCreatedMsg{err: m.client.CreateSession()} },
+		func() tea.Msg { return healthMsg{mods: m.client.Health()} },
 	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var (
-		tiCmd tea.Cmd
-		vpCmd tea.Cmd
-	)
-
-	m.textInput, tiCmd = m.textInput.Update(msg)
-	m.viewport, vpCmd = m.viewport.Update(msg)
+	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			return m, tea.Quit
-		case tea.KeyEnter:
-			if m.loading {
-				return m, nil
-			}
-			v := m.textInput.Value()
-			if v == "" {
-				return m, nil
-			}
-			m.messages = append(m.messages, message{role: "user", content: v})
-			m.textInput.Reset()
-			m.loading = true
-			m.updateViewport()
-			
-			// Send to API
-			return m, func() tea.Msg {
-				reply, err := m.client.SendChat(v)
-				if err != nil {
-					return errMsg(err)
-				}
-				return chatMsg{content: reply}
-			}
+		if c, handled := m.handleKey(msg); handled {
+			return m, c
 		}
 
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-
-		headerHeight := 2
-		footerHeight := 2
-		vpHeight := msg.Height - headerHeight - footerHeight
-
+		m.width, m.height = msg.Width, msg.Height
+		vpHeight := msg.Height - 4 // header(1)+banner/input(2)+hint(1)
+		if vpHeight < 1 {
+			vpHeight = 1
+		}
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, vpHeight)
 			m.ready = true
 		} else {
-			m.viewport.Width = msg.Width
-			m.viewport.Height = vpHeight
+			m.viewport.Width, m.viewport.Height = msg.Width, vpHeight
 		}
-		m.updateViewport()
-
-	case initSessionMsg:
-		return m, func() tea.Msg {
-			err := m.client.CreateSession()
-			return sessionCreatedMsg{err: err}
-		}
+		m.refresh()
 
 	case sessionCreatedMsg:
 		if msg.err != nil {
-			m.err = msg.err
-			m.messages = append(m.messages, message{role: "system", content: fmt.Sprintf("Failed to init: %v", msg.err)})
+			m.append(renderSystem("session init failed: " + msg.err.Error()))
 		} else {
-			m.messages = append(m.messages, message{role: "system", content: fmt.Sprintf("Session active [%s]. Ready for commands.", m.client.SessionID)})
+			m.append(renderSystem(fmt.Sprintf("session active [%s] — ready", short(m.client.SessionID))))
+			m.stream = newStream(m.base, m.client.SessionID)
+			cmds = append(cmds, waitForEvent(m.stream), tickHealth())
 		}
-		m.updateViewport()
 
-	case chatMsg:
+	case chatResultMsg:
 		m.loading = false
-		m.messages = append(m.messages, message{role: "agent", content: msg.content})
-		m.updateViewport()
+		if msg.err != nil {
+			m.append(renderSystem("error: " + msg.err.Error()))
+			break
+		}
+		if r := strings.TrimSpace(msg.res.Reply); r != "" {
+			m.append(renderAgent(r))
+		}
+		if len(msg.res.Proposals) > 0 {
+			m.proposals = msg.res.Proposals
+		} else if msg.res.TaskID != "" {
+			m.append(renderSystem("task started — watching…"))
+		}
 
-	case errMsg:
-		m.loading = false
-		m.err = msg
-		m.messages = append(m.messages, message{role: "system", content: fmt.Sprintf("Error: %v", msg)})
-		m.updateViewport()
+	case execMsg:
+		m.append(renderExec(msg.Command, msg.Status, firstNonEmpty(msg.Output, msg.Error)))
+		cmds = append(cmds, waitForEvent(m.stream))
+
+	case taskMsg:
+		m.onTask(msg)
+		cmds = append(cmds, waitForEvent(m.stream))
+
+	case activityMsg:
+		if s := renderActivity(msg.Kind, msg.Summary, msg.Parent != ""); s != "" {
+			m.append(s)
+		}
+		cmds = append(cmds, waitForEvent(m.stream))
+
+	case wsErrMsg:
+		m.append(renderSystem(msg.note))
+		cmds = append(cmds, waitForEvent(m.stream))
+
+	case approveDoneMsg:
+		if msg.err != nil {
+			m.append(renderSystem("approve failed: " + msg.err.Error()))
+		}
+
+	case healthMsg:
+		m.modules = msg.mods
+
+	case healthTickMsg:
+		cmds = append(cmds, func() tea.Msg { return healthMsg{mods: m.client.Health()} }, tickHealth())
 	}
 
-	return m, tea.Batch(tiCmd, vpCmd)
+	var c tea.Cmd
+	m.input, c = m.input.Update(msg)
+	cmds = append(cmds, c)
+	m.viewport, c = m.viewport.Update(msg)
+	cmds = append(cmds, c)
+	return m, tea.Batch(cmds...)
 }
 
-func (m *model) updateViewport() {
-	var b strings.Builder
-	for _, msg := range m.messages {
-		switch msg.role {
-		case "user":
-			b.WriteString(UserMessageStyle.Render("► " + msg.content))
-		case "agent":
-			// Very basic split for <THOUGHT> vs normal text if they exist
-			content := msg.content
-			if strings.Contains(content, "<THOUGHT>") {
-				parts := strings.SplitN(content, "</THOUGHT>", 2)
-				if len(parts) == 2 {
-					thought := strings.Replace(parts[0], "<THOUGHT>", "", 1)
-					b.WriteString(AgentThoughtStyle.Render(strings.TrimSpace(thought)))
-					b.WriteString("\n")
-					b.WriteString(AgentMessageStyle.Render(strings.TrimSpace(parts[1])))
-				} else {
-					b.WriteString(AgentMessageStyle.Render(content))
-				}
-			} else {
-				b.WriteString(AgentMessageStyle.Render(content))
-			}
-		case "system":
-			b.WriteString(AgentThoughtStyle.Render("[System] " + msg.content))
+// handleKey processes keys that the console consumes; returns handled=true to
+// short-circuit the normal input/viewport update.
+func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	switch msg.Type {
+	case tea.KeyCtrlC, tea.KeyEsc:
+		return tea.Quit, true
+	case tea.KeyEnter:
+		if m.loading {
+			return nil, true
 		}
-		b.WriteString("\n")
+		// Empty input + active proposal/pending → Enter approves.
+		if strings.TrimSpace(m.input.Value()) == "" {
+			if len(m.proposals) > 0 {
+				return m.approveProposal(), true
+			}
+			if m.pendingID != "" {
+				return m.approvePending(true), true
+			}
+			return nil, true
+		}
+		return m.sendChat(), true
+	case tea.KeyRunes:
+		// 'y'/'n' act as approve/reject ONLY when the input is empty and an
+		// approval is pending — otherwise they are normal characters.
+		if strings.TrimSpace(m.input.Value()) == "" && len(msg.Runes) == 1 {
+			switch msg.Runes[0] {
+			case 'y', 'Y':
+				if len(m.proposals) > 0 {
+					return m.approveProposal(), true
+				}
+				if m.pendingID != "" {
+					return m.approvePending(true), true
+				}
+			case 'n', 'N':
+				if len(m.proposals) > 0 {
+					m.proposals = nil
+					m.append(renderSystem("proposal dismissed"))
+					return nil, true
+				}
+				if m.pendingID != "" {
+					return m.approvePending(false), true
+				}
+			}
+		}
 	}
-	m.viewport.SetContent(b.String())
+	return nil, false
+}
+
+func (m *model) sendChat() tea.Cmd {
+	text := strings.TrimSpace(m.input.Value())
+	m.input.Reset()
+	m.proposals = nil
+	m.append(renderUser(text))
+	m.loading = true
+	return func() tea.Msg {
+		res, err := m.client.Chat(text)
+		return chatResultMsg{res: res, err: err}
+	}
+}
+
+func (m *model) approveProposal() tea.Cmd {
+	p := m.proposals[0]
+	m.proposals = nil
+	m.append(renderSystem("running: " + p.Command))
+	id := p.ID
+	return func() tea.Msg { return approveDoneMsg{err: m.client.Approve(id)} }
+}
+
+func (m *model) approvePending(approved bool) tea.Cmd {
+	taskID, propID := m.pendingID, m.pendingPr
+	m.pendingID, m.pendingPr, m.pendingCm = "", "", ""
+	verb := "approved"
+	if !approved {
+		verb = "denied"
+	}
+	m.append(renderSystem("command " + verb))
+	return func() tea.Msg { return approveDoneMsg{err: m.client.ApproveTask(taskID, propID, approved)} }
+}
+
+func (m *model) onTask(t taskMsg) {
+	switch t.Status {
+	case "awaiting_approval":
+		if t.PendingCommand != "" {
+			m.pendingID, m.pendingPr, m.pendingCm = t.ID, t.PendingPropID, t.PendingCommand
+		}
+	case "paused":
+		if t.Question != "" {
+			m.append(renderSystem("agent asks: " + t.Question))
+		}
+	case "completed", "failed", "stopped":
+		if t.Summary != "" {
+			m.append(renderAgent(t.Summary))
+		}
+		for _, f := range t.Findings {
+			m.append(renderActivity("finding", f, false))
+		}
+		m.pendingID, m.pendingPr, m.pendingCm = "", "", ""
+	}
+}
+
+func (m *model) append(line string) {
+	m.lines = append(m.lines, line)
+	m.refresh()
+}
+
+func (m *model) refresh() {
+	if !m.ready {
+		return
+	}
+	m.viewport.SetContent(strings.Join(m.lines, "\n"))
 	m.viewport.GotoBottom()
 }
 
 func (m model) View() string {
 	if !m.ready {
-		return "\n  Initializing..."
+		return "\n  Initializing…"
 	}
-
-	// Status Bar
-	sessionStr := m.client.SessionID
-	if sessionStr == "" {
-		sessionStr = "Connecting..."
-	}
-	if len(sessionStr) > 8 {
-		sessionStr = sessionStr[:8]
-	}
-
-	title := StatusTitleStyle.Render(" YUMMI TUI ")
-	status := fmt.Sprintf(" Session: %s | Orchestrator: %s", sessionStr, "http://localhost:9080")
-	if m.loading {
-		status += " | " + lipgloss.NewStyle().Foreground(ColorPrimary).Render("Processing...")
-	}
-
-	headerPadding := m.width - lipgloss.Width(title) - lipgloss.Width(status)
-	if headerPadding < 0 {
-		headerPadding = 0
-	}
-	header := lipgloss.JoinHorizontal(lipgloss.Top,
-		title,
-		StatusBarStyle.Copy().Width(m.width-lipgloss.Width(title)).Render(status),
-	)
-
-	// Body
+	header := m.renderHeader()
 	body := m.viewport.View()
 
-	// Footer (Input)
-	footer := m.textInput.View()
+	var banner string
+	switch {
+	case len(m.proposals) > 0:
+		p := m.proposals[0]
+		banner = proposalStyle.Render(fmt.Sprintf("proposal [%s] $ %s", orDash(p.RiskLevel), p.Command))
+	case m.pendingID != "":
+		banner = pendingStyle.Render("awaiting approval $ " + m.pendingCm)
+	}
 
-	return fmt.Sprintf("%s\n%s\n%s", header, body, footer)
+	footer := m.input.View()
+	hint := hintStyle.Render("Enter send · y/n approve/reject · ↑↓ scroll · Ctrl+C quit")
+
+	parts := []string{header, body}
+	if banner != "" {
+		parts = append(parts, banner)
+	}
+	parts = append(parts, footer, hint)
+	return strings.Join(parts, "\n")
+}
+
+func (m model) renderHeader() string {
+	title := titleStyle.Render(" YUMMI ")
+	sess := "connecting"
+	if m.client.SessionID != "" {
+		sess = short(m.client.SessionID)
+	}
+	status := statusStyle.Render(fmt.Sprintf(" session %s  %s", sess, m.healthDots()))
+	if m.loading {
+		status += lipgloss.NewStyle().Foreground(colAccent).Render("  · working…")
+	}
+	gap := m.width - lipgloss.Width(title) - lipgloss.Width(status)
+	if gap < 0 {
+		gap = 0
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, title, status, strings.Repeat(" ", gap))
+}
+
+func (m model) healthDots() string {
+	if len(m.modules) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, mod := range m.modules {
+		dot := lipgloss.NewStyle().Foreground(colMuted)
+		switch mod.Status {
+		case "healthy", "connected", "up":
+			dot = dot.Foreground(colGreen)
+		case "degraded":
+			dot = dot.Foreground(colOrange)
+		case "down", "unavailable", "not_connected":
+			dot = dot.Foreground(colRed)
+		}
+		fmt.Fprintf(&b, "%s%s ", dot.Render("●"), mod.Name)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func tickHealth() tea.Cmd {
+	return tea.Tick(8*time.Second, func(time.Time) tea.Msg { return healthTickMsg{} })
 }
