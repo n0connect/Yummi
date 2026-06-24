@@ -23,7 +23,6 @@ src/
   network/
     mod.rs      NetworkController trait
     nftables.rs Linux: nftables via nft CLI (fail-closed DROP default)
-    mock.rs     macOS/test: no-op controller
   observer/
     mod.rs      Passive monitor stub
     capture.rs  /proc/net/{tcp,udp} reader — logs out-of-scope connections
@@ -98,7 +97,7 @@ cargo test policy_engine::tests::test_allow_rule
 ## Platform notes
 
 - **Linux**: Full nftables enforcement. Requires `NET_ADMIN` capability.
-- **macOS**: Mock controller — no actual traffic rules. For development only.
+- **macOS**: Development fallback (if available).
 
 ## Watchdog
 

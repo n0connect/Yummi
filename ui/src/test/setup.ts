@@ -16,22 +16,4 @@ if (typeof ResizeObserver === 'undefined') {
   } as unknown as typeof ResizeObserver
 }
 
-// Mock EventSource for SSE tests
-const EventSourceMock = Object.assign(
-  vi.fn().mockImplementation(() => ({
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    close: vi.fn(),
-    readyState: 0,
-    url: '',
-    onopen: null,
-    onmessage: null,
-    onerror: null,
-    CONNECTING: 0,
-    OPEN: 1,
-    CLOSED: 2,
-  })),
-  { CONNECTING: 0 as const, OPEN: 1 as const, CLOSED: 2 as const },
-)
-
-globalThis.EventSource = EventSourceMock as unknown as typeof EventSource
+// No mocks allowed. EventSource tests must run against real E2E environment or be designed without mocks.
