@@ -752,3 +752,21 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .context-list { list-style: none; padding: 0; margin: 0; }
 .context-list li { padding: var(--space-sm) 0; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: var(--text-xs); }
 .context-list li:last-child { border-bottom: none; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AGENT ACTIVITY CHIPS — legible inline signals (memory / skill / finding / handoff)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.act { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 3px 0; min-width: 0; }
+.act-ico { font-size: 13px; flex: none; }
+.act-label { font-family: var(--font-mono, monospace); text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; opacity: 0.65; flex: none; }
+.act-text { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-memory_recalled .act-text,
+.act-memory_recalled .act-label { color: var(--cyan); opacity: 1; }
+.act-skill_applied .act-label { color: var(--accent); opacity: 1; }
+.act-finding .act-text,
+.act-finding .act-label { color: var(--orange); opacity: 1; }
+.act-handoff_started .act-text,
+.act-handoff_started .act-label,
+.act-handoff_completed .act-text,
+.act-handoff_completed .act-label { color: var(--cyan); opacity: 1; }
+.act-context_saved .act-label { color: var(--accent); opacity: 1; }

@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect, useRef, useMemo } from 'react'
-import type { AgentTask, ChatProposal, ExecutionRecord } from '../../entities/types'
+import type { ActivityEvent, AgentTask, ChatProposal, ExecutionRecord } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
 import { ContextBar, type ApprovalMode } from './ContextBar'
@@ -22,7 +22,7 @@ type ChatResponse = {
   }
 }
 
-type MessageRole = 'user' | 'assistant' | 'system' | 'execution' | 'task'
+type MessageRole = 'user' | 'assistant' | 'system' | 'execution' | 'task' | 'activity'
 
 type Message = {
   id: string
@@ -31,6 +31,23 @@ type Message = {
   timestamp: string
   execution?: ExecutionRecord
   taskID?: string
+  activity?: ActivityEvent
+}
+
+// Activity kinds shown inline in the AGENT timeline. Commands/results render via
+// the execution card and plan/finish/ask via the task card, so they are
+// excluded here to avoid duplication — only the "what the agent is drawing on"
+// signals (memory, skills, sub-agents, findings, persistent memory) surface.
+const INLINE_ACTIVITY = new Set<string>([
+  'memory_recalled', 'skill_applied', 'finding', 'handoff_started', 'handoff_completed', 'context_saved',
+])
+const ACTIVITY_META: Record<string, [string, string]> = {
+  memory_recalled:   ['🧠', 'hatırlandı'],
+  skill_applied:     ['📘', 'skill'],
+  finding:           ['🔎', 'bulgu'],
+  handoff_started:   ['🤝', 'devredildi'],
+  handoff_completed: ['↩︎', 'döndü'],
+  context_saved:     ['💾', 'hatırlandı'],
 }
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
@@ -244,7 +261,13 @@ export function AssistantPanel(): JSX.Element {
     }
   }, [appendMessage])
 
-  useChatStream({ onExecution, onTask })
+  const onActivity = useCallback((ev: ActivityEvent) => {
+    if (sessionID !== 'default' && ev.session_id !== sessionID) return
+    if (!INLINE_ACTIVITY.has(ev.kind)) return
+    appendMessage({ role: 'activity', content: ev.summary, activity: ev })
+  }, [sessionID, appendMessage])
+
+  useChatStream({ onExecution, onTask, onActivity })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -443,6 +466,19 @@ export function AssistantPanel(): JSX.Element {
                     onApprove={(pid, approved) => approveTaskGate(msg.taskID!, pid, approved)}
                     onStop={stopActiveTask}
                   />
+                </div>
+              )
+            }
+
+            // ── Activity chip — legible agent signal ──────────────────────
+            if (msg.role === 'activity' && msg.activity) {
+              const a = msg.activity
+              const [icon, label] = ACTIVITY_META[a.kind] ?? ['•', a.kind]
+              return (
+                <div key={msg.id} className={`act act-${a.kind}`} title={a.detail || ''}>
+                  <span className="act-ico">{icon}</span>
+                  <span className="act-label">{label}</span>
+                  <span className="act-text">{a.summary}</span>
                 </div>
               )
             }
