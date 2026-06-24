@@ -52,7 +52,7 @@ func StartTestServer(t *testing.T, chunked bool, responder func(Request) Respons
 }
 
 func handleConnection(conn net.Conn, chunked bool, responder func(Request) Response) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	lenBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, lenBuf); err != nil {
