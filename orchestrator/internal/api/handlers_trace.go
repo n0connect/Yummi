@@ -1,0 +1,78 @@
+package api
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/n0connect/yummi/orchestrator/internal/agent"
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
+)
+
+// qLimit reads a positive ?limit= query parameter, falling back to def.
+func qLimit(r *http.Request, def int) int {
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+// HandleListActivity returns a session's legible activity trace.
+// GET /api/v1/sessions/{sessionID}/activity?limit=N
+func HandleListActivity(store *agent.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			writeJSON(w, http.StatusOK, []agent.ActivityEvent{})
+			return
+		}
+		writeJSON(w, http.StatusOK, store.ListActivity(chi.URLParam(r, "sessionID"), qLimit(r, 200)))
+	}
+}
+
+// HandleListTactics returns learned procedural tactics — by tool or across all.
+// GET /api/v1/tactics?tool=X&limit=N
+func HandleListTactics(ks *knowledge.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ks == nil {
+			writeJSON(w, http.StatusOK, []knowledge.Tactic{})
+			return
+		}
+		if tool := r.URL.Query().Get("tool"); tool != "" {
+			writeJSON(w, http.StatusOK, ks.ListTactics(tool, qLimit(r, 50)))
+			return
+		}
+		writeJSON(w, http.StatusOK, ks.ListAllTactics(qLimit(r, 50)))
+	}
+}
+
+// HandleListContext returns a session's persistent memory (code maps, etc).
+// GET /api/v1/sessions/{sessionID}/context
+func HandleListContext(ks *knowledge.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ks == nil {
+			writeJSON(w, http.StatusOK, []knowledge.PersistentContext{})
+			return
+		}
+		writeJSON(w, http.StatusOK, ks.ListContexts(chi.URLParam(r, "sessionID")))
+	}
+}
+
+// HandleListSkills returns the loaded skill playbooks. GET /api/v1/skills
+func HandleListSkills(reg *skill.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, reg.All())
+	}
+}
+
+// HandleListRoles returns the available sub-agent roles. GET /api/v1/agent/roles
+func HandleListRoles(runner *agent.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if runner == nil {
+			writeJSON(w, http.StatusOK, []string{})
+			return
+		}
+		writeJSON(w, http.StatusOK, runner.Roles())
+	}
+}

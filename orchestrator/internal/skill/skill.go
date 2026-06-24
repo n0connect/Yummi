@@ -70,6 +70,14 @@ func LoadDir(dir string) (*Registry, error) {
 	return &Registry{skills: skills}, nil
 }
 
+// All returns a copy of every loaded skill (for the read API / TRACE view).
+func (r *Registry) All() []Skill {
+	if r == nil {
+		return []Skill{}
+	}
+	return append([]Skill{}, r.skills...)
+}
+
 // Names returns the names of all loaded skills (stable order).
 func (r *Registry) Names() []string {
 	if r == nil {
