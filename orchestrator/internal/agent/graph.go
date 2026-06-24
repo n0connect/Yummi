@@ -324,10 +324,13 @@ func observeResult(s *GraphState, result ToolResult) string {
 	s.memCtx.AddObservation(result.Content)
 	s.lastObs = obs
 	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepDone, obs)
-	if findings := filterEmpty(s.pendingAct.Findings); len(findings) > 0 {
+	if findings := filterEmpty(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
 		_ = s.store.Update(s.taskID, func(t *Task) {
 			t.Findings = append(t.Findings, findings...)
 		})
+		if task, ok := s.store.Get(s.taskID); ok {
+			recordTaskFindings(context.Background(), s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
+		}
 	}
 	return edgeOK
 }

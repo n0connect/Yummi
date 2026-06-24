@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
+	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 )
 
 // LLM is the minimal model interface the runner needs.
@@ -57,6 +58,13 @@ type Config struct {
 	ApprovalMode           ApprovalMode  // ask_permission (default) or auto
 	Persona                AgentPersona  // document-driven model persona (loaded from agent.yaml)
 	Retry                  RetryConfig   // LLM retry backoff (zero → defaultRetryConfig)
+
+	// Knowledge is the world-model store the loop records findings to and reads
+	// memory from. Nil disables knowledge recording/retrieval (degraded mode).
+	Knowledge *knowledge.Store
+	// Retrieval selects prior memory injected into the step prompt. Nil disables
+	// memory injection. Typically knowledge.NewStructuredRetrieval(Knowledge).
+	Retrieval knowledge.RetrievalStrategy
 }
 
 // Runner drives agentic task loops. One goroutine per running task.

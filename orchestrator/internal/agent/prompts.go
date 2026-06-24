@@ -20,6 +20,20 @@ type Action struct {
 	Summary   string     `json:"summary,omitempty"`
 	Findings  []string   `json:"findings,omitempty"`
 	Question  string     `json:"question,omitempty"`
+
+	// FindingsDetail is the optional rich form of findings. The brain MAY emit
+	// these; when absent, freetext Findings are wrapped as info notes instead.
+	FindingsDetail []FindingDetail `json:"findings_detail,omitempty"`
+}
+
+// FindingDetail is the optional rich form of a discovery. The brain MAY emit
+// these; when absent, freetext Findings are wrapped as info notes instead.
+type FindingDetail struct {
+	Severity    string `json:"severity,omitempty"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Evidence    string `json:"evidence,omitempty"`
+	Target      string `json:"target,omitempty"`
 }
 
 // stripThinkTokens removes <think>...</think> blocks emitted by reasoning

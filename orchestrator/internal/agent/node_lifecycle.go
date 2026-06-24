@@ -167,6 +167,9 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 			t.Summary = summary
 			t.Findings = findings
 		})
+		if task, ok := s.store.Get(s.taskID); ok {
+			recordTaskFindings(ctx, s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
+		}
 	case outcomeStopped:
 		_ = s.store.Transition(s.taskID, StatusStopped, func(t *Task) {
 			t.Summary = s.finishMsg
