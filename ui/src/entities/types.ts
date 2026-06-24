@@ -63,6 +63,71 @@ export type AgentTask = {
   updated_at?: number
 }
 
+// ─── TRACE / observability types ─────────────────────────────────────────────
+
+export type ActivityKind =
+  | 'plan' | 'command' | 'command_result' | 'memory_recalled' | 'skill_applied'
+  | 'handoff_started' | 'handoff_completed' | 'finding' | 'context_saved' | 'ask' | 'finish'
+
+// One legible step in the agent's work (from /ws/events agent.activity +
+// /api/v1/sessions/{id}/activity). parent_task_id nests sub-agent events.
+export type ActivityEvent = {
+  id: string
+  session_id: string
+  task_id: string
+  parent_task_id?: string
+  kind: ActivityKind
+  summary: string
+  detail?: string
+  timestamp: number
+}
+
+// A structured security finding (from /api/v1/sessions/{id}/findings).
+export type Finding = {
+  id: string
+  session_id: string
+  target_id?: string
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical' | string
+  title: string
+  description?: string
+  evidence?: string
+  source?: 'manual' | 'agent' | 'subagent' | string
+  task_id?: string
+  created_at?: number
+}
+
+// A learned, target-scrubbed procedural tactic (from /api/v1/tactics).
+export type Tactic = {
+  id: string
+  tool: string
+  command_pattern: string
+  outcome: 'worked' | 'failed' | 'inconclusive' | string
+  context_tags?: string[]
+  note?: string
+  hit_count: number
+  last_used_at: number
+  created_at: number
+}
+
+// A persistent memory element — code/connection map (from /context).
+export type PersistentContext = {
+  id: string
+  session_id: string
+  key: string
+  value: string
+  created_at: number
+  updated_at: number
+}
+
+// A declarative skill playbook (from /api/v1/skills).
+export type SkillInfo = {
+  name: string
+  description?: string
+  triggers?: string[]
+  tools?: string[]
+  knowledge?: string
+}
+
 // ─── Gateway types (from /api/v1/gateway/rules + /audit + gateway.status WS) ──
 
 export type GatewayRule = {
