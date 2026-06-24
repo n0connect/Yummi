@@ -161,7 +161,14 @@ type SubResult struct {
 // uses it to delegate to a specialized sub-agent. The sub-agent shares the
 // caller's Store and Knowledge, so its findings/tactics join the one world
 // model automatically.
-func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal string) (SubResult, error) {
+func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string) (SubResult, error) {
+	// Tag this sub-run so its plan/command/finding activity nests under the
+	// orchestrator's handoff span in the TRACE view. Set before CreateAndPlan so
+	// the plan event is nested too.
+	r.mu.Lock()
+	r.cfg.ParentTaskID = parentTaskID
+	r.mu.Unlock()
+
 	task, err := r.CreateAndPlan(ctx, sessionID, goal)
 	if err != nil {
 		return SubResult{}, err

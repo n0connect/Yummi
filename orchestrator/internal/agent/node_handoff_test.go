@@ -86,6 +86,47 @@ func TestHandoffsExposesSubAgents(t *testing.T) {
 	}
 }
 
+func TestHandoffEmitsNestedActivity(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	ks, _ := knowledge.NewStore(nil)
+	execer := NewStoreExecer(realShellStore(t), 5*time.Second)
+	subOllama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"sub"}]}`,
+		`[FINISH]
+{"summary":"sub done","findings":["x"]}`,
+	)
+	subCfg := fastRetryCfg()
+	subCfg.Knowledge = ks
+	sub := NewRunner(store, subOllama, nil, execer, subCfg)
+	orchOllama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"delegate"}]}`,
+		`[HANDOFF]
+{"role":"web","subgoal":"do sub"}`,
+		`[FINISH]
+{"summary":"done"}`,
+	)
+	orchCfg := fastRetryCfg()
+	orchCfg.Knowledge = ks
+	orchCfg.SubAgents = map[string]*Runner{"web": sub}
+	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
+	task, _ := orch.CreateAndPlan(context.Background(), "s1", "go")
+	if err := orch.Run(context.Background(), &task); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var sawStart, sawNested bool
+	for _, a := range store.ListActivity("s1", 200) {
+		if a.Kind == ActHandoffIn {
+			sawStart = true
+		}
+		if a.ParentTaskID == task.ID {
+			sawNested = true
+		}
+	}
+	if !sawStart || !sawNested {
+		t.Fatalf("handoff nesting missing: start=%v nested=%v", sawStart, sawNested)
+	}
+}
+
 func TestHandoffActionParse(t *testing.T) {
 	// Tagged form.
 	msg, err := ParseControl(`[HANDOFF]
