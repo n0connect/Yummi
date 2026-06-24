@@ -770,3 +770,45 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .act-handoff_completed .act-text,
 .act-handoff_completed .act-label { color: var(--cyan); opacity: 1; }
 .act-context_saved .act-label { color: var(--accent); opacity: 1; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TRACE PAGE — agent observability
+   ═══════════════════════════════════════════════════════════════════════════ */
+.trace-page { padding: var(--space-lg, 24px); max-width: 1100px; margin: 0 auto; }
+.trace-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: var(--space-lg, 24px); }
+.trace-page-title { font-family: var(--font-mono, monospace); font-size: 18px; letter-spacing: 0.08em; color: var(--accent); }
+.trace-page-sub { font-size: 13px; color: var(--text-muted); flex: 1; }
+.trace-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.trace-section { border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px 16px; background: rgba(255,255,255,0.015); }
+.trace-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.trace-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
+.trace-section-count { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-muted); background: rgba(255,255,255,0.05); padding: 1px 7px; border-radius: 8px; }
+.trace-empty { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.trace-list { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }
+.trace-row { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.trace-thread { color: var(--text-muted); flex: none; }
+.trace-ico { flex: none; font-size: 13px; }
+.trace-kind { font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; opacity: 0.6; flex: none; min-width: 64px; }
+.trace-summary { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-finding { border-left: 2px solid var(--orange); padding: 4px 0 4px 10px; margin: 6px 0; }
+.trace-finding.sev-critical, .trace-finding.sev-high { border-left-color: var(--red); }
+.trace-finding.sev-info, .trace-finding.sev-low { border-left-color: var(--text-muted); }
+.trace-sev { font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; color: var(--orange); margin-right: 8px; }
+.trace-finding.sev-critical .trace-sev, .trace-finding.sev-high .trace-sev { color: var(--red); }
+.trace-finding-title { font-size: 13px; color: var(--text-primary); }
+.trace-src { font-size: 10px; color: var(--text-muted); margin-left: 8px; }
+.trace-finding-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.trace-tactic { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+.trace-cmd { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-outcome { font-size: 10px; text-transform: uppercase; flex: none; }
+.out-worked { color: var(--green); }
+.out-failed { color: var(--red); }
+.trace-hits { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-muted); flex: none; }
+.trace-context { margin: 4px 0; }
+.trace-context summary { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--accent); cursor: pointer; }
+.trace-context-val { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px; margin-top: 6px; overflow-x: auto; }
+.trace-skill { padding: 4px 0; font-size: 12px; }
+.trace-skill-name { font-family: var(--font-mono, monospace); color: var(--accent); margin-right: 10px; }
+.trace-skill-desc { color: var(--text-muted); }
+.trace-roles { display: flex; flex-wrap: wrap; gap: 8px; }
+.trace-role { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--cyan); background: var(--cyan-glow, rgba(56,189,248,0.12)); padding: 3px 10px; border-radius: 8px; }

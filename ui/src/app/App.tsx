@@ -3,6 +3,7 @@ import './app.css'
 import { StatusBar } from '../features/statusbar/StatusBar'
 import { ChatPage } from '../pages/chat/ChatPage'
 import { TerminalPage } from '../pages/terminal/TerminalPage'
+import { TracePage } from '../pages/trace/TracePage'
 import { LogsPage } from '../pages/logs/LogsPage'
 import { GatewayPage } from '../pages/gateway/GatewayPage'
 import { HealthPage } from '../pages/health/HealthPage'
@@ -23,6 +24,7 @@ export function App(): JSX.Element {
         <Route element={<Layout />}>
           <Route path="/" element={<ChatPage />} />
           <Route path="/terminal" element={<TerminalPage />} />
+          <Route path="/trace" element={<TracePage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/gateway" element={<GatewayPage />} />
           <Route path="/health" element={<HealthPage />} />

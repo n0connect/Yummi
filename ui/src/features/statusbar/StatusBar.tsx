@@ -40,6 +40,7 @@ export function StatusBar(): JSX.Element {
           {[
             { to: '/', label: 'Agent', end: true },
             { to: '/terminal', label: 'Bash', end: false },
+            { to: '/trace', label: 'Trace', end: false },
             { to: '/logs', label: 'Logs', end: false },
             { to: '/gateway', label: 'Gateway', end: false },
             { to: '/health', label: 'Health', end: false }
