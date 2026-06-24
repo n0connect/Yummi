@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
@@ -39,7 +40,7 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 	}
 
 	system := StepSystemPrompt(s.cfg.Persona)
-	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary, s.buildMemory(ctx, task))
+	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary, s.buildPreamble(ctx, task))
 
 	raw, err := s.llm.Chat(ctx, system, prompt)
 	if err != nil {
@@ -102,6 +103,17 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 			s.finishMsg = "Task finished."
 		}
 		return edgeFinish, nil
+	case "HANDOFF":
+		// Delegation is only available when sub-agents are configured (the
+		// orchestrator). A sub-agent has an empty SubAgents map, so a HANDOFF it
+		// emits — or one naming an unknown role / empty subgoal — is rejected as
+		// an invalid action rather than wedging the loop. This caps depth at 1.
+		role := strings.TrimSpace(msg.Action.Role)
+		if _, ok := s.cfg.SubAgents[role]; !ok || strings.TrimSpace(msg.Action.Subgoal) == "" {
+			s.retryCtx = RetryContext{Caller: nodeStep}
+			return edgeLLMError, nil
+		}
+		return edgeHandoff, nil
 	case "ASK_OPERATOR":
 		if strings.TrimSpace(msg.Action.Question) == "" {
 			s.retryCtx = RetryContext{Caller: nodeStep}
@@ -121,6 +133,49 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		s.retryCtx = RetryContext{Caller: nodeStep}
 		return edgeLLMError, nil
 	}
+}
+
+// buildPreamble assembles the per-turn context blocks injected ahead of the
+// task state: SKILLS (how to approach this class of target), DELEGATION (which
+// specialists are available), and MEMORY (what we already learned). Each block
+// is independent and may be empty; they are joined with blank lines.
+func (s *GraphState) buildPreamble(ctx context.Context, task Task) string {
+	var parts []string
+	if sk := s.buildSkills(task); sk != "" {
+		parts = append(parts, sk)
+	}
+	if dl := s.buildDelegation(); dl != "" {
+		parts = append(parts, dl)
+	}
+	if mem := s.buildMemory(ctx, task); mem != "" {
+		parts = append(parts, mem)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// buildSkills selects and renders the playbooks relevant to the goal and the
+// tools actually used so far. Empty when no registry / no match.
+func (s *GraphState) buildSkills(task Task) string {
+	if s.cfg.Skills == nil {
+		return ""
+	}
+	return s.cfg.Skills.Render(s.cfg.Skills.Select(task.Goal, toolsFromCommands(s.recentCmds), 3))
+}
+
+// buildDelegation lists the sub-agent roles the orchestrator may hand off to.
+// Empty for sub-agents (no SubAgents configured), so they never see the option.
+func (s *GraphState) buildDelegation() string {
+	if len(s.cfg.SubAgents) == 0 {
+		return ""
+	}
+	roles := make([]string, 0, len(s.cfg.SubAgents))
+	for r := range s.cfg.SubAgents {
+		roles = append(roles, r)
+	}
+	sort.Strings(roles)
+	return "DELEGATION: hand a focused subtask to a specialist with " +
+		`[HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}` +
+		". Available roles: " + strings.Join(roles, ", ") + ".\n"
 }
 
 // buildMemory queries the retrieval strategy for facts/tactics relevant to the

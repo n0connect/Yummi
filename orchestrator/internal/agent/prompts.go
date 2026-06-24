@@ -21,6 +21,10 @@ type Action struct {
 	Findings  []string   `json:"findings,omitempty"`
 	Question  string     `json:"question,omitempty"`
 
+	// Role/Subgoal carry a [HANDOFF]: delegate Subgoal to the sub-agent Role.
+	Role    string `json:"role,omitempty"`
+	Subgoal string `json:"subgoal,omitempty"`
+
 	// FindingsDetail is the optional rich form of findings. The brain MAY emit
 	// these; when absent, freetext Findings are wrapped as info notes instead.
 	FindingsDetail []FindingDetail `json:"findings_detail,omitempty"`
@@ -92,7 +96,7 @@ func ParsePlan(raw string) ([]PlanStep, error) {
 // BuildPlanPrompt returns system and user prompts for the planning call.
 // Network scope is no longer surfaced here — gateway is the sole authority and
 // enforces scope transparently at execution time.
-func BuildPlanPrompt(persona AgentPersona, goal string) (system, user string) {
+func BuildPlanPrompt(persona AgentPersona, skills, goal string) (system, user string) {
 	var b strings.Builder
 	b.WriteString(persona.Identity)
 	if p := strings.TrimSpace(persona.Principles); p != "" {
@@ -100,6 +104,9 @@ func BuildPlanPrompt(persona AgentPersona, goal string) (system, user string) {
 	}
 	if p := strings.TrimSpace(persona.Planning); p != "" {
 		b.WriteString("\n\n" + p)
+	}
+	if sk := strings.TrimSpace(skills); sk != "" {
+		b.WriteString("\n\n" + sk)
 	}
 	b.WriteString("\n\nOUTPUT: reply with ONLY this JSON, nothing else:\n" +
 		`{"steps":[{"id":"s1","description":"<concrete action>"},{"id":"s2","description":"..."}]}`)
@@ -153,13 +160,15 @@ func llmParseRetryHint(attempt int) string {
 
 // BuildStepPrompt renders the full task state + last observation into the
 // per-turn prompt. summary is the compressed history from MemoryContext (may be "").
-func BuildStepPrompt(task Task, lastObservation, summary, memory string) string {
+func BuildStepPrompt(task Task, lastObservation, summary, preamble string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "GOAL: %s\n\n", task.Goal)
 
-	if strings.TrimSpace(memory) != "" {
-		b.WriteString(memory)
-		if !strings.HasSuffix(memory, "\n") {
+	// preamble carries the pre-rendered context blocks (SKILLS / DELEGATION /
+	// MEMORY); each already includes its own header. Rendered verbatim.
+	if strings.TrimSpace(preamble) != "" {
+		b.WriteString(preamble)
+		if !strings.HasSuffix(preamble, "\n") {
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")

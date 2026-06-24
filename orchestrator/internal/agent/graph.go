@@ -20,6 +20,7 @@ const (
 	nodeApproval  = "approval"
 	nodeFinish    = "finish"
 	nodeAsk       = "ask"
+	nodeHandoff   = "handoff"
 )
 
 // Edge name constants.
@@ -40,6 +41,7 @@ const (
 	edgeApproved         = "approved"
 	edgeDenied           = "denied"
 	edgeDone             = "done"
+	edgeHandoff          = "handoff"
 	// Live-control edges (consult channel).
 	edgeLongRunning = "long_running"
 	edgeContinue    = "continue"
@@ -65,7 +67,11 @@ var graphEdges = map[string]map[string]string{
 		edgeUpdatePlan:  nodeStep,
 		edgeSendFull:    nodeStep,
 		edgeStopTask:    nodeFinish,
+		edgeHandoff:     nodeHandoff,
 		edgeLLMError:    nodeRetry,
+	},
+	nodeHandoff: {
+		edgeOK: nodeStep,
 	},
 	nodeTool: {
 		edgeOK:               nodeStep,
@@ -99,16 +105,24 @@ var graphEdges = map[string]map[string]string{
 	},
 }
 
-// nodes maps node names to their handler functions.
-var nodes = map[string]NodeFunc{
-	nodeStep:      stepNode,
-	nodeTool:      toolNode,
-	nodeConsult:   consultNode,
-	nodeRetry:     retryNode,
-	nodeSummarize: summarizeNode,
-	nodeApproval:  approvalNode,
-	nodeFinish:    finishNode,
-	nodeAsk:       askNode,
+// nodes maps node names to their handler functions. Populated in init() rather
+// than as a literal initializer: handoffNode transitively calls Execute (which
+// reads `nodes`), so a static initializer would form an initialization cycle.
+// init() bodies are exempt from that analysis.
+var nodes map[string]NodeFunc
+
+func init() {
+	nodes = map[string]NodeFunc{
+		nodeStep:      stepNode,
+		nodeTool:      toolNode,
+		nodeConsult:   consultNode,
+		nodeRetry:     retryNode,
+		nodeSummarize: summarizeNode,
+		nodeApproval:  approvalNode,
+		nodeFinish:    finishNode,
+		nodeAsk:       askNode,
+		nodeHandoff:   handoffNode,
+	}
 }
 
 // Stuck detection constants.

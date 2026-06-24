@@ -13,7 +13,7 @@ func consultNode(ctx context.Context, s *GraphState) (string, error) {
 		return "", ErrTaskNotFound
 	}
 	system := StepSystemPrompt(s.cfg.Persona)
-	prompt := BuildStepPrompt(task, Wrap(s.consultTag, s.consultBody), s.memCtx.Summary, s.buildMemory(ctx, task))
+	prompt := BuildStepPrompt(task, Wrap(s.consultTag, s.consultBody), s.memCtx.Summary, s.buildPreamble(ctx, task))
 
 	raw, err := s.llm.Chat(ctx, system, prompt)
 	if err != nil {

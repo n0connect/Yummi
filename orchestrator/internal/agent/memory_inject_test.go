@@ -6,7 +6,25 @@ import (
 	"testing"
 
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
+
+func TestPreambleInjectsRelevantSkill(t *testing.T) {
+	reg := skill.New([]skill.Skill{
+		{Name: "web", Triggers: []string{"web", "http"}, Knowledge: "fingerprint with whatweb first"},
+		{Name: "recon", Triggers: []string{"nmap"}, Knowledge: "nmap -sV first"},
+	})
+	s := &GraphState{cfg: Config{Skills: reg}, recentCmds: []string{"whatweb http://x"}}
+
+	pre := s.buildPreamble(context.Background(), Task{Goal: "assess the web target"})
+	if !strings.Contains(pre, "SKILLS") || !strings.Contains(pre, "whatweb") {
+		t.Fatalf("relevant web skill not injected into preamble:\n%s", pre)
+	}
+	// An unrelated skill must not appear.
+	if strings.Contains(pre, "nmap -sV first") {
+		t.Fatalf("irrelevant skill leaked into preamble:\n%s", pre)
+	}
+}
 
 func TestBuildStepPromptIncludesMemory(t *testing.T) {
 	task := Task{Goal: "enumerate host", StepBudget: 10}
