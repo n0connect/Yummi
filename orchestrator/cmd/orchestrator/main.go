@@ -162,6 +162,23 @@ func main() {
 			}
 			retrieval := knowledge.NewStructuredRetrieval(ks)
 
+			// Resilience: wrap the agent loop's LLM in a circuit breaker + EMA
+			// latency tracker, with an optional downgrade to a lighter LOCAL model
+			// (privacy-first — no cloud routing). On repeated primary failures the
+			// loop degrades to the fallback instead of stalling; the breaker also
+			// stops hammering a downed Ollama. With no fallback configured it still
+			// fails fast and tracks health.
+			primaryLLM := assistant.LLM()
+			var fallbackChat llm.ChatFunc
+			fallbackName := ""
+			if fb := cfg.OllamaFallbackModel; fb != "" && fb != primaryLLM.Model() {
+				fallbackChat = llm.NewClient(cfg.OllamaURL, fb).Chat
+				fallbackName = fb
+				slog.Info("agent LLM fallback configured", "primary", primaryLLM.Model(), "fallback", fb)
+			}
+			var agentLLM agent.LLM = llm.NewResilient(
+				primaryLLM.Chat, fallbackChat, primaryLLM.Model(), fallbackName, 3, 60*time.Second)
+
 			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
 			// execution pipeline. Built with no SubAgents of their own, capping
 			// handoff depth at 1 (no recursion).
@@ -173,7 +190,7 @@ func main() {
 			for _, d := range subDefs {
 				subAgents[d.Role] = agent.NewRunner(
 					taskStore,
-					assistant.LLM(),
+					agentLLM,
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					agent.Config{
@@ -190,7 +207,7 @@ func main() {
 
 			taskRunner = agent.NewRunner(
 				taskStore,
-				assistant.LLM(),
+				agentLLM,
 				assistant.Validator(),
 				agent.NewStoreExecer(executionStore, 10*time.Minute),
 				agent.Config{ // defaults: budget 15, ask_permission mode

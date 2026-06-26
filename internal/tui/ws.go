@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"math/rand"
 	"net/url"
 	"strings"
 	"time"
@@ -9,6 +10,37 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
 )
+
+// Reconnect backoff bounds for the /ws/events stream. A healthy connection
+// resets the curve to baseBackoff; repeated dial failures grow it geometrically
+// up to maxBackoff so a downed orchestrator isn't hammered every 1.5s forever.
+const (
+	baseBackoff = 500 * time.Millisecond
+	maxBackoff  = 30 * time.Second
+)
+
+// nextBackoff doubles cur, clamped to maxBackoff. Pure + deterministic so the
+// escalation curve is unit-tested without sleeping.
+func nextBackoff(cur time.Duration) time.Duration {
+	n := cur * 2
+	if n > maxBackoff {
+		return maxBackoff
+	}
+	return n
+}
+
+// jittered adds up to ±20% random jitter so many reconnecting clients don't
+// retry in lockstep (thundering herd).
+func jittered(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	delta := time.Duration(rand.Int63n(int64(d) / 5)) // up to 20%
+	if rand.Intn(2) == 0 {
+		return d - delta
+	}
+	return d + delta
+}
 
 // ── Bubble Tea messages delivered from the /ws/events stream ──────────────────
 
@@ -123,8 +155,9 @@ func decodeFrame(raw []byte) tea.Msg {
 }
 
 // newStream opens /ws/events for the session and returns a channel of decoded
-// Bubble Tea messages. It reconnects with backoff; no Origin header is sent so
-// the orchestrator accepts it as a non-browser client.
+// Bubble Tea messages. It reconnects with jittered exponential backoff (reset on
+// a healthy connection); no Origin header is sent so the orchestrator accepts it
+// as a non-browser client.
 func newStream(base, sessionID string) chan tea.Msg {
 	ch := make(chan tea.Msg, 128)
 	go func() {
@@ -132,13 +165,16 @@ func newStream(base, sessionID string) chan tea.Msg {
 		if sessionID != "" {
 			wsURL += "?session_id=" + url.QueryEscape(sessionID)
 		}
+		backoff := baseBackoff
 		for {
 			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 			if err != nil {
 				ch <- wsErrMsg{note: "stream disconnected, retrying…"}
-				time.Sleep(1500 * time.Millisecond)
+				time.Sleep(jittered(backoff))
+				backoff = nextBackoff(backoff) // escalate only on repeated dial failure
 				continue
 			}
+			backoff = baseBackoff // a successful connection resets the curve
 			for {
 				_, raw, rerr := conn.ReadMessage()
 				if rerr != nil {
@@ -149,7 +185,7 @@ func newStream(base, sessionID string) chan tea.Msg {
 				}
 			}
 			_ = conn.Close()
-			time.Sleep(1500 * time.Millisecond)
+			time.Sleep(jittered(baseBackoff)) // brief pause before immediate reconnect
 		}
 	}()
 	return ch

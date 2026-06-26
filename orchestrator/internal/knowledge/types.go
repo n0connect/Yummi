@@ -50,8 +50,9 @@ type Tactic struct {
 type PersistentContext struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
-	Key       string `json:"key"`   // e.g., "auth_module_connections", "file:/src/main.go"
-	Value     string `json:"value"` // The memory content (JSON graph, markdown map, etc)
+	Key       string `json:"key"`    // e.g., "auth_module_connections", "file:/src/main.go"
+	Value     string `json:"value"`  // The memory content (JSON graph, markdown map, etc)
+	Origin    string `json:"origin"` // who wrote it: "agent" | "subagent" | "operator" (audit/provenance)
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 }

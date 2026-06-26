@@ -106,11 +106,11 @@ func summarizeNode(ctx context.Context, s *GraphState) (string, error) {
 	if len(s.memCtx.Observations) == 0 {
 		return edgeDone, nil
 	}
-	joined := strings.Join(s.memCtx.Observations, "\n---\n")
-	// Cap the summary input to avoid runaway LLM calls.
-	if len(joined) > 8000 {
-		joined = joined[len(joined)-8000:]
-	}
+	// Protect the FIRST observation (it usually establishes the target, topology,
+	// and open ports — losing it costs the model its grounding) plus as much of
+	// the recent tail as fits, compressing only the middle. A plain tail-cut would
+	// drop the early recon entirely. (hermes trajectory_compressor strategy.)
+	joined := summarizeInput(s.memCtx.Observations, 8000)
 
 	inputToSummarize := ""
 	if s.memCtx.Summary != "" {
@@ -147,6 +147,33 @@ func summarizeNode(ctx context.Context, s *GraphState) (string, error) {
 		t.Checkpoint.TokensUsed = 0
 	})
 	return edgeDone, nil
+}
+
+// summarizeInput assembles the text fed to the summarizer, preserving the first
+// observation (initial grounding) and the most recent tail while compressing the
+// middle to fit budget chars. A naive tail-cut would discard the early recon —
+// target, topology, open ports — that the model most needs to keep. When the
+// whole history already fits, it returns it verbatim.
+func summarizeInput(obs []string, budget int) string {
+	const sep = "\n---\n"
+	joined := strings.Join(obs, sep)
+	if len(joined) <= budget {
+		return joined
+	}
+	first := obs[0]
+	// Reserve up to a third of the budget for the first observation so a single
+	// huge banner can't crowd out the recent tail.
+	firstCap := budget / 3
+	if len(first) > firstCap {
+		first = first[:firstCap] + "…(truncated)"
+	}
+	const omitted = "\n---\n[…older observations omitted to fit context…]\n---\n"
+	tailBudget := max(budget-len(first)-len(omitted), 0)
+	tail := joined
+	if len(tail) > tailBudget {
+		tail = tail[len(tail)-tailBudget:]
+	}
+	return first + omitted + tail
 }
 
 // finishNode terminates the task: completed, failed, or stopped. Whenever a

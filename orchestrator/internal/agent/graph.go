@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
+	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
 
 // Node name constants.
@@ -345,7 +347,19 @@ func observeResult(s *GraphState, result ToolResult) string {
 	if compressed != result.Content {
 		tag = "TOOL_RESPONSE_TRUNCATED"
 	}
-	obs := Wrap(tag, s.pendingCommand+"\n"+compressed)
+	// Content-layer fail-closed: tool output originates on the (hostile) target,
+	// so it is adversarial content. Scan the FULL output (not the truncated head)
+	// for prompt-injection / C2 / exfiltration and, if it trips, prepend a banner
+	// telling the model to treat the output as untrusted DATA, not instructions.
+	// Detection, not blocking — the operator can't intervene mid-command and a
+	// researcher may legitimately be reading attacker write-ups.
+	body := s.pendingCommand + "\n" + compressed
+	if banner := threatscan.Banner(result.Content); banner != "" {
+		slog.Warn("agent: tool output tripped threat patterns",
+			"task", s.taskID, "command", s.pendingCommand)
+		body = banner + "\n\n" + body
+	}
+	obs := Wrap(tag, body)
 	// Store the FULL output for SEND_FULL retrieval and summarization.
 	s.memCtx.AddObservation(result.Content)
 	s.lastObs = obs

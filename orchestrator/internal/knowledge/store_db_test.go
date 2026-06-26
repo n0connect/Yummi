@@ -100,3 +100,36 @@ func TestDBRetrievalRoundTrip(t *testing.T) {
 		t.Fatalf("SQL retrieval incomplete: finding=%v tactic=%v", sawFinding, sawTactic)
 	}
 }
+
+// TestDBContextProvenanceRoundTrip verifies the memory-provenance origin column
+// persists and defaults to "agent" through the real SQLite path.
+func TestDBContextProvenanceRoundTrip(t *testing.T) {
+	s := dbStore(t)
+	ctx := context.Background()
+	// Explicit subagent origin.
+	if err := s.RecordContext(ctx, PersistentContext{
+		SessionID: "s1", Key: "topology", Value: "web->redis", Origin: "subagent",
+	}); err != nil {
+		t.Fatalf("RecordContext: %v", err)
+	}
+	// Empty origin must default to "agent".
+	if err := s.RecordContext(ctx, PersistentContext{
+		SessionID: "s1", Key: "creds", Value: "found admin:admin",
+	}); err != nil {
+		t.Fatalf("RecordContext default: %v", err)
+	}
+	got := s.ListContexts("s1")
+	if len(got) != 2 {
+		t.Fatalf("want 2 contexts, got %d", len(got))
+	}
+	byKey := map[string]string{}
+	for _, c := range got {
+		byKey[c.Key] = c.Origin
+	}
+	if byKey["topology"] != "subagent" {
+		t.Fatalf("subagent origin not persisted: %q", byKey["topology"])
+	}
+	if byKey["creds"] != "agent" {
+		t.Fatalf("empty origin should default to agent, got %q", byKey["creds"])
+	}
+}

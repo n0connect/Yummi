@@ -3,7 +3,9 @@
 // of target. A skill is KNOWLEDGE ONLY — it introduces no execution path; every
 // command the agent runs still flows through the single fail-closed sandbox
 // exec path. Skills are loaded from YAML so new ones are added without code
-// changes. It is a leaf package (stdlib + yaml only).
+// changes. It depends only on stdlib, yaml, and the leaf security/threatscan
+// package (skill content is rendered verbatim into the prompt, so it is scanned
+// for injection at load) — no agent/conductor deps, so it stays import-safe.
 package skill
 
 import (
@@ -14,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,6 +66,15 @@ func LoadDir(dir string) (*Registry, error) {
 		}
 		if strings.TrimSpace(s.Name) == "" {
 			slog.Warn("skill: missing name, skipping", "file", path)
+			continue
+		}
+		// Content-layer fail-closed: a skill's knowledge/description is rendered
+		// verbatim into the step prompt (Render), so a skill file is an injection
+		// vector if it ever comes from an untrusted source. Scan at strict scope
+		// and skip (don't load) any skill whose text trips a pattern — a skill is
+		// user-curated, so blocking with a warning is the safe, reviewable choice.
+		if msg := threatscan.FirstThreatMessage(s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
+			slog.Warn("skill: threat pattern in skill content, skipping", "file", path, "reason", msg)
 			continue
 		}
 		skills = append(skills, s)
