@@ -56,6 +56,7 @@ type Config struct {
 	ApprovalTimeout        time.Duration // how long to block on the gate (default 20m)
 	TokenBudget            int           // rough token budget for memory compression (default 6000)
 	SoftTimeout            time.Duration // per-Wait window before consulting the LLM (default 60s)
+	SubAgentTimeout        time.Duration // hard ceiling on one HANDOFF sub-agent run (default 10m)
 	MaxConsecutiveFailures int           // back-to-back failures before REPEATED_FAILURE escalation (default 3)
 	ApprovalMode           ApprovalMode  // ask_permission (default) or auto
 	Persona                AgentPersona  // document-driven model persona (loaded from agent.yaml)
@@ -112,6 +113,9 @@ func NewRunner(store *Store, llm LLM, validator *conductor.Validator, exec Exece
 	}
 	if cfg.SoftTimeout <= 0 {
 		cfg.SoftTimeout = 60 * time.Second
+	}
+	if cfg.SubAgentTimeout <= 0 {
+		cfg.SubAgentTimeout = 10 * time.Minute
 	}
 	if cfg.MaxConsecutiveFailures <= 0 {
 		cfg.MaxConsecutiveFailures = 3

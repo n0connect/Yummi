@@ -34,9 +34,20 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity 
   useEffect(() => {
     let retryTimer: number | undefined
     let socket: WebSocket | null = null
+    let closed = false
+
+    // Jittered exponential backoff (matches TerminalPanel): a healthy connection
+    // resets to baseDelay; repeated failures grow geometrically up to maxDelay so
+    // a downed orchestrator isn't hammered every 1.5s forever.
+    const baseDelay = 500
+    const maxDelay = 30_000
+    let delay = baseDelay
 
     const connect = () => {
       socket = new WebSocket(`${wsScheme}://${window.location.host}/ws/events`)
+      socket.onopen = () => {
+        delay = baseDelay // reset the curve once connected
+      }
       socket.onmessage = evt => {
         try {
           const msg = JSON.parse(String(evt.data)) as WsEvent
@@ -54,12 +65,16 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity 
         }
       }
       socket.onclose = () => {
-        retryTimer = window.setTimeout(connect, 1500)
+        if (closed) return // unmounted — don't reconnect
+        const wait = delay + Math.floor(Math.random() * (delay / 5)) // +0–20% jitter
+        retryTimer = window.setTimeout(connect, wait)
+        delay = Math.min(delay * 2, maxDelay)
       }
     }
 
     connect()
     return () => {
+      closed = true
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       socket?.close()
     }

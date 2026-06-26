@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS persistent_context (
     session_id TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'agent',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -87,6 +88,8 @@ func NewStore(db *sql.DB) (*Store, error) {
 		// Migrate databases whose findings table predates provenance columns.
 		_, _ = db.Exec(`ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`)
 		_, _ = db.Exec(`ALTER TABLE findings ADD COLUMN task_id TEXT`)
+		// Migrate persistent_context tables predating the memory-provenance column.
+		_, _ = db.Exec(`ALTER TABLE persistent_context ADD COLUMN origin TEXT NOT NULL DEFAULT 'agent'`)
 	}
 	return s, nil
 }
@@ -233,15 +236,19 @@ func (s *Store) RecordContext(ctx context.Context, pc PersistentContext) error {
 		pc.CreatedAt = now
 	}
 	pc.UpdatedAt = now
+	if pc.Origin == "" {
+		pc.Origin = "agent"
+	}
 
 	if s.db != nil {
 		_, err := s.db.ExecContext(ctx,
-			`INSERT INTO persistent_context(id,session_id,key,value,created_at,updated_at)
-			 VALUES(?,?,?,?,?,?)
+			`INSERT INTO persistent_context(id,session_id,key,value,origin,created_at,updated_at)
+			 VALUES(?,?,?,?,?,?,?)
 			 ON CONFLICT(id) DO UPDATE SET
 			   value=excluded.value,
+			   origin=excluded.origin,
 			   updated_at=excluded.updated_at`,
-			pc.ID, pc.SessionID, pc.Key, pc.Value, pc.CreatedAt, pc.UpdatedAt)
+			pc.ID, pc.SessionID, pc.Key, pc.Value, pc.Origin, pc.CreatedAt, pc.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("record context: %w", err)
 		}
@@ -256,7 +263,7 @@ func (s *Store) RecordContext(ctx context.Context, pc PersistentContext) error {
 func (s *Store) ListContexts(sessionID string) []PersistentContext {
 	if s.db != nil {
 		rows, err := s.db.Query(
-			`SELECT id,session_id,key,value,created_at,updated_at
+			`SELECT id,session_id,key,value,COALESCE(origin,'agent'),created_at,updated_at
 			 FROM persistent_context WHERE session_id=? ORDER BY updated_at DESC`, sessionID)
 		if err != nil {
 			slog.Error("knowledge: list contexts", "error", err)
@@ -266,7 +273,7 @@ func (s *Store) ListContexts(sessionID string) []PersistentContext {
 		out := make([]PersistentContext, 0)
 		for rows.Next() {
 			var pc PersistentContext
-			if err := rows.Scan(&pc.ID, &pc.SessionID, &pc.Key, &pc.Value, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
+			if err := rows.Scan(&pc.ID, &pc.SessionID, &pc.Key, &pc.Value, &pc.Origin, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
 				slog.Warn("knowledge: scan context", "error", err)
 				continue
 			}

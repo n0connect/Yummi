@@ -11,18 +11,19 @@ import (
 
 // Config holds orchestrator runtime configuration.
 type Config struct {
-	Host             string
-	Port             int
-	DatabasePath     string
-	GatewaySocket    string
-	SandboxContainer string
-	PersonaDir       string
-	DockerSocket     string
-	OllamaURL        string
-	OllamaModel      string
-	OllamaTier       string // "lite" | "pro" | "expert" — overrides OllamaModel if set
-	TLSDir           string // directory holding mTLS certificates for orchestrator ↔ gateway
-	GatewayTLS       bool   // opt-in until the Rust gateway IPC server supports TLS framing
+	Host                string
+	Port                int
+	DatabasePath        string
+	GatewaySocket       string
+	SandboxContainer    string
+	PersonaDir          string
+	DockerSocket        string
+	OllamaURL           string
+	OllamaModel         string
+	OllamaTier          string // "lite" | "pro" | "expert" — overrides OllamaModel if set
+	OllamaFallbackModel string // optional lighter LOCAL model the agent loop degrades to when the primary repeatedly fails (empty = no downgrade, breaker still trips)
+	TLSDir              string // directory holding mTLS certificates for orchestrator ↔ gateway
+	GatewayTLS          bool   // opt-in until the Rust gateway IPC server supports TLS framing
 }
 
 // Load reads config from environment variables with sensible defaults.
@@ -41,18 +42,19 @@ func Load() *Config {
 	}
 
 	cfg := &Config{
-		Host:             envOr("YUMMI_ORCHESTRATOR_HOST", "127.0.0.1"),
-		Port:             port,
-		DatabasePath:     envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
-		GatewaySocket:    envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
-		SandboxContainer: envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
-		PersonaDir:       envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
-		DockerSocket:     envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
-		OllamaURL:        os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
-		OllamaModel:      envOr("YUMMI_OLLAMA_MODEL", "qwen3:8b"),
-		OllamaTier:       strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
-		TLSDir:           envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
-		GatewayTLS:       parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
+		Host:                envOr("YUMMI_ORCHESTRATOR_HOST", "127.0.0.1"),
+		Port:                port,
+		DatabasePath:        envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
+		GatewaySocket:       envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
+		SandboxContainer:    envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
+		PersonaDir:          envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
+		DockerSocket:        envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
+		OllamaURL:           os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
+		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "qwen3:8b"),
+		OllamaTier:          strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
+		OllamaFallbackModel: strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
+		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
+		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
 	}
 
 	// When an operator sets YUMMI_OLLAMA_TIER explicitly, use the tier's model

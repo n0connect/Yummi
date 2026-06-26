@@ -29,13 +29,25 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 
 	task, _ := s.store.Get(s.taskID)
 	s.emit(ActHandoffIn, role+": "+subgoal, "")
-	res, err := sub.RunSubtask(ctx, task.SessionID, subgoal, s.taskID)
+
+	// Cap the sub-agent run so a wedged specialist can't pin the parent loop
+	// forever (autogen's RPC-timeout pattern). The parent ctx still cancels it
+	// early; this only adds an upper bound. A timeout is surfaced as a normal
+	// observation, never a graph error, so the parent keeps control.
+	subCtx, cancel := context.WithTimeout(ctx, s.cfg.SubAgentTimeout)
+	defer cancel()
+	res, err := sub.RunSubtask(subCtx, task.SessionID, subgoal, s.taskID)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return "", ctx.Err() // PARENT cancelled — propagate
+		}
+		reason := err.Error()
+		if subCtx.Err() == context.DeadlineExceeded {
+			reason = fmt.Sprintf("timed out after %s", s.cfg.SubAgentTimeout)
 		}
 		s.lastObs = Wrap("TOOL_FAILED",
-			fmt.Sprintf("sub-agent %q failed on subtask %q: %v", role, subgoal, err))
+			fmt.Sprintf("sub-agent %q failed on subtask %q: %s; handle it yourself or finish", role, subgoal, reason))
+		s.emit(ActHandoffOut, role+" → failed: "+reason, "")
 		return edgeOK, nil
 	}
 
