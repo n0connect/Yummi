@@ -132,6 +132,43 @@ func (c *Client) ApproveTask(taskID, proposalID string, approved bool) error {
 		map[string]any{"proposal_id": proposalID, "approved": approved, "reason": reason}, nil)
 }
 
+// StopTask cancels a running/looping agent task.
+func (c *Client) StopTask(taskID string) error {
+	return c.postJSON(context.Background(), "/api/v1/tasks/"+taskID+"/stop", nil, nil)
+}
+
+// ResumeTask continues a paused agent task (the runner's Start accepts a paused
+// task), letting the operator unblock an ask/stuck/timeout pause from the TUI.
+func (c *Client) ResumeTask(taskID string) error {
+	return c.postJSON(context.Background(), "/api/v1/tasks/"+taskID+"/start", nil, nil)
+}
+
+// ApprovalMode reads the agent's current approval mode (auto | ask_permission).
+func (c *Client) ApprovalMode() (string, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.Base+"/api/v1/agent/mode", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Mode, nil
+}
+
+// SetApprovalMode switches the agent between "auto" and "ask_permission".
+func (c *Client) SetApprovalMode(mode string) error {
+	return c.postJSON(context.Background(), "/api/v1/agent/mode",
+		map[string]string{"mode": mode}, nil)
+}
+
 // Module is one component health row (subset of the system status payload).
 type Module struct {
 	Name   string `json:"name"`

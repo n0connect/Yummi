@@ -22,6 +22,14 @@ type approveDoneMsg struct{ err error }
 type healthMsg struct{ mods []Module }
 type healthTickMsg struct{}
 
+// cmdResultMsg is the async result of an operator control command (/stop,
+// /resume, /auto, /ask, /mode). note (if set) is appended to the timeline;
+// mode (if set) updates the header approval-mode indicator.
+type cmdResultMsg struct {
+	note string
+	mode string
+}
+
 // model is the TUI operator console state.
 type model struct {
 	client *Client
@@ -31,11 +39,20 @@ type model struct {
 	viewport viewport.Model
 	input    textinput.Model
 
-	lines     []string   // rendered timeline lines
+	items        []TimelineItem
+	history      []string
+	historyIndex int
+	slashMenuIdx int
+
 	proposals []Proposal // active single-command proposals (first is acted on)
 	pendingID string     // agent task awaiting approval
 	pendingPr string     // its proposal id
 	pendingCm string     // its command (banner)
+
+	activeTaskID string          // non-terminal task currently being tracked
+	pausedID     string          // task paused awaiting /resume
+	mode         string          // agent approval mode: auto | ask_permission
+	planShown    map[string]bool // task ids whose plan has been printed (once)
 
 	modules []Module
 	loading bool
@@ -48,6 +65,7 @@ type model struct {
 func Run(apiURL string) error {
 	ti := textinput.New()
 	ti.Placeholder = "Tell Yummi what to do…"
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(colMuted)
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Prompt = "❯ "
@@ -55,10 +73,18 @@ func Run(apiURL string) error {
 	ti.TextStyle = inputTextStyle
 
 	m := model{
-		client: NewClient(apiURL),
-		base:   apiURL,
-		input:  ti,
-		lines:  []string{renderSystem("Yummi terminal console — connecting…")},
+		client:       NewClient(apiURL),
+		base:         apiURL,
+		input:        ti,
+		history:      []string{},
+		historyIndex: 0,
+		planShown:    map[string]bool{},
+		items: []TimelineItem{
+			RawItem{Text: "  " + welcomeLogoStyle.Render("Yummi TUI") + " " + welcomeSubStyle.Render("v1.0")},
+			RawItem{Text: "  " + statusStyle.Render("Agentic orchestration console")},
+			RawItem{Text: ""},
+			SystemItem{Text: "connecting…"},
+		},
 	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -69,6 +95,14 @@ func (m model) Init() tea.Cmd {
 		textinput.Blink,
 		func() tea.Msg { return sessionCreatedMsg{err: m.client.CreateSession()} },
 		func() tea.Msg { return healthMsg{mods: m.client.Health()} },
+		func() tea.Msg {
+			// Surface the agent's approval mode in the header from the start.
+			mode, err := m.client.ApprovalMode()
+			if err != nil {
+				return cmdResultMsg{}
+			}
+			return cmdResultMsg{mode: mode}
+		},
 	)
 }
 
@@ -83,23 +117,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		vpHeight := msg.Height - 4 // header(1)+banner/input(2)+hint(1)
-		if vpHeight < 1 {
-			vpHeight = 1
+		vpWidth := msg.Width - 2
+		if vpWidth < 10 {
+			vpWidth = 10
 		}
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, vpHeight)
+			m.viewport = viewport.New(vpWidth, 1)
 			m.ready = true
 		} else {
-			m.viewport.Width, m.viewport.Height = msg.Width, vpHeight
+			m.viewport.Width = vpWidth
 		}
 		m.refresh()
 
 	case sessionCreatedMsg:
 		if msg.err != nil {
-			m.append(renderSystem("session init failed: " + msg.err.Error()))
+			m.append(SystemItem{Text: "session init failed: " + msg.err.Error()})
 		} else {
-			m.append(renderSystem(fmt.Sprintf("session active [%s] — ready", short(m.client.SessionID))))
+			m.append(SystemItem{Text: fmt.Sprintf("session active [%s] — ready", short(m.client.SessionID))})
 			m.stream = newStream(m.base, m.client.SessionID)
 			cmds = append(cmds, waitForEvent(m.stream), tickHealth())
 		}
@@ -107,20 +141,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatResultMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.append(renderSystem("error: " + msg.err.Error()))
+			m.append(SystemItem{Text: "error: " + msg.err.Error()})
 			break
 		}
 		if r := strings.TrimSpace(msg.res.Reply); r != "" {
-			m.append(renderAgent(r))
+			m.append(AgentItem{Text: r})
 		}
 		if len(msg.res.Proposals) > 0 {
 			m.proposals = msg.res.Proposals
 		} else if msg.res.TaskID != "" {
-			m.append(renderSystem("task started — watching…"))
+			m.append(SystemItem{Text: "task started — watching…"})
 		}
 
 	case execMsg:
-		m.append(renderExec(msg.Command, msg.Status, firstNonEmpty(msg.Output, msg.Error)))
+		// Only log terminal states to the timeline to avoid spamming ✗ for "started" or "running".
+		if msg.Status == "completed" || msg.Status == "failed" || msg.Status == "error" {
+			m.append(ExecItem{Command: msg.Command, Status: msg.Status, Output: firstNonEmpty(msg.Output, msg.Error)})
+		}
 		cmds = append(cmds, waitForEvent(m.stream))
 
 	case taskMsg:
@@ -128,18 +165,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, waitForEvent(m.stream))
 
 	case activityMsg:
-		if s := renderActivity(msg.Kind, msg.Summary, msg.Parent != ""); s != "" {
-			m.append(s)
+		a := ActivityItem{Kind: msg.Kind, Summary: msg.Summary, Nested: msg.Parent != ""}
+		if a.Render(m.width) != "" {
+			m.append(a)
 		}
 		cmds = append(cmds, waitForEvent(m.stream))
 
 	case wsErrMsg:
-		m.append(renderSystem(msg.note))
+		m.append(SystemItem{Text: msg.note})
 		cmds = append(cmds, waitForEvent(m.stream))
 
 	case approveDoneMsg:
 		if msg.err != nil {
-			m.append(renderSystem("approve failed: " + msg.err.Error()))
+			m.append(SystemItem{Text: "approve failed: " + msg.err.Error()})
+		}
+
+	case cmdResultMsg:
+		if msg.mode != "" {
+			m.mode = msg.mode
+		}
+		if msg.note != "" {
+			m.append(SystemItem{Text: msg.note})
 		}
 
 	case healthMsg:
@@ -149,6 +195,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, func() tea.Msg { return healthMsg{mods: m.client.Health()} }, tickHealth())
 	}
 
+	m.updateViewportHeight()
+
 	var c tea.Cmd
 	m.input, c = m.input.Update(msg)
 	cmds = append(cmds, c)
@@ -157,12 +205,52 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m *model) slashCommands() []string {
+	return []string{"/stop", "/resume", "/auto", "/ask", "/mode", "/help", "/clear", "/quit"}
+}
+
 // handleKey processes keys that the console consumes; returns handled=true to
 // short-circuit the normal input/viewport update.
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	inSlashMenu := strings.HasPrefix(m.input.Value(), "/")
+
 	switch msg.Type {
 	case tea.KeyCtrlC, tea.KeyEsc:
 		return tea.Quit, true
+
+	case tea.KeyUp:
+		if inSlashMenu {
+			m.slashMenuIdx--
+			if m.slashMenuIdx < 0 {
+				m.slashMenuIdx = len(m.slashCommands()) - 1
+			}
+			return nil, true
+		}
+		if len(m.history) > 0 {
+			if m.historyIndex > 0 {
+				m.historyIndex--
+			}
+			m.input.SetValue(m.history[m.historyIndex])
+			m.input.SetCursor(len(m.input.Value()))
+		}
+		return nil, true
+
+	case tea.KeyDown:
+		if inSlashMenu {
+			m.slashMenuIdx = (m.slashMenuIdx + 1) % len(m.slashCommands())
+			return nil, true
+		}
+		if m.historyIndex < len(m.history) {
+			m.historyIndex++
+			if m.historyIndex == len(m.history) {
+				m.input.SetValue("")
+			} else {
+				m.input.SetValue(m.history[m.historyIndex])
+				m.input.SetCursor(len(m.input.Value()))
+			}
+		}
+		return nil, true
+
 	case tea.KeyEnter:
 		if m.loading {
 			return nil, true
@@ -176,6 +264,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 				return m.approvePending(true), true
 			}
 			return nil, true
+		}
+		if inSlashMenu {
+			return m.handleSlashCommand(m.slashCommands()[m.slashMenuIdx]), true
 		}
 		return m.sendChat(), true
 	case tea.KeyRunes:
@@ -193,7 +284,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			case 'n', 'N':
 				if len(m.proposals) > 0 {
 					m.proposals = nil
-					m.append(renderSystem("proposal dismissed"))
+					m.append(SystemItem{Text: "proposal dismissed"})
 					return nil, true
 				}
 				if m.pendingID != "" {
@@ -207,9 +298,22 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 func (m *model) sendChat() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
+
+	// Add to history
+	if text != "" {
+		m.history = append(m.history, text)
+		m.historyIndex = len(m.history)
+	}
+
 	m.input.Reset()
 	m.proposals = nil
-	m.append(renderUser(text))
+	m.slashMenuIdx = 0
+
+	if strings.HasPrefix(text, "/") {
+		return m.handleSlashCommand(text)
+	}
+
+	m.append(UserItem{Text: text})
 	m.loading = true
 	return func() tea.Msg {
 		res, err := m.client.Chat(text)
@@ -217,10 +321,85 @@ func (m *model) sendChat() tea.Cmd {
 	}
 }
 
+func (m *model) handleSlashCommand(cmd string) tea.Cmd {
+	m.input.Reset()
+	m.slashMenuIdx = 0
+
+	switch cmd {
+	case "/stop":
+		if m.activeTaskID == "" {
+			m.append(SystemItem{Text: "no active task to stop"})
+			return nil
+		}
+		id := m.activeTaskID
+		return func() tea.Msg {
+			if err := m.client.StopTask(id); err != nil {
+				return cmdResultMsg{note: "stop failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "task stopped"}
+		}
+	case "/resume":
+		if m.pausedID == "" {
+			m.append(SystemItem{Text: "no paused task to resume"})
+			return nil
+		}
+		id := m.pausedID
+		m.pausedID = ""
+		return func() tea.Msg {
+			if err := m.client.ResumeTask(id); err != nil {
+				return cmdResultMsg{note: "resume failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "task resumed — watching…"}
+		}
+	case "/auto":
+		return func() tea.Msg {
+			if err := m.client.SetApprovalMode("auto"); err != nil {
+				return cmdResultMsg{note: "mode change failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "approval mode → auto (agent runs commands without asking)", mode: "auto"}
+		}
+	case "/ask":
+		return func() tea.Msg {
+			if err := m.client.SetApprovalMode("ask_permission"); err != nil {
+				return cmdResultMsg{note: "mode change failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "approval mode → ask_permission (every command needs your approval)", mode: "ask_permission"}
+		}
+	case "/mode":
+		return func() tea.Msg {
+			mode, err := m.client.ApprovalMode()
+			if err != nil {
+				return cmdResultMsg{note: "mode query failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "approval mode: " + mode, mode: mode}
+		}
+	case "/clear":
+		m.items = []TimelineItem{SystemItem{Text: "timeline cleared."}}
+		m.refresh()
+		return nil
+	case "/quit", "/exit":
+		return tea.Quit
+	case "/help":
+		m.append(SystemItem{Text: "Available commands:\n" +
+			"  /stop   - Stop the active agent task\n" +
+			"  /resume - Resume a paused task\n" +
+			"  /auto   - Agent runs commands without asking\n" +
+			"  /ask    - Agent asks approval for every command\n" +
+			"  /mode   - Show current approval mode\n" +
+			"  /clear  - Clear timeline\n" +
+			"  /quit   - Exit application\n" +
+			"  /help   - Show this help"})
+		return nil
+	default:
+		m.append(SystemItem{Text: "Unknown command: " + cmd})
+		return nil
+	}
+}
+
 func (m *model) approveProposal() tea.Cmd {
 	p := m.proposals[0]
 	m.proposals = nil
-	m.append(renderSystem("running: " + p.Command))
+	m.append(SystemItem{Text: "running: " + p.Command})
 	id := p.ID
 	return func() tea.Msg { return approveDoneMsg{err: m.client.Approve(id)} }
 }
@@ -232,41 +411,92 @@ func (m *model) approvePending(approved bool) tea.Cmd {
 	if !approved {
 		verb = "denied"
 	}
-	m.append(renderSystem("command " + verb))
+	m.append(SystemItem{Text: "command " + verb})
 	return func() tea.Msg { return approveDoneMsg{err: m.client.ApproveTask(taskID, propID, approved)} }
 }
 
 func (m *model) onTask(t taskMsg) {
+	// Print the plan once, as soon as it exists — this is the LLM's primary
+	// planning artifact and the operator's window into the agent's intent.
+	if len(t.Plan) > 0 && !m.planShown[t.ID] {
+		m.planShown[t.ID] = true
+		m.append(PlanItem{Goal: t.Goal, Steps: t.Plan})
+	}
+
 	switch t.Status {
+	case "planning", "planned", "running", "retrying_llm", "summarizing":
+		m.activeTaskID = t.ID
+
 	case "awaiting_approval":
+		m.activeTaskID = t.ID
 		if t.PendingCommand != "" {
 			m.pendingID, m.pendingPr, m.pendingCm = t.ID, t.PendingPropID, t.PendingCommand
 		}
+
 	case "paused":
-		if t.Question != "" {
-			m.append(renderSystem("agent asks: " + t.Question))
+		m.activeTaskID = t.ID
+		m.pausedID = t.ID
+		q := t.Question
+		if q == "" {
+			q = "agent needs operator input"
 		}
-	case "completed", "failed", "stopped":
+		m.append(SystemItem{Text: "agent paused — " + q + "   (type /resume to continue)"})
+
+	case "completed", "failed", "stopped", "interrupted":
 		if t.Summary != "" {
-			m.append(renderAgent(t.Summary))
+			m.append(AgentItem{Text: t.Summary})
+		} else if t.LastError != "" {
+			m.append(SystemItem{Text: "task " + t.Status + ": " + t.LastError})
+		} else {
+			m.append(SystemItem{Text: "task " + t.Status})
 		}
 		for _, f := range t.Findings {
-			m.append(renderActivity("finding", f, false))
+			m.append(ActivityItem{Kind: "finding", Summary: f, Nested: false})
 		}
+		m.activeTaskID, m.pausedID = "", ""
 		m.pendingID, m.pendingPr, m.pendingCm = "", "", ""
 	}
 }
 
-func (m *model) append(line string) {
-	m.lines = append(m.lines, line)
+func (m *model) append(item TimelineItem) {
+	m.items = append(m.items, item)
 	m.refresh()
+}
+
+func (m *model) updateViewportHeight() {
+	if !m.ready {
+		return
+	}
+	occupied := 6
+	if len(m.proposals) > 0 || m.pendingID != "" {
+		occupied = 8
+	}
+	if strings.HasPrefix(m.input.Value(), "/") {
+		occupied += len(m.slashCommands()) // Menu lines
+	}
+	vpHeight := m.height - occupied
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+	m.viewport.Height = vpHeight
 }
 
 func (m *model) refresh() {
 	if !m.ready {
 		return
 	}
-	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	m.updateViewportHeight()
+	var rendered []string
+	vpWidth := m.width - 2
+	if vpWidth < 10 {
+		vpWidth = 10
+	}
+	for _, item := range m.items {
+		if r := item.Render(vpWidth); r != "" {
+			rendered = append(rendered, r)
+		}
+	}
+	m.viewport.SetContent(strings.Join(rendered, "\n"))
 	m.viewport.GotoBottom()
 }
 
@@ -274,44 +504,120 @@ func (m model) View() string {
 	if !m.ready {
 		return "\n  Initializing…"
 	}
-	header := m.renderHeader()
-	body := m.viewport.View()
 
+	// 1. Framed Timeline
+	timelineStr := m.renderFramedTimeline(m.viewport.View())
+
+	// 2. Proposal Banner / Menu
 	var banner string
 	switch {
 	case len(m.proposals) > 0:
 		p := m.proposals[0]
-		banner = proposalStyle.Render(fmt.Sprintf("proposal [%s] $ %s", orDash(p.RiskLevel), p.Command))
+		left := proposalLabelStyle.Render("proposal") + statusStyle.Render(" · "+orDash(p.RiskLevel)+"  $ ") + proposalCmdStyle.Render(p.Command)
+		right := proposalKeyStyle.Render("[y]") + " run  " + proposalKeyStyle.Render("[n]") + " skip"
+		pad := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+		if pad < 0 {
+			pad = 0
+		}
+		banner = "\n  " + left + strings.Repeat(" ", pad) + right + "\n"
 	case m.pendingID != "":
-		banner = pendingStyle.Render("awaiting approval $ " + m.pendingCm)
+		left := pendingStyle.Render("awaiting approval") + statusStyle.Render("  $ ") + proposalCmdStyle.Render(m.pendingCm)
+		right := proposalKeyStyle.Render("[y]") + " run  " + proposalKeyStyle.Render("[n]") + " skip"
+		pad := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+		if pad < 0 {
+			pad = 0
+		}
+		banner = "\n  " + left + strings.Repeat(" ", pad) + right + "\n"
+	case strings.HasPrefix(m.input.Value(), "/"):
+		var menuLines []string
+		for i, cmd := range m.slashCommands() {
+			prefix := "  "
+			if i == m.slashMenuIdx {
+				prefix = lipgloss.NewStyle().Foreground(colAccent).Render("❯ ")
+				menuLines = append(menuLines, "  "+prefix+lipgloss.NewStyle().Foreground(colText).Render(cmd))
+			} else {
+				menuLines = append(menuLines, "  "+prefix+cmd)
+			}
+		}
+		menuBlock := lipgloss.NewStyle().Foreground(colMuted).Padding(0, 2).Render(strings.Join(menuLines, "\n"))
+		banner = "\n" + menuBlock + "\n"
+	default:
+		banner = "\n"
 	}
 
-	footer := m.input.View()
-	hint := hintStyle.Render("Enter send · y/n approve/reject · ↑↓ scroll · Ctrl+C quit")
+	// 3. Input Box
+	topInp := borderStyle.Render("╭" + strings.Repeat("─", m.width-2) + "╮")
+	botInp := borderStyle.Render("╰" + strings.Repeat("─", m.width-2) + "╯")
 
-	parts := []string{header, body}
-	if banner != "" {
-		parts = append(parts, banner)
+	inpLineStr := m.input.View()
+	padInp := m.width - 4 - lipgloss.Width(inpLineStr)
+	if padInp < 0 {
+		padInp = 0
 	}
-	parts = append(parts, footer, hint)
-	return strings.Join(parts, "\n")
+	midInp := borderStyle.Render("│ ") + inpLineStr + strings.Repeat(" ", padInp) + borderStyle.Render(" │")
+
+	inputBox := topInp + "\n" + midInp + "\n" + botInp
+
+	// 4. Footer Hint
+	hint := "\n" + hintStyle.Render("Enter send · y/n approve · /stop /auto /resume control · ↑↓ history · Ctrl+C quit")
+
+	return timelineStr + banner + inputBox + hint
 }
 
-func (m model) renderHeader() string {
-	title := titleStyle.Render(" YUMMI ")
+func (m model) renderFramedTimeline(body string) string {
+	title := titleStyle.Render("YUMMI")
 	sess := "connecting"
 	if m.client.SessionID != "" {
 		sess = short(m.client.SessionID)
 	}
-	status := statusStyle.Render(fmt.Sprintf(" session %s  %s", sess, m.healthDots()))
+
+	sessLabel := sessLabelStyle.Render("session")
+	sessValue := sessValueStyle.Render(sess)
+	dotSep := statusStyle.Render("·")
+
+	status := fmt.Sprintf("%s %s %s", sessLabel, dotSep, sessValue)
+	if m.mode != "" {
+		modeStyle := modeAskStyle
+		label := "ask"
+		if m.mode == "auto" {
+			modeStyle, label = modeAutoStyle, "auto"
+		}
+		status += "   " + sessLabelStyle.Render("mode") + " " + dotSep + " " + modeStyle.Render(label)
+	}
+	status += "   " + m.healthDots()
+	if m.activeTaskID != "" {
+		status += lipgloss.NewStyle().Foreground(colCyan).Render("  ▶ task")
+	}
 	if m.loading {
 		status += lipgloss.NewStyle().Foreground(colAccent).Render("  · working…")
 	}
-	gap := m.width - lipgloss.Width(title) - lipgloss.Width(status)
-	if gap < 0 {
-		gap = 0
+
+	leftStr := borderStyle.Render("╭─ ") + title + borderStyle.Render(" ")
+	rightStr := "   " + status + borderStyle.Render(" ─╮")
+
+	leftWidth := lipgloss.Width(leftStr)
+	rightWidth := lipgloss.Width(rightStr)
+
+	midWidth := m.width - leftWidth - rightWidth
+	if midWidth < 0 {
+		midWidth = 0
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, title, status, strings.Repeat(" ", gap))
+	midStr := borderStyle.Render(strings.Repeat("─", midWidth))
+
+	topBorder := leftStr + midStr + rightStr
+
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		contentWidth := lipgloss.Width(line)
+		pad := m.width - 2 - contentWidth
+		if pad < 0 {
+			pad = 0
+		}
+		lines[i] = borderStyle.Render("│") + line + strings.Repeat(" ", pad) + borderStyle.Render("│")
+	}
+	bottomBorder := borderStyle.Render("╰" + strings.Repeat("─", m.width-2) + "╯")
+
+	return topBorder + "\n" + strings.Join(lines, "\n") + "\n" + bottomBorder
 }
 
 func (m model) healthDots() string {
@@ -329,7 +635,7 @@ func (m model) healthDots() string {
 		case "down", "unavailable", "not_connected":
 			dot = dot.Foreground(colRed)
 		}
-		fmt.Fprintf(&b, "%s%s ", dot.Render("●"), mod.Name)
+		fmt.Fprintf(&b, "%s%s ", dot.Render("●"), modLabelStyle.Render(mod.Name))
 	}
 	return strings.TrimSpace(b.String())
 }

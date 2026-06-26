@@ -19,14 +19,28 @@ type execMsg struct {
 	Error   string
 }
 
+// PlanStep mirrors the orchestrator's agent.PlanStep JSON (the fields the TUI
+// renders). The TUI is in the root module and cannot import the orchestrator
+// module, so it decodes the wire shape locally.
+type PlanStep struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+}
+
 type taskMsg struct {
 	ID             string
 	Status         string
+	Goal           string
 	Summary        string
 	Findings       []string
+	Plan           []PlanStep
+	StepsUsed      int
+	StepBudget     int
 	PendingCommand string
 	PendingPropID  string
 	Question       string
+	LastError      string
 }
 
 type activityMsg struct {
@@ -52,13 +66,18 @@ type wireExec struct {
 }
 
 type wireTask struct {
-	ID                string   `json:"id"`
-	Status            string   `json:"status"`
-	Summary           string   `json:"summary"`
-	Findings          []string `json:"findings"`
-	PendingCommand    string   `json:"pending_command"`
-	PendingProposalID string   `json:"pending_proposal_id"`
-	Question          string   `json:"question"`
+	ID                string     `json:"id"`
+	Status            string     `json:"status"`
+	Goal              string     `json:"goal"`
+	Summary           string     `json:"summary"`
+	Findings          []string   `json:"findings"`
+	Plan              []PlanStep `json:"plan"`
+	StepsUsed         int        `json:"steps_used"`
+	StepBudget        int        `json:"step_budget"`
+	PendingCommand    string     `json:"pending_command"`
+	PendingProposalID string     `json:"pending_proposal_id"`
+	Question          string     `json:"question"`
+	LastError         string     `json:"last_error"`
 }
 
 type wireActivity struct {
@@ -87,8 +106,10 @@ func decodeFrame(raw []byte) tea.Msg {
 			return nil
 		}
 		return taskMsg{
-			ID: t.ID, Status: t.Status, Summary: t.Summary, Findings: t.Findings,
-			PendingCommand: t.PendingCommand, PendingPropID: t.PendingProposalID, Question: t.Question,
+			ID: t.ID, Status: t.Status, Goal: t.Goal, Summary: t.Summary, Findings: t.Findings,
+			Plan: t.Plan, StepsUsed: t.StepsUsed, StepBudget: t.StepBudget,
+			PendingCommand: t.PendingCommand, PendingPropID: t.PendingProposalID,
+			Question: t.Question, LastError: t.LastError,
 		}
 	case "agent.activity":
 		var a wireActivity

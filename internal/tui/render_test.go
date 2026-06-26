@@ -6,28 +6,28 @@ import (
 )
 
 func TestRenderActivityChips(t *testing.T) {
-	if got := renderActivity("skill_applied", "recon", false); !strings.Contains(got, "skill") || !strings.Contains(got, "recon") {
+	if got := (ActivityItem{Kind: "skill_applied", Summary: "recon"}).Render(80); !strings.Contains(got, "skill") || !strings.Contains(got, "recon") {
 		t.Fatalf("skill chip wrong: %q", got)
 	}
-	if got := renderActivity("memory_recalled", "nmap -sV <TARGET>", false); !strings.Contains(got, "recalled") {
+	if got := (ActivityItem{Kind: "memory_recalled", Summary: "nmap -sV <TARGET>"}).Render(80); !strings.Contains(got, "recalled") {
 		t.Fatalf("memory chip wrong: %q", got)
 	}
 	// command/command_result are NOT chips (rendered via exec line).
-	if got := renderActivity("command", "whoami", false); got != "" {
+	if got := (ActivityItem{Kind: "command", Summary: "whoami"}).Render(80); got != "" {
 		t.Fatalf("command should not be a chip, got %q", got)
 	}
 	// nested events are indented.
-	if got := renderActivity("finding", "redis", true); !strings.Contains(got, "└") {
+	if got := (ActivityItem{Kind: "finding", Summary: "redis", Nested: true}).Render(80); !strings.Contains(got, "└") {
 		t.Fatalf("nested finding should indent: %q", got)
 	}
 }
 
 func TestRenderExecMark(t *testing.T) {
-	ok := renderExec("whoami", "completed", "root")
+	ok := ExecItem{Command: "whoami", Status: "completed", Output: "root"}.Render(80)
 	if !strings.Contains(ok, "✓") || !strings.Contains(ok, "whoami") || !strings.Contains(ok, "root") {
 		t.Fatalf("ok exec wrong: %q", ok)
 	}
-	bad := renderExec("badcmd", "failed", "not found")
+	bad := ExecItem{Command: "badcmd", Status: "failed", Output: "not found"}.Render(80)
 	if !strings.Contains(bad, "✗") {
 		t.Fatalf("failed exec should mark ✗: %q", bad)
 	}

@@ -6,6 +6,11 @@
 # own line.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ThirdyParty ---------
+thirdy-party/*
+thirdy-party/
+/thirdy-party
+
 # ── Go build outputs (make _build-cli / _build-orchestrator → ./bin/*) ───────
 /bin/
 *.bin
@@ -80,3 +85,9 @@ CLAUDE.md
 # ── Cleanups ─────────────────────────────────────────────────────────────────
 docs/
 *.db
+
+# ── Additional Catch-Alls (Windows/Go) ───────────────────────────────────────
+vendor/
+*.exe
+Thumbs.db
+desktop.ini
