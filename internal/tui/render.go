@@ -1,9 +1,13 @@
 package tui
 
-import "strings"
+import (
+	"strings"
 
-// activityMeta maps an activity kind to its [icon, label]. Mirrors the web
-// AGENT timeline. command/command_result render via the exec line, not here.
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// activityMeta maps an activity kind to its [icon, label].
 var activityMeta = map[string][2]string{
 	"memory_recalled":   {"🧠", "recalled"},
 	"skill_applied":     {"📘", "skill"},
@@ -16,37 +20,150 @@ var activityMeta = map[string][2]string{
 	"finish":            {"🏁", "done"},
 }
 
-func renderUser(text string) string   { return userStyle.Render("► " + text) }
-func renderAgent(text string) string  { return agentStyle.Render(strings.TrimSpace(text)) }
-func renderSystem(text string) string { return systemStyle.Render("[system] " + text) }
+// ── Timeline Items ──────────────────────────────────────────────────────────
 
-// renderActivity formats one activity chip, or "" for kinds shown elsewhere
-// (command/command_result render via renderExec). nested events are indented.
-func renderActivity(kind, summary string, nested bool) string {
-	meta, ok := activityMeta[kind]
-	if !ok {
-		return "" // command / command_result / unknown → not a chip
-	}
-	indent := ""
-	if nested {
-		indent = "  └ "
-	}
-	line := meta[0] + " " + meta[1] + " · " + truncate(summary, 80)
-	return indent + chipStyle(kind).Render(line)
+type TimelineItem interface {
+	Render(width int) string
 }
 
-// renderExec formats a finished command result line.
-func renderExec(command, status, output string) string {
+type UserItem struct {
+	Text string
+}
+
+func (u UserItem) Render(width int) string {
+	w := width - 8
+	if w < 10 {
+		w = 80
+	}
+	s := userStyle.Width(w)
+	return "  > " + s.Render(u.Text)
+}
+
+type AgentItem struct {
+	Text string
+}
+
+func (a AgentItem) Render(width int) string {
+	w := width - 8
+	if w < 10 {
+		w = 80
+	}
+
+	tr, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(w),
+	)
+	var out string
+	if err == nil {
+		out, _ = tr.Render(strings.TrimSpace(a.Text))
+	} else {
+		out = strings.TrimSpace(a.Text)
+	}
+
+	out = strings.TrimSuffix(out, "\n")
+	return indentLines(agentStyle.Render(out), "  ")
+}
+
+type SystemItem struct {
+	Text string
+}
+
+func (s SystemItem) Render(width int) string {
+	return "  " + systemStyle.Render("[system] "+s.Text)
+}
+
+type ActivityItem struct {
+	Kind    string
+	Summary string
+	Nested  bool
+}
+
+func (a ActivityItem) Render(width int) string {
+	meta, ok := activityMeta[a.Kind]
+	if !ok {
+		return ""
+	}
+	indent := ""
+	if a.Nested {
+		indent = "  └ "
+	}
+	badge := getBadgeStyle(a.Kind).Render(meta[0] + " " + meta[1])
+	details := statusStyle.Render(" · " + truncate(a.Summary, 80))
+	return "  " + indent + badge + details
+}
+
+type ExecItem struct {
+	Command string
+	Status  string
+	Output  string
+}
+
+func (e ExecItem) Render(width int) string {
 	mark, style := "✓", execOKStyle
-	if status != "completed" {
+	if e.Status != "completed" {
 		mark, style = "✗", execErrStyle
 	}
-	head := style.Render(mark) + " " + cmdStyle.Render(command)
-	out := strings.TrimSpace(output)
+	head := "  " + style.Render(mark) + " " + cmdStyle.Render(e.Command)
+	out := strings.TrimSpace(e.Output)
 	if out == "" {
 		return head
 	}
-	return head + "\n" + outputStyle.Render(indentLines(truncateLines(out, 12), "  "))
+
+	// Convert tabs to spaces to prevent misalignment in lipgloss/terminal
+	out = strings.ReplaceAll(out, "\t", "    ")
+
+	renderedOut := outputStyle.Render(truncateLines(out, 12))
+	return head + "\n" + indentLines(renderedOut, "  ")
+}
+
+// PlanItem renders the agent's plan — the LLM's primary planning artifact — as a
+// titled, step-by-step block so the operator can see what the agent intends to
+// do and (via per-step glyphs) how far it has progressed.
+type PlanItem struct {
+	Goal  string
+	Steps []PlanStep
+}
+
+func (p PlanItem) Render(width int) string {
+	if len(p.Steps) == 0 {
+		return ""
+	}
+	header := "  " + badgePlan.Render("🗺 plan")
+	if g := strings.TrimSpace(p.Goal); g != "" {
+		header += statusStyle.Render(" · " + truncate(g, 70))
+	}
+	lines := []string{header}
+	for _, s := range p.Steps {
+		glyph, gstyle := stepGlyph(s.Status)
+		desc := strings.TrimSpace(s.Description)
+		line := "    " + gstyle.Render(glyph) + " " + planStepStyle.Render(truncate(desc, 80))
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// stepGlyph maps a plan-step status to its marker glyph and style.
+func stepGlyph(status string) (string, lipgloss.Style) {
+	switch status {
+	case "done":
+		return "✓", execOKStyle
+	case "running":
+		return "▶", lipgloss.NewStyle().Foreground(colCyan).Bold(true)
+	case "failed":
+		return "✗", execErrStyle
+	case "skipped":
+		return "⊘", statusStyle
+	default: // pending
+		return "○", statusStyle
+	}
+}
+
+type RawItem struct {
+	Text string
+}
+
+func (r RawItem) Render(width int) string {
+	return r.Text
 }
 
 // ── small utils ──────────────────────────────────────────────────────────────
