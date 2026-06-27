@@ -4,7 +4,24 @@ gateway is the Rust daemon that enforces fail-closed network isolation between t
 
 ## Design principle
 
-**Fail-closed by default.** On startup, gateway installs DROP-all nftables rules. sandbox has no external connectivity until gateway explicitly allows it. If gateway crashes or loses its IPC connection, the DROP rules remain in place — sandbox cannot exfiltrate data or reach unauthorized hosts.
+**Fail-closed by default.** On startup, gateway installs DROP-all nftables rules **before its IPC socket even opens**. The sandbox has no external connectivity until gateway explicitly allows it. If gateway crashes or loses its IPC connection, the DROP rules remain in the kernel — the sandbox cannot exfiltrate data or reach unauthorized hosts.
+
+```text
+   gateway starts ──▶ install DROP-all nftables rules ──▶ open IPC socket
+                                  │                              │
+                                  │  (if the gateway dies, the   │  add_temporary_rule
+                                  │   DROP rules persist) ───┐   ▼
+                                  ▼                          │  evaluate target
+                              ⛔ DROP  ◀────────────────────┴── always-blocked floor
+                              (always wins)                      (loopback · link-local
+                                  ▲                               · 169.254 · private)
+              Block rule matches  │                              │
+              ────────────────────┘                              │ Allow rule + egress mode
+                                                                 ▼
+                                                          ✅ forward + audit
+```
+
+The always-blocked floor (`is_always_blocked`) sits **before** any egress allowance, so loopback, link-local and cloud-metadata (`169.254.169.254`) ranges are dropped even when egress mode is `allow` — closing the SSRF-to-metadata vector.
 
 ## Package layout
 
@@ -21,8 +38,8 @@ src/
     mod.rs      Unix domain socket server (tokio), connection semaphore
     protocol.rs Length-prefixed JSON request/response framing
   network/
-    mod.rs      NetworkController trait
-    nftables.rs Linux: nftables via nft CLI (fail-closed DROP default)
+    mod.rs      Traffic metadata types (the cross-platform trait + macOS mock were removed)
+    nftables.rs Linux/nftables-only controller — FORWARD chain, egress modes, fingerprint masking
   observer/
     mod.rs      Passive monitor stub
     capture.rs  /proc/net/{tcp,udp} reader — logs out-of-scope connections
@@ -41,13 +58,19 @@ orchestrator communicates with gateway over a Unix domain socket (`/run/yummi/ga
 [ 4-byte big-endian length ][ JSON response body ]
 ```
 
-**Request types:**
+**Request types** (`src/ipc/protocol.rs`):
 
-| Method | Payload | Returns |
-|---|---|---|
-| `check_scope` | `{"target": "1.2.3.4"}` | `{"allowed": true}` |
-| `get_status` | `{}` | `{"level": 0, "rules_active": true, "uptime_secs": 42}` |
-| `add_rule` | `{"target": "...", "action": "allow", "ttl_secs": 300}` | `{"ok": true}` |
+| Method | Purpose |
+|---|---|
+| `check_scope` | Resolve a target to a `verdict` (`allow` / `block` / `needs_approval`) |
+| `get_status` | Level, rules-active, uptime |
+| `ping` | Liveness |
+| `add_temporary_rule` | Add a TTL'd Allow/Block rule (`{network, ttl_secs, reason}`) |
+| `remove_rule` | Drop a rule by id |
+| `list_rules` | Active rules (with `source: config\|agent\|manual`) |
+| `set_egress_mode` / `get_egress_mode` | Read/write the runtime egress master switch |
+| `get_audit_log` | Recent tamper-evident audit entries |
+| `get_fingerprint` | Current fingerprint-masking config |
 
 ## Policy engine
 
@@ -96,12 +119,12 @@ cargo test policy_engine::tests::test_allow_rule
 
 ## Platform notes
 
-- **Linux**: Full nftables enforcement. Requires `NET_ADMIN` capability.
-- **macOS**: Development fallback (if available).
+- **Linux**: full nftables enforcement. Requires the `NET_ADMIN` capability.
+- **macOS**: the crate *compiles* (it shells out to the `nft` CLI), so `make _build-gateway` works — but enforcement **fails at runtime** off Linux. Local macOS dev is **not** a real isolation boundary.
 
 ## Watchdog
 
 The watchdog monitors:
-- RSS memory against a configurable limit (default: 256 MB)
-- Heartbeat file freshness
-- On threshold breach → emergency lockdown (all traffic blocked, daemon exits)
+- RSS memory against a configurable limit (`watchdog.max_memory_mb`; shipped config `512`, code fallback `256`)
+- Heartbeat file freshness (`watchdog.heartbeat_interval_secs`, default `5`)
+- On a breach → **emergency lockdown** (all traffic blocked) and daemon exit — fail-closed to the end.

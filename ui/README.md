@@ -18,23 +18,25 @@ src/
   entities/       Shared TypeScript types (AgentTask, ExecutionRecord, etc.)
   features/       Self-contained feature modules
     assistant/    Chat panel — message rendering, proposal bar
+    chat/          Chat event stream hook (useChatStream — WS, jittered backoff)
     tasks/        Agent task tracker (live plan steps, approval gate)
+    trace/         TRACE tab — activity timeline + Findings/Tactics/Context/Skills/Roles
+    gateway/       GATEWAY tab — status, rules, egress mode, tamper-evident audit log
     terminal/     xterm.js PTY panel
     debuglog/     SSE log stream panel
     events/       WebSocket event hooks (useExecutionEvents)
     health/       Health page widgets
-    statusbar/    Top nav (Agent | Bash | Logs | Health)
+    statusbar/    Top nav: Agent | Bash | Trace | Logs | Gateway | Health
     system/       System status cards
   pages/          Route-level page wrappers
-    chat/         / → ChatPage
-    terminal/     /terminal → TerminalPage
-    logs/         /logs → LogsPage
-    health/       /health → HealthPage
+    chat/ terminal/ trace/ logs/ gateway/ health/   route wrappers (/, /terminal, …)
   shared/
     api/          fetchJSON wrapper, WebSocket helpers
     components/   Generic UI primitives
-  test/mocks/     Vitest mocks (MSW handlers)
+  test/setup.ts   jsdom stubs (scrollIntoView · ResizeObserver · EventSource · xterm) — NOT app mocks
 ```
+
+> There are **no mocks of app behavior**: `test/setup.ts` only stubs browser-only APIs that jsdom lacks (so xterm.js and the event streams load under Vitest). Tests exercise real components.
 
 ## Development
 
