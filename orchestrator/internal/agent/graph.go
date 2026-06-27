@@ -309,6 +309,13 @@ func markStepStatus(store *Store, taskID, stepID string, status StepStatus, deta
 // updates the plan step, and accumulates findings. Returns edgeOK on success or
 // edgeIsError on failure (both route back to the step node).
 func observeResult(s *GraphState, result ToolResult) string {
+	// Strip ANSI/C1 escape sequences before the output enters the prompt and the
+	// observation log: interactive tools (nmap, gobuster) emit color/cursor codes
+	// that pollute the model's context and are a terminal/log-injection vector.
+	// Done once here so every downstream use (failure body, success body, the
+	// SEND_FULL buffer, the threat scan) sees clean text. The raw bytes remain in
+	// the execution store's audit record.
+	result.Content = threatscan.StripANSI(result.Content)
 	outcome, reason := Verify(result)
 	if outcome == OutcomeBlocked {
 		s.consecutiveFailures++
