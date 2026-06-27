@@ -31,8 +31,7 @@ RUN apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 ```
 
-After adding the tool, also register it in the orchestrator tool allowlist:
-`orchestrator/internal/conductor/validator.go` → `isToolAllowed()`
+There is **no tool allowlist** to register the tool in. To make the agent aware of it, add its usage to `persona/v0.1/tool_knowledge.yaml` so the LLM knows it exists and how to invoke it. The validator gates on *risk*, not on tool identity.
 
 ## Entrypoint
 

@@ -41,7 +41,7 @@ Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Setting `YUMMI_OLLAMA_TIE
 
 ## Adding tool knowledge
 
-Edit `tool_knowledge.yaml`. Each entry provides the LLM with context about when and how to use a tool — this supplements the allowlist in `orchestrator/internal/conductor/validator.go`.
+Edit `tool_knowledge.yaml`. Each entry provides the LLM with context about when and how to use a tool. This is the **only** place tools are declared — there is no separate tool allowlist (the validator gates on risk, not on tool identity), so this file is how the agent learns a tool exists.
 
 ```yaml
 tools:

@@ -22,6 +22,7 @@ Yummi turns natural language into practical security workflows while keeping tra
 - [What Yummi is](#what-yummi-is)
 - [System architecture](#system-architecture)
 - [The trust boundary (the single most important invariant)](#the-trust-boundary)
+- [Content-layer security](#content-security)
 - [The agent engine](#the-agent-engine)
   - [Graph state machine — nodes & edges](#graph-state-machine)
   - [The tag protocol](#the-tag-protocol)
@@ -63,31 +64,32 @@ User / Operator  →  Orchestrator (Go)  →  Gateway (Rust, IPC)  →  Sandbox 
 ## System architecture <a id="system-architecture"></a>
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                              User / Operator                                  │
-│                        Web Dashboard  ·  Terminal TUI                         │
-└───────────────────────────────────────┬──────────────────────────────────────┘
-                                        │  REST  +  WebSocket  (:9080)
-┌───────────────────────────────────────▼──────────────────────────────────────┐
-│                              Orchestrator (Go)                                │
-│                                                                              │
-│   conductor ──▶ agent graph engine ──▶ execution store ──▶ executor          │
-│   (LLM, persona)   (node state machine)   (queue + events)   (scope + exec)   │
-│        │                  │                                       │           │
-│        └──────────▶ Knowledge Store ◀── Skills · Sub-agents · TRACE           │
-│              (targets · findings · procedural memory · context · activity)    │
-└───────────────────────────────────────┬──────────────────────────────────────┘
-                                        │  Unix domain socket (length-prefixed JSON IPC)
-┌───────────────────────────────────────▼──────────────────────────────────────┐
-│                              Gateway (Rust)                                   │
-│      fail-closed nftables · egress modes · SHA-256 audit chain · watchdog     │
-└────────────────────┬───────────────────────────────────┬─────────────────────┘
-                     │  docker exec (only path)           │  controlled egress
-      ┌──────────────▼────────────┐          ┌────────────▼───────────┐
-      │   Sandbox (Kali Docker)   │          │    External network    │
-      │  read-only · non-root     │          │  (per gateway policy)  │
-      └───────────────────────────┘          └────────────────────────┘
+        ┌──────────────────────────────────────────────────────┐
+        │            Web Dashboard   ·   Terminal TUI          │
+        └───────────────────────────┬──────────────────────────┘
+                                    │  REST + WebSocket · :9080
+        ┌───────────────────────────▼──────────────────────────┐
+        │ ORCHESTRATOR · Go                                    │
+        │                                                      │
+        │   API ─▶ conductor ─▶ agent graph ─▶ executor        │
+        │                          │                           │
+        │                          ▼  (shared world model)     │
+        │              Knowledge Store: findings · memory      │
+        │                          · context · TRACE           │
+        └───────────────────────────┬──────────────────────────┘
+                                    │  Unix socket · length-prefixed JSON IPC
+        ┌───────────────────────────▼──────────────────────────┐
+        │ GATEWAY · Rust trust boundary                        │
+        │ fail-closed nftables · egress · audit · watchdog     │
+        └─────────────┬────────────────────────────┬───────────┘
+          docker exec │  ◀── the ONLY path          │ controlled egress
+        ┌─────────────▼───────────┐      ┌──────────▼───────────┐
+        │ SANDBOX · Kali          │      │  External targets    │
+        │ read-only · non-root    │      │  (per gateway policy)│
+        └─────────────────────────┘      └──────────────────────┘
 ```
+
+The signal runs straight down one spine — operator → API → conductor → agent → executor → gateway → sandbox. `docker exec` is the **only path** from the trusted plane to the sandbox, downstream of the gateway's scope check; the sandbox reaches the outside world *exclusively* through the gateway's nftables rules. The Knowledge Store hangs off the agent as its shared world model.
 
 ### Network topology
 
@@ -115,6 +117,34 @@ This is the **single most important invariant** in the codebase: *deny until exp
 
 ---
 
+## Content-layer security <a id="content-security"></a>
+
+The gateway is a best-in-class **network-layer** boundary. But a pentest conductor faces a second, subtler attack surface: the **content** that flows *back* into the LLM prompt. A target's command output, a scraped web page, an MCP response — none of it is authored by the operator, and any of it can carry a prompt-injection (`ignore previous instructions…`), a C2/promptware directive, an exfiltration payload, or invisible/bidi unicode. Yummi extends the same fail-closed posture to that content layer.
+
+```text
+   tool output · memory writes · skill files        (NOT operator-authored)
+                      │
+                      ▼
+            ┌───────────────────┐   threatscan: injection · exfil · C2
+            │     threatscan    │              · invisible-unicode
+            └─────────┬─────────┘
+        tool output   │   REMEMBER write / skill load
+     (can't intervene │   (user-mediated)
+         mid-run)     │
+              ▼                ▼
+   ⚠ warn banner          ⛔ block at strict scope
+   "untrusted DATA"
+              │
+              ▼
+         LLM prompt
+```
+
+- **`internal/security/threatscan`** — a leaf package (stdlib only) that scans at three scopes (`all` / `context` / `strict`). Tool output is **scanned and warn-bannered** (detection, not blocking — the operator can't intervene mid-command); `[REMEMBER]` writes and skill loads are **blocked** at strict scope, so a poisoned output can't plant a persistent, cross-session prompt injection. It also strips **ANSI/C1 escape sequences** from output before it reaches the brain.
+- **Memory provenance** — every persistent-memory row records who wrote it (`agent` / `subagent`) for audit.
+- **Architectural fitness tests** (`internal/security/invariants`) — executable guards that walk the source tree and **fail the build** if `os/exec` appears outside the audited shell-boundary files, if `internal/mcp` is imported by production code (dormancy lock), or if a telemetry endpoint sneaks in. The invariants below are enforced by tests, not just documented.
+
+---
+
 ## The agent engine <a id="the-agent-engine"></a>
 
 Yummi's agent is **not a flat `while` loop**. It is an explicit **graph state machine**: the LLM emits a single tagged action per turn, and a deterministic router walks typed nodes via a fixed edge table until a terminal node is reached. This design tames context-window exhaustion and infinite action loops — each step re-renders the full task state into the prompt rather than relying on fragile conversation history.
@@ -138,33 +168,55 @@ The engine lives in `orchestrator/internal/agent`. `graph.go` holds the node set
 | `handoff` | `node_handoff.go` | Delegate a focused subtask to a specialist sub-agent and feed its summary back. |
 | `remember` | `node_remember.go` | Persist a structured memory (e.g. a code map) to the knowledge store. |
 
-**The walk** (`Execute` in `graph.go`):
+**The walk** (`Execute` in `graph.go`) — every working node routes back to `step`, so the engine *is* the loop; it exits only at a terminal node:
 
-```
-            ┌──────────── budget_out / context_full ────────────┐
-            ▼                                                    │
-  ┌──────┐ run_command ┌──────┐  ok / is_error   ┌──────┐        │
-  │ step │────────────▶│ tool │─────────────────▶│ step │        │
-  └──┬───┘             └──┬───┘                  └──────┘        │
-     │ finish             │ requires_approval                     │
-     │ ask_operator       ▼                                       │
-     │ handoff         ┌──────────┐ approved/denied               │
-     │ remember        │ approval │──────────────▶ step           │
-     │ update_plan     └──────────┘                               │
-     │ llm_error          │ stuck / long_running                  │
-     ▼                    ▼                                       │
-  finish · ask        ┌─────────┐ continue/abort                  │
-  (terminal)          │ consult │──────────────▶ step             │
-                      └─────────┘                                 │
-  llm_error ▶ retry ─(retry)▶ caller    summarize ─(done)▶ step ──┘
-  handoff  ▶ handoff ─(ok)▶ step        remember  ─(ok)▶ step
+```text
+                        (every working node loops back to STEP)
+        ┌────────────────────────────────────────────────────────────┐
+        │                                                            │
+        ▼                run_command          ok / is_error          │
+   ┌─────────┐ ─────────────────────────▶ ┌──────┐ ──────────────────┤
+   │  STEP   │                            │ TOOL │                   │
+   │ ask LLM │ ◀───── PLAN_UPDATED ─────  │ exec │── requires_approval ──▶ approval ─▶ STEP
+   │ for the │                            │ +    │── long_running ───────▶ consult  ─▶ STEP
+   │ next    │                            │ guard│── stuck / thrash ─────▶ consult  ─▶ STEP
+   │ action  │                            └──────┘
+   └────┬────┘
+        │  finish · budget_out ──▶ FINISH  (terminal)
+        │  ask_operator · halt  ──▶ ASK     (terminal)
+        │  llm_error ──▶ retry ──▶ (back to caller)
+        │  summarize · remember · handoff ──▶ (back to STEP)
+        ▼
+   Each STEP re-renders the FULL task state (plan · observations ·
+   SKILLS · MEMORY) into the prompt — never raw chat history.
 ```
 
-Terminal nodes (`finish`, `ask`) have no outgoing edges — `Execute` stops when it reaches them. `retry` is special: it routes dynamically back to whichever node called it. Every transition is checkpointed, so a crashed task resumes from its last node.
+Terminal nodes (`finish`, `ask`) have no outgoing edges — `Execute` stops when it reaches them. `retry` routes dynamically back to whichever node called it. Every transition is checkpointed, so a crashed task resumes from its last node.
+
+**Loop-breaking is layered** (`tool` node): exact-duplicate fingerprinting (`[DUPLICATE_BLOCKED]`), a sliding-window stuck detector for `A→B→A→B` cycles (`[STUCK]`), a **tool-thrash** guard that catches semantic near-duplicates the hash misses — e.g. rotating `ps -ef` / `ps -ejH` / `ps aux` (`[ABNORMAL_PATTERN]`), and a consecutive-failure escalator that forces a different approach (`[REPEATED_FAILURE]`) before halting to the operator. Critically, procedural memory never recalls a command already run *this task*, so the learning loop can't reinforce a repetition loop.
 
 ### The tag protocol <a id="the-tag-protocol"></a>
 
 The agent and the LLM speak a **closed, bracket-tagged vocabulary** (defined once in `protocol.go`'s `Registry`). This is *not* free text and *not* XML — it is `[TAG]` on its own line, optionally followed by a JSON body. The registry is the single source of truth; the prompt's protocol reference is generated from it.
+
+```text
+   AGENT (step node)                                   LLM (brain)
+        │  render full task state + SKILLS · MEMORY          │
+        │  + protocol reference, then ask ──────────────────▶│
+        │                                                    │
+        │◀──────────────── [RUN_COMMAND] {command, risk} ────│
+        │                                                    │
+        │  validate · stuck/thrash check · scope             │
+        │  ──▶ Gateway scope check ──▶ docker exec (sandbox) │
+        │                                                    │
+        │  [TOOL_RESPONSE_TRUNCATED] head+tail ─────────────▶│
+        │◀──────────────────────────────── [SEND_FULL] ──────│
+        │  [TOOL_RESPONSE_FULL] complete output ────────────▶│
+        │◀──────────────── [FINISH] {summary, findings} ─────│
+        │  terminal — synthesize report if the model omitted │
+```
+
+Two properties make this robust on *small* models: tool output is **threat-scanned and ANSI-stripped** before it ever reaches the brain (see [Content-layer security](#content-security)), and a reply missing its leading tag is recovered by **inferring the control from the JSON shape** (a `command` field → `RUN_COMMAND`, `role`+`subgoal` → `HANDOFF`, …).
 
 **Agent → LLM (observation / envelope tags)** — how the agent hands results back:
 
@@ -213,15 +265,26 @@ The LLM is an **injected, swappable dependency** behind a one-method interface (
 1. **Factual (per engagement)** — `targets` and `findings` tables. Findings carry provenance: `source` (`manual` / `agent` / `subagent`) and the `task_id` that produced them.
 2. **Procedural (portable, target-scrubbed)** — the `procedural_memory` table. Every executed command is recorded as a *tactic*: `{tool, command_pattern, outcome}`, where the target token is replaced with the literal `<TARGET>` placeholder (via `scope.ExtractTarget`) so **no target-specific data leaks** into the portable layer. Identical tactics dedup with a `hit_count`. The outcome (`worked` / `failed`) is derived **mechanically** from the exit code — so this learning loop does not even depend on the brain.
 
-**The learning loop (Hermes):**
+**The learning loop:**
 
-```
-run command ──▶ executor records a target-scrubbed tactic ──▶ procedural_memory
-                                                                   │
-next step ◀── node_step injects a MEMORY block ◀── RetrievalStrategy reads it back
+```text
+   ┌──────────────────┐   ┌───────────────────────┐   ┌───────────────────┐
+   │ agent runs a     │──▶│ executor records a    │──▶│ procedural_memory │
+   │ command          │   │ target-scrubbed tactic│   │ tool·pattern·     │
+   └──────────────────┘   └───────────────────────┘   │ outcome·hit_count │
+            ▲                                         └─────────┬─────────┘
+            │                                                   │
+   ┌────────┴──────────┐  ┌───────────────────────────┐         │
+   │ node_step injects │◀─│ RetrievalStrategy reads   │◀────────┘
+   │ a MEMORY block    │  │ tactics for current tools │
+   └───────────────────┘  │ ‹EXCLUDES cmds already    │
+                          │  run THIS task›           │
+                          └───────────────────────────┘
 ```
 
 Retrieval is behind a `RetrievalStrategy` interface. The shipped implementation, `StructuredRetrieval`, is deterministic SQL keyed on the current session and the tools of recently-executed commands — zero new dependencies, fully local. A semantic/embedding strategy can be dropped in later **without touching the core**.
+
+The EXCLUDES step is load-bearing: procedural memory is for **cross-task transfer**, never for echoing the current task's own working set back into the prompt. Re-surfacing a just-run command as *"prior knowledge — use it, don't rediscover"* is exactly what reinforces a weak model into a command loop, so the current task's commands are filtered out of recall.
 
 **Persistent context** — the `persistent_context` table (`ON CONFLICT DO UPDATE`) holds long-lived memory that outlives a single task's sliding window: source-code connection maps, module graphs, documentation. The source-analysis sub-agent builds and updates these via `[REMEMBER]` — the "never-forget code mapper."
 

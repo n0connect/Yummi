@@ -1,145 +1,116 @@
-# orchestrator — Orchestrator
+# orchestrator — the Go brain & API
 
-orchestrator is the Go orchestrator for Yummi. It exposes the REST + WebSocket API, drives the AI conductor, manages the agentic task loop, and bridges commands to the Kali container (sandbox) through the trust boundary (gateway).
+The orchestrator owns everything AI/API/execution-related: the LLM **conductor**, the agentic **graph engine**, the **knowledge store** (world model + learning loop), and the REST + WebSocket API. It bridges commands to the Kali sandbox **only** through the gateway trust boundary — it never touches nftables and never shells out to the host on behalf of the model.
 
-## Module
-
-```
-github.com/n0connect/yummi/orchestrator
-```
+> Separate Go module: `github.com/n0connect/yummi/orchestrator`. Tests under `internal/*` must run from this directory (or with the `orchestrator/` prefix) — a different module than the repo-root CLI/TUI.
 
 ## Quick start
 
 ```bash
-# Run locally (requires gateway socket and sandbox container running, or degraded mode)
-cd orchestrator && go run ./cmd/orchestrator
-
-# Or via Makefile from repo root
-make _build-orchestrator
-./bin/yummi-orchestrator
+cd orchestrator && go run ./cmd/orchestrator      # local (gateway socket + sandbox, or degraded mode)
+# or, from repo root:
+make _build-orchestrator && ./bin/yummi-orchestrator
 ```
 
-Default listen: `0.0.0.0:9080`
+Default listen: `0.0.0.0:9080`.
 
 ## Package layout
 
 ```
-cmd/orchestrator/             Binary entrypoint — wires all packages, starts HTTP server
+cmd/orchestrator/        Binary entrypoint — wires every package, starts the HTTP server
 internal/
-  api/              HTTP & WebSocket layer (REST routes, SSE logs, WS events/terminal)
-    handlers.go           Shared helpers: writeJSON, writeError, wsUpgrader
-    handlers_session.go   Session / target / finding / audit CRUD
-    handlers_execution.go Execution lifecycle (list, get, cancel)
-    handlers_system.go    gateway + sandbox status and direct exec endpoint
-    handlers_chat.go      Chat, proposal approval, events WebSocket
-    routes.go             Chi mux route registration
-    system.go             System info aggregator, log ring buffer, SSE endpoint
-    terminal.go           PTY WebSocket bridge (docker exec → xterm.js)
-    tasks.go              Agent task HTTP endpoints
-  agent/            Agentic task loop (plan-then-execute + ReAct)
-    runner.go    Loop orchestration — step budget, approval gating, stuck detection
-    store.go     Task lifecycle store (SQLite) + event pub/sub
-    task.go      TaskStatus state machine and Task struct
-    gate.go      Blocking approval channel (medium+ risk commands pause here)
-    exec.go      Adapter: agent commands → execution.Store
-    prompts.go   LLM prompt templates and action JSON parser
-  conductor/      AI assistant engine
-    engine.go    LLM inference, persona loading, chat history
-    validator.go Scope validation (IP/CIDR allow/block) and risk classification
-    approval.go  In-memory proposal store with TTL
-    tier.go      Ollama model tier registry (lite/pro/expert/standard)
-    persona.go   Persona YAML loader
-  execution/      Command execution lifecycle store
-  executor/       Processor: execution.Store → gateway scope check → sandbox bridge
-  session/        SQLite CRUD for sessions, targets, findings, audit trail
-  llm/            Ollama HTTP client
-  sandbox/             Docker exec bridge to Kali container
-  gateway/          IPC client to gateway trust boundary daemon (Unix socket)
-  health/         Ring-buffer health metrics + component pinger
-  mcp/            JSON-RPC 2.0 stdio client for MCP servers
-  tlsutil/        mTLS certificate generation (ECDSA P-256)
-  config/         Environment-based configuration loader
+  agent/                 Agentic GRAPH STATE MACHINE (not a flat loop)
+    graph.go               Node set + graphEdges routing table + Execute() walk
+    node_step.go           Ask the LLM for the next action; build SKILLS/MEMORY/DELEGATION preamble
+    node_tool.go           Validate · gate · execute; duplicate / stuck / tool-thrash detection
+    node_consult.go        Mid-command consult ([CONTINUE]/[ABORT])
+    node_lifecycle.go      retry · approval · summarize · finish · ask nodes
+    node_handoff.go        Delegate a subtask to a specialist sub-agent (depth-1)
+    node_remember.go       Persist a structured memory ([REMEMBER]); threat-scanned
+    protocol.go            Closed agent↔LLM tag vocabulary (Registry) + parser
+    prompts.go             Prompt templates · observation compression
+    store.go · task.go     SQLite task store + pub/sub · Task struct & status
+    gate.go                Blocking operator-approval channel
+    activity.go            Typed TRACE ActivityEvents
+  knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
+    store.go               targets · findings · procedural_memory · persistent_context
+    procedural.go          target-scrubbed tactic recording (the learning loop)
+    retrieval.go           RetrievalStrategy — deterministic SQL recall (excludes current-task cmds)
+  skill/                 Declarative skill registry (YAML playbooks, threat-scanned on load)
+  security/              Content-layer fail-closed
+    threatscan/            injection/exfil/C2/invisible-unicode scan + ANSI stripping
+    invariants/            architectural fitness tests (exec-path, mcp-dormancy, no-telemetry)
+  conductor/             AI engine
+    engine.go              LLM inference · persona · per-session chat history
+    validator.go           RISK CLASSIFICATION ONLY (no scope decisions, no tool allowlist)
+    approval.go            In-memory proposal store with TTL
+    tier.go · persona.go   Ollama tier presets · persona YAML loader
+  scope/                 Single source of truth for ExtractTarget(command) (leaf)
+  execution/ executor/   Execution lifecycle store · processor (scope check → sandbox)
+  llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
+  sandbox/ gateway/      Docker exec bridge · IPC client to the gateway daemon
+  session/ health/       SQLite session CRUD · ring-buffer health metrics
+  api/                   REST routes · domain handlers · WS events/terminal · SSE logs
+  mcp/                   JSON-RPC MCP client — DORMANT (host-exec; unimported by production)
+  tlsutil/ config/ ui/   mTLS certs · env config · embedded ui/dist
 ```
 
 ## Key data flows
 
-**Chat → single command:**
-```
-UI → POST /api/v1/chat
-  → conductor.Engine.ChatWithHistory()
-  → ChatResponse{intent:"suggest_command", proposals:[...]}
-  → UI shows proposal bar
-  → POST /api/v1/chat/approve
-  → execution.Store.Enqueue()
-  → executor.ProcessFunc → gateway.CheckScope → sandbox.Bridge.Exec
-  → WS /ws/events fires execution.status events
+**Chat → agentic task** (the graph engine):
+
+```text
+   UI ──POST /api/v1/chat──▶ conductor
+                              │ detect start_task intent
+                              ▼
+                        agent.Runner.CreateAndPlan()   (LLM produces a numbered plan)
+                              │ Start() → Execute(state, nodeStep)
+                              ▼
+           ┌──────────────────────────────────────────────┐
+           │ graph loop, until a terminal node:           │
+           │   step → tool → step                         │
+           │   (validate · scope · exec · observe)        │──▶ Knowledge Store
+           │                                              │    (findings + target-scrubbed tactics)
+           └──────────────────────────────────────────────┘
+                              │
+                              ▼
+        task.status events over /ws/events  ·  summary returned as the chat reply
 ```
 
-**Chat → agentic task:**
-```
-UI → POST /api/v1/chat
-  → conductor detects start_task intent
-  → agent.Runner.CreateAndPlan() → LLM produces plan
-  → agent.Runner.Start() → loop: step → LLM action → execute → observe → repeat
-  → WS /ws/events fires task.status events
-  → on completion, summary returned as chat reply
-```
+**Chat → single command** — `conductor.ChatWithHistory()` returns `suggest_command` proposals → `POST /chat/approve` → `execution.Store.Enqueue()` → `executor` (gateway `CheckScope` → `sandbox.Bridge.Exec`) → `execution.status` events.
 
-**Approval flow (medium+ risk commands):**
-```
-runner.runCommand() → validator risk ≥ medium
-  → gate.Request() blocks the loop goroutine
-  → task transitions to awaiting_approval
-  → WS pushes task event with PendingCommand + PendingRisk
-  → operator: POST /api/v1/tasks/{id}/approve
-  → gate.Resolve(verdict=true) → loop resumes
-```
+**Approval gate** (operator sign-off): when the agent runs in `ask_permission` mode (or a single command needs approval), `gate.Request()` blocks the loop goroutine; the task transitions to `awaiting_approval`; the operator `POST`s `/tasks/{id}/approve`; `gate.Resolve()` resumes the loop. A 20-minute TTL purges abandoned gates.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `YUMMI_ORCHESTRATOR_HOST` | `127.0.0.1` | Listen address |
-| `YUMMI_ORCHESTRATOR_PORT` | `9080` | Listen port |
+| `YUMMI_ORCHESTRATOR_HOST` / `_PORT` | `127.0.0.1` / `9080` | Listen address / port |
 | `YUMMI_DB_PATH` | `~/.yummi/sessions.db` | SQLite database |
-| `YUMMI_OLLAMA_URL` | _(empty)_ | Ollama endpoint; empty disables LLM |
+| `YUMMI_OLLAMA_URL` | _(empty)_ | Ollama endpoint; **empty = conductor declines everything (no rule-based fallback)** |
 | `YUMMI_OLLAMA_MODEL` | `qwen3:8b` | Model name (overridden by tier) |
-| `YUMMI_OLLAMA_TIER` | _(empty)_ | `lite`/`pro`/`expert`/`standard` |
+| `YUMMI_OLLAMA_TIER` | _(empty)_ | `lite` / `pro` / `expert` / `standard` |
+| `YUMMI_OLLAMA_FALLBACK_MODEL` | _(empty)_ | Optional lighter LOCAL model the resilient client downgrades to |
 | `YUMMI_SANDBOX_CONTAINER` | `yummi-sandbox` | Kali container name |
-| `YUMMI_GATEWAY_SOCKET` | `/run/yummi/gateway.sock` | gateway Unix socket path |
+| `YUMMI_GATEWAY_SOCKET` | `/run/yummi/gateway.sock` | Gateway Unix socket |
 | `YUMMI_PERSONA_DIR` | `persona/v0.1` | Persona YAML directory |
 
-Network scope is no longer an orchestrator concern. It is configured exclusively
-via the gateway's own YAML config (`scope.allow` / `scope.block` in
-`gateway/config/default.yaml`); the gateway is the sole scope authority.
+**Network scope is not an orchestrator concern.** It is configured exclusively in the gateway's own YAML (`scope.allow` / `scope.block`); the gateway is the sole scope authority. The validator does risk classification only.
 
 ## Testing
 
 ```bash
-# All orchestrator tests
-cd orchestrator && go test ./...
-
-# Single package
-cd orchestrator && go test ./internal/agent -run TestRunnerHappyPath
-cd orchestrator && go test ./internal/conductor -run TestValidatorToolAllowlist
-cd orchestrator && go test ./internal/api -run TestHandleChat
-
-# With race detector
-cd orchestrator && go test -race ./...
+cd orchestrator && go test ./...                 # all packages
+cd orchestrator && go test -race ./...           # concurrency-sensitive packages
+cd orchestrator && go test ./internal/agent -run TestGraph_ToolThrash_SemanticDuplicateLoop
+cd orchestrator && go test ./internal/security/invariants   # architectural fitness functions
 ```
 
-## Adding a new API endpoint
+**No mocks of Yummi's own components.** Tests exercise real stores/engines with in-memory SQLite; only the external LLM boundary is driven by a scripted client (`newFakeOllama`) and commands run in a real shell (`realShellStore`). `make test-agent-live` drives the real qwen3:8b + live sandbox end-to-end.
 
-1. Add handler factory in the relevant domain file:
-   - session/target/finding → `handlers_session.go`
-   - execution lifecycle → `handlers_execution.go`
-   - gateway/sandbox system → `handlers_system.go`
-   - chat/agentic → `handlers_chat.go`
-2. Register route in `routes.go`
-3. Add test in `handlers_test.go` or `chat_test.go`
+## Extending
 
-## Adding a new tool to the allowlist
-
-1. `internal/conductor/validator.go` — add to `isToolAllowed`
-2. `persona/v0.1/tool_knowledge.yaml` — add usage context
-3. `internal/conductor/engine_test.go` — add intent test case
+- **Add an API endpoint** — handler in the matching domain file (`handlers_session.go` / `handlers_execution.go` / `handlers_system.go` / `handlers_chat.go`), register in `routes.go`, add a test.
+- **Teach the agent a new tool** — there is **no tool allowlist to edit**. Add the tool's usage to `persona/v0.1/tool_knowledge.yaml` (so the LLM knows it exists and how to invoke it); special-case `classifyRisk` in `validator.go` only if the tool family needs a structural risk floor.
+- **Add a skill / sub-agent role** — drop a YAML file in `persona/v0.1/skills/` or `persona/v0.1/subagents/`; no code change.
+- **Swap the brain** — implement the one-method `LLM` interface; the graph engine is brain-agnostic and never changes.

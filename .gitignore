@@ -10,6 +10,7 @@
 thirdy-party/*
 thirdy-party/
 /thirdy-party
+FUTURES.md
 
 # ── Go build outputs (make _build-cli / _build-orchestrator → ./bin/*) ───────
 /bin/
