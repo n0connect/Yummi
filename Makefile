@@ -61,7 +61,7 @@ endef
 .PHONY: help \
 	build start start-tui stop clean force-restart force-stop close \
 	_check-deps _build-cli _build-ui _build-orchestrator _build-gateway _build-ui-image \
-	test test-agent-live lint doctor install dev dev-ui dev-orchestrator \
+	test test-agent-live lint vuln doctor install dev dev-ui dev-orchestrator \
 	_test-cli _test-orchestrator _test-gateway _test-ui \
 	docker-build docker-orchestrator docker-ui \
 	_ollama-ensure
@@ -187,6 +187,15 @@ lint: _check-deps
 	@$(call log_info,golangci-lint,Running on orchestrator module...)
 	@cd orchestrator && golangci-lint run || { $(call log_error,lint,Orchestrator lint failed.); exit 1; }
 	@$(call log_pass,lint,No issues found.)
+
+## vuln    Supply-chain vulnerability scan (govulncheck, both Go modules)
+vuln: _check-deps
+	@$(call log_section,Vulnerability Scan)
+	@$(call log_info,govulncheck,Scanning root module...)
+	@go run golang.org/x/vuln/cmd/govulncheck@latest ./... || { $(call log_error,vuln,Root module has known vulnerabilities.); exit 1; }
+	@$(call log_info,govulncheck,Scanning orchestrator module...)
+	@cd orchestrator && go run golang.org/x/vuln/cmd/govulncheck@latest ./... || { $(call log_error,vuln,Orchestrator module has known vulnerabilities.); exit 1; }
+	@$(call log_pass,vuln,No known vulnerabilities found.)
 
 ## doctor  Run local environment diagnostics
 doctor:
@@ -347,6 +356,7 @@ help:
 	@printf "  $(CYAN)make test$(RESET)        Run all test suites\n"
 	@printf "  $(CYAN)make test-agent-live$(RESET) Agentic loop e2e vs. real model + sandbox\n"
 	@printf "  $(CYAN)make lint$(RESET)        Static analysis (golangci-lint)\n"
+	@printf "  $(CYAN)make vuln$(RESET)        Supply-chain vuln scan (govulncheck)\n"
 	@printf "  $(CYAN)make doctor$(RESET)      Environment diagnostics\n"
 	@printf "  $(CYAN)make install$(RESET)     Bootstrap dev environment\n"
 	@printf "  $(CYAN)make dev$(RESET)         Hot-reload dev mode\n"
