@@ -10,6 +10,13 @@ type Query struct {
 	SessionID string   // factual scope (current engagement)
 	Tools     []string // tools relevant to the next step (procedural lookup)
 	Limit     int      // max items per category (default 5)
+	// ExcludeCommands are commands already executed in the CURRENT task. Their
+	// scrubbed patterns are filtered out of the procedural results so memory
+	// never echoes back a command the model just ran — that re-injection
+	// ("use it, don't rediscover") is what drives weak models into command
+	// loops. Procedural memory is for cross-task transfer, not for re-surfacing
+	// the current task's own working set (which is already in the context).
+	ExcludeCommands []string
 }
 
 // MemoryItem is one retrieved, pre-formatted memory line.
@@ -61,9 +68,21 @@ func (r *StructuredRetrieval) Retrieve(_ context.Context, q Query) ([]MemoryItem
 		})
 	}
 
-	// Procedural: tactics for each named tool.
+	// Build the set of scrubbed patterns the model already ran this task; these
+	// are suppressed so memory never re-surfaces the current working set.
+	excluded := make(map[string]struct{}, len(q.ExcludeCommands))
+	for _, cmd := range q.ExcludeCommands {
+		if pattern, ok := scrubTarget(cmd); ok {
+			excluded[pattern] = struct{}{}
+		}
+	}
+
+	// Procedural: tactics for each named tool, skipping current-task commands.
 	for _, tool := range q.Tools {
 		for _, tac := range r.store.ListTactics(tool, limit) {
+			if _, skip := excluded[tac.CommandPattern]; skip {
+				continue
+			}
 			items = append(items, MemoryItem{
 				Kind: "tactic",
 				Text: fmt.Sprintf("%s (%s, used %dx)", tac.CommandPattern, tac.Outcome, tac.HitCount),

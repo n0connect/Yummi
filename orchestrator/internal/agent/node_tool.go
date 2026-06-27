@@ -69,6 +69,23 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		s.lastObs = obs
 		return edgeIsError, nil
 	}
+	// Tool-level thrash: the model is rotating trivially-different invocations of
+	// the SAME tool (ps -ef / ps -ejH / ps aux), which exact-hash detection above
+	// misses. Nudge it to stop re-querying the same thing in different forms and
+	// either analyze what it already has or move on. Non-blocking: the model is
+	// told, not silenced. Reset the window so the nudge restarts cleanly.
+	if tool, thrashing := toolThrash(s.recentCmds); thrashing {
+		obs := Wrap("ABNORMAL_PATTERN", "You have run `"+tool+"` "+
+			"several times with only trivially-different flags. These produce the SAME class of "+
+			"information you already have — you are not learning anything new. STOP re-querying with "+
+			"`"+tool+"`: analyze the output you already collected, switch to a DIFFERENT tool/approach, "+
+			"update_plan, or finish if the goal is met.")
+		s.memCtx.AddObservation(obs)
+		s.lastObs = obs
+		s.cmdWindow = nil
+		s.recentCmds = nil
+		return edgeIsError, nil
+	}
 
 	// The command passed validation, stuck, and duplicate checks — it is about
 	// to run (now in auto mode, or after approval). Surface it on the timeline.

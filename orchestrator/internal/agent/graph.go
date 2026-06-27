@@ -281,6 +281,35 @@ func isStuck(window []string) bool {
 	return false
 }
 
+// toolThrashThreshold is how many times a single TOOL may appear in the command
+// window before the agent nudges the model. It is deliberately above 3 so a
+// legitimate escalation on one tool (e.g. nmap -sV → nmap -p- → nmap -sC) is not
+// flagged, while a wider rotation of trivially-different invocations of the same
+// tool (ps -ef / ps -ejH / ps aux / ps -e) — which exact-hash stuck detection
+// misses because each string is distinct — is caught.
+const toolThrashThreshold = 4
+
+// toolThrash reports the tool a window is thrashing on: the same first token
+// (tool name) appearing >= toolThrashThreshold times. Returns ("", false) when
+// no tool dominates. This catches semantic near-duplicate loops that commandHash
+// (exact-match) cannot, since "ps -ef" and "ps -ejH" hash differently but are
+// the same tool producing the same class of information.
+func toolThrash(commands []string) (string, bool) {
+	counts := make(map[string]int, len(commands))
+	for _, c := range commands {
+		fields := strings.Fields(c)
+		if len(fields) == 0 {
+			continue
+		}
+		tool := fields[0]
+		counts[tool]++
+		if counts[tool] >= toolThrashThreshold {
+			return tool, true
+		}
+	}
+	return "", false
+}
+
 // markStepStatus records the outcome on the plan step the model referenced.
 func markStepStatus(store *Store, taskID, stepID string, status StepStatus, detail string) {
 	if stepID == "" {

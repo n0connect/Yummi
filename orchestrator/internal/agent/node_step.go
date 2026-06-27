@@ -204,6 +204,9 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 	}
 	items, err := s.cfg.Retrieval.Retrieve(ctx, knowledge.Query{
 		SessionID: task.SessionID, Tools: toolsFromCommands(s.recentCmds), Limit: 5,
+		// Suppress recall of commands already run this task: re-injecting them as
+		// "use it, don't rediscover" reinforces weak models into command loops.
+		ExcludeCommands: s.recentCmds,
 	})
 	if err != nil || len(items) == 0 {
 		return ""
