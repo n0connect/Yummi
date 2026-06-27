@@ -41,3 +41,60 @@ func TestStructuredRetrievalEmptyWhenNothingStored(t *testing.T) {
 		t.Fatalf("want no items, got %+v", items)
 	}
 }
+
+// TestRetrieveExcludesCurrentTaskCommands is the regression guard for the agent
+// command-loop bug: procedural memory must NOT echo back a command already run
+// in the current task. Recalling "ps -ef (worked, used 3x)" right after running
+// ps -ef — under the "use it, don't rediscover" framing — is what reinforced
+// weak models into re-running near-identical recon commands in a loop.
+func TestRetrieveExcludesCurrentTaskCommands(t *testing.T) {
+	s := memStore(t)
+	ctx := context.Background()
+	_ = s.RecordTactic(ctx, "ps -ef", "worked", nil, "")
+	_ = s.RecordTactic(ctx, "ps -ejH", "worked", nil, "")
+
+	r := NewStructuredRetrieval(s)
+	// The model just ran "ps -ef" this task; it must not be recalled.
+	items, err := r.Retrieve(ctx, Query{
+		Tools:           []string{"ps"},
+		ExcludeCommands: []string{"ps -ef"},
+	})
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	for _, it := range items {
+		if it.Kind == "tactic" && strings.Contains(it.Text, "ps -ef ") {
+			t.Fatalf("current-task command 'ps -ef' was echoed back as memory: %q", it.Text)
+		}
+	}
+	// A DIFFERENT tactic not yet run this task should still surface (memory must
+	// keep its cross-task value; we only suppress the current working set).
+	var sawOther bool
+	for _, it := range items {
+		if strings.Contains(it.Text, "ps -ejH") {
+			sawOther = true
+		}
+	}
+	if !sawOther {
+		t.Fatalf("non-excluded tactic 'ps -ejH' should still be recalled, got %+v", items)
+	}
+}
+
+// A target-bearing command is excluded by its SCRUBBED pattern, matching how
+// tactics are stored (nmap 10.0.0.5 → "nmap <TARGET>").
+func TestRetrieveExcludesScrubbedPattern(t *testing.T) {
+	s := memStore(t)
+	ctx := context.Background()
+	_ = s.RecordTactic(ctx, "nmap -sV 10.0.0.5", "worked", nil, "")
+
+	r := NewStructuredRetrieval(s)
+	items, _ := r.Retrieve(ctx, Query{
+		Tools:           []string{"nmap"},
+		ExcludeCommands: []string{"nmap -sV 10.0.0.9"}, // different target, same pattern
+	})
+	for _, it := range items {
+		if it.Kind == "tactic" {
+			t.Fatalf("scrubbed pattern should have been excluded, got %q", it.Text)
+		}
+	}
+}

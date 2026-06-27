@@ -51,14 +51,17 @@ func TestToolsFromExecutedCommands(t *testing.T) {
 
 // buildMemory must key procedural retrieval off ACTUALLY-EXECUTED commands
 // (s.recentCmds), so it lines up with how the executor records tactics. A
-// tactic recorded for "nmap" must surface after an nmap command ran.
+// tactic recorded for "nmap" must surface after an nmap command ran — as long
+// as it is a DIFFERENT tactic than the one just run (the current-task command
+// is suppressed to break the recall→re-run loop; see the suppression test).
 func TestBuildMemoryKeysOffExecutedCommands(t *testing.T) {
 	ks, _ := knowledge.NewStore(nil)
-	_ = ks.RecordTactic(context.Background(), "nmap -sV 10.0.0.5", "worked", nil, "")
+	// A prior-task tactic for the nmap tool, distinct from what runs below.
+	_ = ks.RecordTactic(context.Background(), "nmap -p- 10.0.0.5", "worked", nil, "")
 
 	s := &GraphState{
 		cfg:        Config{Retrieval: knowledge.NewStructuredRetrieval(ks)},
-		recentCmds: []string{"nmap -sV 10.0.0.9"},
+		recentCmds: []string{"nmap -sV 10.0.0.9"}, // different pattern → not excluded
 	}
 	mem := s.buildMemory(context.Background(), Task{SessionID: "s1"})
 	if !strings.Contains(mem, "MEMORY") || !strings.Contains(mem, "<TARGET>") {
@@ -69,5 +72,24 @@ func TestBuildMemoryKeysOffExecutedCommands(t *testing.T) {
 	s.recentCmds = nil
 	if mem := s.buildMemory(context.Background(), Task{SessionID: "s1"}); strings.Contains(mem, "<TARGET>") {
 		t.Fatalf("tactic should not surface before any command ran:\n%s", mem)
+	}
+}
+
+// TestBuildMemorySuppressesCurrentTaskCommands is the agent-level guard for the
+// command-loop fix: a command already run this task (in recentCmds) must not be
+// recalled by buildMemory, even though its tactic exists in the store. This
+// breaks the "run → record → recall 'use it' → re-run" reinforcement loop.
+func TestBuildMemorySuppressesCurrentTaskCommands(t *testing.T) {
+	ks, _ := knowledge.NewStore(nil)
+	ctx := context.Background()
+	_ = ks.RecordTactic(ctx, "ps -ef", "worked", nil, "")
+
+	s := &GraphState{
+		cfg:        Config{Retrieval: knowledge.NewStructuredRetrieval(ks)},
+		recentCmds: []string{"ps -ef"}, // the model just ran this
+	}
+	mem := s.buildMemory(ctx, Task{SessionID: "s1"})
+	if strings.Contains(mem, "ps -ef") {
+		t.Fatalf("current-task command must not be recalled into MEMORY:\n%s", mem)
 	}
 }
