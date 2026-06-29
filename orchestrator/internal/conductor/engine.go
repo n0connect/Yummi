@@ -305,6 +305,24 @@ func (e *Engine) buildSystemPrompt() string {
 		}
 	}
 
+	// Role/disposition come from core_identity.yaml's character block — behavioral
+	// guidance the persona file declares but that has no other home in this prompt.
+	// Without this, that YAML content is silently inert: present in the file,
+	// never seen by the model.
+	disposition := ""
+	if e.persona.Role != "" {
+		disposition += e.persona.Role + "\n"
+	}
+	for _, d := range []string{
+		e.persona.Disposition.OperatorRelationship,
+		e.persona.Disposition.Honesty,
+		e.persona.Disposition.Economy,
+	} {
+		if d != "" {
+			disposition += "- " + d + "\n"
+		}
+	}
+
 	// External egress is governed by an operator-set gateway mode (block / allow /
 	// ask) that the model cannot see and must not try to infer. The model proposes
 	// targets — including hostnames like google.com — freely; the gateway decides
@@ -312,8 +330,19 @@ func (e *Engine) buildSystemPrompt() string {
 	// plainly, never described as the assistant "lacking permission".
 	scopeSection := "\nNETWORK EGRESS: whether external targets are reachable is decided by the gateway according to an operator-set mode you cannot see (block / allow / ask). Propose any target the operator asks for — including public hostnames like google.com — without pre-judging or refusing on scope grounds. If the gateway blocks or queues a target for approval, report that result factually (e.g. \"gateway blocked this target\" / \"awaiting operator approval\"); do NOT say you personally lack permission or that external access is forbidden in general.\n"
 
-	prompt := fmt.Sprintf(`You are %s, an elite Red Team penetration testing AI assistant.
+	// languageRule is rule #3 below. Prefer the persona's own wording (explicitly
+	// bidirectional, "no exceptions") over the hardcoded fallback, which only
+	// spelled out the Turkish-input direction and left the English direction
+	// implicit — live testing showed the model defaulting to Turkish for short
+	// English messages early in a conversation, which an asymmetric example
+	// plausibly reinforces.
+	languageRule := e.persona.Disposition.LanguageParity
+	if languageRule == "" {
+		languageRule = "Match the operator's language exactly: Turkish input gets Turkish output, English input gets English output. No exceptions."
+	}
 
+	prompt := fmt.Sprintf(`You are %s, an elite Red Team penetration testing AI assistant.
+%s
 EXECUTION ENVIRONMENT:
 - You control a Kali Linux container named "sandbox" (Docker, isolated network, IP 172.20.0.10).
 - Every command you propose runs INSIDE sandbox via docker exec — not on the operator's machine.
@@ -324,11 +353,11 @@ EXECUTION ENVIRONMENT:
 CRITICAL RULES:
 1. Output ONLY valid JSON. No markdown, no text outside JSON.
 2. Commands go in the "proposals" array. Pure answers use "message" only.
-3. Match the operator's language exactly (Turkish input → Turkish output).
+3. %s
 4. Use your knowledge for commands — never invent flags you are unsure about.
 5. Classify risk: low (passive/read-only), medium (generates logs), high (triggers alerts), critical (destructive/irreversible).
 6. Do NOT ask for scope/IP when the request clearly refers to the local sandbox container (e.g. "list users", "check disk", "show processes").
-`, identity, scopeSection)
+`, identity, disposition, scopeSection, languageRule)
 
 	if methodology != "" {
 		prompt += "\nWorkflow:\n" + methodology
