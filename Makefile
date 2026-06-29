@@ -59,8 +59,8 @@ endef
 
 # ── Phony declarations ────────────────────────────────────────────────────────
 .PHONY: help \
-	build start start-tui stop clean force-restart force-stop close \
-	_check-deps _build-cli _build-ui _build-orchestrator _build-gateway _build-ui-image \
+	build start start-tui stop clean force-restart close \
+	_check-deps _build-cli _build-ui _build-orchestrator _build-gateway \
 	test test-agent-live lint vuln doctor install dev dev-ui dev-orchestrator \
 	_test-cli _test-orchestrator _test-gateway _test-ui \
 	docker-build docker-orchestrator docker-ui \
@@ -232,11 +232,6 @@ _build-ui:
 	@set -o pipefail; cd $(UI_DIR) && npm run build 2>&1 | sed 's/^/  /' || { $(call log_error,UI,Vite build failed.); exit 1; }
 	@$(call log_pass,UI,Dist ready.)
 
-_build-ui-image: _build-ui
-	@$(call log_info,yummi-ui,Building Docker image...)
-	@docker build -t yummi/ui:local ./$(UI_DIR) 2>&1 | sed 's/^/  /' || { $(call log_error,yummi-ui,Docker build failed.); exit 1; }
-	@$(call log_pass,yummi-ui,Image built.)
-
 _build-orchestrator: | $(BIN_DIR)
 	@$(call log_info,yummi-orchestrator,Building version $(GIT_SHA)...)
 	@cd orchestrator && go build -trimpath -o ../$(BIN_DIR)/$(ORCHESTRATOR_BINARY) $(ORCHESTRATOR_PKG) || { $(call log_error,yummi-orchestrator,Build failed.); exit 1; }
@@ -363,7 +358,7 @@ help:
 	@printf "\n$(BOLD)  Granular build$(RESET)  $(DIM)(fast feedback loops)$(RESET)\n"
 	@printf "  $(DIM)make _build-cli$(RESET)   yummi CLI only\n"
 	@printf "  $(DIM)make _build-ui$(RESET)    React/Vite UI only\n"
-	@printf "  $(DIM)make _build-orchestrator$(RESET)    orchestrator orchestrator + UI embed\n"
+	@printf "  $(DIM)make _build-orchestrator$(RESET)    orchestrator server binary only\n"
 	@printf "  $(DIM)make _build-gateway$(RESET) gateway Rust binary only\n"
 	@printf "\n$(BOLD)  Granular test$(RESET)\n"
 	@printf "  $(DIM)make _test-cli$(RESET)    CLI + internal packages\n"
