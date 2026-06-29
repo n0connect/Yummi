@@ -186,6 +186,29 @@ func TestLargePasteCollapsesToPlaceholderAndExpandsOnSend(t *testing.T) {
 	}
 }
 
+// Regression: a sequential loop of strings.ReplaceAll (one per stored block,
+// lowest index first) re-scans the *whole growing string* on every pass —
+// including text just spliced in by an earlier substitution. If block #1's
+// own pasted content happened to literally contain the text "[Pasted #2]",
+// the later pass for block #2 would match that occurrence too, splicing
+// block #2's content into the middle of block #1's text instead of leaving
+// it untouched. expandPastedBlocks must substitute in a single pass over the
+// original text so a placeholder produced by expansion is never re-matched.
+func TestExpandPastedBlocksDoesNotSpliceAcrossBlocks(t *testing.T) {
+	m := newTestModel()
+	m.pastedBlocks = []string{
+		"block one contains the literal text [Pasted #2] inside it",
+		"block two's real content",
+	}
+
+	got := m.expandPastedBlocks("intro [Pasted #1] middle [Pasted #2] end")
+	want := "intro block one contains the literal text [Pasted #2] inside it middle block two's real content end"
+
+	if got != want {
+		t.Fatalf("cross-block splicing occurred:\n got:  %q\nwant: %q", got, want)
+	}
+}
+
 func TestPlanItemRendersStepsAndGlyphs(t *testing.T) {
 	out := PlanItem{
 		Goal: "enumerate services",
