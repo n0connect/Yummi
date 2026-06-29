@@ -9,16 +9,41 @@
 package scope
 
 import (
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
 )
 
-// targetPattern matches an IPv4 address (optionally with a CIDR suffix) or a
-// dotted hostname. It is deliberately conservative: a bare word with no dot
-// (e.g. "localhost", "100") does not match, so loop counters and tool
+// hostnamePattern matches a syntactically valid DNS hostname as a WHOLE token
+// (note the ^…$ anchors): one or more labels of alphanumerics/hyphens, each
+// label 1–63 chars and not starting/ending with a hyphen, ending in a letters-
+// only TLD. Anchoring is the security-relevant part: it validates the entire
+// token, so an IP-shaped prefix can never be peeled off a longer name (e.g.
+// "1.2.3.4.evil.com" is the hostname, never the IP "1.2.3.4"). A bare word with
+// no dot (e.g. "localhost", "100") does not match, so loop counters and tool
 // subcommands are never mistaken for targets.
-var targetPattern = regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?|[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+)\b`)
+var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$`)
+
+// validTarget canonicalizes a single, fully-stripped token into a target, or ""
+// when the token is not a structurally valid IP, CIDR, or hostname. This is an
+// allowlist of well-formed shapes, not a blacklist: IP and CIDR forms are
+// bound-checked by net/netip (rejecting out-of-range octets like 999.x or
+// 256.1.1.1 and bad prefix lengths), and hostnames must match the whole token.
+// Anything else returns "" — the caller then treats the command as targetless,
+// and the gateway (sole scope authority) stays fail-closed.
+func validTarget(tok string) string {
+	if addr, err := netip.ParseAddr(tok); err == nil {
+		return addr.String()
+	}
+	if pfx, err := netip.ParsePrefix(tok); err == nil {
+		return pfx.String()
+	}
+	if hostnamePattern.MatchString(tok) {
+		return tok
+	}
+	return ""
+}
 
 // ExtractTarget returns the first IP or hostname a command appears to target,
 // or "" when none can be identified.
@@ -42,6 +67,10 @@ func ExtractTarget(command string) string {
 			}
 			tok = tok[eq+1:]
 		}
+
+		// Trim surrounding single/double quotes to resolve quoted targets like curl "10.0.0.1"
+		tok = strings.Trim(tok, "\"'")
+
 		if tok == "" {
 			continue
 		}
@@ -51,17 +80,18 @@ func ExtractTarget(command string) string {
 			continue
 		}
 
-		// URL argument: take the host component (handles userinfo, port, path).
+		// URL argument: take the host component (handles userinfo, port, path,
+		// and IPv6 literals like [::1], which url.Hostname unwraps).
 		if strings.Contains(tok, "://") {
 			if u, err := url.Parse(tok); err == nil {
-				if host := targetPattern.FindString(u.Hostname()); host != "" {
+				if host := validTarget(u.Hostname()); host != "" {
 					return host
 				}
 			}
 			continue
 		}
 
-		if host := targetPattern.FindString(tok); host != "" {
+		if host := validTarget(tok); host != "" {
 			return host
 		}
 	}

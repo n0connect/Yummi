@@ -88,24 +88,39 @@ func firstToken(cmd string) string {
 	return strings.ToLower(fields[0])
 }
 
+// simpleCommandPattern allowlists the structural shape of a single,
+// unchained tool invocation: a bare command/path token, followed by
+// whitespace-separated argument tokens that are either a quoted string (any
+// content except the quote char, a backslash, or a literal CR/LF) or an
+// unquoted token built only from characters that have no meaning to a shell
+// (letters, digits, and a fixed set of common flag/path/URL punctuation).
+// Notably ABSENT from the unquoted charset: ; | & ` $ ( ) { } [ ] < > # \ and
+// any whitespace other than plain space/tab — every one of those is
+// shell-significant (chaining, substitution, redirection, backgrounding,
+// globbing) and would change what actually executes inside the sandbox's
+// `bash -lc`. A command line containing any of them outside quotes simply
+// does not match this shape.
+//
+// This is a deliberate default-deny allowlist, not a list of forbidden
+// characters: classifyRisk does not ask "does this command contain a bad
+// character," it asks "does this command match the one shape we understand
+// well enough to call low risk." Anything else — including command
+// structures we didn't anticipate — falls through to critical.
+var simpleCommandPattern = regexp.MustCompile(
+	`^[A-Za-z0-9_./-]+(?:[ \t]+(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|[A-Za-z0-9_.\-/:=,@%+~?*]+))*[ \t]*$`,
+)
+
 // classifyRisk returns a floor risk level based purely on structural command
-// properties — no tool-specific flag knowledge. The model's own risk_level
-// field is the primary source of truth; this function only provides a
-// conservative safety floor so clearly dangerous shell operators are never
-// accidentally rated low by a miscalibrated model response.
+// shape — no tool-specific flag knowledge. The model's own risk_level field
+// is the primary source of truth; this function only provides a conservative
+// safety floor: "low" is granted only to commands matching the simple,
+// unchained shape above, and everything else — including command structures
+// this function doesn't recognize — is "critical" by default.
 func classifyRisk(cmd string) string {
-	c := strings.ToLower(cmd)
-
-	// Structural critical signals: logical command-chaining operators that
-	// expand blast radius beyond a single tool invocation.
-	criticalOperators := []string{"&&", "||"}
-	for _, op := range criticalOperators {
-		if strings.Contains(c, op) {
-			return "critical"
-		}
+	if simpleCommandPattern.MatchString(cmd) {
+		return "low"
 	}
-
-	return "low"
+	return "critical"
 }
 
 func requiresApproval(risk string) bool {

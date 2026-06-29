@@ -165,13 +165,13 @@ func summarizeInput(obs []string, budget int) string {
 	// huge banner can't crowd out the recent tail.
 	firstCap := budget / 3
 	if len(first) > firstCap {
-		first = first[:firstCap] + "…(truncated)"
+		first = first[:utf8SafeCut(first, firstCap)] + "…(truncated)"
 	}
 	const omitted = "\n---\n[…older observations omitted to fit context…]\n---\n"
 	tailBudget := max(budget-len(first)-len(omitted), 0)
 	tail := joined
 	if len(tail) > tailBudget {
-		tail = tail[len(tail)-tailBudget:]
+		tail = tail[utf8SafeCut(tail, len(tail)-tailBudget):]
 	}
 	return first + omitted + tail
 }

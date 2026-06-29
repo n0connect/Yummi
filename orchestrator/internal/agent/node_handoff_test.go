@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 )
 
@@ -124,6 +125,87 @@ func TestHandoffEmitsNestedActivity(t *testing.T) {
 	}
 	if !sawStart || !sawNested {
 		t.Fatalf("handoff nesting missing: start=%v nested=%v", sawStart, sawNested)
+	}
+}
+
+// TestApproveResolvesSubAgentGate is a regression test for the security audit
+// finding that a sub-agent's pending approval was structurally unreachable:
+// each sub-agent runs its own task loop against its own private *Gate, but
+// the only API path (HandleApproveTask -> the top-level Runner.Approve) used
+// to call only that top runner's gate, so a delegated sub-agent's medium+
+// risk command could never be approved — it would always time out. This
+// proves the top-level runner's Approve now resolves a sub-agent's gate too.
+func TestApproveResolvesSubAgentGate(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	ks, _ := knowledge.NewStore(nil)
+	execer := NewStoreExecer(realShellStore(t), 5*time.Second)
+	validator := conductor.NewValidator() // real RequiresApproval from risk_level
+
+	subOllama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"do a risky thing"}]}`,
+		"[RUN_COMMAND]\n{\"command\":\"echo risky\",\"step_id\":\"s1\",\"risk_level\":\"medium\"}",
+		`[FINISH]
+{"summary":"sub done"}`,
+	)
+	subCfg := fastRetryCfg()
+	subCfg.Knowledge = ks
+	subCfg.ApprovalMode = ModeAskPermission
+	sub := NewRunner(store, subOllama, validator, execer, subCfg)
+
+	orchOllama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"delegate"}]}`,
+		`[HANDOFF]
+{"role":"web","subgoal":"do the risky thing"}`,
+		`[FINISH]
+{"summary":"done"}`,
+	)
+	orchCfg := fastRetryCfg()
+	orchCfg.Knowledge = ks
+	orchCfg.SubAgents = map[string]*Runner{"web": sub}
+	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
+
+	sessionID := "sess-sub-approve"
+	task, err := orch.CreateAndPlan(context.Background(), sessionID, "delegate risky work")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+
+	runErrCh := make(chan error, 1)
+	go func() { runErrCh <- orch.Run(context.Background(), &task) }()
+
+	// The sub-agent's own task (not the orchestrator's, which stays "running"
+	// for the duration of the synchronous handoff) is what reaches
+	// awaiting_approval — both share the same Store.
+	var subTask Task
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, tk := range store.ListBySession(sessionID, 50) {
+			if tk.Status == StatusAwaitingApproval {
+				subTask = tk
+			}
+		}
+		if subTask.ID != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if subTask.ID == "" {
+		t.Fatal("sub-agent task never reached awaiting_approval")
+	}
+
+	// The regression check: approving through the TOP-LEVEL runner (the only
+	// one the API has a handle to via HandleApproveTask) must resolve the
+	// sub-agent's gate, not just the orchestrator's own (empty) one.
+	if err := orch.Approve(subTask.ID, subTask.PendingProposalID, true, ""); err != nil {
+		t.Fatalf("orch.Approve on sub-agent task: %v", err)
+	}
+
+	if err := <-runErrCh; err != nil {
+		t.Fatalf("orch.Run: %v", err)
+	}
+	final, _ := store.Get(task.ID)
+	if final.Status != StatusCompleted {
+		t.Fatalf("orchestrator task not completed: %s (lastErr=%q)", final.Status, final.LastError)
 	}
 }
 

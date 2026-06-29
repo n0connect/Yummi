@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
 
 const (
@@ -52,8 +54,31 @@ type Record struct {
 	Status     string `json:"status"`
 	Output     string `json:"output,omitempty"`
 	Error      string `json:"error,omitempty"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
+	// SecurityBanner is the content-layer threat verdict for this command's
+	// output: a non-empty warning string when the raw output trips known
+	// prompt-injection / C2 / exfiltration patterns, "" when clean. It is
+	// DERIVED from Output (never persisted as authoritative state — recomputed
+	// on load) and computed ONCE here at the store chokepoint so that BOTH
+	// execution paths inherit it: the agent loop AND the single-command chat
+	// path. Consumers (UI, any LLM re-feed) must surface it so the model treats
+	// the output as untrusted DATA, not instructions. Output itself is left raw
+	// for the audit record — the banner is a separate signal, never mutates it.
+	SecurityBanner string `json:"security_banner,omitempty"`
+	// SanitizedOutput/SanitizedError are ANSI/C1-escape-stripped copies of
+	// Output/Error (threatscan.StripANSI), DERIVED the same way SecurityBanner
+	// is — never persisted as authoritative state, recomputed on load. Output
+	// itself stays raw for the operator's audit record (a researcher may
+	// legitimately need to see attacker write-ups verbatim, escapes included).
+	// But any consumer that re-feeds this content back into the LLM (the UI's
+	// chat feedback loop, any future server-side re-feed) MUST use the
+	// sanitized copy, mirroring how the agent loop already strips ANSI from
+	// its own observations (agent/graph.go) before reusing the same prompt
+	// channel — otherwise a target could use escape sequences to smuggle a
+	// payload past the banner scan and back into model context.
+	SanitizedOutput string `json:"sanitized_output,omitempty"`
+	SanitizedError  string `json:"sanitized_error,omitempty"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
 }
 
 // Event is published whenever an execution lifecycle changes.
@@ -411,9 +436,24 @@ func (s *Store) updateStatusIfIn(id string, allowed []string, status, output, er
 	rec.UpdatedAt = now
 	if output != "" {
 		rec.Output = output
+		// Content-layer fail-closed at the single chokepoint: every command's
+		// output — agent-loop OR single-command chat — originates on a (hostile)
+		// target and is adversarial by default. Scan it once here so no consumer
+		// can forget to. Detection only (a banner), never blocking or mutating
+		// the raw output: the operator can't intervene mid-command and a
+		// researcher may legitimately be reading attacker write-ups.
+		rec.SecurityBanner = threatscan.Banner(output)
+		rec.SanitizedOutput = threatscan.StripANSI(output)
 	}
 	if errText != "" {
 		rec.Error = errText
+		// Failure output (stderr / error body) is equally attacker-influenced.
+		// Only set a banner from the error when the output itself was clean, so
+		// we never clobber a hit found on stdout.
+		if rec.SecurityBanner == "" {
+			rec.SecurityBanner = threatscan.Banner(errText)
+		}
+		rec.SanitizedError = threatscan.StripANSI(errText)
 	}
 	s.items[id] = rec
 	s.mu.Unlock()
@@ -532,6 +572,18 @@ func (s *Store) loadFromDB() error {
 		rec.ProposalID = proposalID.String
 		rec.Output = output.String
 		rec.Error = errText.String
+		// SecurityBanner/SanitizedOutput/SanitizedError are derived, not stored —
+		// recompute them on load so a restored record carries the same
+		// content-layer verdict and LLM-safe copy it had live.
+		if rec.Output != "" {
+			rec.SecurityBanner = threatscan.Banner(rec.Output)
+			rec.SanitizedOutput = threatscan.StripANSI(rec.Output)
+		} else if rec.Error != "" {
+			rec.SecurityBanner = threatscan.Banner(rec.Error)
+		}
+		if rec.Error != "" {
+			rec.SanitizedError = threatscan.StripANSI(rec.Error)
+		}
 		s.items[rec.ID] = rec
 	}
 	return rows.Err()

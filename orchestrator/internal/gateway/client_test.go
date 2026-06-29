@@ -134,12 +134,56 @@ func TestClientAddManualRule(t *testing.T) {
 	})
 
 	c := NewClient(socket)
-	ruleID, expiresAt, err := c.AddManualRule("10.0.0.5/32", 600, "emergency access for finding F-12")
+	ruleID, expiresAt, _, err := c.AddManualRule("10.0.0.5/32", 600, "emergency access for finding F-12")
 	if err != nil {
 		t.Fatalf("add manual rule: %v", err)
 	}
 	if ruleID != "manual-1" || expiresAt != 1700 {
 		t.Fatalf("unexpected result: ruleID=%s expiresAt=%d", ruleID, expiresAt)
+	}
+}
+
+// TestClientAddTemporaryRulePropagatesKernelWarning is a regression test: the
+// gateway's policy engine can accept a rule while its OWN internal nftables
+// kernel-level unlock silently fails — that used to be visible only in the
+// gateway's logs. AddTemporaryRule must surface it to the Go caller (which
+// the executor turns into an operator-visible execution warning) rather than
+// reporting a bare, unqualified success.
+func TestClientAddTemporaryRulePropagatesKernelWarning(t *testing.T) {
+	const warning = "policy rule added but the nftables kernel unlock for 10.0.0.5/32 failed (no such device) — sandbox traffic to this target is still dropped"
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "add_temporary_rule" {
+			return Response{Type: "error", Message: "unexpected request"}
+		}
+		return Response{Type: "rule_added", RuleID: "temp-1", ExpiresAt: 1700, KernelWarning: warning}
+	})
+
+	c := NewClient(socket)
+	ruleID, expiresAt, kernelWarning, err := c.AddTemporaryRule("10.0.0.5/32", 600, "agent execution")
+	if err != nil {
+		t.Fatalf("add temporary rule: %v", err)
+	}
+	if ruleID != "temp-1" || expiresAt != 1700 {
+		t.Fatalf("unexpected result: ruleID=%s expiresAt=%d", ruleID, expiresAt)
+	}
+	if kernelWarning != warning {
+		t.Fatalf("expected kernel warning to propagate, got %q", kernelWarning)
+	}
+}
+
+// A clean rule add (no kernel failure) must leave kernelWarning empty.
+func TestClientAddTemporaryRuleNoWarningOnSuccess(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		return Response{Type: "rule_added", RuleID: "temp-2", ExpiresAt: 1800}
+	})
+
+	c := NewClient(socket)
+	_, _, kernelWarning, err := c.AddTemporaryRule("10.0.0.6/32", 600, "agent execution")
+	if err != nil {
+		t.Fatalf("add temporary rule: %v", err)
+	}
+	if kernelWarning != "" {
+		t.Fatalf("expected no kernel warning, got %q", kernelWarning)
 	}
 }
 
@@ -256,7 +300,7 @@ func TestClientCheckEgressFallsBackToInScope(t *testing.T) {
 
 func TestClientAddManualRuleRequiresReason(t *testing.T) {
 	c := NewClient("/nonexistent") // never reaches the socket — fails client-side
-	_, _, err := c.AddManualRule("10.0.0.5/32", 600, "")
+	_, _, _, err := c.AddManualRule("10.0.0.5/32", 600, "")
 	if err == nil {
 		t.Fatal("expected error for empty reason")
 	}

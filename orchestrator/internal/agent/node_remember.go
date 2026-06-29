@@ -16,8 +16,8 @@ import (
 // persistent memory. It is knowledge-only: no execution path, fail-closed.
 // A nil knowledge store degrades to a no-op observation rather than failing.
 func rememberNode(ctx context.Context, s *GraphState) (string, error) {
-	key := strings.TrimSpace(s.pendingAct.MemKey)
-	val := strings.TrimSpace(s.pendingAct.MemValue)
+	key := threatscan.StripANSI(strings.TrimSpace(s.pendingAct.MemKey))
+	val := threatscan.StripANSI(strings.TrimSpace(s.pendingAct.MemValue))
 	if key == "" || val == "" {
 		s.lastObs = Wrap("TOOL_FAILED", "REMEMBER needs both key and value")
 		return edgeOK, nil
@@ -26,6 +26,10 @@ func rememberNode(ctx context.Context, s *GraphState) (string, error) {
 	// into the prompt every future turn (buildMemory), so a value derived from
 	// poisoned tool output could plant a cross-session prompt injection. Memory
 	// is a user-mediated path, so we BLOCK (strict scope) rather than warn.
+	// ANSI is stripped BEFORE the threat scan (not after) so a target can't use
+	// an escape sequence to split a banned phrase across bytes the regex scan
+	// would otherwise see as contiguous — same ordering as the agent's own
+	// tool-output observations (graph.go: StripANSI, then Banner).
 	if msg := threatscan.FirstThreatMessage(key+"\n"+val, threatscan.ScopeStrict); msg != "" {
 		slog.Warn("agent: REMEMBER blocked by threat scan", "task", s.taskID, "key", key, "reason", msg)
 		s.lastObs = Wrap("TOOL_FAILED", "REMEMBER rejected — "+msg+

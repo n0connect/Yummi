@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,23 +22,34 @@ var wsUpgrader = websocket.Upgrader{
 	CheckOrigin:     isValidWebSocketOrigin,
 }
 
+// isLocalhostOrigin reports whether an Origin header value names a loopback
+// host. It is the single source of truth for "is this a same-machine browser
+// origin", shared by the WebSocket upgrade check and the CORS middleware so the
+// two never drift. An unparseable origin is treated as not-localhost (deny).
+func isLocalhostOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
 // isValidWebSocketOrigin validates WebSocket origins to prevent CSWSH attacks.
 // Accepts localhost/127.0.0.1 connections and non-browser clients (no Origin header).
 func isValidWebSocketOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
+		return true // non-browser client (CLI/TUI) — no Origin to forge
+	}
+	if isLocalhostOrigin(origin) {
 		return true
 	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		slog.Warn("websocket: invalid origin header", "origin", origin, "error", err)
-		return false
-	}
-	hostname := u.Hostname()
-	if hostname == "127.0.0.1" || hostname == "localhost" || hostname == "[::1]" {
-		return true
-	}
-	slog.Warn("websocket: rejected non-localhost origin", "origin", origin, "hostname", hostname)
+	slog.Warn("websocket: rejected non-localhost origin", "origin", origin)
 	return false
 }
 
@@ -97,6 +109,21 @@ var validSeverities = map[string]struct{}{
 func isValidSeverity(s string) bool {
 	_, ok := validSeverities[strings.ToLower(s)]
 	return ok
+}
+
+var (
+	sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
+	namePattern      = regexp.MustCompile(`^[a-zA-Z0-9\s_-]{1,100}$`)
+	titlePattern     = regexp.MustCompile(`^[a-zA-Z0-9\s_\-\.,\!\?\'\"\#\(\)\[\]]{1,200}$`)
+	reasonPattern    = regexp.MustCompile(`^[a-zA-Z0-9\s_\-\.,\!\?\'\"\#\(\)\[\]]{1,500}$`)
+)
+
+func isValidSessionID(id string) bool {
+	return sessionIDPattern.MatchString(id)
+}
+
+func isValidName(name string) bool {
+	return namePattern.MatchString(name)
 }
 
 func appendAuditSafe(sm *session.Manager, sessionID, eventType, actor string, payload any) {

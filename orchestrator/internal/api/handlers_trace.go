@@ -11,10 +11,12 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
 
-// qLimit reads a positive ?limit= query parameter, falling back to def.
+// qLimit reads a positive ?limit= query parameter, falling back to def. The
+// value is clamped to the shared safe bound so a caller cannot request an
+// unboundedly large result set.
 func qLimit(r *http.Request, def int) int {
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
-		return v
+		return clampLimit(v)
 	}
 	return def
 }
@@ -27,7 +29,12 @@ func HandleListActivity(store *agent.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, []agent.ActivityEvent{})
 			return
 		}
-		writeJSON(w, http.StatusOK, store.ListActivity(chi.URLParam(r, "sessionID"), qLimit(r, 200)))
+		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, store.ListActivity(sessionID, qLimit(r, 200)))
 	}
 }
 
@@ -55,7 +62,12 @@ func HandleListContext(ks *knowledge.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, []knowledge.PersistentContext{})
 			return
 		}
-		writeJSON(w, http.StatusOK, ks.ListContexts(chi.URLParam(r, "sessionID")))
+		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, ks.ListContexts(sessionID))
 	}
 }
 

@@ -16,6 +16,18 @@ export type ExecutionRecord = {
   mode?: string
   output?: string
   error?: string
+  // Content-layer threat verdict for this command's output, set by the
+  // orchestrator when the raw output trips known prompt-injection / C2 /
+  // exfiltration patterns. Surfaced in the card AND prepended when the output
+  // is fed back to the conductor, so the model treats it as untrusted DATA.
+  security_banner?: string
+  // ANSI/C1-escape-stripped copies of output/error. output/error stay raw for
+  // operator display (escape sequences included, intentionally); anything
+  // that re-feeds this content back into the LLM (analyzeOutput below) must
+  // use these instead — an unstripped escape sequence could be used by a
+  // hostile target to smuggle a payload past the banner scan.
+  sanitized_output?: string
+  sanitized_error?: string
   created_at?: number
   updated_at?: number
 }

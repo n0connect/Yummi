@@ -30,7 +30,7 @@ func TestGraph_ToolThrash_SemanticDuplicateLoop(t *testing.T) {
 		"[RUN_COMMAND]\n{\"command\":\"echo b\",\"step_id\":\"s1\",\"risk_level\":\"low\"}",
 		"[RUN_COMMAND]\n{\"command\":\"echo c\",\"step_id\":\"s1\",\"risk_level\":\"low\"}",
 		"[RUN_COMMAND]\n{\"command\":\"echo d\",\"step_id\":\"s1\",\"risk_level\":\"low\"}", // 4th echo → thrash nudge, NOT executed
-		"[RUN_COMMAND]\n{\"command\":\"true\",\"step_id\":\"s1\",\"risk_level\":\"low\"}", // recovery: different tool
+		"[RUN_COMMAND]\n{\"command\":\"true\",\"step_id\":\"s1\",\"risk_level\":\"low\"}",   // recovery: different tool
 		"[FINISH]\n{\"summary\":\"enumerated processes\"}")
 
 	s := newToolState(t, store, task.ID, ollama, es, fastRetryCfg())

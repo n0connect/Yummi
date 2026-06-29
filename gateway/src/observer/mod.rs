@@ -50,11 +50,8 @@ impl Observer {
                 seen.insert(key);
 
                 // Check destination against gateway policy scope.
-                let dst_raw = dst.trim_matches(|c| c == '[' || c == ']');
-                let dst_ip_str = if let Some(p) = dst_raw.rfind(':') {
-                    &dst_raw[..p]
-                } else {
-                    dst_raw
+                let Some(dst_ip_str) = extract_ip_str(dst) else {
+                    continue;
                 };
                 if let Ok(dst_ip) = IpAddr::from_str(dst_ip_str) {
                     let (decision, reason) = self.policy.evaluate(dst_ip);
@@ -80,6 +77,23 @@ impl Observer {
                 seen.clear();
             }
         }
+    }
+}
+
+/// Extracts the bare IP-address portion from a "host:port" or "[ipv6]:port"
+/// string produced by parse_proc_addr. Returns None for anything that
+/// doesn't match one of those two well-defined shapes — an allowlist on
+/// structure rather than a best-effort strip, since silently misparsing the
+/// destination would mean evaluating policy against the wrong address.
+fn extract_ip_str(addr: &str) -> Option<&str> {
+    if let Some(rest) = addr.strip_prefix('[') {
+        // "[ipv6]:port" — the IP is everything up to the matching ']'.
+        let end = rest.find(']')?;
+        Some(&rest[..end])
+    } else {
+        // "ipv4:port" — the IP is everything before the last ':'.
+        let p = addr.rfind(':')?;
+        Some(&addr[..p])
     }
 }
 
@@ -128,7 +142,7 @@ fn parse_proc_addr(hex: &str) -> String {
         // /proc/net stores little-endian on little-endian arch
         let bytes = n.to_le_bytes();
         let ip = IpAddr::from(bytes);
-        return format!("{}:{}", ip, port);
+        return format!("{ip}:{port}");
     }
     // IPv6: 32 hex chars
     if parts[0].len() == 32 {
@@ -140,7 +154,62 @@ fn parse_proc_addr(hex: &str) -> String {
                 bytes[i * 4..(i + 1) * 4].copy_from_slice(&wb);
             }
         }
-        return format!("[{:x?}]:{}", bytes, port);
+        let ip = IpAddr::from(bytes);
+        return format!("[{ip}]:{port}");
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_proc_addr_ipv4() {
+        // 0100007F = 127.0.0.1 little-endian; 0050 = port 80.
+        assert_eq!(parse_proc_addr("0100007F:0050"), "127.0.0.1:80");
+    }
+
+    #[test]
+    fn test_parse_proc_addr_ipv6_produces_parseable_literal() {
+        // ::1 (loopback) encoded the way /proc/net/tcp6 stores it.
+        let out = parse_proc_addr("00000000000000000000000001000000:0050");
+        assert_eq!(out, "[::1]:80");
+        // Regression for the audit finding: the previous `{:x?}` Debug-format
+        // produced "[[0, 0, ..., 1]]:80", which extract_ip_str/IpAddr::from_str
+        // could never parse back — every IPv6 entry was silently dropped from
+        // the audit log. The fixed output must round-trip through the same
+        // extraction the run loop uses.
+        let ip_str = extract_ip_str(&out).expect("extract_ip_str should find the IPv6 literal");
+        assert_eq!(ip_str, "::1");
+        assert!(
+            IpAddr::from_str(ip_str).is_ok(),
+            "produced literal {out:?} did not round-trip through IpAddr::from_str"
+        );
+    }
+
+    #[test]
+    fn test_extract_ip_str_ipv4() {
+        assert_eq!(extract_ip_str("127.0.0.1:80"), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn test_extract_ip_str_ipv6() {
+        assert_eq!(extract_ip_str("[::1]:80"), Some("::1"));
+        assert_eq!(extract_ip_str("[2001:db8::1]:443"), Some("2001:db8::1"));
+    }
+
+    #[test]
+    fn test_extract_ip_str_malformed_returns_none() {
+        assert_eq!(extract_ip_str("[::1"), None); // unterminated bracket
+        assert_eq!(extract_ip_str("no-colon-here"), None);
+        assert_eq!(extract_ip_str(""), None);
+    }
+
+    #[test]
+    fn test_parse_proc_addr_malformed_input_returns_empty() {
+        assert_eq!(parse_proc_addr("not-a-valid-entry"), "");
+        assert_eq!(parse_proc_addr(""), "");
+        assert_eq!(parse_proc_addr("ZZZZZZZZ:0050"), "0.0.0.0:80"); // bad hex falls back to 0, never panics
+    }
 }

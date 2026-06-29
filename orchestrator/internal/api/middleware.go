@@ -33,6 +33,27 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// maxRequestBody bounds the size of a REST request body. It is generous enough
+// not to restrict legitimate use (a chat turn that feeds a large tool output
+// back for analysis) while capping unbounded-body memory exhaustion: every JSON
+// handler decodes straight from r.Body, so without this a single oversized
+// request could force an arbitrarily large allocation. The orchestrator binds to
+// localhost, so this is defense-in-depth, not the primary boundary.
+const maxRequestBody = 8 << 20 // 8 MiB
+
+// BodyLimit caps the request body via http.MaxBytesReader, so a handler that
+// reads past the limit gets a clean error (decoded as a 400) instead of
+// allocating without bound. Applied to REST routes only; WebSocket upgrades read
+// frames, not a JSON body, and must not be wrapped.
+func BodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && !isWebSocketRequest(r) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // JSONContentType sets Content-Type to application/json for API routes.
 func JSONContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

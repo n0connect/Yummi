@@ -18,6 +18,10 @@ func HandleListExecutions(store *execution.Store) http.HandlerFunc {
 			return
 		}
 		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		limit := 100
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			v, err := strconv.Atoi(raw)
@@ -39,6 +43,10 @@ func HandleGetExecution(store *execution.Store) http.HandlerFunc {
 			return
 		}
 		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid execution id format", nil)
+			return
+		}
 		record, ok := store.Get(id)
 		if !ok {
 			writeError(w, http.StatusNotFound, "execution not found", nil)
@@ -55,6 +63,10 @@ func HandleCancelExecution(store *execution.Store, sm *session.Manager) http.Han
 			return
 		}
 		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid execution id format", nil)
+			return
+		}
 		rec, err := store.Cancel(id)
 		if err != nil {
 			status := http.StatusInternalServerError

@@ -38,6 +38,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 	// REST API
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(JSONContentType)
+		r.Use(BodyLimit)
 
 		// Sessions
 		r.Get("/sessions", HandleListSessions(sm))

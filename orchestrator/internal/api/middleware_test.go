@@ -25,6 +25,35 @@ func TestTimeoutUnlessWebSocketWrapsNormalRequestsWithDeadline(t *testing.T) {
 	}
 }
 
+func TestCORSOnlyGrantsLocalhostOrigins(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := CORSMiddleware(next)
+
+	cases := []struct {
+		origin    string
+		wantGrant bool
+	}{
+		{"http://localhost:3000", true},
+		{"http://127.0.0.1:9080", true},
+		{"https://evil.example.com", false},
+		{"http://localhost.evil.com", false}, // suffix trick must not pass
+		{"null", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+		req.Header.Set("Origin", tc.origin)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		got := w.Header().Get("Access-Control-Allow-Origin")
+		if tc.wantGrant && got != tc.origin {
+			t.Errorf("origin %q: expected ACAO %q, got %q", tc.origin, tc.origin, got)
+		}
+		if !tc.wantGrant && got != "" {
+			t.Errorf("origin %q: expected NO CORS grant, got ACAO %q", tc.origin, got)
+		}
+	}
+}
+
 func TestTimeoutUnlessWebSocketSkipsUpgradeRequests(t *testing.T) {
 	mw := TimeoutUnlessWebSocket(10 * time.Millisecond)
 	var hasDeadline bool

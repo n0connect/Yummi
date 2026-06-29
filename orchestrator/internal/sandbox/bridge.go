@@ -29,6 +29,11 @@ type Result struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	Duration int64  `json:"duration_ms"`
+	// Warning carries a non-fatal, operator-visible note about the command's
+	// surrounding infrastructure (e.g. the gateway's nftables unlock failed)
+	// that did not block execution but may explain an otherwise-unexplained
+	// network failure. Empty when nothing to report.
+	Warning string `json:"warning,omitempty"`
 }
 
 // NewBridge creates a bridge to the named container.
