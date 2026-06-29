@@ -76,6 +76,21 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 	return nil
 }
 
+// getStatus issues a GET and reports only whether the server returned 2xx —
+// used by SessionExists, where the body is irrelevant.
+func (c *Client) getStatus(ctx context.Context, path string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+path, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, nil
+}
+
 // CreateSession opens a session and stores its id. The server returns the
 // Session object whose id field is the session id (NOT "session_id").
 func (c *Client) CreateSession() error {
@@ -89,6 +104,34 @@ func (c *Client) CreateSession() error {
 		return fmt.Errorf("session create returned empty id")
 	}
 	c.SessionID = out.ID
+	return nil
+}
+
+// SessionExists reports whether a session id is still known to the orchestrator
+// (true on HTTP 200 from GET /api/v1/sessions/{id}).
+func (c *Client) SessionExists(id string) bool {
+	status, err := c.getStatus(context.Background(), "/api/v1/sessions/"+id)
+	return err == nil && status == http.StatusOK
+}
+
+// EnsureSession reuses the session id persisted from a previous TUI launch
+// (if the orchestrator still recognizes it) instead of always starting a
+// brand-new, empty-history session. Conversation history lives in-memory on
+// the conductor keyed by session id (see conductor.Engine.history), so a
+// fresh id every launch meant the TUI's chat history never accumulated past
+// a couple of turns — unlike the web UI, which reuses one long-lived session
+// id across a whole browser tab — and the model's tone drifted noticeably
+// between the two clients as a result, even though both hit the identical
+// /api/v1/chat endpoint. Reusing the persisted id closes that gap.
+func (c *Client) EnsureSession() error {
+	if id := loadPersistedSessionID(); id != "" && c.SessionExists(id) {
+		c.SessionID = id
+		return nil
+	}
+	if err := c.CreateSession(); err != nil {
+		return err
+	}
+	savePersistedSessionID(c.SessionID) // best-effort; a failed write just costs history continuity, not correctness
 	return nil
 }
 

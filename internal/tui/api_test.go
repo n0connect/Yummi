@@ -35,6 +35,88 @@ func TestCreateSessionReadsID(t *testing.T) {
 	}
 }
 
+// Regression for the TUI/web personality-drift bug: chat history lives
+// in-memory on the conductor keyed by session id, and the TUI previously
+// called CreateSession() unconditionally on every launch — a fresh, empty
+// history every time, unlike the web UI which reuses one session id for a
+// whole browser tab. EnsureSession must reuse a still-valid persisted id
+// instead of always minting a new one.
+func TestEnsureSessionReusesPersistedID(t *testing.T) {
+	t.Setenv("YUMMI_HOME", t.TempDir())
+	savePersistedSessionID("sess-old")
+
+	var gotPath string
+	created := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Method == http.MethodPost {
+			created = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	if err := c.EnsureSession(); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if c.SessionID != "sess-old" {
+		t.Fatalf("expected reused session id, got %q", c.SessionID)
+	}
+	if gotPath != "/api/v1/sessions/sess-old" {
+		t.Fatalf("expected a GET existence check, got path %q", gotPath)
+	}
+	if created {
+		t.Fatal("EnsureSession should not create a new session when the persisted one is still valid")
+	}
+}
+
+func TestEnsureSessionCreatesAndPersistsWhenNoneSaved(t *testing.T) {
+	t.Setenv("YUMMI_HOME", t.TempDir())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"sess-new","name":"TUI"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	if err := c.EnsureSession(); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if c.SessionID != "sess-new" {
+		t.Fatalf("expected the newly created session id, got %q", c.SessionID)
+	}
+	if got := loadPersistedSessionID(); got != "sess-new" {
+		t.Fatalf("new session id not persisted for next launch, got %q", got)
+	}
+}
+
+func TestEnsureSessionFallsBackWhenPersistedIDStale(t *testing.T) {
+	t.Setenv("YUMMI_HOME", t.TempDir())
+	savePersistedSessionID("sess-gone")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"sess-new","name":"TUI"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound) // the orchestrator no longer knows "sess-gone"
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	if err := c.EnsureSession(); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if c.SessionID != "sess-new" {
+		t.Fatalf("expected fallback to a freshly created session, got %q", c.SessionID)
+	}
+}
+
 func TestChatParsesProposalsAndTask(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/chat" {

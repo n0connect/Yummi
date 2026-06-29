@@ -49,6 +49,13 @@ type execMsg struct {
 	Status  string
 	Output  string
 	Error   string
+	// SanitizedOutput/SanitizedError/Banner are the ANSI-stripped, threat-scan-banner-prefixed
+	// copies used when feeding this result back into the conductor — see analyzeOutput in
+	// app.go. Never the raw fields: those may carry target-controlled escape sequences.
+	SanitizedOutput string
+	SanitizedError  string
+	Banner          string
+	Mode            string
 }
 
 // PlanStep mirrors the orchestrator's agent.PlanStep JSON (the fields the TUI
@@ -91,10 +98,14 @@ type wsEnvelope struct {
 }
 
 type wireExec struct {
-	Command string `json:"command"`
-	Status  string `json:"status"`
-	Output  string `json:"output"`
-	Error   string `json:"error"`
+	Command         string `json:"command"`
+	Status          string `json:"status"`
+	Output          string `json:"output"`
+	Error           string `json:"error"`
+	SanitizedOutput string `json:"sanitized_output"`
+	SanitizedError  string `json:"sanitized_error"`
+	SecurityBanner  string `json:"security_banner"`
+	Mode            string `json:"mode"`
 }
 
 type wireTask struct {
@@ -131,7 +142,11 @@ func decodeFrame(raw []byte) tea.Msg {
 		if json.Unmarshal(env.Data, &e) != nil {
 			return nil
 		}
-		return execMsg(e)
+		return execMsg{
+			Command: e.Command, Status: e.Status, Output: e.Output, Error: e.Error,
+			SanitizedOutput: e.SanitizedOutput, SanitizedError: e.SanitizedError,
+			Banner: e.SecurityBanner, Mode: e.Mode,
+		}
 	case "task.status":
 		var t wireTask
 		if json.Unmarshal(env.Data, &t) != nil {
