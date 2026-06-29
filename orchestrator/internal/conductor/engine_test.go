@@ -256,8 +256,31 @@ func TestParseStructuredResponse(t *testing.T) {
 	}
 }
 
+// Regression: the system prompt's only language instruction used to be the
+// hardcoded, one-directional "Match the operator's language exactly (Turkish
+// input → Turkish output)" — found live to plausibly bias the model toward
+// Turkish since the English direction was only implicit. buildSystemPrompt
+// must now surface the persona's explicit, bidirectional language_parity
+// rule from core_identity.yaml's character.disposition block.
+func TestSystemPromptUsesPersonaLanguageParity(t *testing.T) {
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
+	if err != nil {
+		t.Fatalf("engine init: %v", err)
+	}
+	if engine.persona.Disposition.LanguageParity == "" {
+		t.Fatal("persona's language_parity field loaded empty — core_identity.yaml's character block isn't being parsed")
+	}
+	prompt := engine.buildSystemPrompt()
+	if !strings.Contains(prompt, engine.persona.Disposition.LanguageParity) {
+		t.Fatalf("system prompt does not include the persona's language_parity text:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "English input") {
+		t.Fatal("system prompt's language rule does not explicitly cover the English direction")
+	}
+}
+
 func TestSystemPromptIncludesStartTask(t *testing.T) {
-	engine, err := NewEngine("../../persona/v0.1", "", "")
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
 	if err != nil {
 		t.Fatalf("engine init: %v", err)
 	}

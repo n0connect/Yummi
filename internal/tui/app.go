@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -263,14 +265,25 @@ func (m *model) insertPastePlaceholder(runes []rune) tea.Cmd {
 	return nil
 }
 
+var pastedPlaceholderPattern = regexp.MustCompile(`\[Pasted #(\d+)\]`)
+
 // expandPastedBlocks substitutes every "[Pasted #N]" placeholder in text with
 // the full content it stands in for, so the conductor sees the real pasted
 // content even though the operator only ever saw a compact placeholder.
+// ReplaceAllStringFunc matches once against the original text and never
+// re-scans a replacement's own content — unlike a sequential loop of
+// strings.ReplaceAll calls, which would let one block's pasted text that
+// happens to literally contain "[Pasted #2]" get spliced with block #2's
+// content in the wrong place.
 func (m *model) expandPastedBlocks(text string) string {
-	for i, block := range m.pastedBlocks {
-		text = strings.ReplaceAll(text, fmt.Sprintf("[Pasted #%d]", i+1), block)
-	}
-	return text
+	return pastedPlaceholderPattern.ReplaceAllStringFunc(text, func(match string) string {
+		sub := pastedPlaceholderPattern.FindStringSubmatch(match)
+		idx, err := strconv.Atoi(sub[1])
+		if err != nil || idx < 1 || idx > len(m.pastedBlocks) {
+			return match
+		}
+		return m.pastedBlocks[idx-1]
+	})
 }
 
 func (m *model) slashCommands() []string {
