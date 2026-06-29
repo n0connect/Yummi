@@ -16,6 +16,30 @@ const KIND_META: Record<ActivityKind, [string, string]> = {
   finish:            ['🏁', 'bitti'],
 }
 
+// Both severity and outcome are typed `<literal> | string` (entities/types.ts)
+// so a future/unrecognized backend value type-checks — but that means it must
+// never be interpolated directly into a className. Closed-set lookup with a
+// safe default instead.
+function severityClass(severity: string): string {
+  switch (severity) {
+    case 'info':     return 'trace-finding sev-info'
+    case 'low':       return 'trace-finding sev-low'
+    case 'medium':    return 'trace-finding sev-medium'
+    case 'high':      return 'trace-finding sev-high'
+    case 'critical':  return 'trace-finding sev-critical'
+    default:          return 'trace-finding sev-unknown'
+  }
+}
+
+function outcomeClass(outcome: string): string {
+  switch (outcome) {
+    case 'worked':       return 'trace-outcome out-worked'
+    case 'failed':        return 'trace-outcome out-failed'
+    case 'inconclusive':  return 'trace-outcome out-inconclusive'
+    default:               return 'trace-outcome out-unknown'
+  }
+}
+
 function ActivityRow({ ev }: { ev: ActivityEvent }): JSX.Element {
   const [icon, label] = KIND_META[ev.kind] ?? ['•', ev.kind]
   const nested = Boolean(ev.parent_task_id)
@@ -64,7 +88,7 @@ export function TracePage(): JSX.Element {
         {/* Findings */}
         <Section title="Bulgular" count={findings.length}>
           {findings.map(f => (
-            <div key={f.id} className={`trace-finding sev-${f.severity}`}>
+            <div key={f.id} className={severityClass(f.severity)}>
               <span className="trace-sev">{f.severity}</span>
               <span className="trace-finding-title">{f.title}</span>
               {f.source && <span className="trace-src">{f.source}</span>}
@@ -78,7 +102,7 @@ export function TracePage(): JSX.Element {
           {tactics.map(t => (
             <div key={t.id} className="trace-tactic">
               <code className="trace-cmd">{t.command_pattern}</code>
-              <span className={`trace-outcome out-${t.outcome}`}>{t.outcome}</span>
+              <span className={outcomeClass(t.outcome)}>{t.outcome}</span>
               <span className="trace-hits">{t.hit_count}×</span>
             </div>
           ))}

@@ -1,6 +1,9 @@
 package agent
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 // maxRetainedObservation caps the bytes any single observation contributes to
 // the in-memory history. A command can return a multi-megabyte dump (a large
@@ -43,8 +46,27 @@ func capObservation(obs string) string {
 		return obs
 	}
 	const edge = maxRetainedObservation / 2
-	head := obs[:edge]
-	tail := obs[len(obs)-edge:]
+	head := obs[:utf8SafeCut(obs, edge)]
+	tail := obs[utf8SafeCut(obs, len(obs)-edge):]
 	return fmt.Sprintf("%s\n...[observation capped: %d bytes total, middle elided]...\n%s",
 		head, len(obs), tail)
+}
+
+// utf8SafeCut returns the largest index <= n (clamped to [0, len(s)]) that
+// does not land in the middle of a multi-byte UTF-8 rune. obs/tool-output
+// text is attacker-influenced (the pentest target controls it), so naive
+// byte-offset slicing (s[:n], s[n:]) can split a rune and produce invalid
+// UTF-8 in retained history, prompts, and JSON-encoded API responses —
+// rounding down to the nearest rune boundary keeps every slice valid UTF-8.
+func utf8SafeCut(s string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n >= len(s) {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
 }

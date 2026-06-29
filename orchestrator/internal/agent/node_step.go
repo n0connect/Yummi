@@ -92,8 +92,7 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 	switch msg.Tag {
 	case "RUN_COMMAND":
 		if strings.TrimSpace(msg.Action.Command) == "" {
-			s.retryCtx = RetryContext{Caller: nodeStep}
-			return edgeLLMError, nil
+			return s.rejectStepAction()
 		}
 		return edgeRunCommand, nil
 	case "FINISH":
@@ -110,35 +109,41 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		// an invalid action rather than wedging the loop. This caps depth at 1.
 		role := strings.TrimSpace(msg.Action.Role)
 		if _, ok := s.cfg.SubAgents[role]; !ok || strings.TrimSpace(msg.Action.Subgoal) == "" {
-			s.retryCtx = RetryContext{Caller: nodeStep}
-			return edgeLLMError, nil
+			return s.rejectStepAction()
 		}
 		return edgeHandoff, nil
 	case "REMEMBER":
 		if strings.TrimSpace(msg.Action.MemKey) == "" || strings.TrimSpace(msg.Action.MemValue) == "" {
-			s.retryCtx = RetryContext{Caller: nodeStep}
-			return edgeLLMError, nil
+			return s.rejectStepAction()
 		}
 		return edgeRemember, nil
 	case "ASK_OPERATOR":
 		if strings.TrimSpace(msg.Action.Question) == "" {
-			s.retryCtx = RetryContext{Caller: nodeStep}
-			return edgeLLMError, nil
+			return s.rejectStepAction()
 		}
 		return edgeAskOperator, nil
 	case "UPDATE_PLAN":
 		if len(msg.Action.Steps) == 0 {
-			s.retryCtx = RetryContext{Caller: nodeStep}
-			return edgeLLMError, nil
+			return s.rejectStepAction()
 		}
 		_ = s.store.Update(s.taskID, func(t *Task) { t.Plan = msg.Action.Steps })
 		s.lastObs = Wrap("PLAN_UPDATED", msg.Action.Reason)
 		return edgeUpdatePlan, nil
 	default:
 		// CONTINUE/ABORT/CHANGE_GOAL are consult-only and invalid at a normal step.
-		s.retryCtx = RetryContext{Caller: nodeStep}
-		return edgeLLMError, nil
+		return s.rejectStepAction()
 	}
+}
+
+// rejectStepAction is the shared outcome for a structurally-parsed control
+// message whose required field(s) are missing/invalid at the step node: route
+// to the LLM-error retry edge with a fresh retry context (Attempts starts at
+// 0 — this is a new validation failure, not a continuation of an LLM-call
+// failure, so it must NOT reuse whatever Attempts count node_step's own
+// LLM-call-error paths above carry).
+func (s *GraphState) rejectStepAction() (string, error) {
+	s.retryCtx = RetryContext{Caller: nodeStep}
+	return edgeLLMError, nil
 }
 
 // buildPreamble assembles the per-turn context blocks injected ahead of the

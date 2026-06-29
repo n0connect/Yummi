@@ -33,7 +33,7 @@ func windowToSamples(w string) int {
 		return 720
 	default:
 		if n, err := strconv.Atoi(w); err == nil && n > 0 {
-			return n
+			return clampLimit(n)
 		}
 		return 720
 	}

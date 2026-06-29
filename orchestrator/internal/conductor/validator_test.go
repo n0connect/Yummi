@@ -71,3 +71,70 @@ func TestValidatorEmptyCommandDropped(t *testing.T) {
 		t.Error("expected a warning about the empty command")
 	}
 }
+
+func TestValidatorShellChainingEscalation(t *testing.T) {
+	v := NewValidator()
+
+	tests := []struct {
+		cmd  string
+		want string
+	}{
+		{"ping 127.0.0.1; ping 8.8.8.8", "critical"},
+		{"ping 127.0.0.1\nping 8.8.8.8", "critical"},
+		{"nmap 10.0.0.1 | grep open", "critical"},
+		{"echo `whoami`", "critical"},
+		{"echo $(whoami)", "critical"},
+		{"echo $target", "critical"},
+		{"ping 10.0.0.1 && ping 10.0.0.2", "critical"},
+		{"ping 10.0.0.1 || ping 10.0.0.2", "critical"},
+		{"nmap 10.0.0.1", "low"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			resp := v.ValidateChatResponse(ChatResponse{
+				Proposals: []Proposal{
+					{Command: tt.cmd, RiskLevel: "low"},
+				},
+			})
+			if resp.Proposals[0].RiskLevel != tt.want {
+				t.Errorf("expected risk level %s, got %s for %q", tt.want, resp.Proposals[0].RiskLevel, tt.cmd)
+			}
+		})
+	}
+}
+
+// TestClassifyRiskAllowlistShape proves classifyRisk is a default-deny
+// allowlist on command SHAPE, not a blacklist of specific bad characters.
+// These cases cover structures the old "escalate on &&/||/;/|/`/$" blacklist
+// would have missed entirely (a lone "&" backgrounds the command; ">"/"<"
+// redirect; "()" opens a subshell; "#" starts a comment that can hide a
+// trailing payload) — all are shell-significant and must NOT be "low" even
+// though none of them are in that old fixed list. Conversely, the SAME bytes
+// inside a quoted argument are inert data to the shell, so they don't
+// escalate — proving the allowlist isn't simply a stricter blacklist either.
+func TestClassifyRiskAllowlistShape(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want string
+	}{
+		{"sleep 30 &", "critical"},              // lone background operator
+		{"cat file.txt > /tmp/out", "critical"}, // output redirection
+		{"cat < /etc/passwd", "critical"},       // input redirection
+		{"(cd /tmp; ls)", "critical"},           // subshell
+		{"echo hi # rm -rf /", "critical"},      // comment can hide a payload
+		{"curl 'http://x/?a=1&b=2'", "low"},     // quoted: & is inert data
+		{"grep \"a;b|c\" file.txt", "low"},      // quoted: ;| are inert data
+		{"nmap -sV -p1-65535 10.0.0.1", "low"},  // ordinary flags/ranges
+		{"sqlmap -u http://example.com --risk 3", "low"},
+		{"gobuster dir -u http://10.0.0.1 -w /usr/share/wordlists/dirb/common.txt", "low"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			if got := classifyRisk(tt.cmd); got != tt.want {
+				t.Errorf("classifyRisk(%q) = %q, want %q", tt.cmd, got, tt.want)
+			}
+		})
+	}
+}

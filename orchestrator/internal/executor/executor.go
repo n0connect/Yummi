@@ -71,15 +71,31 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 		}
 
 		network := hostNetwork(target)
+		var nftWarning string
 		if network == "" {
 			slog.Warn("RunScopedCommand: target is not an IP, skipping nftables unlock (gateway needs a resolved IP)",
 				"target", target)
-		} else if _, _, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
+		} else if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
+			// The IPC call itself failed (gateway unreachable, malformed request, etc.).
 			slog.Warn("RunScopedCommand: gateway nftables unlock failed (proceeding — check gateway logs)",
 				"target", target, "error", nftErr)
+			nftWarning = fmt.Sprintf("gateway nftables unlock for %s failed (%v) — the command ran but may have no network path to the target", network, nftErr)
+		} else if kernelWarning != "" {
+			// The IPC call succeeded (policy rule added) but the gateway's own
+			// kernel-level nftables unlock failed internally — same operator-
+			// visible consequence as the case above, different failure point.
+			slog.Warn("RunScopedCommand: gateway accepted the rule but its kernel unlock failed",
+				"target", target, "warning", kernelWarning)
+			nftWarning = kernelWarning
 		} else {
 			slog.Info("RunScopedCommand: nftables allow rule added", "target", network)
 		}
+
+		result, err := bridge.Exec(ctx, command)
+		if nftWarning != "" && result != nil {
+			result.Warning = nftWarning
+		}
+		return result, err
 	}
 
 	return bridge.Exec(ctx, command)
@@ -136,7 +152,7 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 			return "", err
 		}
 
-		// Build output combining stdout and stderr.
+		// Build output combining stdout, stderr, and any non-fatal gateway warning.
 		var out strings.Builder
 		if result.Stdout != "" {
 			out.WriteString(result.Stdout)
@@ -146,6 +162,12 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 				out.WriteString("\n--- stderr ---\n")
 			}
 			out.WriteString(result.Stderr)
+		}
+		if result.Warning != "" {
+			if out.Len() > 0 {
+				out.WriteString("\n--- warning ---\n")
+			}
+			out.WriteString(result.Warning)
 		}
 
 		if result.ExitCode != 0 {

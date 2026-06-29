@@ -312,9 +312,26 @@ func (r *Runner) Stop(taskID string) error {
 	return r.store.Transition(taskID, StatusStopped, nil)
 }
 
-// Approve resolves the pending gate verdict for a task.
+// Approve resolves the pending gate verdict for a task. Every sub-agent runs
+// its own task loop against its own private *Gate (see Config.SubAgents), so
+// a delegated sub-task's pending approval never lives on the top-level
+// runner's gate. We first try our own gate (the common case — the
+// orchestrator's own task), then fall back to each configured sub-agent's
+// gate (handoff depth is capped at 1, so this set is small and bounded — an
+// explicit, known list of owners, not a guess). Task state itself
+// (PendingCommand/PendingRisk) is already visible regardless of which gate
+// holds it, since runners share one Store; only verdict delivery was
+// previously unreachable for sub-agent tasks.
 func (r *Runner) Approve(taskID, proposalID string, approved bool, reason string) error {
-	return r.gate.Resolve(taskID, proposalID, approved, reason)
+	if err := r.gate.Resolve(taskID, proposalID, approved, reason); err == nil {
+		return nil
+	}
+	for _, sub := range r.cfg.SubAgents {
+		if err := sub.gate.Resolve(taskID, proposalID, approved, reason); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("no pending approval for task %s proposal %s", taskID, proposalID)
 }
 
 // ApprovalMode returns the mode new task states are built with.

@@ -129,8 +129,12 @@ func (c *Client) Ping() error {
 	return nil
 }
 
-// AddTemporaryRule adds a temporary allow rule with TTL.
-func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description string) (string, int64, error) {
+// AddTemporaryRule adds a temporary allow rule with TTL. The returned
+// kernelWarning is non-empty when the gateway's policy engine accepted the
+// rule but its nftables kernel-level unlock failed — the call still succeeds
+// (the policy state is consistent), but the caller should surface the
+// warning since sandbox traffic to the target is still actually dropped.
+func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description string) (ruleID string, expiresAt int64, kernelWarning string, err error) {
 	desc := &description
 	resp, err := c.send(Request{
 		Type:        "add_temporary_rule",
@@ -139,12 +143,12 @@ func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description st
 		Description: desc,
 	})
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	if resp.Type != "rule_added" {
-		return "", 0, fmt.Errorf("unexpected response: %s", resp.Type)
+		return "", 0, "", fmt.Errorf("unexpected response: %s", resp.Type)
 	}
-	return resp.RuleID, resp.ExpiresAt, nil
+	return resp.RuleID, resp.ExpiresAt, resp.KernelWarning, nil
 }
 
 // RemoveRule removes a rule by ID.
@@ -185,9 +189,9 @@ func (c *Client) GetAuditLog(limit int) ([]AuditRowView, bool, error) {
 // AddTemporaryRule (used by the agent/executor path). reason is mandatory —
 // the gateway rejects an empty reason, but we also fail fast client-side to
 // avoid an unnecessary round trip.
-func (c *Client) AddManualRule(network string, ttlSecs uint64, reason string) (string, int64, error) {
+func (c *Client) AddManualRule(network string, ttlSecs uint64, reason string) (ruleID string, expiresAt int64, kernelWarning string, err error) {
 	if strings.TrimSpace(reason) == "" {
-		return "", 0, fmt.Errorf("reason is required for manual rules")
+		return "", 0, "", fmt.Errorf("reason is required for manual rules")
 	}
 	resp, err := c.send(Request{
 		Type:    "add_manual_rule",
@@ -196,12 +200,12 @@ func (c *Client) AddManualRule(network string, ttlSecs uint64, reason string) (s
 		Reason:  reason,
 	})
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	if resp.Type != "rule_added" {
-		return "", 0, fmt.Errorf("unexpected response: %s", resp.Type)
+		return "", 0, "", fmt.Errorf("unexpected response: %s", resp.Type)
 	}
-	return resp.RuleID, resp.ExpiresAt, nil
+	return resp.RuleID, resp.ExpiresAt, resp.KernelWarning, nil
 }
 
 // FingerprintConfig reports the gateway's current fingerprint-masking settings.

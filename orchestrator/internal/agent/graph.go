@@ -351,11 +351,7 @@ func observeResult(s *GraphState, result ToolResult) string {
 		body := s.pendingCommand + "\nreason: " + reason +
 			"\nGateway rejected this target — it is out of network scope. " +
 			"Choose a different, in-scope target, or ask the operator if you believe this is wrong."
-		obs := Wrap("COMMAND_BLOCKED", body)
-		s.memCtx.AddObservation(obs)
-		s.lastObs = obs
-		markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
-		return edgeIsError
+		return s.failStep("COMMAND_BLOCKED", body, reason)
 	}
 	if outcome == OutcomeFailure {
 		s.consecutiveFailures++
@@ -371,11 +367,7 @@ func observeResult(s *GraphState, result ToolResult) string {
 				"inspect correct usage with `<tool> --help` or `-h`, update_plan with a new strategy, "+
 				"or finish / ask_operator if truly blocked.\n\n%s", s.consecutiveFailures, body)
 		}
-		obs := Wrap(tag, body)
-		s.memCtx.AddObservation(obs)
-		s.lastObs = obs
-		markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
-		return edgeIsError
+		return s.failStep(tag, body, reason)
 	}
 	s.consecutiveFailures = 0 // any success clears the failure streak
 	compressed := CompressObservation(result.Content)
@@ -418,6 +410,18 @@ func observeResult(s *GraphState, result ToolResult) string {
 		}
 	}
 	return edgeOK
+}
+
+// failStep records a tag-wrapped failure observation, marks the current plan
+// step failed, and returns the error edge — the shared tail for
+// observeResult's OutcomeBlocked and OutcomeFailure branches, which differ
+// only in how tag/body are built above.
+func (s *GraphState) failStep(tag, body, reason string) string {
+	obs := Wrap(tag, body)
+	s.memCtx.AddObservation(obs)
+	s.lastObs = obs
+	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
+	return edgeIsError
 }
 
 // lastFullObservation returns the most recent full (uncompressed) tool output,

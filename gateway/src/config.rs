@@ -29,6 +29,7 @@ pub struct GatewayConfig {
 
 /// Policy engine settings.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(Default)]
 pub struct PolicyConfig {
     #[serde(default)]
     pub default_allow: bool,
@@ -36,14 +37,6 @@ pub struct PolicyConfig {
     pub observe_only: bool,
 }
 
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self {
-            default_allow: false,
-            observe_only: false,
-        }
-    }
-}
 
 /// Network controller settings.
 ///

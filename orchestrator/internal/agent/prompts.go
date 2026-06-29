@@ -135,13 +135,14 @@ func CompressObservation(output string) string {
 	if len(output) <= compressHeadBytes+compressTailBytes {
 		return output
 	}
-	// Align head at a newline boundary.
-	head := output[:compressHeadBytes]
+	// Align head at a newline boundary (UTF-8 rune boundary first — output is
+	// attacker-influenced tool output, so a raw byte cut can split a rune).
+	head := output[:utf8SafeCut(output, compressHeadBytes)]
 	if nl := strings.LastIndex(head, "\n"); nl > 0 {
 		head = output[:nl+1]
 	}
 	// Align tail at a newline boundary.
-	tail := output[len(output)-compressTailBytes:]
+	tail := output[utf8SafeCut(output, len(output)-compressTailBytes):]
 	if nl := strings.Index(tail, "\n"); nl >= 0 && nl < len(tail)-1 {
 		tail = tail[nl+1:]
 	}

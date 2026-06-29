@@ -31,11 +31,8 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		if reason == "" {
 			reason = "command rejected by validator"
 		}
-		obs := Wrap("COMMAND_BLOCKED", reason+
-			"\nThe command was empty or malformed after normalization. Propose a concrete, well-formed command.")
-		s.memCtx.AddObservation(obs)
-		s.lastObs = obs
-		return edgeIsError, nil
+		return s.blockCommand(Wrap("COMMAND_BLOCKED", reason+
+			"\nThe command was empty or malformed after normalization. Propose a concrete, well-formed command."))
 	}
 	p := validated.Proposals[0]
 	s.pendingCommand = p.Command
@@ -52,22 +49,17 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		obs := Wrap("ABNORMAL_PATTERN", "You are repeating the same commands. Recent: ["+
 			strings.Join(s.recentCmds, ", ")+"]. STOP repeating — choose a DIFFERENT command, "+
 			"update_plan with a new approach, or finish if the goal is already met.")
-		s.memCtx.AddObservation(obs)
-		s.lastObs = obs
 		s.cmdWindow = nil
 		s.recentCmds = nil
-		return edgeIsError, nil
+		return s.blockCommand(obs)
 	}
 	// Block re-running any command already seen in the recent window — not just
 	// the immediately-previous one. This catches A→B→A→B style oscillation at
 	// the first repeat instead of letting it cycle until stuck detection.
 	if windowCount(s.cmdWindow, hash) >= 2 {
-		obs := Wrap("DUPLICATE_BLOCKED", "You already ran this exact command recently: `"+p.Command+"`\n"+
+		return s.blockCommand(Wrap("DUPLICATE_BLOCKED", "You already ran this exact command recently: `"+p.Command+"`\n"+
 			"Re-running it produces the same output you already have. Choose a DIFFERENT command, "+
-			"update the plan, or finish if the goal is met.")
-		s.memCtx.AddObservation(obs)
-		s.lastObs = obs
-		return edgeIsError, nil
+			"update the plan, or finish if the goal is met."))
 	}
 	// Tool-level thrash: the model is rotating trivially-different invocations of
 	// the SAME tool (ps -ef / ps -ejH / ps aux), which exact-hash detection above
@@ -80,11 +72,9 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 			"information you already have — you are not learning anything new. STOP re-querying with "+
 			"`"+tool+"`: analyze the output you already collected, switch to a DIFFERENT tool/approach, "+
 			"update_plan, or finish if the goal is met.")
-		s.memCtx.AddObservation(obs)
-		s.lastObs = obs
 		s.cmdWindow = nil
 		s.recentCmds = nil
-		return edgeIsError, nil
+		return s.blockCommand(obs)
 	}
 
 	// The command passed validation, stuck, and duplicate checks — it is about
@@ -116,4 +106,16 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		return edgeLongRunning, nil
 	}
 	return observeResult(s, result), nil
+}
+
+// blockCommand records msg as both the rolling memory observation and the
+// node's immediate lastObs (what the next step prompt shows), then routes to
+// the error edge — the shared outcome for every toolNode guard (validator
+// rejection, stuck/duplicate/thrash detection) that rejects a command before
+// it ever runs. Any window reset the caller needs must happen BEFORE calling
+// this, since it only handles the observation + edge, not the windows.
+func (s *GraphState) blockCommand(msg string) (string, error) {
+	s.memCtx.AddObservation(msg)
+	s.lastObs = msg
+	return edgeIsError, nil
 }
