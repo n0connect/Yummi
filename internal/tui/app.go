@@ -54,6 +54,17 @@ type model struct {
 	mode         string          // agent approval mode: auto | ask_permission
 	planShown    map[string]bool // task ids whose plan has been printed (once)
 
+	// autoFeedbackCount counts consecutive auto feed-backs (analyzeExecution)
+	// sent since the last user message, capped to break infinite retry loops —
+	// mirrors AssistantPanel.tsx's autoFeedbackCountRef in the web UI.
+	autoFeedbackCount int
+
+	// pastedBlocks holds the full content of large/multi-line pastes collapsed
+	// to a "[Pasted #N]" placeholder in the input — textinput is single-line, so
+	// a raw paste either overflows past the box border or corrupts on newlines.
+	// Cleared once the message is sent; substituted back in at send time.
+	pastedBlocks []string
+
 	modules []Module
 	loading bool
 	ready   bool
@@ -86,14 +97,14 @@ func Run(apiURL string) error {
 			SystemItem{Text: "connecting…"},
 		},
 	}
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
-		func() tea.Msg { return sessionCreatedMsg{err: m.client.CreateSession()} },
+		func() tea.Msg { return sessionCreatedMsg{err: m.client.EnsureSession()} },
 		func() tea.Msg { return healthMsg{mods: m.client.Health()} },
 		func() tea.Msg {
 			// Surface the agent's approval mode in the header from the start.
@@ -127,6 +138,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.viewport.Width = vpWidth
 		}
+		// Bound the input to the box's actual content width (border + prompt)
+		// so typing past it scrolls in place like a normal shell prompt instead
+		// of bleeding text past the right border — textinput.Width defaults to
+		// 0, which bubbles/textinput treats as "unbounded", never clipping.
+		inputWidth := m.width - 4 - lipgloss.Width(m.input.Prompt)
+		if inputWidth < 1 {
+			inputWidth = 1
+		}
+		m.input.Width = inputWidth
 		m.refresh()
 
 	case sessionCreatedMsg:
@@ -155,8 +175,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case execMsg:
 		// Only log terminal states to the timeline to avoid spamming ✗ for "started" or "running".
-		if msg.Status == "completed" || msg.Status == "failed" || msg.Status == "error" {
+		if msg.Status == "completed" || msg.Status == "failed" || msg.Status == "canceled" {
 			m.append(ExecItem{Command: msg.Command, Status: msg.Status, Output: firstNonEmpty(msg.Output, msg.Error)})
+		}
+		// Feed completed/failed results from the single-command chat loop back to
+		// the conductor so it can analyze the output, same as AssistantPanel.tsx's
+		// analyzeOutput — skip 'canceled' (user-initiated) and agent_task mode (the
+		// agent graph handles its own observation loop internally).
+		if (msg.Status == "completed" || msg.Status == "failed") && msg.Mode == "assistant_loop" {
+			if c := m.analyzeExecution(msg); c != nil {
+				cmds = append(cmds, c)
+			}
 		}
 		cmds = append(cmds, waitForEvent(m.stream))
 
@@ -200,9 +229,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var c tea.Cmd
 	m.input, c = m.input.Update(msg)
 	cmds = append(cmds, c)
-	m.viewport, c = m.viewport.Update(msg)
-	cmds = append(cmds, c)
+	// Only forward mouse events (wheel scroll) to the viewport. Forwarding every
+	// tea.Msg used to mean any letter the user typed that happens to collide with
+	// viewport's pager keymap (j/k/h/l/u/d/f/b, space, pgup/pgdown — vim-style
+	// bindings baked into bubbles/viewport's DefaultKeyMap) scrolled the timeline
+	// out from under them mid-sentence. Arrow-key history navigation is handled
+	// entirely in handleKey above and never reaches here.
+	if _, ok := msg.(tea.MouseMsg); ok {
+		m.viewport, c = m.viewport.Update(msg)
+		cmds = append(cmds, c)
+	}
 	return m, tea.Batch(cmds...)
+}
+
+// pasteCollapseThreshold is the rune count above which a bracketed paste gets
+// collapsed to a "[Pasted #N]" placeholder rather than inserted verbatim.
+const pasteCollapseThreshold = 200
+
+// insertPastePlaceholder stores runes as a new pasted block and splices its
+// "[Pasted #N]" placeholder into the input at the current cursor position.
+func (m *model) insertPastePlaceholder(runes []rune) tea.Cmd {
+	m.pastedBlocks = append(m.pastedBlocks, string(runes))
+	placeholder := fmt.Sprintf("[Pasted #%d]", len(m.pastedBlocks))
+
+	val := []rune(m.input.Value())
+	pos := m.input.Position()
+	if pos > len(val) {
+		pos = len(val)
+	}
+	newVal := string(val[:pos]) + placeholder + string(val[pos:])
+	m.input.SetValue(newVal)
+	m.input.SetCursor(pos + len(placeholder))
+	return nil
+}
+
+// expandPastedBlocks substitutes every "[Pasted #N]" placeholder in text with
+// the full content it stands in for, so the conductor sees the real pasted
+// content even though the operator only ever saw a compact placeholder.
+func (m *model) expandPastedBlocks(text string) string {
+	for i, block := range m.pastedBlocks {
+		text = strings.ReplaceAll(text, fmt.Sprintf("[Pasted #%d]", i+1), block)
+	}
+	return text
 }
 
 func (m *model) slashCommands() []string {
@@ -270,6 +338,14 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.sendChat(), true
 	case tea.KeyRunes:
+		// Large or multi-line pastes arrive as one bracketed-paste KeyMsg (Paste
+		// is only ever true for an actual terminal paste, never normal typing).
+		// Collapse them to a placeholder instead of dumping raw text into the
+		// single-line input, where they'd either overflow the box or, for
+		// multi-line content, render as a corrupted single line.
+		if msg.Paste && (len(msg.Runes) > pasteCollapseThreshold || strings.ContainsRune(string(msg.Runes), '\n')) {
+			return m.insertPastePlaceholder(msg.Runes), true
+		}
 		// 'y'/'n' act as approve/reject ONLY when the input is empty and an
 		// approval is pending — otherwise they are normal characters.
 		if strings.TrimSpace(m.input.Value()) == "" && len(msg.Runes) == 1 {
@@ -296,6 +372,47 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// analyzeExecution feeds a completed/failed single-command result back to the
+// conductor so it can analyze the output, retry on error, or try a different
+// approach — the terminal-console mirror of AssistantPanel.tsx's analyzeOutput.
+// Capped at 3 consecutive auto feed-backs per user turn to prevent infinite loops.
+func (m *model) analyzeExecution(msg execMsg) tea.Cmd {
+	m.autoFeedbackCount++
+	if m.autoFeedbackCount > 3 {
+		m.append(SystemItem{Text: "Otomatik deneme limiti aşıldı. Farklı bir komut denemek için yazın."})
+		return nil
+	}
+
+	// Use the ANSI-stripped copies for anything fed back into the LLM — the raw
+	// output may contain escape sequences a hostile target could use to smuggle
+	// a payload past the banner scan.
+	output := strings.TrimSpace(firstNonEmpty(msg.SanitizedOutput, msg.Output))
+	errText := strings.TrimSpace(firstNonEmpty(msg.SanitizedError, msg.Error))
+
+	guard := ""
+	if banner := strings.TrimSpace(msg.Banner); banner != "" {
+		guard = banner + "\n\n"
+	}
+
+	var feedback string
+	if msg.Status == "failed" {
+		detail := firstNonEmpty(firstNonEmpty(errText, output), "exit code 1")
+		feedback = guard +
+			fmt.Sprintf("[KOMUT BAŞARISIZ] `%s`\n\nHata çıktısı:\n```\n%s\n```\n\n", msg.Command, detail) +
+			"Komut başarısız oldu. FARKLI bir komut seç — aynı komutu tekrar deneme."
+	} else {
+		feedback = guard +
+			fmt.Sprintf("[KOMUT TAMAMLANDI] `%s`\n\nÇıktı:\n```\n%s\n```\n\n", msg.Command, firstNonEmpty(output, "(çıktı yok)")) +
+			"Bu sonucu analiz et ve kullanıcının sorusunu yanıtla."
+	}
+
+	m.loading = true
+	return func() tea.Msg {
+		res, err := m.client.Chat(feedback)
+		return chatResultMsg{res: res, err: err}
+	}
+}
+
 func (m *model) sendChat() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 
@@ -308,15 +425,22 @@ func (m *model) sendChat() tea.Cmd {
 	m.input.Reset()
 	m.proposals = nil
 	m.slashMenuIdx = 0
+	m.autoFeedbackCount = 0
 
 	if strings.HasPrefix(text, "/") {
 		return m.handleSlashCommand(text)
 	}
 
+	// Expand any "[Pasted #N]" placeholders back to their full content for the
+	// conductor — the operator only ever sees the compact placeholder in the
+	// timeline, matching what was typed/sent.
+	sendText := m.expandPastedBlocks(text)
+	m.pastedBlocks = nil
+
 	m.append(UserItem{Text: text})
 	m.loading = true
 	return func() tea.Msg {
-		res, err := m.client.Chat(text)
+		res, err := m.client.Chat(sendText)
 		return chatResultMsg{res: res, err: err}
 	}
 }
