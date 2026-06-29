@@ -3,11 +3,23 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/netip"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 )
+
+// validNetwork reports whether s is a syntactically valid IP address or CIDR
+// prefix. net/netip bound-checks octets and prefix length, so this rejects
+// malformed input (out-of-range octets, bad masks) without a blacklist.
+func validNetwork(s string) bool {
+	if _, err := netip.ParseAddr(s); err == nil {
+		return true
+	}
+	_, err := netip.ParsePrefix(s)
+	return err == nil
+}
 
 // HandleGatewayRules returns all currently active gateway policy rules.
 func HandleGatewayRules(c *gateway.Client) http.HandlerFunc {
@@ -49,16 +61,40 @@ func HandleGatewayAddRule(c *gateway.Client) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "network is required", nil)
 			return
 		}
+		if len(req.Network) > 45 {
+			writeError(w, http.StatusBadRequest, "network is too long (max 45 characters)", nil)
+			return
+		}
+		if req.TTLSecs < 1 || req.TTLSecs > 86400 {
+			writeError(w, http.StatusBadRequest, "ttl_secs must be between 1 and 86400", nil)
+			return
+		}
+		if !reasonPattern.MatchString(req.Reason) {
+			writeError(w, http.StatusBadRequest, "reason must be 1-500 characters and contain only alphanumeric, spaces, and basic punctuation", nil)
+			return
+		}
+		// Syntax-validate the target as an IP or CIDR before it ever reaches the
+		// gateway/nftables. The gateway is the authority and re-validates, but a
+		// structural check here rejects garbage with a clean 400 (instead of a
+		// 502 round-trip) and keeps malformed input out of the nftables path.
+		if !validNetwork(req.Network) {
+			writeError(w, http.StatusBadRequest, "network must be a valid IP or CIDR (e.g. 10.0.0.5 or 10.0.0.0/24)", nil)
+			return
+		}
 		if c == nil {
 			writeError(w, http.StatusServiceUnavailable, "gateway not configured", nil)
 			return
 		}
-		ruleID, expiresAt, err := c.AddManualRule(req.Network, req.TTLSecs, req.Reason)
+		ruleID, expiresAt, kernelWarning, err := c.AddManualRule(req.Network, req.TTLSecs, req.Reason)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "failed to add rule", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"rule_id": ruleID, "expires_at": expiresAt})
+		resp := map[string]any{"rule_id": ruleID, "expires_at": expiresAt}
+		if kernelWarning != "" {
+			resp["kernel_warning"] = kernelWarning
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -68,6 +104,10 @@ func HandleGatewayRemoveRule(c *gateway.Client) http.HandlerFunc {
 		ruleID := chi.URLParam(r, "id")
 		if ruleID == "" {
 			writeError(w, http.StatusBadRequest, "rule id is required", nil)
+			return
+		}
+		if !isValidSessionID(ruleID) {
+			writeError(w, http.StatusBadRequest, "invalid rule id format", nil)
 			return
 		}
 		if c == nil {
@@ -158,7 +198,7 @@ func HandleGatewayAudit(c *gateway.Client) http.HandlerFunc {
 		limit := 50
 		if v := r.URL.Query().Get("limit"); v != "" {
 			if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-				limit = parsed
+				limit = clampLimit(parsed)
 			}
 		}
 		if c == nil {

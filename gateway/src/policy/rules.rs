@@ -87,7 +87,7 @@ pub enum RuleSource {
 impl PolicyRule {
     /// Check if this rule has expired.
     pub fn is_expired(&self, now_unix: i64) -> bool {
-        self.expires_at.map_or(false, |exp| now_unix > exp)
+        self.expires_at.is_some_and(|exp| now_unix > exp)
     }
 }
 

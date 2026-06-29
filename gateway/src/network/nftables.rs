@@ -45,7 +45,7 @@ fn rand_byte() -> u8 {
 }
 
 fn format_mac(mac: [u8; 6]) -> String {
-    mac.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":")
+    mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
 }
 
 /// Linux nftables-based network controller.
@@ -53,7 +53,7 @@ fn format_mac(mac: [u8; 6]) -> String {
 /// Installs and manages an `inet` table with two chains:
 /// - `yummi_forward`: FORWARD hook — filters sandbox's outbound traffic.
 /// - `yummi_nat`:     POSTROUTING hook — masquerades sandbox's packets so they
-///                    appear from the gateway container when forwarded.
+///   appear from the gateway container when forwarded.
 pub struct NftablesController {
     table_name:    String,
     forward_chain: String,
@@ -264,7 +264,7 @@ impl NftablesController {
         if let Some(ttl) = self.ttl_normalize {
             if !self.sandbox_ip.is_empty() {
                 if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                    s.push_str(&format!("    ip saddr {} ip ttl set {}\n", ip, ttl));
+                    s.push_str(&format!("    ip saddr {ip} ip ttl set {ttl}\n"));
                 }
             }
         }
@@ -272,7 +272,7 @@ impl NftablesController {
         // Pass through traffic NOT originating from sandbox (other containers, host).
         if !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                s.push_str(&format!("    ip saddr != {} accept\n", ip));
+                s.push_str(&format!("    ip saddr != {ip} accept\n"));
             } else {
                 tracing::warn!(sandbox_ip = %self.sandbox_ip, "invalid sandbox_ip — applying rules to ALL forwarded traffic");
             }
@@ -286,9 +286,9 @@ impl NftablesController {
             if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
                 let safe = net.to_string();
                 if safe.contains(':') {
-                    s.push_str(&format!("    ip6 daddr {} drop\n", safe));
+                    s.push_str(&format!("    ip6 daddr {safe} drop\n"));
                 } else {
-                    s.push_str(&format!("    ip daddr {} drop\n", safe));
+                    s.push_str(&format!("    ip daddr {safe} drop\n"));
                 }
             } else {
                 tracing::error!(cidr, "invalid CIDR in block list — skipped");
@@ -300,9 +300,9 @@ impl NftablesController {
             if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
                 let safe = net.to_string();
                 if safe.contains(':') {
-                    s.push_str(&format!("    ip6 daddr {} accept\n", safe));
+                    s.push_str(&format!("    ip6 daddr {safe} accept\n"));
                 } else {
-                    s.push_str(&format!("    ip daddr {} accept\n", safe));
+                    s.push_str(&format!("    ip daddr {safe} accept\n"));
                 }
             } else {
                 tracing::error!(cidr, "invalid CIDR in allow list — skipped");
@@ -322,7 +322,7 @@ impl NftablesController {
         // on per-target @allowed_targets and Block drops everything.
         if *self.egress_mode.read().unwrap() == EgressMode::Allow && !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                s.push_str(&format!("    ip saddr {} accept\n", ip));
+                s.push_str(&format!("    ip saddr {ip} accept\n"));
             }
         }
 
@@ -338,7 +338,7 @@ impl NftablesController {
         s.push_str("    type nat hook postrouting priority 100;\n");
         if !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                s.push_str(&format!("    ip saddr {} masquerade\n", ip));
+                s.push_str(&format!("    ip saddr {ip} masquerade\n"));
             }
         }
         s.push_str("  }\n");

@@ -31,6 +31,27 @@ func TestExtractTarget(t *testing.T) {
 		// CIDR target preserved.
 		{"cidr", "nmap -sn 192.168.1.0/24", "192.168.1.0/24"},
 
+		// IPv6 literal in a URL is unwrapped and accepted.
+		{"ipv6 url literal", "curl http://[2001:db8::1]/x", "2001:db8::1"},
+
+		// Octet bound check: out-of-range octets are NOT valid IPs, and with a
+		// digits-only final label they are not valid hostnames either, so they
+		// must not be returned as targets.
+		{"octet over 255", "nmap 256.1.1.1", ""},
+		{"all octets over 255", "nmap 999.999.999.999", ""},
+
+		// Scope-confusion guard: an IP-shaped PREFIX of a longer hostname must
+		// be treated as the (unresolvable-here, fail-closed) hostname, never
+		// peeled off as the IP — otherwise the gateway would open an nftables
+		// rule for the wrong host while the sandbox's DNS resolves elsewhere.
+		{"ip prefix of hostname", "nmap 1.2.3.4.evil.com", "1.2.3.4.evil.com"},
+		{"ip prefix of hostname in url", "curl http://1.2.3.4.evil.com/x", "1.2.3.4.evil.com"},
+
+		// Quoted targets resolved.
+		{"quoted ip", `curl "10.0.0.1"`, "10.0.0.1"},
+		{"single-quoted hostname", `nikto -h 'example.org'`, "example.org"},
+		{"quoted equals url flag", `ffuf --url="http://10.0.0.9/FUZZ"`, "10.0.0.9"},
+
 		// No target.
 		{"local only", "echo hello", ""},
 		{"whoami", "whoami", ""},

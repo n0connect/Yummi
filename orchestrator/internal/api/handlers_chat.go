@@ -57,6 +57,16 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			writeError(w, http.StatusBadRequest, "invalid request", err)
 			return
 		}
+		if len(req.Message) > 10000 {
+			writeError(w, http.StatusBadRequest, "message is too long (max 10000 characters)", nil)
+			return
+		}
+		if req.SessionID != "" && req.SessionID != "default" {
+			if !isValidSessionID(req.SessionID) {
+				writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+				return
+			}
+		}
 
 		if assistant == nil {
 			resp := conductor.ChatResponse{
@@ -171,8 +181,18 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 			writeError(w, http.StatusBadRequest, "invalid request", err)
 			return
 		}
+		if req.SessionID != "" && req.SessionID != "default" {
+			if !isValidSessionID(req.SessionID) {
+				writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+				return
+			}
+		}
 		if req.ProposalID == "" {
 			writeError(w, http.StatusBadRequest, "proposal_id is required", nil)
+			return
+		}
+		if !isValidSessionID(req.ProposalID) {
+			writeError(w, http.StatusBadRequest, "invalid proposal id format", nil)
 			return
 		}
 

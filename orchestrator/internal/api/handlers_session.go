@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
+	"github.com/n0connect/yummi/orchestrator/internal/scope"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
@@ -39,6 +40,10 @@ func HandleCreateSession(sm *session.Manager) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "name is required", nil)
 			return
 		}
+		if !isValidName(req.Name) {
+			writeError(w, http.StatusBadRequest, "name must be 1-100 characters and only contain alphanumeric, spaces, underscores, or dashes", nil)
+			return
+		}
 
 		s := session.Session{
 			ID:           uuid.New().String(),
@@ -60,6 +65,10 @@ func HandleCreateSession(sm *session.Manager) http.HandlerFunc {
 func HandleGetSession(sm *session.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		s, err := sm.Get(id)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "session not found", err)
@@ -72,6 +81,10 @@ func HandleGetSession(sm *session.Manager) http.HandlerFunc {
 func HandleUpdateSession(sm *session.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		var req struct {
 			Name         *string `json:"name,omitempty"`
 			Status       *string `json:"status,omitempty"`
@@ -89,13 +102,27 @@ func HandleUpdateSession(sm *session.Manager) http.HandlerFunc {
 		}
 
 		if req.Name != nil {
+			if !isValidName(*req.Name) {
+				writeError(w, http.StatusBadRequest, "name must be 1-100 characters and only contain alphanumeric, spaces, underscores, or dashes", nil)
+				return
+			}
 			s.Name = *req.Name
 		}
 		if req.Status != nil {
-			s.Status = *req.Status
+			status := *req.Status
+			if status != "active" && status != "closed" {
+				writeError(w, http.StatusBadRequest, "status must be either active or closed", nil)
+				return
+			}
+			s.Status = status
 		}
 		if req.GatewayLevel != nil {
-			s.GatewayLevel = *req.GatewayLevel
+			lvl := *req.GatewayLevel
+			if lvl < 0 || lvl > 5 {
+				writeError(w, http.StatusBadRequest, "gateway_level must be between 0 and 5", nil)
+				return
+			}
+			s.GatewayLevel = lvl
 		}
 		s.UpdatedAt = time.Now().Unix()
 
@@ -110,6 +137,10 @@ func HandleUpdateSession(sm *session.Manager) http.HandlerFunc {
 func HandleDeleteSession(sm *session.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		if err := sm.Delete(id); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to delete session", err)
 			return
@@ -123,6 +154,10 @@ func HandleDeleteSession(sm *session.Manager) http.HandlerFunc {
 func HandleListTargets(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		writeJSON(w, http.StatusOK, ks.ListTargets(sessionID))
 	}
 }
@@ -130,6 +165,10 @@ func HandleListTargets(ks *knowledge.Store) http.HandlerFunc {
 func HandleCreateTarget(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		var req struct {
 			Value   string `json:"value"`
 			InScope bool   `json:"in_scope"`
@@ -141,6 +180,14 @@ func HandleCreateTarget(ks *knowledge.Store) http.HandlerFunc {
 		}
 		if req.Value == "" {
 			writeError(w, http.StatusBadRequest, "value is required", nil)
+			return
+		}
+		if len(req.Value) > 253 || scope.ExtractTarget("dummy "+req.Value) != req.Value {
+			writeError(w, http.StatusBadRequest, "value must be a valid IP, CIDR, or hostname (max 253 chars)", nil)
+			return
+		}
+		if len(req.Notes) > 1000 {
+			writeError(w, http.StatusBadRequest, "notes cannot exceed 1000 characters", nil)
 			return
 		}
 
@@ -166,6 +213,10 @@ func HandleCreateTarget(ks *knowledge.Store) http.HandlerFunc {
 func HandleListFindings(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		writeJSON(w, http.StatusOK, ks.ListFindings(sessionID))
 	}
 }
@@ -173,6 +224,10 @@ func HandleListFindings(ks *knowledge.Store) http.HandlerFunc {
 func HandleCreateFinding(ks *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		var req struct {
 			Severity    string `json:"severity"`
 			Title       string `json:"title"`
@@ -189,6 +244,18 @@ func HandleCreateFinding(ks *knowledge.Store) http.HandlerFunc {
 		}
 		if !isValidSeverity(req.Severity) {
 			writeError(w, http.StatusBadRequest, "severity must be one of: info, low, medium, high, critical", nil)
+			return
+		}
+		if !titlePattern.MatchString(req.Title) {
+			writeError(w, http.StatusBadRequest, "title must be 1-200 characters and contain only alphanumeric, spaces, and basic punctuation", nil)
+			return
+		}
+		if len(req.Description) > 5000 {
+			writeError(w, http.StatusBadRequest, "description cannot exceed 5000 characters", nil)
+			return
+		}
+		if len(req.Evidence) > 10000 {
+			writeError(w, http.StatusBadRequest, "evidence cannot exceed 10000 characters", nil)
 			return
 		}
 
@@ -214,6 +281,10 @@ func HandleCreateFinding(ks *knowledge.Store) http.HandlerFunc {
 func HandleListAudit(sm *session.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "sessionID")
+		if !isValidSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
 		limit := 100
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			v, err := strconv.Atoi(raw)

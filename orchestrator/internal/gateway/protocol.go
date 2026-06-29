@@ -16,15 +16,20 @@ type Request struct {
 
 // Response mirrors gateway/src/ipc/protocol.rs IpcResponse.
 type Response struct {
-	Type          string         `json:"type"`
-	IP            string         `json:"ip,omitempty"`
-	InScope       bool           `json:"in_scope,omitempty"`
-	Level         int            `json:"level,omitempty"`
-	RulesActive   bool           `json:"rules_active,omitempty"`
-	UptimeSecs    uint64         `json:"uptime_secs,omitempty"`
-	Message       string         `json:"message,omitempty"`
-	RuleID        string         `json:"rule_id,omitempty"`
-	ExpiresAt     int64          `json:"expires_at,omitempty"`
+	Type        string `json:"type"`
+	IP          string `json:"ip,omitempty"`
+	InScope     bool   `json:"in_scope,omitempty"`
+	Level       int    `json:"level,omitempty"`
+	RulesActive bool   `json:"rules_active,omitempty"`
+	UptimeSecs  uint64 `json:"uptime_secs,omitempty"`
+	Message     string `json:"message,omitempty"`
+	RuleID      string `json:"rule_id,omitempty"`
+	ExpiresAt   int64  `json:"expires_at,omitempty"`
+	// KernelWarning is set when the gateway's policy engine added a rule but
+	// the nftables kernel-level unlock failed — the rule looks active to
+	// future scope checks, but traffic to the target is still actually
+	// dropped (fail-safe, not fail-open). See ipc/protocol.rs RuleAdded.
+	KernelWarning string         `json:"kernel_warning,omitempty"`
 	Rules         []RuleView     `json:"rules,omitempty"`
 	AuditRows     []AuditRowView `json:"rows,omitempty"`
 	ChainVerified bool           `json:"chain_verified,omitempty"`

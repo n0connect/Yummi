@@ -93,10 +93,10 @@ impl PolicyEngine {
             .iter()
             .enumerate()
             .map(|(i, net)| PolicyRule {
-                id: format!("allow-{}", i),
+                id: format!("allow-{i}"),
                 action: RuleAction::Allow,
                 network: *net,
-                description: format!("Initial allow rule: {}", net),
+                description: format!("Initial allow rule: {net}"),
                 expires_at: None,
                 source: RuleSource::Config,
             })
@@ -107,10 +107,10 @@ impl PolicyEngine {
             .iter()
             .enumerate()
             .map(|(i, net)| PolicyRule {
-                id: format!("block-{}", i),
+                id: format!("block-{i}"),
                 action: RuleAction::Block,
                 network: *net,
-                description: format!("Initial block rule: {}", net),
+                description: format!("Initial block rule: {net}"),
                 expires_at: None,
                 source: RuleSource::Config,
             })
@@ -242,13 +242,32 @@ impl PolicyEngine {
     /// Add a temporary allow rule with TTL (from IPC request).
     /// Returns the rule ID and expiration timestamp.
     pub fn add_temporary_allow(&self, net: IpNet, ttl_secs: u64, description: String) -> (String, i64) {
+        self.add_allow_rule("temp", RuleSource::Agent, net, ttl_secs, description)
+    }
+
+    /// Add a manually-issued temporary allow rule (operator UI path).
+    /// Always tagged `source: Manual` — the caller cannot override this.
+    pub fn add_manual_allow(&self, net: IpNet, ttl_secs: u64, reason: String) -> (String, i64) {
+        self.add_allow_rule("manual", RuleSource::Manual, net, ttl_secs, reason)
+    }
+
+    /// Shared implementation behind add_temporary_allow/add_manual_allow —
+    /// the two differ only in rule-ID prefix and RuleSource tag.
+    fn add_allow_rule(
+        &self,
+        id_prefix: &str,
+        source: RuleSource,
+        net: IpNet,
+        ttl_secs: u64,
+        description: String,
+    ) -> (String, i64) {
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
 
         let expires_at = now_unix + ttl_secs as i64;
-        let rule_id = format!("temp-{}-{}", now_unix, uuid::Uuid::new_v4());
+        let rule_id = format!("{}-{}-{}", id_prefix, now_unix, uuid::Uuid::new_v4());
 
         let rule = PolicyRule {
             id: rule_id.clone(),
@@ -256,39 +275,12 @@ impl PolicyEngine {
             network: net,
             description,
             expires_at: Some(expires_at),
-            source: RuleSource::Agent,
+            source,
         };
 
         let mut state = self.state.write().unwrap();
         state.allow_rules.push(rule);
-        tracing::info!(%net, rule_id, expires_at, "temporary allow rule added");
-
-        (rule_id, expires_at)
-    }
-
-    /// Add a manually-issued temporary allow rule (operator UI path).
-    /// Always tagged `source: Manual` — the caller cannot override this.
-    pub fn add_manual_allow(&self, net: IpNet, ttl_secs: u64, reason: String) -> (String, i64) {
-        let now_unix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let expires_at = now_unix + ttl_secs as i64;
-        let rule_id = format!("manual-{}-{}", now_unix, uuid::Uuid::new_v4());
-
-        let rule = PolicyRule {
-            id: rule_id.clone(),
-            action: RuleAction::Allow,
-            network: net,
-            description: reason,
-            expires_at: Some(expires_at),
-            source: RuleSource::Manual,
-        };
-
-        let mut state = self.state.write().unwrap();
-        state.allow_rules.push(rule);
-        tracing::info!(%net, rule_id, expires_at, "manual allow rule added");
+        tracing::info!(%net, rule_id, expires_at, source = id_prefix, "allow rule added");
 
         (rule_id, expires_at)
     }

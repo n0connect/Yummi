@@ -46,9 +46,30 @@ var hasEscape = regexp.MustCompile("[\x1b\\x{80}-\\x{9f}]")
 // Clean text (no ESC / C1 byte) returns unchanged via the fast path. The raw
 // bytes are untouched in the execution store's audit record — only the agent's
 // observation copy is sanitized.
+//
+// Stripping is applied to a FIXED POINT, not a single pass: removing one escape
+// can place two formerly-separated bytes next to each other and form a NEW escape
+// (e.g. "\x1b\x1b00" — the inner "\x1b0" is consumed, leaving "\x1b0", itself a
+// live escape). A lone ReplaceAllString would leave that residue behind, which
+// defeats the whole purpose, since a hostile target can craft overlapping ESC
+// bytes specifically to smuggle a sequence through sanitization. We re-scan until
+// the output stops changing. Each pass strictly shrinks the string (every
+// replacement removes ≥1 byte), so this always terminates; the loop bound is a
+// belt-and-suspenders guard against any future non-shrinking edit.
 func StripANSI(s string) string {
 	if s == "" || !hasEscape.MatchString(s) {
 		return s
 	}
-	return ansiEscape.ReplaceAllString(s, "")
+	// maxIter is fixed from the ORIGINAL length up front; it must NOT read the
+	// shrinking s, or the counter and the length cross before convergence. Each
+	// pass removes ≥1 byte, so the original length is a safe upper bound on the
+	// number of passes the fixed-point iteration can need.
+	for maxIter := len(s); maxIter > 0; maxIter-- {
+		stripped := ansiEscape.ReplaceAllString(s, "")
+		if stripped == s {
+			break
+		}
+		s = stripped
+	}
+	return s
 }

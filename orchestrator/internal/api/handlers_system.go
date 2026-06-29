@@ -120,11 +120,15 @@ func HandleSandboxExec(bridge *sandbox.Bridge, pc *gateway.Client, sm *session.M
 			"duration_ms": result.Duration,
 		})
 
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"exit_code":   result.ExitCode,
 			"stdout":      result.Stdout,
 			"stderr":      result.Stderr,
 			"duration_ms": result.Duration,
-		})
+		}
+		if result.Warning != "" {
+			resp["warning"] = result.Warning
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }

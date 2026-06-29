@@ -9,6 +9,7 @@
 pub mod protocol;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
@@ -35,6 +36,8 @@ pub struct IpcServer {
     semaphore: Arc<Semaphore>,
     /// Live nftables controller — when present, AddTemporaryRule also updates kernel rules.
     ctrl: Option<Arc<NftablesController>>,
+    /// Process start time, for GetStatus's uptime_secs.
+    started_at: Instant,
 }
 
 impl IpcServer {
@@ -59,6 +62,7 @@ impl IpcServer {
             allowed_uids,
             semaphore: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             ctrl: None,
+            started_at: Instant::now(),
         }
     }
 
@@ -101,9 +105,10 @@ impl IpcServer {
                     let audit = self.audit.clone();
                     let allowed_uids = self.allowed_uids.clone();
                     let ctrl = self.ctrl.clone();
+                    let started_at = self.started_at;
                     tokio::spawn(async move {
                         let _permit = permit; // released when handler finishes
-                        if let Err(e) = handle_connection(stream, policy, audit, allowed_uids, ctrl).await {
+                        if let Err(e) = handle_connection(stream, policy, audit, allowed_uids, ctrl, started_at).await {
                             warn!(error = %e, "IPC connection error");
                         }
                     });
@@ -125,6 +130,7 @@ async fn handle_connection(
     audit: AuditLog,
     allowed_uids: Vec<u32>,
     ctrl: Option<Arc<NftablesController>>,
+    started_at: Instant,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve peer UID once per connection (Linux only via SO_PEERCRED).
     let peer_uid: Option<u32> = peer_uid_from_stream(&stream);
@@ -145,7 +151,7 @@ async fn handle_connection(
         stream.read_exact(&mut buf).await?;
 
         let request: IpcRequest = serde_json::from_slice(&buf)?;
-        let response = process_request(request, &policy, peer_uid, &allowed_uids, ctrl.as_deref(), &audit);
+        let response = process_request(request, &policy, peer_uid, &allowed_uids, ctrl.as_deref(), &audit, started_at);
 
         let resp_bytes = serde_json::to_vec(&response)?;
         let resp_len = (resp_bytes.len() as u32).to_be_bytes();
@@ -173,6 +179,7 @@ fn process_request(
     allowed_uids: &[u32],
     ctrl: Option<&NftablesController>,
     audit: &AuditLog,
+    started_at: Instant,
 ) -> IpcResponse {
     match req {
         // ── Read-only ops — no UID check ──────────────────────────────────
@@ -196,10 +203,17 @@ fn process_request(
                 verdict: verdict_str.to_string(),
             }
         }
+        // `level` has no implemented multi-tier semantics elsewhere in the
+        // gateway (the observer's "Level 0" label refers to itself, not a
+        // general enforcement level) — left at 0 rather than inventing a
+        // value. `rules_active` is genuinely always true here: main.rs aborts
+        // startup if `install_rules()` fails, so by the time the IPC socket
+        // is even listening, the fail-closed FORWARD rules are installed.
+        // `uptime_secs` is real elapsed process time, not a stub.
         IpcRequest::GetStatus => IpcResponse::Status {
             level: 0,
             rules_active: true,
-            uptime_secs: 0,
+            uptime_secs: started_at.elapsed().as_secs(),
         },
         IpcRequest::Ping => IpcResponse::Pong,
 
@@ -260,15 +274,36 @@ fn process_request(
                     message: "permission denied: UID not allowlisted for write operations".to_string(),
                 };
             }
+            if network.len() > 45 {
+                return IpcResponse::Error {
+                    message: "network CIDR string too long".to_string(),
+                };
+            }
+            if ttl_secs > 86400 {
+                return IpcResponse::Error {
+                    message: "ttl_secs exceeds maximum limit (86400)".to_string(),
+                };
+            }
+            if let Some(ref d) = description {
+                if d.len() > 500 {
+                    return IpcResponse::Error {
+                        message: "description exceeds maximum limit (500)".to_string(),
+                    };
+                }
+            }
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
-                    let desc = description.unwrap_or_else(|| format!("Temporary rule: {}", network));
-                    let (rule_id, expires_at) = policy.add_temporary_allow(net.clone(), ttl_secs, desc.clone());
+                    let desc = description.unwrap_or_else(|| format!("Temporary rule: {network}"));
+                    let (rule_id, expires_at) = policy.add_temporary_allow(net, ttl_secs, desc.clone());
 
                     // Also unlock at the nftables kernel level so sandbox's packets actually reach the target.
+                    let mut kernel_warning = None;
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
                             warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
+                            kernel_warning = Some(format!(
+                                "policy rule added but the nftables kernel unlock for {network} failed ({e}) — sandbox traffic to this target is still dropped"
+                            ));
                         }
                     }
 
@@ -280,7 +315,7 @@ fn process_request(
                         warn!(error = %e, "failed to audit agent rule add (rule itself succeeded)");
                     }
 
-                    IpcResponse::RuleAdded { rule_id, expires_at }
+                    IpcResponse::RuleAdded { rule_id, expires_at, kernel_warning }
                 }
                 Err(_) => IpcResponse::Error {
                     message: format!("invalid network CIDR: {network}"),
@@ -292,6 +327,11 @@ fn process_request(
                 warn!(peer_uid, "RemoveRule denied: UID not allowlisted");
                 return IpcResponse::Error {
                     message: "permission denied: UID not allowlisted for write operations".to_string(),
+                };
+            }
+            if rule_id.len() > 64 {
+                return IpcResponse::Error {
+                    message: "rule_id exceeds maximum limit (64)".to_string(),
                 };
             }
             if policy.remove_rule(&rule_id) {
@@ -318,6 +358,21 @@ fn process_request(
                     message: "permission denied: UID not allowlisted for write operations".to_string(),
                 };
             }
+            if network.len() > 45 {
+                return IpcResponse::Error {
+                    message: "network CIDR string too long".to_string(),
+                };
+            }
+            if ttl_secs > 86400 {
+                return IpcResponse::Error {
+                    message: "ttl_secs exceeds maximum limit (86400)".to_string(),
+                };
+            }
+            if reason.len() > 500 {
+                return IpcResponse::Error {
+                    message: "reason exceeds maximum limit (500)".to_string(),
+                };
+            }
             if reason.trim().is_empty() {
                 return IpcResponse::Error {
                     message: "reason is required for manual rules".to_string(),
@@ -325,10 +380,14 @@ fn process_request(
             }
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
-                    let (rule_id, expires_at) = policy.add_manual_allow(net.clone(), ttl_secs, reason.clone());
+                    let (rule_id, expires_at) = policy.add_manual_allow(net, ttl_secs, reason.clone());
+                    let mut kernel_warning = None;
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
                             warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
+                            kernel_warning = Some(format!(
+                                "policy rule added but the nftables kernel unlock for {network} failed ({e}) — sandbox traffic to this target is still dropped"
+                            ));
                         }
                     }
                     let now_ns = std::time::SystemTime::now()
@@ -338,7 +397,7 @@ fn process_request(
                     if let Err(e) = audit.record_rule_event(now_ns, &network, "rule_added", &format!("[manual] {reason}")) {
                         warn!(error = %e, "failed to audit manual rule add (rule itself succeeded)");
                     }
-                    IpcResponse::RuleAdded { rule_id, expires_at }
+                    IpcResponse::RuleAdded { rule_id, expires_at, kernel_warning }
                 }
                 Err(_) => IpcResponse::Error {
                     message: format!("invalid network CIDR: {network}"),
@@ -352,6 +411,11 @@ fn process_request(
                 warn!(peer_uid, "SetEgressMode denied: UID not allowlisted");
                 return IpcResponse::Error {
                     message: "permission denied: UID not allowlisted for write operations".to_string(),
+                };
+            }
+            if mode.len() > 10 {
+                return IpcResponse::Error {
+                    message: "egress mode too long".to_string(),
                 };
             }
             let m = match EgressMode::parse(&mode) {
@@ -438,6 +502,7 @@ mod tests {
             &[],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::ScopeResult { in_scope, verdict, .. } => {
@@ -452,8 +517,25 @@ mod tests {
     fn test_process_ping() {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
-        let resp = process_request(IpcRequest::Ping, &policy, None, &[], None, &audit);
+        let resp = process_request(IpcRequest::Ping, &policy, None, &[], None, &audit, std::time::Instant::now());
         assert!(matches!(resp, IpcResponse::Pong));
+    }
+
+    // Regression: GetStatus used to return a hardcoded uptime_secs: 0
+    // regardless of how long the process had actually been running.
+    #[test]
+    fn test_get_status_reports_real_uptime() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let started_at = Instant::now() - std::time::Duration::from_secs(42);
+        let resp = process_request(IpcRequest::GetStatus, &policy, None, &[], None, &audit, started_at);
+        match resp {
+            IpcResponse::Status { uptime_secs, rules_active, .. } => {
+                assert!(uptime_secs >= 42, "expected uptime_secs >= 42, got {uptime_secs}");
+                assert!(rules_active);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
     }
 
     #[test]
@@ -472,6 +554,7 @@ mod tests {
             &[0u32],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         assert!(matches!(resp, IpcResponse::Error { .. }));
     }
@@ -491,6 +574,7 @@ mod tests {
             &[0u32],
             None, // no live controller in unit tests
             &audit,
+            std::time::Instant::now(),
         );
         assert!(matches!(resp, IpcResponse::RuleAdded { .. }));
     }
@@ -512,7 +596,7 @@ mod tests {
         let policy = make_policy();
         policy.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
         let audit = AuditLog::open(":memory:").expect("audit log");
-        let resp = process_request(IpcRequest::ListRules, &policy, None, &[0], None, &audit);
+        let resp = process_request(IpcRequest::ListRules, &policy, None, &[0], None, &audit, std::time::Instant::now());
         match resp {
             IpcResponse::RuleList { rules } => {
                 assert_eq!(rules.len(), 2, "expected 1 config rule + 1 manual rule");
@@ -540,6 +624,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::Error { message } => assert!(message.contains("permission denied")),
@@ -562,6 +647,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::Error { message } => assert!(message.contains("reason is required")),
@@ -584,6 +670,7 @@ mod tests {
             &[0],
             Some(&ctrl),
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::FingerprintConfig { ttl_normalize, mac_randomization } => {
@@ -605,6 +692,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::FingerprintConfig { ttl_normalize, mac_randomization } => {
@@ -626,6 +714,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::Error { message } => assert!(message.contains("permission denied")),
@@ -646,6 +735,7 @@ mod tests {
             &[0],
             None, // no live controller in unit tests
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::EgressMode { mode } => assert_eq!(mode, "allow"),
@@ -665,6 +755,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::Error { message } => assert!(message.contains("invalid egress mode")),
@@ -677,13 +768,13 @@ mod tests {
     fn test_get_egress_mode_returns_current() {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
-        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit);
+        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit, std::time::Instant::now());
         match resp {
             IpcResponse::EgressMode { mode } => assert_eq!(mode, "block"),
             other => panic!("expected EgressMode, got {other:?}"),
         }
         policy.set_egress_mode(EgressMode::Ask);
-        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit);
+        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit, std::time::Instant::now());
         match resp {
             IpcResponse::EgressMode { mode } => assert_eq!(mode, "ask"),
             other => panic!("expected EgressMode, got {other:?}"),
@@ -705,6 +796,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::ScopeResult { verdict, in_scope, .. } => {
@@ -721,6 +813,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
 
         let resp = process_request(
@@ -730,6 +823,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::ScopeResult { verdict, in_scope, .. } => {
@@ -751,6 +845,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         let (rows, _) = audit.recent_rows(10).expect("recent rows");
         assert_eq!(rows.len(), 1);
@@ -773,6 +868,7 @@ mod tests {
             &[0],
             None,
             &audit,
+            std::time::Instant::now(),
         );
         let (rows, _) = audit.recent_rows(10).expect("recent rows");
         assert_eq!(rows.len(), 1);

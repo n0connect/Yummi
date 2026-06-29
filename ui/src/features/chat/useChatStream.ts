@@ -36,9 +36,11 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity 
     let socket: WebSocket | null = null
     let closed = false
 
-    // Jittered exponential backoff (matches TerminalPanel): a healthy connection
-    // resets to baseDelay; repeated failures grow geometrically up to maxDelay so
-    // a downed orchestrator isn't hammered every 1.5s forever.
+    // Jittered exponential backoff: a healthy connection resets to baseDelay;
+    // repeated failures grow geometrically up to maxDelay so a downed
+    // orchestrator isn't hammered forever. TerminalPanel uses a separate,
+    // simpler linear backoff (1.5s·attempt, capped at 10s) for its own
+    // WebSocket — the two are intentionally different, not meant to match.
     const baseDelay = 500
     const maxDelay = 30_000
     let delay = baseDelay

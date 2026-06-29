@@ -76,6 +76,14 @@ pub enum IpcResponse {
         rule_id: String,
         /// Unix timestamp when rule will expire
         expires_at: i64,
+        /// Set when the policy-engine rule was added but the kernel-level
+        /// nftables unlock failed (add_allowed_target error) — the rule
+        /// LOOKS active to future check_scope calls, but sandbox traffic to
+        /// this target is still actually dropped at the kernel (fail-safe,
+        /// not fail-open: nothing got MORE open than before). None when the
+        /// kernel call succeeded or no live controller is attached.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kernel_warning: Option<String>,
     },
     /// Success response for rule removal.
     RuleRemoved { rule_id: String },

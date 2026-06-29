@@ -62,6 +62,20 @@ const WELCOME: Omit<Message, 'id' | 'timestamp'> = {
 
 let _id = 0
 const nextId = () => `msg-${++_id}`
+
+// MAX_MESSAGE_CONTENT_CHARS bounds a single message's rendered/stored text.
+// Execution output, task summaries, and findings all ultimately originate
+// from sandbox tool output run against a (hostile) pentest target — an
+// unbounded field could pressure the render tree or sessionStorage with a
+// single oversized record. Mirrors the head+tail capping the orchestrator
+// already applies to agent observations (orchestrator/internal/agent/memory.go).
+const MAX_MESSAGE_CONTENT_CHARS = 64 * 1024
+
+function capMessageContent(content: string): string {
+  if (content.length <= MAX_MESSAGE_CONTENT_CHARS) return content
+  const edge = MAX_MESSAGE_CONTENT_CHARS / 2
+  return `${content.slice(0, edge)}\n...[message capped: ${content.length} chars total, middle elided]...\n${content.slice(-edge)}`
+}
 const freshWelcome = (): Message => ({ ...WELCOME, id: nextId(), timestamp: new Date().toISOString() })
 
 function loadMessages(): Message[] {
@@ -90,6 +104,71 @@ function saveApprovalMode(mode: ApprovalMode): void {
 
 // Terminal statuses where the task is no longer active.
 const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'])
+
+// ─── Message row renderers ──────────────────────────────────────────────────
+// Pure presentational pieces of the message thread — each takes only the
+// props it needs and holds no state of its own, so they can be read (and
+// changed) independently of the stateful logic in AssistantPanel below.
+
+function TaskCardMessage({ task, onClose, onApprove, onStop }: {
+  task: AgentTask
+  onClose: () => void
+  onApprove: (proposalID: string, approved: boolean) => void
+  onStop: () => void
+}): JSX.Element {
+  return (
+    <div className="msg-task-card">
+      <TaskTracker liveTask={task} onClose={onClose} onApprove={onApprove} onStop={onStop} />
+    </div>
+  )
+}
+
+function ActivityChipMessage({ activity }: { activity: ActivityEvent }): JSX.Element {
+  const [icon, label] = ACTIVITY_META[activity.kind] ?? ['•', activity.kind]
+  return (
+    <div className={`act act-${activity.kind}`} title={activity.detail || ''}>
+      <span className="act-ico">{icon}</span>
+      <span className="act-label">{label}</span>
+      <span className="act-text">{activity.summary}</span>
+    </div>
+  )
+}
+
+function ExecutionMessage({ content, execution }: { content: string; execution: ExecutionRecord }): JSX.Element {
+  return (
+    <details className="msg msg-execution" open={execution.status !== 'completed'}>
+      <summary className="execution-summary">
+        <span className="execution-chevron">›</span>
+        <span className={`execution-status ${execution.status === 'completed' ? 'status-ok' : 'status-err'}`}>
+          {execution.status === 'completed' ? '✓' : '✗'}
+        </span>
+        <code className="execution-cmd">{execution.command}</code>
+      </summary>
+      <div className="execution-detail">
+        {execution.security_banner && (
+          <div className="execution-threat" role="alert">
+            ⚠ {execution.security_banner}
+          </div>
+        )}
+        {content && <pre className="execution-output">{content}</pre>}
+        {execution.error && execution.status !== 'completed' && (
+          <div className="execution-error">{execution.error}</div>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function TextMessage({ role, content, timestamp }: { role: MessageRole; content: string; timestamp: string }): JSX.Element {
+  return (
+    <div className={`msg msg-${role}`} title={new Date(timestamp).toLocaleTimeString()}>
+      {role === 'user'      && <span className="msg-prefix">[USER] ❯</span>}
+      {role === 'assistant' && <span className="msg-prefix">[YUMMI] ❯</span>}
+      {role === 'system'    && <span className="msg-prefix">[SYSTEM] ❯</span>}
+      <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>{content}</span>
+    </div>
+  )
+}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -146,7 +225,7 @@ export function AssistantPanel(): JSX.Element {
 
   const appendMessage = useCallback((msg: Omit<Message, 'id' | 'timestamp'>) => {
     setMessages(prev =>
-      [...prev, { ...msg, id: nextId(), timestamp: new Date().toISOString() }].slice(-120)
+      [...prev, { ...msg, content: capMessageContent(msg.content), id: nextId(), timestamp: new Date().toISOString() }].slice(-120)
     )
   }, [])
 
@@ -181,17 +260,28 @@ export function AssistantPanel(): JSX.Element {
       return
     }
 
-    const output = (record.output ?? '').trim()
-    const error  = (record.error  ?? '').trim()
+    // Use the ANSI-stripped copies for anything fed back into the LLM — the
+    // raw output may contain escape sequences a hostile target could use to
+    // smuggle a payload past the banner scan (see entities/types.ts).
+    const output = (record.sanitized_output ?? record.output ?? '').trim()
+    const error  = (record.sanitized_error  ?? record.error  ?? '').trim()
+
+    // Content-layer fail-closed: this raw command output is about to be fed
+    // back INTO the conductor LLM. It originates on a (hostile) target, so if
+    // the orchestrator flagged it, prepend that banner — symmetric with the
+    // agent loop, which prepends the same banner to its observations. The model
+    // must treat the fenced output as untrusted DATA, never as instructions.
+    const banner = (record.security_banner ?? '').trim()
+    const guard = banner ? `${banner}\n\n` : ''
 
     let feedback: string
     if (record.status === 'failed') {
       const detail = error || output || 'exit code 1'
-      feedback =
+      feedback = guard +
         `[KOMUT BAŞARISIZ] \`${record.command}\`\n\nHata çıktısı:\n\`\`\`\n${detail}\n\`\`\`\n\n` +
         `Komut başarısız oldu. FARKLI bir komut seç — aynı komutu tekrar deneme.`
     } else {
-      feedback =
+      feedback = guard +
         `[KOMUT TAMAMLANDI] \`${record.command}\`\n\nÇıktı:\n\`\`\`\n${output || '(çıktı yok)'}\n\`\`\`\n\n` +
         `Bu sonucu analiz et ve kullanıcının sorusunu yanıtla.`
     }
@@ -452,75 +542,28 @@ export function AssistantPanel(): JSX.Element {
         {/* Message thread */}
         <div className="chat-messages">
           {messages.map(msg => {
-            // ── Task card — inline TaskTracker ────────────────────────────
             if (msg.role === 'task' && msg.taskID) {
-              const isThisActive = activeTask?.id === msg.taskID
-              const displayTask  = isThisActive ? activeTask : null
+              // Only the currently-active task has live data to show; a task
+              // card for a past/different task renders nothing.
+              const displayTask = activeTask?.id === msg.taskID ? activeTask : null
               if (!displayTask) return null
-
               return (
-                <div key={msg.id} className="msg-task-card">
-                  <TaskTracker
-                    liveTask={displayTask}
-                    onClose={() => setActiveTask(null)}
-                    onApprove={(pid, approved) => approveTaskGate(msg.taskID!, pid, approved)}
-                    onStop={stopActiveTask}
-                  />
-                </div>
-              )
-            }
-
-            // ── Activity chip — legible agent signal ──────────────────────
-            if (msg.role === 'activity' && msg.activity) {
-              const a = msg.activity
-              const [icon, label] = ACTIVITY_META[a.kind] ?? ['•', a.kind]
-              return (
-                <div key={msg.id} className={`act act-${a.kind}`} title={a.detail || ''}>
-                  <span className="act-ico">{icon}</span>
-                  <span className="act-label">{label}</span>
-                  <span className="act-text">{a.summary}</span>
-                </div>
-              )
-            }
-
-            // ── Execution result — collapsible ────────────────────────────
-            if (msg.role === 'execution' && msg.execution) {
-              return (
-                <details
+                <TaskCardMessage
                   key={msg.id}
-                  className="msg msg-execution"
-                  open={msg.execution.status !== 'completed'}
-                >
-                  <summary className="execution-summary">
-                    <span className="execution-chevron">›</span>
-                    <span className={`execution-status ${msg.execution.status === 'completed' ? 'status-ok' : 'status-err'}`}>
-                      {msg.execution.status === 'completed' ? '✓' : '✗'}
-                    </span>
-                    <code className="execution-cmd">{msg.execution.command}</code>
-                  </summary>
-                  <div className="execution-detail">
-                    {msg.content && <pre className="execution-output">{msg.content}</pre>}
-                    {msg.execution.error && msg.execution.status !== 'completed' && (
-                      <div className="execution-error">{msg.execution.error}</div>
-                    )}
-                  </div>
-                </details>
+                  task={displayTask}
+                  onClose={() => setActiveTask(null)}
+                  onApprove={(pid, approved) => approveTaskGate(msg.taskID!, pid, approved)}
+                  onStop={stopActiveTask}
+                />
               )
             }
-
-            // ── Regular text message ──────────────────────────────────────
-            return (
-              <div
-                key={msg.id}
-                className={`msg msg-${msg.role}`}
-                title={new Date(msg.timestamp).toLocaleTimeString()}
-              >
-                {msg.role === 'user'      && <span className="msg-prefix">[USER] ❯</span>}
-                {msg.role === 'assistant' && <span className="msg-prefix">[YUMMI] ❯</span>}
-                {msg.role === 'system'    && <span className="msg-prefix">[SYSTEM] ❯</span>}
-                <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
-              </div>
-            )
+            if (msg.role === 'activity' && msg.activity) {
+              return <ActivityChipMessage key={msg.id} activity={msg.activity} />
+            }
+            if (msg.role === 'execution' && msg.execution) {
+              return <ExecutionMessage key={msg.id} content={msg.content} execution={msg.execution} />
+            }
+            return <TextMessage key={msg.id} role={msg.role} content={msg.content} timestamp={msg.timestamp} />
           })}
           <div ref={messagesEndRef} />
         </div>
