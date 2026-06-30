@@ -114,6 +114,54 @@ func TestClientGetHostnamePolicy(t *testing.T) {
 	}
 }
 
+func TestClientAddRemoveHostnameRule(t *testing.T) {
+	block := []string{}
+	socket := StartTestServer(t, false, func(req Request) Response {
+		switch req.Type {
+		case "add_hostname_rule":
+			block = append(block, req.Pattern)
+		case "remove_hostname_rule":
+			out := block[:0]
+			for _, p := range block {
+				if p != req.Pattern {
+					out = append(out, p)
+				}
+			}
+			block = out
+		default:
+			return Response{Type: "error", Message: "unexpected"}
+		}
+		return Response{Type: "hostname_policy", Allow: []string{}, Block: append([]string{}, block...)}
+	})
+	c := NewClient(socket)
+
+	hp, err := c.AddHostnameRule("block", "*.tracker.com")
+	if err != nil {
+		t.Fatalf("AddHostnameRule: %v", err)
+	}
+	if len(hp.Block) != 1 || hp.Block[0] != "*.tracker.com" {
+		t.Fatalf("add did not reflect: %+v", hp.Block)
+	}
+	hp, err = c.RemoveHostnameRule("block", "*.tracker.com")
+	if err != nil {
+		t.Fatalf("RemoveHostnameRule: %v", err)
+	}
+	if len(hp.Block) != 0 {
+		t.Fatalf("remove did not reflect: %+v", hp.Block)
+	}
+}
+
+// A gateway error response (e.g. malformed pattern) surfaces as a Go error.
+func TestClientAddHostnameRuleError(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		return Response{Type: "error", Message: "malformed hostname pattern"}
+	})
+	c := NewClient(socket)
+	if _, err := c.AddHostnameRule("block", "***"); err == nil {
+		t.Fatal("expected an error for a gateway error response")
+	}
+}
+
 func TestClientPingChunkedResponse(t *testing.T) {
 	socket := StartTestServer(t, true, func(req Request) Response {
 		if req.Type != "ping" {

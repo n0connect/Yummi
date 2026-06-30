@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ipnet::IpNet;
 
 use crate::config::ScopeConfig;
-use self::hostname::{HostnamePolicy, HostnameVerdict};
+use self::hostname::{HostnameList, HostnamePolicy, HostnameVerdict};
 use self::rules::{EgressMode, PolicyRule, RuleAction, RuleSource};
 
 /// Policy decision for a traffic flow.
@@ -65,9 +65,11 @@ struct PolicyState {
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     state: Arc<RwLock<PolicyState>>,
-    /// Name-level allow/block patterns. Config-time and immutable, so it lives
-    /// outside the RwLock (no runtime mutation).
-    hostname: Arc<HostnamePolicy>,
+    /// Name-level allow/block patterns. Seeded from config and mutable at
+    /// runtime (operator add/remove via IPC) — behind its own RwLock, separate
+    /// from the IP rule state. Runtime edits are in-memory only (reset on
+    /// restart, when config reloads).
+    hostname: Arc<RwLock<HostnamePolicy>>,
 }
 
 impl std::fmt::Debug for PolicyState {
@@ -147,10 +149,10 @@ impl PolicyEngine {
                 egress_mode: EgressMode::Block,
                 default_allow,
             })),
-            hostname: Arc::new(HostnamePolicy::new(
+            hostname: Arc::new(RwLock::new(HostnamePolicy::new(
                 &scope.hostname_allow,
                 &scope.hostname_block,
-            )),
+            ))),
         }
     }
 
@@ -158,12 +160,26 @@ impl PolicyEngine {
     /// Block wins; a non-empty allow-list is a whitelist; otherwise Neutral.
     /// IP literals are never name-policed (→ Neutral). See `hostname` module.
     pub fn check_hostname(&self, host: &str) -> HostnameVerdict {
-        self.hostname.check(host)
+        self.hostname.read().unwrap().check(host)
     }
 
-    /// The configured hostname allow/block patterns, for operator visibility.
+    /// The current hostname allow/block patterns (config + runtime), for
+    /// operator visibility.
     pub fn hostname_patterns(&self) -> (Vec<String>, Vec<String>) {
-        (self.hostname.allow_patterns(), self.hostname.block_patterns())
+        let h = self.hostname.read().unwrap();
+        (h.allow_patterns(), h.block_patterns())
+    }
+
+    /// Add a hostname pattern to the allow or block list at runtime. Returns
+    /// false on a malformed pattern. In-memory only (resets on restart).
+    pub fn add_hostname_pattern(&self, list: HostnameList, pattern: &str) -> bool {
+        self.hostname.write().unwrap().add(list, pattern)
+    }
+
+    /// Remove a hostname pattern from the allow or block list. Returns true if
+    /// one was removed.
+    pub fn remove_hostname_pattern(&self, list: HostnameList, pattern: &str) -> bool {
+        self.hostname.write().unwrap().remove(list, pattern)
     }
 
     /// Current operator-set egress mode. Takes (and releases) a read-lock.

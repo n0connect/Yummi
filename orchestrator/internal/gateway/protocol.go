@@ -13,6 +13,8 @@ type Request struct {
 	Reason      string  `json:"reason,omitempty"`
 	Limit       int     `json:"limit,omitempty"`
 	Mode        string  `json:"mode,omitempty"`
+	List        string  `json:"list,omitempty"`
+	Pattern     string  `json:"pattern,omitempty"`
 }
 
 // Response mirrors gateway/src/ipc/protocol.rs IpcResponse.

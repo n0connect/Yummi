@@ -80,6 +80,8 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/gateway/egress-mode", HandleGatewayEgressMode(pc))
 		r.Post("/gateway/egress-mode", HandleGatewaySetEgressMode(pc))
 		r.Get("/gateway/hostname-policy", HandleGatewayHostnamePolicy(pc))
+		r.Post("/gateway/hostname-policy", HandleGatewayAddHostnameRule(pc))
+		r.Delete("/gateway/hostname-policy", HandleGatewayRemoveHostnameRule(pc))
 
 		// sandbox status & direct exec
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))
