@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
@@ -24,6 +25,7 @@ const (
 	nodeAsk       = "ask"
 	nodeHandoff   = "handoff"
 	nodeRemember  = "remember"
+	nodeThreatHold = "threat_hold"
 )
 
 // Edge name constants.
@@ -53,6 +55,7 @@ const (
 	edgeChangeGoal  = "change_goal"
 	edgeStopTask    = "stop_task"
 	edgeSendFull    = "send_full"
+	edgeThreatHold  = "threat_hold"
 )
 
 // NodeFunc is a state machine node function.
@@ -87,6 +90,7 @@ var graphEdges = map[string]map[string]string{
 		edgeRequiresApproval: nodeApproval,
 		edgeStuck:            nodeConsult,
 		edgeLongRunning:      nodeConsult,
+		edgeThreatHold:       nodeThreatHold,
 	},
 	nodeConsult: {
 		edgeContinue:    nodeStep,
@@ -104,6 +108,11 @@ var graphEdges = map[string]map[string]string{
 		// edgeRetryAgain → s.retryCtx.Caller (handled dynamically in Execute)
 	},
 	nodeApproval: {
+		edgeApproved: nodeStep,
+		edgeDenied:   nodeStep,
+		edgeGiveUp:   nodeAsk,
+	},
+	nodeThreatHold: {
 		edgeApproved: nodeStep,
 		edgeDenied:   nodeStep,
 		edgeGiveUp:   nodeAsk,
@@ -131,6 +140,7 @@ func init() {
 		nodeAsk:       askNode,
 		nodeHandoff:   handoffNode,
 		nodeRemember:  rememberNode,
+		nodeThreatHold: threatHoldNode,
 	}
 }
 
@@ -182,6 +192,7 @@ type GraphState struct {
 	finishOutcome   finishOutcome      // how finishNode terminates the task
 	finishMsg       string             // summary (completed/stopped) or error (failed) for finishNode
 
+	pendingThreatResult ToolResult // quarantined threat tool result awaiting approval
 	// consecutiveFailures counts back-to-back command failures; any success
 	// resets it. At failureLimit() the failure observation escalates to a
 	// forceful REPEATED_FAILURE directive; at 2×limit stepNode halts to the
@@ -370,23 +381,27 @@ func observeResult(s *GraphState, result ToolResult) string {
 		return s.failStep(tag, body, reason)
 	}
 	s.consecutiveFailures = 0 // any success clears the failure streak
+	// Content-layer fail-closed: check if raw output trips known threat patterns.
+	// If a threat is detected, quarantine the output and transition to threat hold node.
+	if banner := threatscan.Banner(result.Content); banner != "" {
+		slog.Warn("agent: tool output tripped threat patterns, quarantining",
+			"task", s.taskID, "command", s.pendingCommand)
+		s.pendingThreatResult = result
+		s.pendingProposal = conductor.Proposal{
+			ID:        uuid.NewString(),
+			Command:   s.pendingCommand,
+			Rationale: "Threat Scan flagged potential injection in output",
+			RiskLevel: "threat_approval",
+		}
+		return edgeThreatHold
+	}
+
 	compressed := CompressObservation(result.Content)
 	tag := "TOOL_RESPONSE"
 	if compressed != result.Content {
 		tag = "TOOL_RESPONSE_TRUNCATED"
 	}
-	// Content-layer fail-closed: tool output originates on the (hostile) target,
-	// so it is adversarial content. Scan the FULL output (not the truncated head)
-	// for prompt-injection / C2 / exfiltration and, if it trips, prepend a banner
-	// telling the model to treat the output as untrusted DATA, not instructions.
-	// Detection, not blocking — the operator can't intervene mid-command and a
-	// researcher may legitimately be reading attacker write-ups.
 	body := s.pendingCommand + "\n" + compressed
-	if banner := threatscan.Banner(result.Content); banner != "" {
-		slog.Warn("agent: tool output tripped threat patterns",
-			"task", s.taskID, "command", s.pendingCommand)
-		body = banner + "\n\n" + body
-	}
 	obs := Wrap(tag, body)
 	// Store the FULL output for SEND_FULL retrieval and summarization.
 	s.memCtx.AddObservation(result.Content)
