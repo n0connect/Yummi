@@ -8,6 +8,47 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 )
 
+// TestSeedHistoryRestoresButDoesNotClobber verifies the durable-chat-history
+// restore path: SeedHistory fills an empty session's in-memory history (so a
+// restart restores context) but never overwrites a session that already has
+// live turns, and caps to the most recent maxHistoryPerSession.
+func TestSeedHistoryRestoresButDoesNotClobber(t *testing.T) {
+	// A non-empty Ollama URL gives a non-nil llmClient (lazy, no connection),
+	// which SeedHistory requires before it does anything.
+	e, err := NewEngine("", "http://127.0.0.1:11434", "qwen3:8b")
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// Empty session → seeded.
+	e.SeedHistory("s1", []llm.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "answer"},
+	})
+	if got := len(e.history["s1"]); got != 2 {
+		t.Fatalf("expected 2 seeded turns, got %d", got)
+	}
+
+	// Second seed on a now-populated session is a no-op (no clobber).
+	e.SeedHistory("s1", []llm.Message{{Role: "user", Content: "SHOULD NOT APPEAR"}})
+	if got := len(e.history["s1"]); got != 2 {
+		t.Fatalf("seed clobbered live history: now %d turns", got)
+	}
+	if e.history["s1"][0].Content != "first" {
+		t.Fatalf("live history mutated: %+v", e.history["s1"])
+	}
+
+	// Over-cap seed keeps only the tail.
+	big := make([]llm.Message, maxHistoryPerSession+10)
+	for i := range big {
+		big[i] = llm.Message{Role: "user", Content: "m"}
+	}
+	e.SeedHistory("s2", big)
+	if got := len(e.history["s2"]); got != maxHistoryPerSession {
+		t.Fatalf("seed not capped: got %d, want %d", got, maxHistoryPerSession)
+	}
+}
+
 // TestAppendObservationFeedsHistory verifies that AppendObservation injects a
 // well-formed tool-result message into the session's chat history.
 func TestAppendObservationFeedsHistory(t *testing.T) {
@@ -256,8 +297,31 @@ func TestParseStructuredResponse(t *testing.T) {
 	}
 }
 
+// Regression: the system prompt's only language instruction used to be the
+// hardcoded, one-directional "Match the operator's language exactly (Turkish
+// input → Turkish output)" — found live to plausibly bias the model toward
+// Turkish since the English direction was only implicit. buildSystemPrompt
+// must now surface the persona's explicit, bidirectional language_parity
+// rule from core_identity.yaml's character.disposition block.
+func TestSystemPromptUsesPersonaLanguageParity(t *testing.T) {
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
+	if err != nil {
+		t.Fatalf("engine init: %v", err)
+	}
+	if engine.persona.Disposition.LanguageParity == "" {
+		t.Fatal("persona's language_parity field loaded empty — core_identity.yaml's character block isn't being parsed")
+	}
+	prompt := engine.buildSystemPrompt()
+	if !strings.Contains(prompt, engine.persona.Disposition.LanguageParity) {
+		t.Fatalf("system prompt does not include the persona's language_parity text:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "English input") {
+		t.Fatal("system prompt's language rule does not explicitly cover the English direction")
+	}
+}
+
 func TestSystemPromptIncludesStartTask(t *testing.T) {
-	engine, err := NewEngine("../../persona/v0.1", "", "")
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
 	if err != nil {
 		t.Fatalf("engine init: %v", err)
 	}

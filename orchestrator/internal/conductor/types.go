@@ -36,4 +36,17 @@ type Persona struct {
 	Boundaries   []string
 	Methodology  []string
 	OutputSchema string
+	Role         string
+	Disposition  PersonaDisposition
+}
+
+// PersonaDisposition mirrors core_identity.yaml's character.disposition block —
+// behavioral guidance (not safety rules) the model should fold into its
+// system prompt: how it relates to the operator, how it handles uncertainty,
+// how terse to be, and language matching.
+type PersonaDisposition struct {
+	OperatorRelationship string
+	Honesty              string
+	Economy              string
+	LanguageParity       string
 }

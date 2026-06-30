@@ -4,14 +4,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type coreIdentityFile struct {
-	Version  string   `yaml:"version"`
-	Identity string   `yaml:"identity"`
-	Values   []string `yaml:"values"`
+	Version   string   `yaml:"version"`
+	Identity  string   `yaml:"identity"`
+	Values    []string `yaml:"values"`
+	Character struct {
+		Role        string `yaml:"role"`
+		Disposition struct {
+			OperatorRelationship string `yaml:"operator_relationship"`
+			Honesty              string `yaml:"honesty"`
+			Economy              string `yaml:"economy"`
+			LanguageParity       string `yaml:"language_parity"`
+		} `yaml:"disposition"`
+	} `yaml:"character"`
 }
 
 type safetyFile struct {
@@ -53,6 +63,13 @@ func LoadPersona(dir string) (Persona, error) {
 		Boundaries:   safety.Boundaries,
 		Methodology:  methodology.Steps,
 		OutputSchema: string(schemaBytes),
+		Role:         strings.TrimSpace(core.Character.Role),
+		Disposition: PersonaDisposition{
+			OperatorRelationship: strings.TrimSpace(core.Character.Disposition.OperatorRelationship),
+			Honesty:              strings.TrimSpace(core.Character.Disposition.Honesty),
+			Economy:              strings.TrimSpace(core.Character.Disposition.Economy),
+			LanguageParity:       strings.TrimSpace(core.Character.Disposition.LanguageParity),
+		},
 	}, nil
 }
 

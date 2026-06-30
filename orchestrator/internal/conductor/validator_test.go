@@ -128,6 +128,13 @@ func TestClassifyRiskAllowlistShape(t *testing.T) {
 		{"nmap -sV -p1-65535 10.0.0.1", "low"},  // ordinary flags/ranges
 		{"sqlmap -u http://example.com --risk 3", "low"},
 		{"gobuster dir -u http://10.0.0.1 -w /usr/share/wordlists/dirb/common.txt", "low"},
+		// Regression: a single shell word can mix a bareword fragment directly
+		// against a quoted fragment with no space between them (ordinary POSIX
+		// word-splitting) — found live via an agent task proposing exactly this
+		// command, which the allowlist regex was wrongly rejecting as "critical"
+		// before it supported concatenated fragments within one token.
+		{"cut -d':' -f1 /etc/passwd", "low"},
+		{"awk -F':' '{print $1}' /etc/passwd", "low"},
 	}
 
 	for _, tt := range tests {

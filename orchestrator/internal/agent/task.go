@@ -98,18 +98,25 @@ type Checkpoint struct {
 
 // Task is the persistent state of one agentic task.
 type Task struct {
-	ID         string     `json:"id"`
-	SessionID  string     `json:"session_id"`
-	Goal       string     `json:"goal"`
-	Status     TaskStatus `json:"status"`
-	Plan       []PlanStep `json:"plan,omitempty"`
-	StepsUsed  int        `json:"steps_used"`
-	StepBudget int        `json:"step_budget"`
-	Summary    string     `json:"summary,omitempty"`
-	Findings   []string   `json:"findings,omitempty"`
-	Question   string     `json:"question,omitempty"` // set when paused via ask_operator
-	LastError  string     `json:"last_error,omitempty"`
-	TokensUsed int        `json:"tokens_used,omitempty"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	// ParentTaskID is set when this task is a sub-agent run delegated via
+	// [HANDOFF] from another task (see agent.go's Handoffs/RunSubtask). Empty
+	// for a top-level orchestrator task. Lets the UI surface a sub-task's own
+	// pending approval under the parent it was spawned from, instead of it
+	// being invisible to the operator (it has its own task ID the chat/web UI
+	// never otherwise learns about).
+	ParentTaskID string     `json:"parent_task_id,omitempty"`
+	Goal         string     `json:"goal"`
+	Status       TaskStatus `json:"status"`
+	Plan         []PlanStep `json:"plan,omitempty"`
+	StepsUsed    int        `json:"steps_used"`
+	StepBudget   int        `json:"step_budget"`
+	Summary      string     `json:"summary,omitempty"`
+	Findings     []string   `json:"findings,omitempty"`
+	Question     string     `json:"question,omitempty"` // set when paused via ask_operator
+	LastError    string     `json:"last_error,omitempty"`
+	TokensUsed   int        `json:"tokens_used,omitempty"`
 
 	// Checkpoint holds the last saved graph position (crash recovery).
 	Checkpoint Checkpoint `json:"checkpoint,omitempty"`

@@ -90,10 +90,14 @@ func firstToken(cmd string) string {
 
 // simpleCommandPattern allowlists the structural shape of a single,
 // unchained tool invocation: a bare command/path token, followed by
-// whitespace-separated argument tokens that are either a quoted string (any
-// content except the quote char, a backslash, or a literal CR/LF) or an
-// unquoted token built only from characters that have no meaning to a shell
-// (letters, digits, and a fixed set of common flag/path/URL punctuation).
+// whitespace-separated argument tokens. Each argument token is one or more
+// concatenated fragments — a quoted string (any content except the quote
+// char, a backslash, or a literal CR/LF) or an unquoted run of characters
+// that have no meaning to a shell (letters, digits, and a fixed set of
+// common flag/path/URL punctuation) — which is what lets ordinary partial
+// quoting like cut -d':' -f1 or awk -F':' match: -d':' is the bareword
+// fragment "-d" directly followed by the quoted fragment "':'", still one
+// shell word with no unquoted shell metacharacter in it.
 // Notably ABSENT from the unquoted charset: ; | & ` $ ( ) { } [ ] < > # \ and
 // any whitespace other than plain space/tab — every one of those is
 // shell-significant (chaining, substitution, redirection, backgrounding,
@@ -107,7 +111,7 @@ func firstToken(cmd string) string {
 // well enough to call low risk." Anything else — including command
 // structures we didn't anticipate — falls through to critical.
 var simpleCommandPattern = regexp.MustCompile(
-	`^[A-Za-z0-9_./-]+(?:[ \t]+(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|[A-Za-z0-9_.\-/:=,@%+~?*]+))*[ \t]*$`,
+	`^[A-Za-z0-9_./-]+(?:[ \t]+(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|[A-Za-z0-9_.\-/:=,@%+~?*]+)+)*[ \t]*$`,
 )
 
 // classifyRisk returns a floor risk level based purely on structural command

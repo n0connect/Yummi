@@ -31,7 +31,7 @@ RUN apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 ```
 
-There is **no tool allowlist** to register the tool in. To make the agent aware of it, add its usage to `persona/v0.1/tool_knowledge.yaml` so the LLM knows it exists and how to invoke it. The validator gates on *risk*, not on tool identity.
+There is **no tool allowlist** to register the tool in. The model relies on its own pretrained knowledge to use it; for a niche tool, add a short usage note to `persona/v0.1/core_identity.yaml` or `agent.yaml` instead. The validator gates on *risk*, not on tool identity.
 
 ## Entrypoint
 
