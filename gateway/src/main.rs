@@ -84,7 +84,7 @@ async fn run_linux() -> Result<()> {
     info!("nftables FORWARD rules active (fail-closed)");
 
     let audit    = AuditLog::open(&cfg.logging.audit_db)?;
-    let policy   = PolicyEngine::new(&cfg.scope);
+    let policy   = PolicyEngine::with_default_allow(&cfg.scope, cfg.policy.default_allow);
     let observer = Observer::new(policy.clone(), audit.clone());
     let ipc      = IpcServer::new(&cfg.ipc, policy.clone(), audit.clone())
         .with_controller(controller.clone());

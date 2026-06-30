@@ -99,10 +99,21 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 	result, done := handle.Wait(s.cfg.SoftTimeout)
 	if !done {
 		s.pendingHandle = handle
-		s.consultTag = "LONG_RUNNING"
-		s.consultBody = fmt.Sprintf("Command still running: `%s` (~%.0fs elapsed). Reply [CONTINUE] to keep waiting or [ABORT] to cancel.",
-			p.Command, s.cfg.SoftTimeout.Seconds())
 		s.consultCaller = nodeTool
+		// Distinguish a genuinely slow command from one blocked on operator
+		// egress approval (gateway Ask mode). The latter would otherwise be
+		// reported as "still running", which is misleading — the command isn't
+		// progressing, it's waiting for the operator to approve the external
+		// target in the egress bar.
+		if target, held := handle.EgressHold(); held {
+			s.consultTag = "AWAITING_EGRESS_APPROVAL"
+			s.consultBody = fmt.Sprintf("Command `%s` is held awaiting your egress approval for %q. Approve or deny it in the egress bar, then reply [CONTINUE] to keep waiting, or [ABORT] to cancel.",
+				p.Command, target)
+		} else {
+			s.consultTag = "LONG_RUNNING"
+			s.consultBody = fmt.Sprintf("Command still running: `%s` (~%.0fs elapsed). Reply [CONTINUE] to keep waiting or [ABORT] to cancel.",
+				p.Command, s.cfg.SoftTimeout.Seconds())
+		}
 		return edgeLongRunning, nil
 	}
 	return observeResult(s, result), nil
