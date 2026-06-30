@@ -391,6 +391,7 @@ mod tests {
                     "127.0.0.0/8".parse().unwrap(),
                     "169.254.0.0/16".parse().unwrap(),
                 ],
+                ..Default::default()
             },
             policy: PolicyConfig::default(),
             logging: LoggingConfig {

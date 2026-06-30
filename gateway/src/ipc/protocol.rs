@@ -49,6 +49,13 @@ pub enum IpcRequest {
     SetEgressMode { mode: String },
     /// Read the current egress mode (read-only, no auth required).
     GetEgressMode,
+    /// Name-level scope verdict for a hostname against the configured
+    /// hostname_allow/hostname_block patterns (read-only). The orchestrator
+    /// consults this before it resolves a name; the gateway cannot enforce it
+    /// at the packet layer (it sees only IPs).
+    CheckHostname { host: String },
+    /// Read the configured hostname allow/block patterns (read-only).
+    GetHostnamePolicy,
 }
 
 /// Response from gateway to orchestrator.
@@ -99,6 +106,12 @@ pub enum IpcResponse {
     /// Current/updated egress mode ("block"|"allow"|"ask"). Returned by both
     /// GetEgressMode and a successful SetEgressMode.
     EgressMode { mode: String },
+    /// Result of CheckHostname. `verdict` is "allow" (matched a whitelist),
+    /// "block" (matched a blocklist, or a whitelist is set and the name didn't
+    /// match), or "neutral" (no name restriction — defer to the IP-egress flow).
+    HostnameResult { host: String, verdict: String },
+    /// Result of GetHostnamePolicy — the configured patterns, for operator visibility.
+    HostnamePolicy { allow: Vec<String>, block: Vec<String> },
 }
 
 /// Read-only view of a policy rule, returned by ListRules.
