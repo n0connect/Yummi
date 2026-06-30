@@ -47,6 +47,16 @@ services:
     image: yummi/sandbox:local
     command: ["/usr/local/bin/entrypoint.sh"]
     read_only: true
+    # Resolve names via Cloudflare DNS (not Docker's embedded resolver), so the
+    # sandbox and the orchestrator (which resolves the same names through
+    # Cloudflare before opening a gateway rule) agree on the target IPs. DNS
+    # itself is not the trust boundary — the query still egresses through the
+    # gateway (udp/53 is accepted), and the actual connection to the resolved IP
+    # is gated by nftables. Resolution only maps name→IP; reachability is the
+    # gateway's call.
+    dns:
+      - "1.1.1.1"
+      - "1.0.0.1"
     tmpfs:
       - /tmp:size=256m,mode=1777
       - /run:size=64m,mode=755

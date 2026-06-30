@@ -30,6 +30,35 @@ func TestStoreExecerStubCompletion(t *testing.T) {
 	}
 }
 
+// TestStoreExecerEgressHold proves the handle reports an egress-approval hold
+// (so node_tool can show an accurate "awaiting egress approval" prompt instead
+// of a misleading "still running"). A processor returning the egress sentinel
+// holds the execution; Wait returns not-done and EgressHold surfaces the target.
+func TestStoreExecerEgressHold(t *testing.T) {
+	es := execution.NewStore()
+	es.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
+		return "", execution.ErrEgressApprovalRequired
+	})
+	e := NewStoreExecer(es, 5*time.Second)
+
+	handle, err := e.Start(context.Background(), "sess-1", "nmap -sV 8.8.8.8")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Short Wait: the command never completes (it's held), so done must be false.
+	_, done := handle.Wait(500 * time.Millisecond)
+	if done {
+		t.Fatal("held execution should not report done")
+	}
+	target, held := handle.EgressHold()
+	if !held {
+		t.Fatal("expected EgressHold to report the command is held")
+	}
+	if target != "8.8.8.8" {
+		t.Fatalf("EgressHold target = %q, want 8.8.8.8", target)
+	}
+}
+
 // TestStoreExecerContextCancellation verifies that context cancellation
 // is propagated as a Go error (not a ToolResult.IsError).
 func TestStoreExecerContextCancellation(t *testing.T) {

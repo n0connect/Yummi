@@ -49,6 +49,12 @@ struct PolicyState {
     /// Operator-controlled master egress switch. Defaults to `Block`
     /// (fail-closed); does NOT persist across restarts.
     egress_mode: EgressMode,
+    /// When the allow-list is empty, what does `evaluate()` decide for a
+    /// non-blocked destination? `false` (the secure default, and the value in
+    /// config/default.yaml) = deny-all / fail-closed; `true` = observe-only,
+    /// allow everything not explicitly blocked. Sourced from
+    /// `policy.default_allow` at startup.
+    default_allow: bool,
 }
 
 /// Policy engine evaluates traffic against scope rules.
@@ -87,7 +93,18 @@ fn is_always_blocked(ip: IpAddr) -> bool {
 }
 
 impl PolicyEngine {
+    /// Construct with the fail-closed default (`default_allow = false`): an
+    /// empty allow-list denies all non-blocked traffic. This is the secure
+    /// default used by tests; production wiring goes through
+    /// [`PolicyEngine::with_default_allow`] to honor the operator's config.
     pub fn new(scope: &ScopeConfig) -> Self {
+        Self::with_default_allow(scope, false)
+    }
+
+    /// Construct honoring the operator's `policy.default_allow`. `false` =
+    /// deny-all when the allow-list is empty (fail-closed); `true` = observe-
+    /// only (allow everything not explicitly blocked).
+    pub fn with_default_allow(scope: &ScopeConfig, default_allow: bool) -> Self {
         let allow_rules: Vec<PolicyRule> = scope
             .allow
             .iter()
@@ -123,6 +140,7 @@ impl PolicyEngine {
                 // Fail-closed default — no external egress until an operator
                 // explicitly switches the mode. Resets to Block on restart.
                 egress_mode: EgressMode::Block,
+                default_allow,
             })),
         }
     }
@@ -230,8 +248,17 @@ impl PolicyEngine {
             return (Decision::Block, "not_in_scope");
         }
 
-        // No allow list = observe-only mode, allow everything not blocked.
-        (Decision::Allow, "default_allow")
+        // Empty allow-list: decided by the operator's `policy.default_allow`.
+        // Default `false` = deny-all / fail-closed (a target is reachable only
+        // once explicitly allowed — in Ask mode this surfaces as a per-
+        // destination approval). `true` = observe-only, allow everything not
+        // blocked. Previously this was hardcoded to Allow, silently ignoring
+        // the config field.
+        if state.default_allow {
+            (Decision::Allow, "default_allow")
+        } else {
+            (Decision::Block, "default_deny")
+        }
     }
 
     /// Check if a specific IP is in scope (for IPC queries).
@@ -410,13 +437,15 @@ mod tests {
         assert_eq!(decision, Decision::Block);
     }
 
+    // With an empty allow-list and default_allow=true, evaluate() is observe-
+    // only: everything not explicitly blocked is allowed.
     #[test]
     fn test_observe_only_mode() {
         let scope = ScopeConfig {
             allow: vec![],
             block: vec!["127.0.0.0/8".parse().unwrap()],
         };
-        let engine = PolicyEngine::new(&scope);
+        let engine = PolicyEngine::with_default_allow(&scope, true);
 
         let (decision, reason) = engine.evaluate("8.8.8.8".parse().unwrap());
         assert_eq!(decision, Decision::Allow);
@@ -424,6 +453,37 @@ mod tests {
 
         let (decision, _) = engine.evaluate("127.0.0.1".parse().unwrap());
         assert_eq!(decision, Decision::Block);
+    }
+
+    // Regression: an empty allow-list with the secure default (default_allow=
+    // false, as in config/default.yaml) must DENY non-blocked traffic, not
+    // allow it. Previously evaluate() hardcoded Allow here, silently ignoring
+    // the config and making the gateway fail-OPEN when no allow rules existed.
+    #[test]
+    fn test_empty_allowlist_denies_by_default() {
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec!["127.0.0.0/8".parse().unwrap()],
+        };
+        let engine = PolicyEngine::new(&scope); // default_allow = false
+
+        let (decision, reason) = engine.evaluate("8.8.8.8".parse().unwrap());
+        assert_eq!(decision, Decision::Block);
+        assert_eq!(reason, "default_deny");
+    }
+
+    // In Ask mode, deny-by-default means a fresh out-of-scope target needs
+    // operator approval rather than silently going out — the behavior the
+    // egress round-trip relies on.
+    #[test]
+    fn test_ask_mode_needs_approval_with_empty_allowlist() {
+        let scope = ScopeConfig { allow: vec![], block: vec![] };
+        let engine = PolicyEngine::new(&scope); // default_allow = false
+        engine.set_egress_mode(EgressMode::Ask);
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::NeedsApproval
+        );
     }
 
     #[test]
