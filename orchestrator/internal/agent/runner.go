@@ -35,6 +35,12 @@ type ExecHandle interface {
 	// Wait blocks up to soft; returns (result, true) when the command reaches a
 	// terminal state, or (zero, false) if soft elapsed while it is still running.
 	Wait(soft time.Duration) (ToolResult, bool)
+	// EgressHold reports whether the command is currently held awaiting operator
+	// egress approval (gateway Ask mode), and the target it's blocked on. This
+	// lets the loop distinguish "command is slow" from "command is blocked on
+	// the operator" after a non-done Wait, so it surfaces an accurate prompt
+	// instead of a misleading "still running".
+	EgressHold() (target string, held bool)
 	// Cancel requests cancellation of the running command.
 	Cancel()
 }

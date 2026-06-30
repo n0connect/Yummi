@@ -10,7 +10,7 @@ sandbox is the Dockerized Kali Linux environment where all pentest commands run.
 | Filesystem | Read-only | Prevent persistence across runs |
 | Writable mounts | `/tmp` (256 MB), `/run` (64 MB) | Tmpfs — wiped on restart |
 | Capabilities | `NET_RAW`, `NET_ADMIN` | Required for nmap, tcpdump |
-| DNS | `172.20.0.2` (gateway) | All DNS queries logged by gateway |
+| DNS | `1.1.1.1` / `1.0.0.1` (Cloudflare) | Same resolver the orchestrator uses, so both agree on a name's IP before the gateway opens a rule. DNS still egresses through the gateway (udp/53 accepted); resolution is not the trust boundary — the connection to the resolved IP is gated by nftables. |
 | `no-new-privileges` | `true` | No privilege escalation |
 
 ## Volumes
