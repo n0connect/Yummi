@@ -142,6 +142,27 @@ func HandleGatewayFingerprintConfig(c *gateway.Client) http.HandlerFunc {
 	}
 }
 
+// HandleGatewayHostnamePolicy returns the gateway's configured hostname
+// allow/block patterns (operator visibility; the lists are config-level).
+func HandleGatewayHostnamePolicy(c *gateway.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "not_configured"})
+			return
+		}
+		hp, err := c.GetHostnamePolicy()
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "unreachable", "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":  hp.Allow,
+			"block":  hp.Block,
+			"status": "connected",
+		})
+	}
+}
+
 // HandleGatewayEgressMode returns the gateway's current egress mode.
 func HandleGatewayEgressMode(c *gateway.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,19 @@ scope:
     - "10.0.0.0/8"
     - "172.16.0.0/12"
     - "192.168.0.0/16"
+  # Name-level scope, enforced by the orchestrator before it resolves a name
+  # (the gateway sees only IPs in packets). Wildcard: "*.example.com" covers
+  # the apex example.com AND any subdomain at any depth.
+  #
+  # hostname_allow — empty means no name whitelist (any name may proceed to the
+  # IP-egress flow). Non-empty makes it a whitelist: a name must match or it is
+  # blocked. e.g. to scope an engagement to one target:
+  #   hostname_allow: ["*.acme-corp.com"]
+  hostname_allow: []
+  # hostname_block — always out of scope by name, a hard deny that wins over
+  # everything (even Allow egress mode). e.g.:
+  #   hostname_block: ["*.facebook.com", "metadata.google.internal"]
+  hostname_block: []
 
 policy:
   default_allow: false
