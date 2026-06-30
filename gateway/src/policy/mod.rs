@@ -1,5 +1,6 @@
 //! Policy engine — determines allow/block decisions for traffic.
 
+pub mod hostname;
 pub mod rules;
 
 use std::net::IpAddr;
@@ -10,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ipnet::IpNet;
 
 use crate::config::ScopeConfig;
+use self::hostname::{HostnamePolicy, HostnameVerdict};
 use self::rules::{EgressMode, PolicyRule, RuleAction, RuleSource};
 
 /// Policy decision for a traffic flow.
@@ -49,6 +51,12 @@ struct PolicyState {
     /// Operator-controlled master egress switch. Defaults to `Block`
     /// (fail-closed); does NOT persist across restarts.
     egress_mode: EgressMode,
+    /// When the allow-list is empty, what does `evaluate()` decide for a
+    /// non-blocked destination? `false` (the secure default, and the value in
+    /// config/default.yaml) = deny-all / fail-closed; `true` = observe-only,
+    /// allow everything not explicitly blocked. Sourced from
+    /// `policy.default_allow` at startup.
+    default_allow: bool,
 }
 
 /// Policy engine evaluates traffic against scope rules.
@@ -57,6 +65,9 @@ struct PolicyState {
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     state: Arc<RwLock<PolicyState>>,
+    /// Name-level allow/block patterns. Config-time and immutable, so it lives
+    /// outside the RwLock (no runtime mutation).
+    hostname: Arc<HostnamePolicy>,
 }
 
 impl std::fmt::Debug for PolicyState {
@@ -87,7 +98,18 @@ fn is_always_blocked(ip: IpAddr) -> bool {
 }
 
 impl PolicyEngine {
+    /// Construct with the fail-closed default (`default_allow = false`): an
+    /// empty allow-list denies all non-blocked traffic. This is the secure
+    /// default used by tests; production wiring goes through
+    /// [`PolicyEngine::with_default_allow`] to honor the operator's config.
     pub fn new(scope: &ScopeConfig) -> Self {
+        Self::with_default_allow(scope, false)
+    }
+
+    /// Construct honoring the operator's `policy.default_allow`. `false` =
+    /// deny-all when the allow-list is empty (fail-closed); `true` = observe-
+    /// only (allow everything not explicitly blocked).
+    pub fn with_default_allow(scope: &ScopeConfig, default_allow: bool) -> Self {
         let allow_rules: Vec<PolicyRule> = scope
             .allow
             .iter()
@@ -123,8 +145,25 @@ impl PolicyEngine {
                 // Fail-closed default — no external egress until an operator
                 // explicitly switches the mode. Resets to Block on restart.
                 egress_mode: EgressMode::Block,
+                default_allow,
             })),
+            hostname: Arc::new(HostnamePolicy::new(
+                &scope.hostname_allow,
+                &scope.hostname_block,
+            )),
         }
+    }
+
+    /// Name-level verdict for a hostname (the IPC `check_hostname` entry point).
+    /// Block wins; a non-empty allow-list is a whitelist; otherwise Neutral.
+    /// IP literals are never name-policed (→ Neutral). See `hostname` module.
+    pub fn check_hostname(&self, host: &str) -> HostnameVerdict {
+        self.hostname.check(host)
+    }
+
+    /// The configured hostname allow/block patterns, for operator visibility.
+    pub fn hostname_patterns(&self) -> (Vec<String>, Vec<String>) {
+        (self.hostname.allow_patterns(), self.hostname.block_patterns())
     }
 
     /// Current operator-set egress mode. Takes (and releases) a read-lock.
@@ -230,8 +269,17 @@ impl PolicyEngine {
             return (Decision::Block, "not_in_scope");
         }
 
-        // No allow list = observe-only mode, allow everything not blocked.
-        (Decision::Allow, "default_allow")
+        // Empty allow-list: decided by the operator's `policy.default_allow`.
+        // Default `false` = deny-all / fail-closed (a target is reachable only
+        // once explicitly allowed — in Ask mode this surfaces as a per-
+        // destination approval). `true` = observe-only, allow everything not
+        // blocked. Previously this was hardcoded to Allow, silently ignoring
+        // the config field.
+        if state.default_allow {
+            (Decision::Allow, "default_allow")
+        } else {
+            (Decision::Block, "default_deny")
+        }
     }
 
     /// Check if a specific IP is in scope (for IPC queries).
@@ -347,6 +395,7 @@ mod tests {
                 "127.0.0.0/8".parse().unwrap(),
                 "169.254.0.0/16".parse().unwrap(),
             ],
+            ..Default::default()
         }
     }
 
@@ -367,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_always_blocks_loopback_even_with_no_block_rule_configured() {
-        let scope = ScopeConfig { allow: vec![], block: vec![] }; // no block rules at all
+        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() }; // no block rules at all
         let engine = PolicyEngine::new(&scope);
         let (decision, reason) = engine.evaluate("127.0.0.1".parse().unwrap());
         assert_eq!(decision, Decision::Block);
@@ -381,6 +430,7 @@ mod tests {
         let scope = ScopeConfig {
             allow: vec!["169.254.0.0/16".parse().unwrap()],
             block: vec![],
+            ..Default::default()
         };
         let engine = PolicyEngine::new(&scope);
         let (decision, _) = engine.evaluate("169.254.1.1".parse().unwrap());
@@ -389,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_always_blocks_multicast_and_unspecified() {
-        let scope = ScopeConfig { allow: vec![], block: vec![] };
+        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() };
         let engine = PolicyEngine::new(&scope);
         assert_eq!(engine.evaluate("224.0.0.1".parse().unwrap()).0, Decision::Block);
         assert_eq!(engine.evaluate("0.0.0.0".parse().unwrap()).0, Decision::Block);
@@ -410,13 +460,16 @@ mod tests {
         assert_eq!(decision, Decision::Block);
     }
 
+    // With an empty allow-list and default_allow=true, evaluate() is observe-
+    // only: everything not explicitly blocked is allowed.
     #[test]
     fn test_observe_only_mode() {
         let scope = ScopeConfig {
             allow: vec![],
             block: vec!["127.0.0.0/8".parse().unwrap()],
+            ..Default::default()
         };
-        let engine = PolicyEngine::new(&scope);
+        let engine = PolicyEngine::with_default_allow(&scope, true);
 
         let (decision, reason) = engine.evaluate("8.8.8.8".parse().unwrap());
         assert_eq!(decision, Decision::Allow);
@@ -426,11 +479,44 @@ mod tests {
         assert_eq!(decision, Decision::Block);
     }
 
+    // Regression: an empty allow-list with the secure default (default_allow=
+    // false, as in config/default.yaml) must DENY non-blocked traffic, not
+    // allow it. Previously evaluate() hardcoded Allow here, silently ignoring
+    // the config and making the gateway fail-OPEN when no allow rules existed.
+    #[test]
+    fn test_empty_allowlist_denies_by_default() {
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec!["127.0.0.0/8".parse().unwrap()],
+            ..Default::default()
+        };
+        let engine = PolicyEngine::new(&scope); // default_allow = false
+
+        let (decision, reason) = engine.evaluate("8.8.8.8".parse().unwrap());
+        assert_eq!(decision, Decision::Block);
+        assert_eq!(reason, "default_deny");
+    }
+
+    // In Ask mode, deny-by-default means a fresh out-of-scope target needs
+    // operator approval rather than silently going out — the behavior the
+    // egress round-trip relies on.
+    #[test]
+    fn test_ask_mode_needs_approval_with_empty_allowlist() {
+        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() };
+        let engine = PolicyEngine::new(&scope); // default_allow = false
+        engine.set_egress_mode(EgressMode::Ask);
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::NeedsApproval
+        );
+    }
+
     #[test]
     fn test_temporary_allow() {
         let scope = ScopeConfig {
             allow: vec!["10.0.0.0/8".parse().unwrap()],
             block: vec![],
+            ..Default::default()
         };
         let engine = PolicyEngine::new(&scope);
 
@@ -449,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_expired_rule_cleanup() {
-        let scope = ScopeConfig { allow: vec![], block: vec![] };
+        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() };
         let engine = PolicyEngine::new(&scope);
 
         engine.add_temporary_allow("192.168.1.0/24".parse().unwrap(), 1, "Expires soon".to_string());
@@ -471,6 +557,7 @@ mod tests {
         let scope = ScopeConfig {
             allow: vec!["10.0.0.0/8".parse().unwrap()],
             block: vec!["10.0.0.1/32".parse().unwrap()],
+            ..Default::default()
         };
         let engine = Arc::new(PolicyEngine::new(&scope));
         let mut handles = vec![];
@@ -494,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_add_manual_allow_tags_source_manual() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
         let (rule_id, _expires) = engine.add_manual_allow(
             "10.0.0.5/32".parse().unwrap(),
             600,
@@ -508,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_list_rules_excludes_expired() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
         engine.add_manual_allow("10.0.0.1/32".parse().unwrap(), 0, "expires immediately".to_string());
         std::thread::sleep(std::time::Duration::from_secs(1));
         let rules = engine.list_rules();
@@ -523,14 +610,14 @@ mod tests {
 
     #[test]
     fn test_check_egress_block_mode_blocks_external() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
         // default mode is Block
         assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Block);
     }
 
     #[test]
     fn test_check_egress_allow_mode_allows_external() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
         engine.set_egress_mode(EgressMode::Allow);
         assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Allow);
     }
@@ -540,7 +627,7 @@ mod tests {
         // A bare hostname (non-IP) is decided purely by the egress mode, never
         // an "invalid IP" error — this is what makes `ping google.com` work in
         // Allow mode and queue for approval in Ask mode.
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
         assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Block); // default
         engine.set_egress_mode(EgressMode::Allow);
         assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Allow);
@@ -554,6 +641,7 @@ mod tests {
         let scope = ScopeConfig {
             allow: vec!["10.0.0.0/8".parse().unwrap()],
             block: vec![],
+            ..Default::default()
         };
         let engine = PolicyEngine::new(&scope);
         engine.set_egress_mode(EgressMode::Ask);
@@ -568,6 +656,7 @@ mod tests {
         let scope = ScopeConfig {
             allow: vec!["8.8.8.0/24".parse().unwrap()],
             block: vec![],
+            ..Default::default()
         };
         let engine = PolicyEngine::new(&scope);
         engine.set_egress_mode(EgressMode::Ask);
@@ -576,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_check_egress_always_blocked_floor_wins_in_all_modes() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![] });
+        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
         for mode in [EgressMode::Block, EgressMode::Allow, EgressMode::Ask] {
             engine.set_egress_mode(mode);
             assert_eq!(
@@ -593,6 +682,7 @@ mod tests {
         let engine = PolicyEngine::new(&ScopeConfig {
             allow: vec![],
             block: vec!["127.0.0.0/8".parse().unwrap()],
+            ..Default::default()
         });
         engine.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
         let rules = engine.list_rules();

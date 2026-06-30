@@ -62,7 +62,9 @@ orchestrator communicates with gateway over a Unix domain socket (`/run/yummi/ga
 
 | Method | Purpose |
 |---|---|
-| `check_scope` | Resolve a target to a `verdict` (`allow` / `block` / `needs_approval`) |
+| `check_scope` | Resolve an IP target to a `verdict` (`allow` / `block` / `needs_approval`) |
+| `check_hostname` | Name-level verdict (`allow` / `block` / `neutral`) against the configured hostname patterns |
+| `get_hostname_policy` | The configured hostname allow/block patterns |
 | `get_status` | Level, rules-active, uptime |
 | `ping` | Liveness |
 | `add_temporary_rule` | Add a TTL'd Allow/Block rule (`{network, ttl_secs, reason}`) |
@@ -85,7 +87,28 @@ scope:
   block:
     - "192.168.1.1"
     - "127.0.0.0/8"
+  # Name-level scope (see below). Wildcard "*.example.com" covers the apex
+  # AND any subdomain at any depth.
+  hostname_allow:
+    - "*.acme-corp.com"   # whitelist: only matching names may proceed
+  hostname_block:
+    - "*.facebook.com"    # hard deny by name, wins over everything
 ```
+
+### Hostname policy
+
+The gateway only sees IPs in packets, so name-level scope is enforced by the
+orchestrator: before it resolves a hostname it calls `check_hostname`, and the
+gateway returns a verdict against `hostname_allow`/`hostname_block`:
+
+- a `hostname_block` match → **block** (hard, name-level deny — wins even in `allow` egress mode);
+- else if `hostname_allow` is non-empty it is a **whitelist** (a name must match or it's blocked);
+- else → **neutral** (no name restriction; the IP-egress flow decides).
+
+`*.example.com` matches `example.com` and any subdomain (`a.b.example.com`); a
+pattern with no `*` is an exact match. A name-level block is recorded in the
+tamper-evident audit chain (`reason: hostname_blocked`). The lists are
+config-level; view them at `GET /api/v1/gateway/hostname-policy`.
 
 ### Egress mode
 

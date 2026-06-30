@@ -10,12 +10,18 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/n0connect/yummi/orchestrator/internal/dnsresolve"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
+
+// defaultResolver maps hostname targets to IPs via Cloudflare DNS — shared by
+// RunScopedCommand and UnlockEgressTarget so both resolve a name the same way
+// the sandbox does. Stateless; safe for concurrent use.
+var defaultResolver = dnsresolve.New()
 
 // ErrOutOfScope marks a command's target as rejected by gateway's scope
 // policy. The returned error also carries a "GATEWAY_BLOCKED:" prefix in its
@@ -50,10 +56,40 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 		if pc == nil {
 			return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
 		}
-		verdict, err := pc.CheckEgress(target)
+
+		// Name-level scope gate, BEFORE resolution: for a hostname target,
+		// consult the gateway's hostname allow/block policy. A "block" verdict
+		// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
+		// resolving or touching the IP-egress flow. "allow"/"neutral" proceed.
+		// IP targets carry no name, so they skip this.
+		if isHostnameTarget(target) {
+			hv, err := pc.CheckHostname(target)
+			if err != nil {
+				slog.Error("RunScopedCommand: gateway hostname check error — blocking (fail-closed)",
+					"target", target, "error", err)
+				return nil, fmt.Errorf("gateway hostname check unavailable: %w", err)
+			}
+			if hv == "block" {
+				return nil, fmt.Errorf("GATEWAY_BLOCKED: hostname %q is blocked by policy: %w", target, ErrOutOfScope)
+			}
+		}
+
+		// Resolve a hostname target to IP(s) through Cloudflare (the same
+		// resolver the sandbox uses) so the gateway — which only understands
+		// IPs — can rule on the very address(es) the sandbox will connect to.
+		// An IP literal passes through unchanged; an unresolvable hostname
+		// yields no IPs and falls back to the gateway's mode-based unresolved
+		// verdict (and opens no rule, as before).
+		ips := defaultResolver.Resolve(ctx, target)
+		checkTarget := target
+		if len(ips) > 0 {
+			checkTarget = ips[0]
+		}
+
+		verdict, err := pc.CheckEgress(checkTarget)
 		if err != nil {
 			slog.Error("RunScopedCommand: gateway egress check error — blocking execution (fail-closed)",
-				"target", target, "error", err)
+				"target", target, "resolved", checkTarget, "error", err)
 			return nil, fmt.Errorf("gateway scope check unavailable: %w", err)
 		}
 		switch verdict {
@@ -70,26 +106,10 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
 		}
 
-		network := hostNetwork(target)
-		var nftWarning string
-		if network == "" {
-			slog.Warn("RunScopedCommand: target is not an IP, skipping nftables unlock (gateway needs a resolved IP)",
-				"target", target)
-		} else if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
-			// The IPC call itself failed (gateway unreachable, malformed request, etc.).
-			slog.Warn("RunScopedCommand: gateway nftables unlock failed (proceeding — check gateway logs)",
-				"target", target, "error", nftErr)
-			nftWarning = fmt.Sprintf("gateway nftables unlock for %s failed (%v) — the command ran but may have no network path to the target", network, nftErr)
-		} else if kernelWarning != "" {
-			// The IPC call succeeded (policy rule added) but the gateway's own
-			// kernel-level nftables unlock failed internally — same operator-
-			// visible consequence as the case above, different failure point.
-			slog.Warn("RunScopedCommand: gateway accepted the rule but its kernel unlock failed",
-				"target", target, "warning", kernelWarning)
-			nftWarning = kernelWarning
-		} else {
-			slog.Info("RunScopedCommand: nftables allow rule added", "target", network)
-		}
+		// Open an allow rule for every resolved IPv4 (bounded) so a hostname
+		// that round-robins across a small set stays reachable; a bare IP
+		// target opens just its own /32.
+		nftWarning := openAllowRules(pc, target, ips, command)
 
 		result, err := bridge.Exec(ctx, command)
 		if nftWarning != "" && result != nil {
@@ -193,43 +213,121 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 	}
 }
 
-// UnlockEgressTarget opens a temporary gateway allow rule for target so a
+// openAllowRules installs a 1-hour temporary gateway allow rule for each
+// resolved IP of target (or target's own /32·/128 when it is already an IP and
+// ips is empty). It never fails the caller — a rule-install problem is returned
+// as an operator-visible warning string appended to the command output, since
+// the command still ran; "" means every rule went in cleanly. Shared by the
+// direct-run and post-approval retry paths so they open rules identically.
+func openAllowRules(pc *gateway.Client, target string, ips []string, command string) string {
+	networks := resolvedNetworks(target, ips)
+	if len(networks) == 0 {
+		slog.Warn("executor: target has no resolvable IP, skipping nftables unlock (gateway needs an IP)",
+			"target", target)
+		return ""
+	}
+	var warnings []string
+	for _, network := range networks {
+		if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
+			slog.Warn("executor: gateway nftables unlock failed (proceeding — check gateway logs)",
+				"target", target, "network", network, "error", nftErr)
+			warnings = append(warnings, fmt.Sprintf("gateway nftables unlock for %s failed (%v)", network, nftErr))
+		} else if kernelWarning != "" {
+			slog.Warn("executor: gateway accepted the rule but its kernel unlock failed",
+				"target", target, "network", network, "warning", kernelWarning)
+			warnings = append(warnings, kernelWarning)
+		} else {
+			slog.Info("executor: nftables allow rule added", "target", network)
+		}
+	}
+	return strings.Join(warnings, "; ")
+}
+
+// resolvedNetworks turns a target + its resolved IPs into the CIDR list the
+// gateway needs. Resolved IPs each become a single-address /32 prefix; an
+// IP-literal target with no resolution falls back to its own /32; a bare
+// unresolvable hostname yields nothing (no rule can be opened).
+//
+// IPv6 is intentionally dropped: the gateway's nftables `allowed_targets` set
+// is `type ipv4_addr`, so a v6 allow rule is accepted over IPC but fails the
+// kernel unlock. Filtering here avoids opening rules that cannot work (an
+// IPv6-only target is simply unreachable through this gateway). If the gateway
+// gains a v6 set, lift this filter.
+func resolvedNetworks(target string, ips []string) []string {
+	if len(ips) == 0 {
+		if n := ipv4Network(target); n != "" {
+			return []string{n}
+		}
+		return nil
+	}
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if n := ipv4Network(ip); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// isHostnameTarget reports whether target is a hostname (not an IP literal or
+// CIDR) — i.e. something the gateway's name-level hostname policy applies to.
+func isHostnameTarget(target string) bool {
+	if _, err := netip.ParseAddr(target); err == nil {
+		return false
+	}
+	if _, err := netip.ParsePrefix(target); err == nil {
+		return false
+	}
+	return true
+}
+
+// ipv4Network returns the single-address CIDR the gateway needs for target,
+// but only when it is an IPv4 address ("1.2.3.4" → "1.2.3.4/32") or an IPv4
+// CIDR (passed through). Returns "" for IPv6, a hostname, or any non-IP — the
+// gateway's allow set is IPv4-only and it has no resolver of its own.
+func ipv4Network(target string) string {
+	if prefix, err := netip.ParsePrefix(target); err == nil {
+		if prefix.Addr().Is4() {
+			return target
+		}
+		return ""
+	}
+	if addr, err := netip.ParseAddr(target); err == nil && addr.Is4() {
+		return target + "/32"
+	}
+	return ""
+}
+
+// UnlockEgressTarget opens temporary gateway allow rule(s) for target so a
 // command held in execution.StatusAwaitingEgressApproval can be retried and
 // reach it. It is the unlock callback the API's resolve-egress handler passes
 // to execution.Store.ResolveEgress — keeping the gateway client out of the
-// execution store. Returns an error for a bare hostname (no IP/CIDR form, so
-// no rule can be installed: hostname→IP resolution is deliberately out of
-// scope), or when the gateway IPC call itself fails. The 1-hour TTL matches
-// RunScopedCommand's own allow-rule lifetime.
+// execution store. A hostname target is resolved via Cloudflare DNS (the same
+// resolver the sandbox uses) and a rule is opened for each resolved IP. Returns
+// an error only when nothing could be opened — an unresolvable hostname (no IP
+// to rule on) or a gateway IPC failure.
 func UnlockEgressTarget(pc *gateway.Client, target, command string) error {
 	if pc == nil {
 		return fmt.Errorf("gateway client not configured")
 	}
-	network := hostNetwork(target)
-	if network == "" {
-		return fmt.Errorf("cannot approve egress for non-IP target %q: hostname resolution is not supported yet", target)
+	ips := defaultResolver.Resolve(context.Background(), target)
+	networks := resolvedNetworks(target, ips)
+	if len(networks) == 0 {
+		return fmt.Errorf("cannot approve egress for %q: it did not resolve to any IP", target)
 	}
-	if _, _, _, err := pc.AddTemporaryRule(network, 3600, "egress approved: "+command); err != nil {
-		return fmt.Errorf("gateway rule install failed: %w", err)
+	var firstErr error
+	opened := 0
+	for _, network := range networks {
+		if _, _, _, err := pc.AddTemporaryRule(network, 3600, "egress approved: "+command); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		opened++
+	}
+	if opened == 0 {
+		return fmt.Errorf("gateway rule install failed: %w", firstErr)
 	}
 	return nil
-}
-
-// hostNetwork converts a target into the single-address CIDR the gateway needs
-// to install an nftables allow rule: "1.2.3.4" → "1.2.3.4/32", an IPv6 address
-// → ".../128", and an already-CIDR target (e.g. "10.0.0.0/24") is passed
-// through. It returns "" for anything that is not an IP/CIDR — the gateway has
-// no resolver, so a bare hostname cannot be turned into a rule.
-func hostNetwork(target string) string {
-	if _, err := netip.ParsePrefix(target); err == nil {
-		return target // already a CIDR
-	}
-	addr, err := netip.ParseAddr(target)
-	if err != nil {
-		return ""
-	}
-	if addr.Is4() {
-		return target + "/32"
-	}
-	return target + "/128"
 }
