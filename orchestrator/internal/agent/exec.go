@@ -96,6 +96,17 @@ func (h *storeHandle) Wait(soft time.Duration) (ToolResult, bool) {
 	}
 }
 
+// EgressHold reports whether this execution is currently held awaiting operator
+// egress approval, and the target it's blocked on. Returns ("", false) for any
+// other state.
+func (h *storeHandle) EgressHold() (string, bool) {
+	rec, ok := h.store.Get(h.recID)
+	if !ok || rec.Status != execution.StatusAwaitingEgressApproval {
+		return "", false
+	}
+	return rec.EgressTarget, true
+}
+
 // Cancel requests cancellation of the running command.
 func (h *storeHandle) Cancel() { _, _ = h.store.Cancel(h.recID) }
 

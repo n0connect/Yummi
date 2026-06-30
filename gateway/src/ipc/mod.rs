@@ -197,6 +197,26 @@ fn process_request(
                 EgressVerdict::Block => "block",
                 EgressVerdict::NeedsApproval => "needs_approval",
             };
+            // Forensic trail: a scope check that did NOT allow the target is a
+            // "proposed but blocked/queued" event. Record it in the tamper-
+            // evident chain so a denied target leaves an auditable trace even
+            // though no connection was ever attempted (the observer only logs
+            // actual connection attempts). Allows are not chained here —
+            // they're already represented by the rule_added event that opens
+            // them, and an allowed scope check makes no security decision worth
+            // a row.
+            if verdict != EgressVerdict::Allow {
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as i64)
+                    .unwrap_or(0);
+                if let Err(e) = audit.record_decision(
+                    now_ns, None, "orchestrator", &ip, None, None, "scope_check",
+                    verdict_str, "scope_check_rejected",
+                ) {
+                    warn!(error = %e, "failed to record scope-check rejection in audit");
+                }
+            }
             IpcResponse::ScopeResult {
                 ip,
                 in_scope: verdict == EgressVerdict::Allow,
@@ -519,6 +539,35 @@ mod tests {
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(IpcRequest::Ping, &policy, None, &[], None, &audit, std::time::Instant::now());
         assert!(matches!(resp, IpcResponse::Pong));
+    }
+
+    // A scope check that is not allowed must leave a hash-chained audit row —
+    // the "proposed but blocked/queued" forensic trail. An allowed check must
+    // not (it makes no security decision; the rule_added event covers it).
+    #[test]
+    fn test_scope_check_rejection_is_audited() {
+        let policy = make_policy(); // allow-list = 10.0.0.0/8
+        policy.set_egress_mode(EgressMode::Ask);
+        let audit = AuditLog::open(":memory:").expect("audit log");
+
+        // Out-of-scope target → needs_approval → audited.
+        let _ = process_request(
+            IpcRequest::CheckScope { ip: "8.8.8.8".to_string() },
+            &policy, None, &[], None, &audit, std::time::Instant::now(),
+        );
+        let (rows, verified) = audit.recent_rows(10).expect("rows");
+        assert!(verified, "audit chain must verify");
+        assert_eq!(rows.len(), 1, "rejection should produce exactly one audit row");
+        assert_eq!(rows[0].decision, "needs_approval");
+        assert_eq!(rows[0].dst_ip, "8.8.8.8");
+
+        // In-scope target → allow → NOT audited (still just the one row).
+        let _ = process_request(
+            IpcRequest::CheckScope { ip: "10.0.0.1".to_string() },
+            &policy, None, &[], None, &audit, std::time::Instant::now(),
+        );
+        let (rows, _) = audit.recent_rows(10).expect("rows");
+        assert_eq!(rows.len(), 1, "an allowed scope check must not add an audit row");
     }
 
     // Regression: GetStatus used to return a hardcoded uptime_secs: 0
