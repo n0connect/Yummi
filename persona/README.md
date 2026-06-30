@@ -10,56 +10,47 @@ v0.1/
   methodology.yaml         How it approaches pentest tasks — recon → exploit → report
   safety_boundaries.yaml   Hard stops — what the assistant will never do
   output_schema.json       JSON schema for conductor ChatResponse validation
-  tool_knowledge.yaml      Tool registry — flags, use cases, example invocations
-  tier_capabilities/       Per-tier capability overrides
-    lite.yaml              llama3.2:3b — fast, limited tool set
-    pro.yaml               llama3.1:8b — balanced
-    expert.yaml            llama3.3:70b — full capability
-    standard.yaml          Default when no tier is set
+  tier_capabilities/       Reference docs for each tier's profile (NOT loaded by Go — see note below)
+    lite.yaml / standard.yaml / pro.yaml / expert.yaml
   golden_tests/            Regression fixtures — input → expected intent
     *.yaml
 ```
 
 ## Model tiers
 
-Tiers are selected via `YUMMI_OLLAMA_TIER`:
+Tiers are selected via `YUMMI_OLLAMA_TIER`. The actual model/context/thinking-mode values are hardcoded in `orchestrator/internal/conductor/tier.go`'s `DefaultTierRegistry()` — **not** loaded from `tier_capabilities/*.yaml`:
 
-| Tier | Model | Profile |
+| Tier | Model | Context window |
 |---|---|---|
-| `lite` | llama3.2:3b | Fast, ~4 GB VRAM, reduced tool set |
-| `pro` | llama3.1:8b | Balanced, ~8 GB VRAM |
-| `expert` | llama3.3:70b | Full capability, requires GPU |
-| `standard` | qwen3:8b (default) | Dev default — good balance on Apple Silicon |
+| `lite` | qwen3:4b | 8192 |
+| `standard` (default) | qwen3:8b | 16384 |
+| `pro` | qwen3:14b | 16384 |
+| `expert` | qwen3:32b | 32768 (extended thinking mode) |
 
 Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Setting `YUMMI_OLLAMA_TIER` overrides `YUMMI_OLLAMA_MODEL`.
 
+**`tier_capabilities/*.yaml` is currently reference documentation only** — each file describes that tier's intended strengths/limitations for a human reader, but no Go code reads this directory (verified: `grep -rn tier_capabilities orchestrator --include='*.go'` returns nothing). If you change a tier's actual behavior, edit `tier.go`'s `DefaultTierRegistry()` map directly; update the matching `tier_capabilities/<name>.yaml` afterward to keep the description honest, but know that editing the YAML alone changes nothing at runtime.
+
 ## Adding a new tier
 
-1. Copy an existing file from `tier_capabilities/` to `tier_capabilities/<name>.yaml`
-2. Update `orchestrator/internal/conductor/tier.go` — add to `tierPresets` map
+1. Add an entry to `DefaultTierRegistry()`'s map in `orchestrator/internal/conductor/tier.go`.
+2. Add/update the matching `tier_capabilities/<name>.yaml` for human reference (optional, not load-bearing).
 3. Test: `cd orchestrator && go test ./internal/conductor -run TestTier`
 
-## Adding tool knowledge
+## Teaching the agent a new tool
 
-Edit `tool_knowledge.yaml`. Each entry provides the LLM with context about when and how to use a tool. This is the **only** place tools are declared — there is no separate tool allowlist (the validator gates on risk, not on tool identity), so this file is how the agent learns a tool exists.
+There is no tool registry file and no tool allowlist — the validator gates on risk, not on tool identity. The model relies on its own pretrained knowledge of pentest tools; `persona/v0.1/agent.yaml`'s `identity` is explicit about this ("you are given no catalogue and need none"). If a tool needs special handling:
 
-```yaml
-tools:
-  - name: mytool
-    category: recon          # recon | exploit | post-exploit | util
-    description: "..."
-    common_flags:
-      - flag: "-p"
-        description: "Port range"
-    example_invocations:
-      - "mytool -p 80,443 target.com"
-```
+- Niche/unusual tool the model doesn't already know well: add a short usage note to `core_identity.yaml` or `agent.yaml`'s prose (sparingly — these are reasoning documents, not a reference manual).
+- A tool family needs a structural risk floor: special-case it in `classifyRisk` (`orchestrator/internal/conductor/validator.go`).
 
 ## Updating safety boundaries
 
 `safety_boundaries.yaml` defines absolute constraints — actions the assistant must never take regardless of user instruction. Changes here require careful review because they affect the trust model of the entire system.
 
 ## Golden tests
+
+**Not currently wired to an automated runner** — there is no Go code or script that reads `golden_tests/*.yaml` and asserts against it; verified no consumer exists anywhere in the repo. These are fixture-shaped documents describing intended (input, intent) pairs for a regression suite that hasn't been built yet. Treat them as a spec for that future runner, not as something CI already checks.
 
 `golden_tests/*.yaml` contain expected (input, intent) pairs for regression testing:
 

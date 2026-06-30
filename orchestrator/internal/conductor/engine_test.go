@@ -8,6 +8,47 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 )
 
+// TestSeedHistoryRestoresButDoesNotClobber verifies the durable-chat-history
+// restore path: SeedHistory fills an empty session's in-memory history (so a
+// restart restores context) but never overwrites a session that already has
+// live turns, and caps to the most recent maxHistoryPerSession.
+func TestSeedHistoryRestoresButDoesNotClobber(t *testing.T) {
+	// A non-empty Ollama URL gives a non-nil llmClient (lazy, no connection),
+	// which SeedHistory requires before it does anything.
+	e, err := NewEngine("", "http://127.0.0.1:11434", "qwen3:8b")
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// Empty session → seeded.
+	e.SeedHistory("s1", []llm.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "answer"},
+	})
+	if got := len(e.history["s1"]); got != 2 {
+		t.Fatalf("expected 2 seeded turns, got %d", got)
+	}
+
+	// Second seed on a now-populated session is a no-op (no clobber).
+	e.SeedHistory("s1", []llm.Message{{Role: "user", Content: "SHOULD NOT APPEAR"}})
+	if got := len(e.history["s1"]); got != 2 {
+		t.Fatalf("seed clobbered live history: now %d turns", got)
+	}
+	if e.history["s1"][0].Content != "first" {
+		t.Fatalf("live history mutated: %+v", e.history["s1"])
+	}
+
+	// Over-cap seed keeps only the tail.
+	big := make([]llm.Message, maxHistoryPerSession+10)
+	for i := range big {
+		big[i] = llm.Message{Role: "user", Content: "m"}
+	}
+	e.SeedHistory("s2", big)
+	if got := len(e.history["s2"]); got != maxHistoryPerSession {
+		t.Fatalf("seed not capped: got %d, want %d", got, maxHistoryPerSession)
+	}
+}
+
 // TestAppendObservationFeedsHistory verifies that AppendObservation injects a
 // well-formed tool-result message into the session's chat history.
 func TestAppendObservationFeedsHistory(t *testing.T) {

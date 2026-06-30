@@ -75,6 +75,42 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 	}
 }
 
+// Regression: core_identity-style "whole field silently dropped" bugs aren't
+// limited to YAML — ParentTaskID needs an explicit column + persist/load wire-
+// up like every other Task field, or a sub-task's parent link would survive
+// in memory but vanish across a restart, breaking the operator-discoverability
+// fix this field exists for.
+func TestCreateSubtaskPersistsParentTaskIDAcrossReload(t *testing.T) {
+	db := openTestDB(t)
+	s1, _ := NewStore(db)
+	parent, _ := s1.Create("sess-1", "parent goal", 15)
+	sub, err := s1.CreateSubtask("sess-1", "sub goal", 15, parent.ID)
+	if err != nil {
+		t.Fatalf("create subtask: %v", err)
+	}
+	if sub.ParentTaskID != parent.ID {
+		t.Fatalf("ParentTaskID = %q, want %q", sub.ParentTaskID, parent.ID)
+	}
+
+	s2, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	got, ok := s2.Get(sub.ID)
+	if !ok {
+		t.Fatal("subtask lost after reload")
+	}
+	if got.ParentTaskID != parent.ID {
+		t.Fatalf("ParentTaskID after reload = %q, want %q", got.ParentTaskID, parent.ID)
+	}
+
+	// A top-level task must NOT pick up a stray parent link.
+	gotParent, _ := s2.Get(parent.ID)
+	if gotParent.ParentTaskID != "" {
+		t.Fatalf("top-level task got a ParentTaskID: %q", gotParent.ParentTaskID)
+	}
+}
+
 func TestStorePublishesEvents(t *testing.T) {
 	s, _ := NewStore(openTestDB(t))
 	_, ch, err := s.Subscribe(8)

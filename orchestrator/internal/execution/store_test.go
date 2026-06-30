@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -244,6 +245,129 @@ func TestCancelCompletedExecutionFails(t *testing.T) {
 		t.Fatal("expected cancel on completed execution to fail")
 	} else if !errors.Is(err, ErrExecutionTerminal) {
 		t.Fatalf("expected ErrExecutionTerminal, got %v", err)
+	}
+}
+
+// pollStatus waits up to 2s for an execution to reach a given status.
+func pollStatus(t *testing.T, store *Store, id, want string) Record {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok := store.Get(id)
+		if ok && got.Status == want {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, _ := store.Get(id)
+	t.Fatalf("execution %s never reached %q (last: %q)", id, want, got.Status)
+	return Record{}
+}
+
+// TestEgressApprovalHoldThenApproveResumes proves the full Ask-mode round-trip:
+// a ProcessFunc that returns ErrEgressApprovalRequired holds the execution
+// (instead of failing it), and approving via ResolveEgress runs the unlock
+// callback then re-processes the command to completion.
+func TestEgressApprovalHoldThenApproveResumes(t *testing.T) {
+	store := NewStore()
+	var calls atomic.Int32
+	store.SetProcessor(func(ctx context.Context, rec Record) (string, error) {
+		// First attempt: gateway wants approval. After unlock, the retry runs.
+		if calls.Add(1) == 1 {
+			return "", ErrEgressApprovalRequired
+		}
+		return "scan complete", nil
+	})
+
+	rec, err := store.Enqueue("s1", "p1", "nmap -sV 8.8.8.8", "assistant_loop")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	held := pollStatus(t, store, rec.ID, StatusAwaitingEgressApproval)
+	if held.EgressTarget != "8.8.8.8" {
+		t.Fatalf("held record EgressTarget = %q, want 8.8.8.8", held.EgressTarget)
+	}
+
+	var unlocked bool
+	resumed, err := store.ResolveEgress(rec.ID, true, func() error { unlocked = true; return nil })
+	if err != nil {
+		t.Fatalf("ResolveEgress(approve): %v", err)
+	}
+	if !unlocked {
+		t.Fatal("unlock callback was not invoked on approval")
+	}
+	if resumed.Status != StatusQueued {
+		t.Fatalf("after approve, status = %q, want queued", resumed.Status)
+	}
+
+	done := pollStatus(t, store, rec.ID, StatusCompleted)
+	if done.Output != "scan complete" {
+		t.Fatalf("resumed execution output = %q, want 'scan complete'", done.Output)
+	}
+	if done.EgressTarget != "" {
+		t.Fatalf("EgressTarget should be cleared after resume, got %q", done.EgressTarget)
+	}
+}
+
+// TestEgressApprovalDenyFailsWithoutUnlock proves denial ends the execution as
+// failed and never invokes the unlock callback (no rule is opened).
+func TestEgressApprovalDenyFailsWithoutUnlock(t *testing.T) {
+	store := NewStore()
+	store.SetProcessor(func(ctx context.Context, rec Record) (string, error) {
+		return "", ErrEgressApprovalRequired
+	})
+	rec, _ := store.Enqueue("s1", "p1", "nmap -sV 8.8.8.8", "assistant_loop")
+	pollStatus(t, store, rec.ID, StatusAwaitingEgressApproval)
+
+	unlockCalled := false
+	failed, err := store.ResolveEgress(rec.ID, false, func() error { unlockCalled = true; return nil })
+	if err != nil {
+		t.Fatalf("ResolveEgress(deny): %v", err)
+	}
+	if unlockCalled {
+		t.Fatal("unlock must NOT be called on denial — no rule should open")
+	}
+	if failed.Status != StatusFailed {
+		t.Fatalf("after deny, status = %q, want failed", failed.Status)
+	}
+	if !strings.Contains(failed.Error, "denied") {
+		t.Fatalf("expected a denial reason in Error, got %q", failed.Error)
+	}
+}
+
+// TestEgressApprovalUnlockFailureFails proves that if the unlock callback fails
+// (e.g. bare hostname with no IP rule to open), the execution ends as failed
+// rather than being requeued into a command that would just hold again.
+func TestEgressApprovalUnlockFailureFails(t *testing.T) {
+	store := NewStore()
+	store.SetProcessor(func(ctx context.Context, rec Record) (string, error) {
+		return "", ErrEgressApprovalRequired
+	})
+	rec, _ := store.Enqueue("s1", "p1", "curl http://example.com", "assistant_loop")
+	pollStatus(t, store, rec.ID, StatusAwaitingEgressApproval)
+
+	_, err := store.ResolveEgress(rec.ID, true, func() error { return errors.New("hostname resolution not supported") })
+	if err == nil {
+		t.Fatal("expected ResolveEgress to surface the unlock error")
+	}
+	got, _ := store.Get(rec.ID)
+	if got.Status != StatusFailed {
+		t.Fatalf("after unlock failure, status = %q, want failed", got.Status)
+	}
+}
+
+// TestResolveEgressRejectsNonHeldExecution proves ResolveEgress is a no-op
+// (with a typed error) on an execution that isn't actually awaiting egress.
+func TestResolveEgressRejectsNonHeldExecution(t *testing.T) {
+	store := NewStore()
+	rec, _ := store.Enqueue("s1", "p1", "echo hi", "manual_terminal")
+	if _, err := store.WaitForTerminal(rec.ID, 2*time.Second); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	_, err := store.ResolveEgress(rec.ID, true, func() error { return nil })
+	if !errors.Is(err, ErrNotAwaitingEgress) {
+		t.Fatalf("expected ErrNotAwaitingEgress, got %v", err)
 	}
 }
 

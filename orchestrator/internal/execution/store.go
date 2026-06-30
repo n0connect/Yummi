@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/n0connect/yummi/orchestrator/internal/scope"
 	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
 
@@ -22,6 +23,12 @@ const (
 	StatusQueued = "queued"
 	// StatusRunning means the execution request is currently being processed.
 	StatusRunning = "running"
+	// StatusAwaitingEgressApproval means the gateway placed the command's target
+	// in the "needs_approval" egress verdict (Ask mode) and the execution is
+	// held — fail-closed, no traffic — until the operator approves or denies the
+	// external access via ResolveEgress. Non-terminal: it resumes (→ queued) on
+	// approval or ends (→ failed) on denial.
+	StatusAwaitingEgressApproval = "awaiting_egress_approval"
 	// StatusCompleted means the execution flow finished successfully.
 	StatusCompleted = "completed"
 	// StatusFailed means the execution flow failed.
@@ -42,6 +49,17 @@ var (
 	ErrExecutionNotFound = errors.New("execution not found")
 	// ErrExecutionTerminal indicates the execution is already in a terminal state.
 	ErrExecutionTerminal = errors.New("execution already terminal")
+	// ErrNotAwaitingEgress indicates ResolveEgress was called on an execution
+	// that is not currently held for egress approval.
+	ErrNotAwaitingEgress = errors.New("execution is not awaiting egress approval")
+	// ErrEgressApprovalRequired is the sentinel a ProcessFunc returns to signal
+	// that the command's target needs operator egress approval (gateway Ask
+	// mode). The store reacts by holding the execution in
+	// StatusAwaitingEgressApproval instead of failing it. The executor's own
+	// executor.ErrEgressApprovalRequired (from RunScopedCommand) is translated
+	// to this sentinel by executor.ProcessFunc — the store deliberately does not
+	// import executor.
+	ErrEgressApprovalRequired = errors.New("egress approval required")
 )
 
 // Record describes one execution lifecycle item.
@@ -77,8 +95,14 @@ type Record struct {
 	// payload past the banner scan and back into model context.
 	SanitizedOutput string `json:"sanitized_output,omitempty"`
 	SanitizedError  string `json:"sanitized_error,omitempty"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	// EgressTarget is the host/IP the command targets, set only while the
+	// execution is held in StatusAwaitingEgressApproval so the UI can name what
+	// external access is pending. DERIVED from Command (scope.ExtractTarget),
+	// never persisted as authoritative state — recomputed on load like
+	// SecurityBanner/SanitizedOutput.
+	EgressTarget string `json:"egress_target,omitempty"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // Event is published whenever an execution lifecycle changes.
@@ -224,6 +248,81 @@ func (s *Store) Cancel(id string) (Record, error) {
 	return rec, nil
 }
 
+// holdForEgressApproval transitions a running execution into
+// StatusAwaitingEgressApproval and records the (derived) target so the UI can
+// name the pending external access. Returns (record, true) only when the
+// execution was running; a no-op otherwise.
+func (s *Store) holdForEgressApproval(id, target string) (Record, bool) {
+	now := time.Now().Unix()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.items[id]
+	if !ok || rec.Status != StatusRunning {
+		return Record{}, false
+	}
+	rec.Status = StatusAwaitingEgressApproval
+	rec.EgressTarget = target
+	rec.UpdatedAt = now
+	s.items[id] = rec
+	return rec, true
+}
+
+// ResolveEgress settles an execution held in StatusAwaitingEgressApproval.
+//
+// On approval, unlock is invoked (the API layer wires this to a gateway
+// temporary-allow rule for the target — the store itself holds no gateway
+// client, keeping the conductor/executor/store boundary intact); if it
+// succeeds the execution is requeued and re-processed (the gateway now returns
+// "allow" for the freshly-opened target). On denial — or if unlock fails — the
+// execution ends as failed. Returns ErrNotAwaitingEgress if the execution is
+// not currently held.
+func (s *Store) ResolveEgress(id string, approved bool, unlock func() error) (Record, error) {
+	if s == nil {
+		return Record{}, ErrStoreNil
+	}
+	rec, ok := s.Get(id)
+	if !ok {
+		return Record{}, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
+	}
+	if rec.Status != StatusAwaitingEgressApproval {
+		return Record{}, fmt.Errorf("%w: %s (%s)", ErrNotAwaitingEgress, id, rec.Status)
+	}
+
+	if !approved {
+		failed, _ := s.failEgress(id, "operator denied external network access for "+rec.EgressTarget)
+		return failed, nil
+	}
+	if unlock != nil {
+		if err := unlock(); err != nil {
+			failed, _ := s.failEgress(id, "egress approval could not be applied: "+err.Error())
+			return failed, err
+		}
+	}
+
+	requeued, ok := s.updateStatusIfIn(id, []string{StatusAwaitingEgressApproval}, StatusQueued, "", "")
+	if !ok {
+		return Record{}, fmt.Errorf("%w: %s", ErrNotAwaitingEgress, id)
+	}
+	requeued.EgressTarget = ""
+	s.mu.Lock()
+	s.items[id] = requeued
+	s.mu.Unlock()
+	s.publish(Event{Type: "execution.queued", Timestamp: requeued.UpdatedAt, Record: requeued})
+	s.dbPersist(requeued)
+	go s.process(id)
+	return requeued, nil
+}
+
+func (s *Store) failEgress(id, reason string) (Record, bool) {
+	failed, ok := s.updateStatusIfIn(id, []string{StatusAwaitingEgressApproval}, StatusFailed, "", reason)
+	if !ok {
+		return Record{}, false
+	}
+	s.publish(Event{Type: "execution.failed", Timestamp: failed.UpdatedAt, Record: failed})
+	s.dbPersist(failed)
+	return failed, true
+}
+
 // Get returns one execution record by id.
 // Falls back to the database when the record is not in memory (e.g. after restart).
 func (s *Store) Get(id string) (Record, bool) {
@@ -351,6 +450,21 @@ func (s *Store) process(id string) {
 	if fn != nil {
 		output, err := fn(ctx, running)
 		if err != nil {
+			// Egress Ask mode: the gateway wants operator approval before the
+			// target may be reached. Hold the execution (fail-closed, no
+			// traffic) instead of failing it — ResolveEgress resumes or ends it.
+			if errors.Is(err, ErrEgressApprovalRequired) {
+				held, ok := s.holdForEgressApproval(id, scope.ExtractTarget(running.Command))
+				if ok {
+					s.publish(Event{
+						Type:      "execution.awaiting_egress_approval",
+						Timestamp: held.UpdatedAt,
+						Record:    held,
+					})
+					s.dbPersist(held)
+				}
+				return
+			}
 			errText := err.Error()
 			failed, ok := s.updateStatusIfIn(id, []string{StatusRunning}, StatusFailed, output, errText)
 			if ok {
@@ -583,6 +697,11 @@ func (s *Store) loadFromDB() error {
 		}
 		if rec.Error != "" {
 			rec.SanitizedError = threatscan.StripANSI(rec.Error)
+		}
+		// EgressTarget is derived, not stored — re-derive it for a record still
+		// held for egress approval so a post-restart resolve can name the target.
+		if rec.Status == StatusAwaitingEgressApproval {
+			rec.EgressTarget = scope.ExtractTarget(rec.Command)
 		}
 		s.items[rec.ID] = rec
 	}

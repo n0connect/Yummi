@@ -74,10 +74,6 @@ type Config struct {
 	// is typically given a Subset scoped to its role.
 	Skills *skill.Registry
 
-	// ParentTaskID nests this runner's activity under a parent task (set for
-	// sub-agent runs by the handoff path; empty for the orchestrator).
-	ParentTaskID string
-
 	// SubAgents maps a role name to a specialized sub-agent Runner the brain may
 	// hand a focused subtask to via [HANDOFF]. Empty/nil disables delegation —
 	// and sub-agents themselves are built with an empty map, capping handoff
@@ -179,14 +175,13 @@ type SubResult struct {
 // caller's Store and Knowledge, so its findings/tactics join the one world
 // model automatically.
 func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string) (SubResult, error) {
-	// Tag this sub-run so its plan/command/finding activity nests under the
-	// orchestrator's handoff span in the TRACE view. Set before CreateAndPlan so
-	// the plan event is nested too.
-	r.mu.Lock()
-	r.cfg.ParentTaskID = parentTaskID
-	r.mu.Unlock()
-
-	task, err := r.CreateAndPlan(ctx, sessionID, goal)
+	// parentTaskID is threaded straight into task creation (persisted on the
+	// Task row itself) rather than mutated on the shared Runner config — the
+	// latter raced under concurrent handoffs from different parent tasks on
+	// the same Runner, since Config.ParentTaskID was one field shared across
+	// every call. It also nests this sub-run's plan/command/finding activity
+	// under the orchestrator's handoff span in the TRACE view.
+	task, err := r.createAndPlan(ctx, sessionID, goal, parentTaskID)
 	if err != nil {
 		return SubResult{}, err
 	}
@@ -219,13 +214,19 @@ func (r *Runner) Run(ctx context.Context, task *Task) error {
 // Gate exposes the approval gate for the API layer.
 func (r *Runner) Gate() *Gate { return r.gate }
 
-// CreateAndPlan creates a task and runs the planning LLM call synchronously.
-// Callers that want async planning wrap this in a goroutine.
+// CreateAndPlan creates a top-level task and runs the planning LLM call
+// synchronously. Callers that want async planning wrap this in a goroutine.
 func (r *Runner) CreateAndPlan(ctx context.Context, sessionID, goal string) (Task, error) {
+	return r.createAndPlan(ctx, sessionID, goal, "")
+}
+
+// createAndPlan is the shared implementation behind CreateAndPlan (top-level
+// task, parentTaskID "") and RunSubtask (sub-agent task, parentTaskID set).
+func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskID string) (Task, error) {
 	if r.llm == nil {
 		return Task{}, fmt.Errorf("LLM not configured")
 	}
-	task, err := r.store.Create(sessionID, goal, r.cfg.StepBudget)
+	task, err := r.store.CreateSubtask(sessionID, goal, r.cfg.StepBudget, parentTaskID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -257,7 +258,7 @@ func (r *Runner) CreateAndPlan(ctx context.Context, sessionID, goal string) (Tas
 	}
 	task, _ = r.store.Get(task.ID)
 	r.store.RecordActivity(ActivityEvent{
-		SessionID: task.SessionID, TaskID: task.ID, ParentTaskID: r.cfg.ParentTaskID,
+		SessionID: task.SessionID, TaskID: task.ID, ParentTaskID: task.ParentTaskID,
 		Kind: ActPlan, Summary: fmt.Sprintf("%d steps planned", len(steps)),
 	})
 	return task, nil
@@ -367,7 +368,7 @@ func (r *Runner) buildState(taskID string) *GraphState {
 		exec:         r.exec,
 		gate:         r.gate,
 		cfg:          r.cfg,
-		parentTaskID: r.cfg.ParentTaskID,
+		parentTaskID: task.ParentTaskID,
 		memCtx:       MemoryContext{TokenBudget: r.cfg.TokenBudget},
 	}
 	// Restore from checkpoint on crash-recovery resume.

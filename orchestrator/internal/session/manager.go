@@ -42,8 +42,18 @@ CREATE TABLE IF NOT EXISTS executions (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    payload TEXT,
+    created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
 CREATE INDEX IF NOT EXISTS idx_executions_session ON executions(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, id);
 `
 
 // Session represents a pentest engagement.
@@ -64,6 +74,19 @@ type AuditEvent struct {
 	EventType string `json:"event_type"`
 	Actor     string `json:"actor"`
 	Payload   string `json:"payload"`
+}
+
+// ChatMessage is one persisted turn of a session's conversation. Content is the
+// human-readable text; Payload is optional opaque JSON the UI uses to rebuild a
+// richer message (intent / proposals / task id) on reload. Role is "user",
+// "assistant", or "system".
+type ChatMessage struct {
+	ID        int64  `json:"id"`
+	SessionID string `json:"session_id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Payload   string `json:"payload,omitempty"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 // OpenDB opens (or creates) the SQLite database and applies schema.
@@ -168,6 +191,74 @@ func (m *Manager) AppendAudit(sessionID, eventType, actor string, payload any) e
 		return fmt.Errorf("insert audit event: %w", err)
 	}
 	return nil
+}
+
+// maxChatContentBytes bounds a single persisted message. Execution output and
+// tool results fed into the thread originate on a (hostile) target; an
+// unbounded field could bloat the DB and the reload payload with one oversized
+// record. Mirrors the UI's own MAX_MESSAGE_CONTENT_CHARS cap.
+const maxChatContentBytes = 64 * 1024
+
+// AppendMessage persists one conversation turn. content is capped; payload may
+// be empty. Best-effort: callers treat a persistence failure as non-fatal
+// (the live UI already has the message in memory).
+func (m *Manager) AppendMessage(sessionID, role, content, payload string) error {
+	if sessionID == "" || role == "" {
+		return fmt.Errorf("session id and role are required")
+	}
+	if len(content) > maxChatContentBytes {
+		content = content[:maxChatContentBytes]
+	}
+	var payloadArg any
+	if payload != "" {
+		payloadArg = payload
+	}
+	_, err := m.db.Exec(
+		"INSERT INTO chat_messages (session_id, role, content, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+		sessionID, role, content, payloadArg, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert chat message: %w", err)
+	}
+	return nil
+}
+
+// ListMessages returns a session's conversation in chronological order (oldest
+// first), capped at the most recent limit turns.
+func (m *Manager) ListMessages(sessionID string, limit int) ([]ChatMessage, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	// Take the newest `limit` rows (id DESC), then flip to chronological order
+	// so the caller gets the tail of a long conversation, oldest-first.
+	rows, err := m.db.Query(
+		"SELECT id, session_id, role, content, COALESCE(payload,''), created_at FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+		sessionID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	msgs := make([]ChatMessage, 0, limit)
+	for rows.Next() {
+		var c ChatMessage
+		if err := rows.Scan(&c.ID, &c.SessionID, &c.Role, &c.Content, &c.Payload, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Reverse in place → chronological.
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, nil
 }
 
 // ListAudit returns audit events for a session ordered by latest first.
