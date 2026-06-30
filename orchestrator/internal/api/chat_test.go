@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
@@ -38,6 +41,87 @@ func TestHandleChatAllowsDefaultSessionSentinel(t *testing.T) {
 	}
 	if resp["session_id"] != "default" {
 		t.Fatalf("expected session_id default, got %#v", resp["session_id"])
+	}
+}
+
+// TestChatPersistsTurnsAndMessagesEndpointReplaysThem proves the durable
+// chat-history round-trip: a chat against a real session writes the operator's
+// message and the assistant's reply to chat_messages, and GET
+// /sessions/{id}/messages hands them back in order for the UI to rehydrate.
+func TestChatPersistsTurnsAndMessagesEndpointReplaysThem(t *testing.T) {
+	sm := openTestManager(t)
+	now := time.Now().Unix()
+	sess := &session.Session{ID: "feed-beef-cafe", Name: "Recon", CreatedAt: now, UpdatedAt: now, Status: "active"}
+	if err := sm.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// No LLM → the engine declines, but the turn (user msg + assistant reply)
+	// still persists for a real session.
+	engine, err := conductor.NewEngine(t.TempDir(), "", "")
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil)
+	body := `{"message":"enumerate the host","session_id":"feed-beef-cafe"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	chat.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("chat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Now read them back via the messages endpoint.
+	r := chi.NewRouter()
+	r.Get("/sessions/{id}/messages", HandleListMessages(sm))
+	mreq := httptest.NewRequest(http.MethodGet, "/sessions/feed-beef-cafe/messages", nil)
+	mw := httptest.NewRecorder()
+	r.ServeHTTP(mw, mreq)
+	if mw.Code != http.StatusOK {
+		t.Fatalf("messages: expected 200, got %d: %s", mw.Code, mw.Body.String())
+	}
+
+	var msgs []session.ChatMessage
+	if err := json.Unmarshal(mw.Body.Bytes(), &msgs); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 persisted turns (user+assistant), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Content != "enumerate the host" {
+		t.Fatalf("user turn not persisted correctly: %+v", msgs[0])
+	}
+	if msgs[1].Role != "assistant" || msgs[1].Content == "" {
+		t.Fatalf("assistant turn not persisted correctly: %+v", msgs[1])
+	}
+}
+
+// TestChatDoesNotPersistFeedbackTurns proves auto-feedback turns (from_feedback)
+// stay out of the durable thread so a reload doesn't replay synthetic
+// tool-output as operator messages.
+func TestChatDoesNotPersistFeedbackTurns(t *testing.T) {
+	sm := openTestManager(t)
+	now := time.Now().Unix()
+	_ = sm.Create(&session.Session{ID: "dead-beef-feed", Name: "X", CreatedAt: now, UpdatedAt: now, Status: "active"})
+
+	engine, _ := conductor.NewEngine(t.TempDir(), "", "")
+	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil)
+	body := `{"message":"[KOMUT TAMAMLANDI] output...","session_id":"dead-beef-feed","from_feedback":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	chat.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("chat: expected 200, got %d", w.Code)
+	}
+
+	msgs, err := sm.ListMessages("dead-beef-feed", 100)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("from_feedback turn should not persist, got %d messages", len(msgs))
 	}
 }
 

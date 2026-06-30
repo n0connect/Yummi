@@ -15,6 +15,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/health"
+	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
@@ -52,6 +53,12 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 		var req struct {
 			Message   string `json:"message"`
 			SessionID string `json:"session_id,omitempty"`
+			// FromFeedback marks an auto-generated turn (the UI feeding a
+			// command's output back to the conductor). It still flows into the
+			// model's in-memory context, but is NOT persisted to chat_messages —
+			// otherwise a reloaded conversation would replay verbose synthetic
+			// tool-output turns as if the operator had typed them.
+			FromFeedback bool `json:"from_feedback,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request", err)
@@ -94,6 +101,16 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			if _, err := sm.Get(sessionID); err != nil {
 				writeError(w, http.StatusNotFound, "session not found", nil)
 				return
+			}
+		}
+
+		// Restore prior conversation into the conductor's in-memory history
+		// before this turn, so a process restart doesn't make the model answer
+		// cold. Idempotent: SeedHistory only fills when the in-memory history is
+		// empty (i.e. the first turn after a restart for this session).
+		if sm != nil && sessionID != "" {
+			if persisted, err := sm.ListMessages(sessionID, maxSeedMessages); err == nil && len(persisted) > 0 {
+				assistant.SeedHistory(sessionID, toLLMHistory(persisted))
 			}
 		}
 
@@ -157,12 +174,62 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			"confidence":              resp.Confidence,
 		})
 
+		// Persist this turn so the conversation survives a reload / restart /
+		// session switch. Skip auto-feedback turns (kept out of the durable
+		// thread on purpose) and the legacy "default" ad-hoc bucket. Best-effort
+		// — a persistence failure never blocks the reply the operator already has.
+		if sm != nil && sessionID != "" && sessionID != "default" && !req.FromFeedback {
+			persistChatTurn(sm, sessionID, req.Message, resp)
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"reply":                   resp.Message,
 			"session_id":              sessionID,
 			"approval_required_count": approvalRequiredCount,
 			"data":                    resp,
 		})
+	}
+}
+
+// maxSeedMessages bounds how many persisted turns are pulled back into the
+// conductor's in-memory history on restart. The conductor itself caps to
+// maxHistoryPerSession; this is a DB-read ceiling a little above that.
+const maxSeedMessages = 40
+
+// toLLMHistory converts persisted chat turns into the conductor's message
+// shape, keeping only the user/assistant turns that form LLM context (system
+// rows are UI notices, not model turns).
+func toLLMHistory(msgs []session.ChatMessage) []llm.Message {
+	out := make([]llm.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role != "user" && m.Role != "assistant" {
+			continue
+		}
+		out = append(out, llm.Message{Role: m.Role, Content: m.Content})
+	}
+	return out
+}
+
+// persistChatTurn durably records the operator's message and the assistant's
+// reply. The assistant turn carries a small JSON payload (intent + proposals +
+// task id) so the UI can rebuild a richer message on reload, not just plain
+// text. All best-effort; failures are logged, never surfaced.
+func persistChatTurn(sm *session.Manager, sessionID, userMessage string, resp conductor.ChatResponse) {
+	if strings.TrimSpace(userMessage) != "" {
+		if err := sm.AppendMessage(sessionID, "user", userMessage, ""); err != nil {
+			slog.Warn("persist user chat message failed", "session", sessionID, "error", err)
+		}
+	}
+	payload := ""
+	if buf, err := json.Marshal(map[string]any{
+		"intent":    resp.Intent,
+		"proposals": resp.Proposals,
+		"task_id":   resp.TaskID,
+	}); err == nil {
+		payload = string(buf)
+	}
+	if err := sm.AppendMessage(sessionID, "assistant", resp.Message, payload); err != nil {
+		slog.Warn("persist assistant chat message failed", "session", sessionID, "error", err)
 	}
 }
 

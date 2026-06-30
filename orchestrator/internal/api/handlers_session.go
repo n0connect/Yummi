@@ -78,6 +78,31 @@ func HandleGetSession(sm *session.Manager) http.HandlerFunc {
 	}
 }
 
+// HandleListMessages returns a session's persisted conversation in
+// chronological order, so the UI can rehydrate a chat on reload or when the
+// operator switches sessions in the sidebar.
+func HandleListMessages(sm *session.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+			return
+		}
+		limit := 200
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if v, err := strconv.Atoi(raw); err == nil {
+				limit = clampLimit(v)
+			}
+		}
+		msgs, err := sm.ListMessages(normalizeSessionID(id), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list messages", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, msgs)
+	}
+}
+
 func HandleUpdateSession(sm *session.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")

@@ -111,6 +111,6 @@ cd orchestrator && go test ./internal/security/invariants   # architectural fitn
 ## Extending
 
 - **Add an API endpoint** — handler in the matching domain file (`handlers_session.go` / `handlers_execution.go` / `handlers_system.go` / `handlers_chat.go`), register in `routes.go`, add a test.
-- **Teach the agent a new tool** — there is **no tool allowlist to edit**. Add the tool's usage to `persona/v0.1/tool_knowledge.yaml` (so the LLM knows it exists and how to invoke it); special-case `classifyRisk` in `validator.go` only if the tool family needs a structural risk floor.
+- **Teach the agent a new tool** — there is **no tool allowlist to edit**. The model relies on its own pretrained knowledge; for a niche tool, add a short usage note to `persona/v0.1/core_identity.yaml` or `agent.yaml`. Special-case `classifyRisk` in `validator.go` only if the tool family needs a structural risk floor.
 - **Add a skill / sub-agent role** — drop a YAML file in `persona/v0.1/skills/` or `persona/v0.1/subagents/`; no code change.
 - **Swap the brain** — implement the one-method `LLM` interface; the graph engine is brain-agnostic and never changes.

@@ -44,6 +44,16 @@ func TestHandleCreateSessionValidation(t *testing.T) {
 	if w3.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for unsafe chars in name, got %d", w3.Code)
 	}
+
+	// Valid name - Turkish letters + ellipsis (auto-titles from a Turkish first
+	// message must validate; the bilingual UI would otherwise silently keep the
+	// placeholder "Yeni Sohbet").
+	req4 := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{"name":"Göz taraması 10.0.0.1…"}`))
+	w4 := httptest.NewRecorder()
+	h.ServeHTTP(w4, req4)
+	if w4.Code != http.StatusCreated {
+		t.Errorf("expected 201 for valid Turkish name, got %d: %s", w4.Code, w4.Body.String())
+	}
 }
 
 func TestHandleGetSessionValidation(t *testing.T) {

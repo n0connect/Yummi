@@ -179,6 +179,28 @@ func (e *Engine) ClearHistory(sessionID string) {
 	e.histMu.Unlock()
 }
 
+// SeedHistory primes a session's in-memory chat history from persisted turns —
+// but ONLY when it is currently empty, so a process restart restores prior
+// context without ever clobbering a live in-memory conversation. The slice is
+// capped to the most recent maxHistoryPerSession turns (the tail). This is what
+// makes durable chat history actually feed the model after a restart, instead
+// of every reloaded conversation starting cold. Safe on nil engine, empty
+// session, disabled LLM, or empty input.
+func (e *Engine) SeedHistory(sessionID string, msgs []llm.Message) {
+	if e == nil || e.llmClient == nil || sessionID == "" || len(msgs) == 0 {
+		return
+	}
+	e.histMu.Lock()
+	defer e.histMu.Unlock()
+	if len(e.history[sessionID]) > 0 {
+		return // live history already present — don't double-seed
+	}
+	if len(msgs) > maxHistoryPerSession {
+		msgs = msgs[len(msgs)-maxHistoryPerSession:]
+	}
+	e.history[sessionID] = append([]llm.Message(nil), msgs...)
+}
+
 // ── LLM helpers ──────────────────────────────────────────────────────────────
 
 func (e *Engine) chatWithLLMHistory(ctx context.Context, history []llm.Message) (ChatResponse, error) {

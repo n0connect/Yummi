@@ -44,6 +44,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sessions", HandleListSessions(sm))
 		r.Post("/sessions", HandleCreateSession(sm))
 		r.Get("/sessions/{id}", HandleGetSession(sm))
+		r.Get("/sessions/{id}/messages", HandleListMessages(sm))
 		r.Patch("/sessions/{id}", HandleUpdateSession(sm))
 		r.Delete("/sessions/{id}", HandleDeleteSession(sm))
 
@@ -65,6 +66,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sessions/{sessionID}/executions", HandleListExecutions(executions))
 		r.Get("/executions/{id}", HandleGetExecution(executions))
 		r.Post("/executions/{id}/cancel", HandleCancelExecution(executions, sm))
+		r.Post("/executions/{id}/resolve-egress", HandleResolveEgress(executions, pc, sm))
 
 		// gateway status
 		r.Get("/gateway/status", HandleGatewayStatus(pc))
