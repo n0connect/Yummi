@@ -95,6 +95,40 @@ func (c *Client) CheckEgress(ip string) (string, error) {
 	return "block", nil
 }
 
+// CheckHostname asks gateway for the name-level verdict on a hostname against
+// the configured hostname_allow/hostname_block patterns, returning one of
+// "allow"|"block"|"neutral". An older gateway that doesn't implement it returns
+// no verdict; we degrade to "neutral" (no name restriction) so the IP-egress
+// flow — which is fail-closed on its own — remains the authority.
+func (c *Client) CheckHostname(host string) (string, error) {
+	resp, err := c.send(Request{Type: "check_hostname", Host: host})
+	if err != nil {
+		return "", err
+	}
+	switch resp.Verdict {
+	case "allow", "block", "neutral":
+		return resp.Verdict, nil
+	default:
+		return "neutral", nil
+	}
+}
+
+// HostnamePolicy is the configured hostname allow/block pattern lists.
+type HostnamePolicy struct {
+	Allow []string `json:"allow"`
+	Block []string `json:"block"`
+}
+
+// GetHostnamePolicy returns the gateway's configured hostname allow/block
+// patterns, for operator visibility.
+func (c *Client) GetHostnamePolicy() (*HostnamePolicy, error) {
+	resp, err := c.send(Request{Type: "get_hostname_policy"})
+	if err != nil {
+		return nil, err
+	}
+	return &HostnamePolicy{Allow: resp.Allow, Block: resp.Block}, nil
+}
+
 func validEgressMode(mode string) bool {
 	switch mode {
 	case "block", "allow", "ask":

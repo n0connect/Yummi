@@ -57,6 +57,23 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 			return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
 		}
 
+		// Name-level scope gate, BEFORE resolution: for a hostname target,
+		// consult the gateway's hostname allow/block policy. A "block" verdict
+		// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
+		// resolving or touching the IP-egress flow. "allow"/"neutral" proceed.
+		// IP targets carry no name, so they skip this.
+		if isHostnameTarget(target) {
+			hv, err := pc.CheckHostname(target)
+			if err != nil {
+				slog.Error("RunScopedCommand: gateway hostname check error — blocking (fail-closed)",
+					"target", target, "error", err)
+				return nil, fmt.Errorf("gateway hostname check unavailable: %w", err)
+			}
+			if hv == "block" {
+				return nil, fmt.Errorf("GATEWAY_BLOCKED: hostname %q is blocked by policy: %w", target, ErrOutOfScope)
+			}
+		}
+
 		// Resolve a hostname target to IP(s) through Cloudflare (the same
 		// resolver the sandbox uses) so the gateway — which only understands
 		// IPs — can rule on the very address(es) the sandbox will connect to.
@@ -250,6 +267,18 @@ func resolvedNetworks(target string, ips []string) []string {
 		}
 	}
 	return out
+}
+
+// isHostnameTarget reports whether target is a hostname (not an IP literal or
+// CIDR) — i.e. something the gateway's name-level hostname policy applies to.
+func isHostnameTarget(target string) bool {
+	if _, err := netip.ParseAddr(target); err == nil {
+		return false
+	}
+	if _, err := netip.ParsePrefix(target); err == nil {
+		return false
+	}
+	return true
 }
 
 // ipv4Network returns the single-address CIDR the gateway needs for target,
