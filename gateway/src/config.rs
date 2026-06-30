@@ -87,13 +87,28 @@ impl Default for NetworkConfig {
     }
 }
 
-/// Scope rules: which networks are allowed/blocked.
-#[derive(Debug, Clone, Deserialize)]
+/// Scope rules: which networks are allowed/blocked, plus name-level
+/// allow/block patterns the orchestrator enforces (the gateway sees only IPs in
+/// packets, so it stores and rules on hostname patterns but cannot act on them
+/// at the packet layer — the orchestrator consults `check_hostname` before it
+/// resolves a name).
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct ScopeConfig {
     #[serde(default)]
     pub allow: Vec<IpNet>,
     #[serde(default)]
     pub block: Vec<IpNet>,
+    /// Hostname glob patterns that are in scope. Empty = no name whitelist (any
+    /// name may proceed to the IP-egress flow). Non-empty = whitelist mode: a
+    /// name must match one of these or it is blocked. `*.example.com` matches
+    /// `example.com` and any subdomain at any depth.
+    #[serde(default)]
+    pub hostname_allow: Vec<String>,
+    /// Hostname glob patterns that are always out of scope — a hard, name-level
+    /// deny that wins over everything (even Allow egress mode). Same wildcard
+    /// semantics as `hostname_allow`.
+    #[serde(default)]
+    pub hostname_block: Vec<String>,
 }
 
 /// Logging and audit configuration.
@@ -185,6 +200,7 @@ impl GatewayConfig {
                     "169.254.0.0/16".parse().expect("valid CIDR"),
                     "224.0.0.0/4".parse().expect("valid CIDR"),
                 ],
+                ..Default::default()
             },
             policy: PolicyConfig::default(),
             logging: LoggingConfig {

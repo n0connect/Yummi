@@ -50,6 +50,70 @@ func TestClientCheckScope(t *testing.T) {
 	}
 }
 
+func TestClientCheckHostname(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "check_hostname" {
+			return Response{Type: "error", Message: "unexpected request type"}
+		}
+		verdict := "neutral"
+		switch req.Host {
+		case "ads.evil.com":
+			verdict = "block"
+		case "api.acme.com":
+			verdict = "allow"
+		}
+		return Response{Type: "hostname_result", Host: req.Host, Verdict: verdict}
+	})
+	c := NewClient(socket)
+
+	for host, want := range map[string]string{
+		"ads.evil.com": "block",
+		"api.acme.com": "allow",
+		"example.org":  "neutral",
+	} {
+		got, err := c.CheckHostname(host)
+		if err != nil {
+			t.Fatalf("CheckHostname(%q): %v", host, err)
+		}
+		if got != want {
+			t.Errorf("CheckHostname(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
+// An older gateway with no check_hostname support returns no verdict; the
+// client must degrade to "neutral" so the IP-egress flow stays the authority.
+func TestClientCheckHostnameDegradesToNeutral(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		return Response{Type: "hostname_result", Host: req.Host} // no verdict
+	})
+	c := NewClient(socket)
+	got, err := c.CheckHostname("anything.com")
+	if err != nil {
+		t.Fatalf("CheckHostname: %v", err)
+	}
+	if got != "neutral" {
+		t.Fatalf("expected neutral degrade, got %q", got)
+	}
+}
+
+func TestClientGetHostnamePolicy(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "get_hostname_policy" {
+			return Response{Type: "error", Message: "unexpected request type"}
+		}
+		return Response{Type: "hostname_policy", Allow: []string{"*.acme.com"}, Block: []string{"*.evil.com"}}
+	})
+	c := NewClient(socket)
+	hp, err := c.GetHostnamePolicy()
+	if err != nil {
+		t.Fatalf("GetHostnamePolicy: %v", err)
+	}
+	if len(hp.Allow) != 1 || hp.Allow[0] != "*.acme.com" || len(hp.Block) != 1 || hp.Block[0] != "*.evil.com" {
+		t.Fatalf("unexpected hostname policy: %+v", hp)
+	}
+}
+
 func TestClientPingChunkedResponse(t *testing.T) {
 	socket := StartTestServer(t, true, func(req Request) Response {
 		if req.Type != "ping" {

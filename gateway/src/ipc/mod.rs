@@ -285,6 +285,32 @@ fn process_request(
         IpcRequest::GetEgressMode => IpcResponse::EgressMode {
             mode: policy.egress_mode().as_str().to_string(),
         },
+        IpcRequest::CheckHostname { host } => {
+            let verdict = policy.check_hostname(&host);
+            // Forensic trail: a name-level block is a "proposed but blocked by
+            // hostname policy" event — record it in the tamper-evident chain
+            // (the orchestrator enforces it by not resolving/running the name).
+            if verdict == crate::policy::hostname::HostnameVerdict::Block {
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as i64)
+                    .unwrap_or(0);
+                if let Err(e) = audit.record_decision(
+                    now_ns, None, "orchestrator", &host, None, None, "hostname_check",
+                    "block", "hostname_blocked",
+                ) {
+                    warn!(error = %e, "failed to record hostname block in audit");
+                }
+            }
+            IpcResponse::HostnameResult {
+                host,
+                verdict: verdict.as_str().to_string(),
+            }
+        }
+        IpcRequest::GetHostnamePolicy => {
+            let (allow, block) = policy.hostname_patterns();
+            IpcResponse::HostnamePolicy { allow, block }
+        }
 
         // ── Write ops — require allowlisted UID ───────────────────────────
         IpcRequest::AddTemporaryRule { network, ttl_secs, description } => {
@@ -501,6 +527,7 @@ mod tests {
         let cfg = crate::config::ScopeConfig {
             allow: vec!["10.0.0.0/8".parse().unwrap()],
             block: vec![],
+            ..Default::default()
         };
         PolicyEngine::new(&cfg)
     }
@@ -530,6 +557,59 @@ mod tests {
                 assert_eq!(verdict, "allow");
             }
             _ => panic!("unexpected response"),
+        }
+    }
+
+    fn make_hostname_policy() -> PolicyEngine {
+        let cfg = crate::config::ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            hostname_allow: vec!["*.acme.com".to_string()],
+            hostname_block: vec!["*.evil.com".to_string()],
+        };
+        PolicyEngine::new(&cfg)
+    }
+
+    #[test]
+    fn test_check_hostname_verdicts_and_audit() {
+        let policy = make_hostname_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+
+        let verdict = |host: &str, audit: &AuditLog| -> String {
+            match process_request(
+                IpcRequest::CheckHostname { host: host.to_string() },
+                &policy, None, &[], None, audit, std::time::Instant::now(),
+            ) {
+                IpcResponse::HostnameResult { verdict, .. } => verdict,
+                other => panic!("unexpected response: {other:?}"),
+            }
+        };
+
+        assert_eq!(verdict("api.acme.com", &audit), "allow"); // whitelisted
+        assert_eq!(verdict("acme.com", &audit), "allow"); // apex covered
+        assert_eq!(verdict("c2.evil.com", &audit), "block"); // blocklisted
+        assert_eq!(verdict("random.com", &audit), "block"); // whitelist set, no match
+
+        // Only the two blocks were audited (allows are not chained).
+        let (rows, verified) = audit.recent_rows(10).expect("rows");
+        assert!(verified, "audit chain must verify");
+        assert_eq!(rows.len(), 2, "expected 2 hostname-block audit rows");
+        assert!(rows.iter().all(|r| r.reason == "hostname_blocked"));
+    }
+
+    #[test]
+    fn test_get_hostname_policy_returns_patterns() {
+        let policy = make_hostname_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        match process_request(
+            IpcRequest::GetHostnamePolicy,
+            &policy, None, &[], None, &audit, std::time::Instant::now(),
+        ) {
+            IpcResponse::HostnamePolicy { allow, block } => {
+                assert_eq!(allow, vec!["*.acme.com".to_string()]);
+                assert_eq!(block, vec!["*.evil.com".to_string()]);
+            }
+            other => panic!("unexpected response: {other:?}"),
         }
     }
 

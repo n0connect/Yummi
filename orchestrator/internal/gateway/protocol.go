@@ -5,6 +5,7 @@ package gateway
 type Request struct {
 	Type        string  `json:"type"`
 	IP          string  `json:"ip,omitempty"`
+	Host        string  `json:"host,omitempty"`
 	Network     string  `json:"network,omitempty"`
 	TTLSecs     uint64  `json:"ttl_secs,omitempty"`
 	Description *string `json:"description,omitempty"`
@@ -39,6 +40,11 @@ type Response struct {
 
 	Mode    string `json:"mode,omitempty"`
 	Verdict string `json:"verdict,omitempty"`
+	Host    string `json:"host,omitempty"`
+
+	// HostnamePolicy view (GetHostnamePolicy response).
+	Allow []string `json:"allow,omitempty"`
+	Block []string `json:"block,omitempty"`
 }
 
 // StatusResponse is a structured gateway status.
