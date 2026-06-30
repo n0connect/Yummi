@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
 	last_error TEXT,
 	checkpoint TEXT,
 	tokens_used INTEGER NOT NULL DEFAULT 0,
+	parent_task_id TEXT,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );`
@@ -74,6 +75,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 		// Migrate existing databases that pre-date the checkpoint/tokens_used columns.
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN checkpoint TEXT`)
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0`)
+		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN parent_task_id TEXT`)
 		_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON agent_tasks(session_id)`)
 		_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS agent_activity (
 			id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_id TEXT NOT NULL,
@@ -88,8 +90,21 @@ func NewStore(db *sql.DB) (*Store, error) {
 	return s, nil
 }
 
-// Create registers a new task in the planning state.
+// Create registers a new top-level task in the planning state.
 func (s *Store) Create(sessionID, goal string, stepBudget int) (Task, error) {
+	return s.create(sessionID, goal, stepBudget, "")
+}
+
+// CreateSubtask registers a new task delegated from parentTaskID (a
+// sub-agent run via [HANDOFF] — see RunSubtask). Identical to Create except
+// the resulting Task carries ParentTaskID, so the operator-facing API/WS
+// surface can tie a sub-task's own pending approval back to the task it was
+// spawned from instead of it being an orphaned, undiscoverable ID.
+func (s *Store) CreateSubtask(sessionID, goal string, stepBudget int, parentTaskID string) (Task, error) {
+	return s.create(sessionID, goal, stepBudget, parentTaskID)
+}
+
+func (s *Store) create(sessionID, goal string, stepBudget int, parentTaskID string) (Task, error) {
 	if goal == "" {
 		return Task{}, errors.New("goal is required")
 	}
@@ -101,13 +116,14 @@ func (s *Store) Create(sessionID, goal string, stepBudget int) (Task, error) {
 	}
 	now := time.Now().Unix()
 	task := Task{
-		ID:         uuid.NewString(),
-		SessionID:  sessionID,
-		Goal:       goal,
-		Status:     StatusPlanning,
-		StepBudget: stepBudget,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.NewString(),
+		SessionID:    sessionID,
+		ParentTaskID: parentTaskID,
+		Goal:         goal,
+		Status:       StatusPlanning,
+		StepBudget:   stepBudget,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	s.mu.Lock()
 	s.items[task.ID] = task
@@ -251,8 +267,8 @@ func (s *Store) persist(t Task) {
 	findings, _ := json.Marshal(t.Findings)
 	checkpoint, _ := json.Marshal(t.Checkpoint)
 	_, err := s.db.Exec(`
-		INSERT INTO agent_tasks(id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		INSERT INTO agent_tasks(id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,parent_task_id,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status, plan=excluded.plan, steps_used=excluded.steps_used,
 			summary=excluded.summary, findings=excluded.findings, question=excluded.question,
@@ -260,7 +276,7 @@ func (s *Store) persist(t Task) {
 			tokens_used=excluded.tokens_used, updated_at=excluded.updated_at`,
 		t.ID, t.SessionID, t.Goal, string(t.Status), string(plan), t.StepsUsed,
 		t.StepBudget, t.Summary, string(findings), t.Question, t.LastError,
-		string(checkpoint), t.TokensUsed, t.CreatedAt, t.UpdatedAt,
+		string(checkpoint), t.TokensUsed, nullActStr(t.ParentTaskID), t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		slog.Error("agent: persist failed", "task", t.ID, "error", err)
@@ -359,7 +375,7 @@ func nullActStr(v string) any {
 
 func (s *Store) loadFromDB() error {
 	rows, err := s.db.Query(`
-		SELECT id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,created_at,updated_at
+		SELECT id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,parent_task_id,created_at,updated_at
 		FROM agent_tasks ORDER BY created_at ASC`)
 	if err != nil {
 		return err
@@ -370,10 +386,10 @@ func (s *Store) loadFromDB() error {
 	for rows.Next() {
 		var t Task
 		var status string
-		var plan, findings, summary, question, lastErr, checkpoint sql.NullString
+		var plan, findings, summary, question, lastErr, checkpoint, parentTaskID sql.NullString
 		if err := rows.Scan(&t.ID, &t.SessionID, &t.Goal, &status, &plan,
 			&t.StepsUsed, &t.StepBudget, &summary, &findings, &question,
-			&lastErr, &checkpoint, &t.TokensUsed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&lastErr, &checkpoint, &t.TokensUsed, &parentTaskID, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			slog.Warn("agent: skipping corrupted row", "error", err)
 			continue
 		}
@@ -381,6 +397,7 @@ func (s *Store) loadFromDB() error {
 		t.Summary = summary.String
 		t.Question = question.String
 		t.LastError = lastErr.String
+		t.ParentTaskID = parentTaskID.String
 		if plan.Valid && plan.String != "" {
 			if err := json.Unmarshal([]byte(plan.String), &t.Plan); err != nil {
 				slog.Warn("agent: plan unmarshal failed", "task", t.ID, "error", err)

@@ -2,9 +2,14 @@ package agent
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
@@ -206,6 +211,80 @@ func TestApproveResolvesSubAgentGate(t *testing.T) {
 	final, _ := store.Get(task.ID)
 	if final.Status != StatusCompleted {
 		t.Fatalf("orchestrator task not completed: %s (lastErr=%q)", final.Status, final.LastError)
+	}
+	// The discoverability fix this test package exists to cover: the
+	// sub-agent's task must carry the orchestrator's task ID as its
+	// ParentTaskID, so the UI can surface its pending approval under the
+	// parent it watches instead of it being an orphaned ID the operator never
+	// learns about.
+	if subTask.ParentTaskID != task.ID {
+		t.Fatalf("sub-task ParentTaskID = %q, want orchestrator task ID %q", subTask.ParentTaskID, task.ID)
+	}
+}
+
+// TestRunSubtaskParentTaskIDDoesNotRaceAcrossConcurrentHandoffs is a
+// regression test: RunSubtask used to write the parent link to
+// Config.ParentTaskID, a field shared by the whole *Runner — a sub-agent
+// Runner instance is configured once and reused for every handoff, so two
+// parent tasks delegating to the SAME role concurrently could have one
+// task's sub-task end up tagged with the OTHER parent's ID, depending on
+// goroutine timing. Threading parentTaskID straight into task creation
+// (CreateSubtask) instead removes the shared mutable field entirely; this
+// test would flake under the old implementation and must pass reliably now.
+func TestRunSubtaskParentTaskIDDoesNotRaceAcrossConcurrentHandoffs(t *testing.T) {
+	// A real on-disk file, not openTestDB's plain ":memory:" — under concurrent
+	// writes the sql.DB pool opens multiple physical connections, and a bare
+	// ":memory:" DSN hands each new connection its own empty database (no
+	// shared cache), so schema creation on connection #1 wouldn't be visible
+	// to connections #2+. This test is the only one in the package that
+	// actually exercises concurrent writes, hence the dedicated setup.
+	dbPath := filepath.Join(t.TempDir(), "agent.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, _ := NewStore(db)
+
+	// RunSubtask's first act is exactly this call (CreateSubtask), now with
+	// parentTaskID threaded straight in as a parameter — under the old
+	// implementation this was instead a write to the shared Runner field
+	// Config.ParentTaskID, read back later by a different goroutine, the
+	// classic write-then-read-elsewhere shape of the race this test guards
+	// against. Driving many concurrent calls against the same Store (as many
+	// concurrent handoffs from different parent tasks would) must never let
+	// one call's parent ID leak onto another's sub-task.
+	const n = 20
+	parentIDs := make([]string, n)
+	for i := range parentIDs {
+		parentIDs[i] = uuid.NewString()
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	subTaskIDs := make([]string, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			task, err := store.CreateSubtask("sess", "goal", 5, parentIDs[i])
+			errs[i] = err
+			subTaskIDs[i] = task.ID
+		}()
+	}
+	wg.Wait()
+
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("CreateSubtask[%d]: %v", i, errs[i])
+		}
+		got, ok := store.Get(subTaskIDs[i])
+		if !ok {
+			t.Fatalf("subtask %d not found", i)
+		}
+		if got.ParentTaskID != parentIDs[i] {
+			t.Fatalf("subtask %d ParentTaskID = %q, want %q (cross-contamination)", i, got.ParentTaskID, parentIDs[i])
+		}
 	}
 }
 

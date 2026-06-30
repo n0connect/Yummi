@@ -145,6 +145,13 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 
 		result, err := RunScopedCommand(ctx, e.bridge, e.gateway, rec.Command)
 		if err != nil {
+			// Egress Ask mode: don't fail the execution and don't record a
+			// tactic outcome — the command never ran. Translate to the store's
+			// sentinel so it holds the record for operator egress approval
+			// (the store deliberately does not import this package).
+			if errors.Is(err, ErrEgressApprovalRequired) {
+				return "", execution.ErrEgressApprovalRequired
+			}
 			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
 			if result != nil {
 				return result.Stderr, fmt.Errorf("command failed: %w", err)
@@ -184,6 +191,28 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 
 		return out.String(), nil
 	}
+}
+
+// UnlockEgressTarget opens a temporary gateway allow rule for target so a
+// command held in execution.StatusAwaitingEgressApproval can be retried and
+// reach it. It is the unlock callback the API's resolve-egress handler passes
+// to execution.Store.ResolveEgress — keeping the gateway client out of the
+// execution store. Returns an error for a bare hostname (no IP/CIDR form, so
+// no rule can be installed: hostname→IP resolution is deliberately out of
+// scope), or when the gateway IPC call itself fails. The 1-hour TTL matches
+// RunScopedCommand's own allow-rule lifetime.
+func UnlockEgressTarget(pc *gateway.Client, target, command string) error {
+	if pc == nil {
+		return fmt.Errorf("gateway client not configured")
+	}
+	network := hostNetwork(target)
+	if network == "" {
+		return fmt.Errorf("cannot approve egress for non-IP target %q: hostname resolution is not supported yet", target)
+	}
+	if _, _, _, err := pc.AddTemporaryRule(network, 3600, "egress approved: "+command); err != nil {
+		return fmt.Errorf("gateway rule install failed: %w", err)
+	}
+	return nil
 }
 
 // hostNetwork converts a target into the single-address CIDR the gateway needs

@@ -1,0 +1,80 @@
+/* Collapsible conversation rail. Default-closed and overlaid (position
+   absolute) so opening it never reflows / squeezes the chat column. */
+
+.rail-toggle {
+  position: absolute;
+  top: var(--space-md);
+  left: var(--space-md);
+  z-index: 20;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all var(--transition-fast);
+}
+.rail-toggle:hover { color: var(--text-primary); border-color: var(--accent); }
+
+.session-rail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 260px;
+  z-index: 19;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  transform: translateX(-100%);
+  transition: transform var(--transition-base, 0.22s) var(--transition-spring, ease);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.session-rail.open { transform: translateX(0); }
+
+.rail-header {
+  display: flex;
+  align-items: center;
+  padding: var(--space-md) var(--space-lg);
+  padding-left: calc(var(--space-md) + 36px); /* clear the toggle button */
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: 48px;
+}
+.rail-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--text-primary);
+}
+
+.rail-list { flex: 1; overflow-y: auto; padding: var(--space-sm); }
+.rail-empty { padding: var(--space-lg); color: var(--text-muted); font-size: var(--text-xs); }
+
+.rail-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: 2px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--transition-fast);
+}
+.rail-item:hover { background: rgba(255, 255, 255, 0.03); color: var(--text-primary); }
+.rail-item.active { background: var(--accent-soft); color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
+.rail-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); }
+.rail-item-when { flex-shrink: 0; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }

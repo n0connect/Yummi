@@ -11,11 +11,15 @@ export type ExecutionRecord = {
   id: string
   session_id: string
   proposal_id?: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled' | string
+  status: 'queued' | 'running' | 'awaiting_egress_approval' | 'completed' | 'failed' | 'canceled' | string
   command: string
   mode?: string
   output?: string
   error?: string
+  // The host/IP the command targets, set only while status is
+  // 'awaiting_egress_approval' (gateway Ask mode) so the UI can name what
+  // external access is pending operator approval.
+  egress_target?: string
   // Content-layer threat verdict for this command's output, set by the
   // orchestrator when the raw output trips known prompt-injection / C2 /
   // exfiltration patterns. Surfaced in the card AND prepended when the output
@@ -30,6 +34,29 @@ export type ExecutionRecord = {
   sanitized_error?: string
   created_at?: number
   updated_at?: number
+}
+
+// ─── Session + persisted chat (from /api/v1/sessions[/{id}/messages]) ─────────
+
+export type SessionSummary = {
+  id: string
+  name: string
+  created_at?: number
+  updated_at?: number
+  status?: string
+  gateway_level?: number
+}
+
+// One persisted conversation turn. payload is opaque JSON the server attaches
+// to assistant turns (intent / proposals / task id); the UI currently renders
+// reloaded turns as plain text, so payload is informational.
+export type ServerChatMessage = {
+  id: number
+  session_id: string
+  role: 'user' | 'assistant' | 'system' | string
+  content: string
+  payload?: string
+  created_at?: number
 }
 
 // ─── Agent Task types (from /api/v1/tasks + /ws/events task.status) ───────────
@@ -59,6 +86,10 @@ export type PlanStep = {
 export type AgentTask = {
   id: string
   session_id: string
+  // Set when this task is a sub-agent run delegated via [HANDOFF] from
+  // another task; empty for a top-level task. Lets the UI surface a
+  // sub-task's own pending approval nested under the parent it watches.
+  parent_task_id?: string
   goal: string
   status: TaskStatus
   plan?: PlanStep[]

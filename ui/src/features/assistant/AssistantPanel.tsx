@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect, useRef, useMemo } from 'react'
-import type { ActivityEvent, AgentTask, ChatProposal, ExecutionRecord } from '../../entities/types'
+import type { ActivityEvent, AgentTask, ChatProposal, ExecutionRecord, ServerChatMessage, SessionSummary } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
 import { ContextBar, type ApprovalMode } from './ContextBar'
@@ -52,8 +52,10 @@ const ACTIVITY_META: Record<string, [string, string]> = {
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
-const STORAGE_MSGS = 'yummi:chat:messages'
-const STORAGE_SID  = 'yummi:chat:sessionId'
+// Real sessions persist server-side (chat_messages); only the legacy "default"
+// ad-hoc bucket still uses sessionStorage so a quick unsaved chat survives a
+// reload. STORAGE_MSGS is therefore scoped to the default bucket only.
+const STORAGE_MSGS = 'yummi:chat:messages:default'
 const STORAGE_MODE = 'yummi:agent:approvalMode'
 const WELCOME: Omit<Message, 'id' | 'timestamp'> = {
   role: 'system',
@@ -78,7 +80,8 @@ function capMessageContent(content: string): string {
 }
 const freshWelcome = (): Message => ({ ...WELCOME, id: nextId(), timestamp: new Date().toISOString() })
 
-function loadMessages(): Message[] {
+// loadDefaultMessages restores the ad-hoc "default" bucket from sessionStorage.
+function loadDefaultMessages(): Message[] {
   try {
     const raw = sessionStorage.getItem(STORAGE_MSGS)
     if (raw) return JSON.parse(raw) as Message[]
@@ -86,8 +89,17 @@ function loadMessages(): Message[] {
   return [freshWelcome()]
 }
 
-function loadSessionID(): string {
-  return sessionStorage.getItem(STORAGE_SID) ?? 'default'
+// rebuildMessages turns persisted server turns back into thread messages.
+// Reloaded turns render as plain text — any proposals they carried were
+// already acted on, so they are intentionally not made re-actionable here.
+function rebuildMessages(rows: ServerChatMessage[]): Message[] {
+  if (rows.length === 0) return [freshWelcome()]
+  return rows.map(r => ({
+    id: nextId(),
+    role: (r.role === 'user' || r.role === 'assistant' || r.role === 'system') ? r.role : 'system',
+    content: r.content,
+    timestamp: new Date((r.created_at ?? 0) * 1000).toISOString(),
+  }))
 }
 
 function loadApprovalMode(): ApprovalMode {
@@ -110,15 +122,18 @@ const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'])
 // props it needs and holds no state of its own, so they can be read (and
 // changed) independently of the stateful logic in AssistantPanel below.
 
-function TaskCardMessage({ task, onClose, onApprove, onStop }: {
+function TaskCardMessage({ task, onClose, onApprove, onStop, subTask, onApproveSub }: {
   task: AgentTask
   onClose: () => void
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
+  subTask?: AgentTask | null
+  onApproveSub?: (proposalID: string, approved: boolean) => void
 }): JSX.Element {
   return (
     <div className="msg-task-card">
-      <TaskTracker liveTask={task} onClose={onClose} onApprove={onApprove} onStop={onStop} />
+      <TaskTracker liveTask={task} onClose={onClose} onApprove={onApprove} onStop={onStop}
+        subTask={subTask} onApproveSub={onApproveSub} />
     </div>
   )
 }
@@ -172,28 +187,66 @@ function TextMessage({ role, content, timestamp }: { role: MessageRole; content:
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function AssistantPanel(): JSX.Element {
-  const [messages, setMessages]   = useState<Message[]>(loadMessages)
+type AssistantPanelProps = {
+  // sessionID is owned by ChatPage so the session rail can switch it. "default"
+  // is the legacy ad-hoc bucket (sessionStorage-backed); any other value is a
+  // real, server-persisted session whose history we hydrate.
+  sessionID: string
+  onSessionChange: (sessionID: string) => void
+  // onSessionsChanged signals the rail to refresh its list (new/renamed session).
+  onSessionsChanged: () => void
+}
+
+export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }: AssistantPanelProps): JSX.Element {
+  const [messages, setMessages]   = useState<Message[]>(loadDefaultMessages)
   const [input, setInput]         = useState('')
-  const [sessionID, setSessionID] = useState<string>(loadSessionID)
   const [proposals, setProposals] = useState<ChatProposal[]>([])
   const [isLoading, setIsLoading] = useState(false)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
+  // subTask tracks a sub-agent task delegated (via [HANDOFF]) from
+  // activeTask, when one exists. Handoff is synchronous and depth-capped at
+  // 1, so there is at most one outstanding sub-task per active task.
+  const [subTask, setSubTask] = useState<AgentTask | null>(null)
+  // egressHolds tracks executions held in gateway Ask mode awaiting operator
+  // approval of their external target. Rendered as a pending-approval bar.
+  const [egressHolds, setEgressHolds] = useState<ExecutionRecord[]>([])
   const [approvalMode, setApprovalModeState] = useState<ApprovalMode>(loadApprovalMode)
+  // needsTitleRef marks a freshly-created session whose name should be set from
+  // the operator's first message (Claude-style auto-title).
+  const needsTitleRef = useRef(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef       = useRef<HTMLInputElement>(null)
 
-  // ── Persistence ────────────────────────────────────────────────────────────
+  // ── Persistence / hydration ──────────────────────────────────────────────────
 
+  // Hydrate the thread when the active session changes: real sessions load
+  // their persisted turns from the server; the "default" bucket falls back to
+  // its sessionStorage copy. Runs on mount and on every rail switch.
   useEffect(() => {
-    sessionStorage.setItem(STORAGE_MSGS, JSON.stringify(messages.slice(-120)))
-  }, [messages])
-
-  useEffect(() => {
-    sessionStorage.setItem(STORAGE_SID, sessionID)
+    let cancelled = false
+    if (sessionID === 'default') {
+      setMessages(loadDefaultMessages())
+      setProposals([]); setActiveTask(null); setSubTask(null); setEgressHolds([])
+      return
+    }
+    fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sessionID}/messages`)
+      .then(rows => {
+        if (cancelled) return
+        setMessages(rebuildMessages(rows ?? []))
+        setProposals([]); setActiveTask(null); setSubTask(null); setEgressHolds([])
+      })
+      .catch(() => { if (!cancelled) setMessages([freshWelcome()]) })
+    return () => { cancelled = true }
   }, [sessionID])
+
+  // Only the ad-hoc "default" bucket mirrors to sessionStorage; real sessions
+  // are durably persisted server-side by the chat handler.
+  useEffect(() => {
+    if (sessionID !== 'default') return
+    sessionStorage.setItem(STORAGE_MSGS, JSON.stringify(messages.slice(-120)))
+  }, [messages, sessionID])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -229,14 +282,30 @@ export function AssistantPanel(): JSX.Element {
     )
   }, [])
 
-  const clearChat = useCallback(() => {
+  // newChat starts a fresh, server-persisted conversation. It creates a real
+  // session (so its turns are durable and it appears in the rail) and lets the
+  // first operator message auto-title it. Falls back to the ad-hoc "default"
+  // bucket if session creation fails (e.g. orchestrator unreachable).
+  const newChat = useCallback(async () => {
     setMessages([freshWelcome()])
     setProposals([])
     setActiveTask(null)
-    setSessionID('default')
-    sessionStorage.removeItem(STORAGE_MSGS)
-    sessionStorage.removeItem(STORAGE_SID)
-  }, [])
+    setSubTask(null)
+    setEgressHolds([])
+    try {
+      const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Yeni Sohbet' }),
+      })
+      needsTitleRef.current = true
+      onSessionChange(s.id)
+      onSessionsChanged()
+    } catch {
+      needsTitleRef.current = false
+      onSessionChange('default')
+    }
+  }, [onSessionChange, onSessionsChanged])
 
   // ── WebSocket stream ───────────────────────────────────────────────────────
 
@@ -304,7 +373,19 @@ export function AssistantPanel(): JSX.Element {
 
   const onExecution = useCallback((record: ExecutionRecord) => {
     if (sessionID !== 'default' && record.session_id !== sessionID) return
+
+    // Gateway Ask mode: the command is held until the operator approves the
+    // external target. Surface it as a pending egress-approval card (deduped
+    // by execution id) rather than a normal result message — the buttons live
+    // there until the operator decides.
+    if (record.status === 'awaiting_egress_approval') {
+      setEgressHolds(prev => [...prev.filter(r => r.id !== record.id), record])
+      return
+    }
+
     if (['completed', 'failed', 'canceled'].includes(record.status)) {
+      // A resolved execution leaves the egress-hold list if it was there.
+      setEgressHolds(prev => prev.filter(r => r.id !== record.id))
       appendMessage({
         role: 'execution',
         content: record.output || record.error || `Command ${record.status}`,
@@ -321,6 +402,16 @@ export function AssistantPanel(): JSX.Element {
 
   const onTask = useCallback((task: AgentTask) => {
     const active = activeTaskRef.current
+
+    // A sub-agent task delegated from the one we're watching: track it
+    // separately so its own pending approval can render nested under the
+    // parent's card, instead of being silently dropped (it has its own task
+    // ID the UI otherwise never learns about — see TaskTracker's subTask prop).
+    if (active && task.parent_task_id === active.id) {
+      setSubTask(TERMINAL.has(task.status) ? null : task)
+      return
+    }
+
     if (!active || task.id !== active.id) return
 
     setActiveTask(task)
@@ -340,6 +431,7 @@ export function AssistantPanel(): JSX.Element {
         appendMessage({ role: 'assistant', content: lines.join('\n') })
       }
       setActiveTask(null)
+      setSubTask(null)
     }
 
     // When paused and there's a question, surface it.
@@ -367,6 +459,7 @@ export function AssistantPanel(): JSX.Element {
       await fetchJSON(`/api/v1/tasks/${activeTask.id}/stop`, { method: 'POST' })
       appendMessage({ role: 'system', content: 'Görev durduruldu.' })
       setActiveTask(null)
+      setSubTask(null)
     } catch {
       appendMessage({ role: 'system', content: 'Görev durdurulamadı.' })
     }
@@ -381,6 +474,28 @@ export function AssistantPanel(): JSX.Element {
       })
     } catch {
       appendMessage({ role: 'system', content: 'Onay gönderilemedi.' })
+    }
+  }, [appendMessage])
+
+  const resolveEgress = useCallback(async (rec: ExecutionRecord, approved: boolean) => {
+    // Optimistically drop the card; the resulting completed/failed event will
+    // append the final result (or onExecution re-adds it if the call fails).
+    setEgressHolds(prev => prev.filter(r => r.id !== rec.id))
+    try {
+      await fetchJSON(`/api/v1/executions/${rec.id}/resolve-egress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      })
+      appendMessage({
+        role: 'system',
+        content: approved
+          ? `Dış ağ erişimi onaylandı: ${rec.egress_target ?? rec.command}`
+          : `Dış ağ erişimi reddedildi: ${rec.egress_target ?? rec.command}`,
+      })
+    } catch {
+      appendMessage({ role: 'system', content: 'Egress kararı gönderilemedi.' })
+      setEgressHolds(prev => [...prev.filter(r => r.id !== rec.id), rec]) // restore
     }
   }, [appendMessage])
 
@@ -412,6 +527,18 @@ export function AssistantPanel(): JSX.Element {
     appendMessage({ role: 'user', content: text })
     setIsLoading(true)
 
+    // Auto-title a freshly-created session from the operator's first message
+    // (Claude-style), then let the rail pick up the new name.
+    if (needsTitleRef.current && sessionID !== 'default') {
+      needsTitleRef.current = false
+      const title = text.length > 40 ? text.slice(0, 40).trimEnd() + '…' : text
+      void fetchJSON(`/api/v1/sessions/${sessionID}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: title }),
+      }).then(() => onSessionsChanged()).catch(() => { /* title is best-effort */ })
+    }
+
     try {
       const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
         method: 'POST',
@@ -419,7 +546,7 @@ export function AssistantPanel(): JSX.Element {
         body: JSON.stringify({ message: text, session_id: sessionID }),
       })
 
-      if (res.session_id) setSessionID(res.session_id)
+      if (res.session_id && res.session_id !== sessionID) onSessionChange(res.session_id)
 
       const reply = res.data?.message ?? res.reply ?? 'Cevap alınamadı'
       appendMessage({ role: 'assistant', content: reply })
@@ -430,6 +557,7 @@ export function AssistantPanel(): JSX.Element {
         try {
           const task = await fetchJSON<AgentTask>(`/api/v1/tasks/${taskID}`)
           setActiveTask(task)
+          setSubTask(null) // a brand-new task can't have a stale sub-task from before
           // Inject a task card message so it appears in the message thread.
           appendMessage({
             role: 'task',
@@ -532,7 +660,7 @@ export function AssistantPanel(): JSX.Element {
           )}
         </span>
         <span className="panel-header-actions">
-          <button className="small-button" onClick={clearChat}>
+          <button className="small-button" onClick={() => void newChat()}>
             Yeni Sohbet
           </button>
         </span>
@@ -551,9 +679,11 @@ export function AssistantPanel(): JSX.Element {
                 <TaskCardMessage
                   key={msg.id}
                   task={displayTask}
-                  onClose={() => setActiveTask(null)}
+                  onClose={() => { setActiveTask(null); setSubTask(null) }}
                   onApprove={(pid, approved) => approveTaskGate(msg.taskID!, pid, approved)}
                   onStop={stopActiveTask}
+                  subTask={subTask}
+                  onApproveSub={(pid, approved) => subTask && approveTaskGate(subTask.id, pid, approved)}
                 />
               )
             }
@@ -567,6 +697,29 @@ export function AssistantPanel(): JSX.Element {
           })}
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Egress approval holds (gateway Ask mode) */}
+        {egressHolds.length > 0 && (
+          <div className="egress-bar">
+            {egressHolds.map(rec => (
+              <div key={rec.id} className="egress-card">
+                <div className="egress-main">
+                  <span className="egress-title">⚠ Dış ağ erişimi onayı</span>
+                  <code className="egress-target">{rec.egress_target || rec.command}</code>
+                  <span className="egress-hint">Gateway bu hedefe çıkış için operatör onayı bekliyor.</span>
+                </div>
+                <div className="egress-actions">
+                  <button className="btn-approve" onClick={() => void resolveEgress(rec, true)}>
+                    İzin ver
+                  </button>
+                  <button className="btn-reject" onClick={() => void resolveEgress(rec, false)} title="Reddet">
+                    Reddet
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Proposals */}
         {proposals.length > 0 && (
