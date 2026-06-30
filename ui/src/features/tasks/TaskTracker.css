@@ -228,6 +228,15 @@
   border: 1px solid rgba(255, 214, 10, 0.3);
   border-radius: var(--radius-md);
 }
+.tt-gate-nested {
+  margin-left: calc(var(--space-lg) + var(--space-md));
+  border-left: 2px solid var(--border);
+}
+.tt-gate-nested-badge {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
 .tt-gate-head { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-sm); }
 .tt-gate-title { font-size: var(--text-xs); font-weight: 600; color: var(--text-primary); }
 .tt-gate-cmd {

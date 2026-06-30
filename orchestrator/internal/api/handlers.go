@@ -113,9 +113,14 @@ func isValidSeverity(s string) bool {
 
 var (
 	sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
-	namePattern      = regexp.MustCompile(`^[a-zA-Z0-9\s_-]{1,100}$`)
-	titlePattern     = regexp.MustCompile(`^[a-zA-Z0-9\s_\-\.,\!\?\'\"\#\(\)\[\]]{1,200}$`)
-	reasonPattern    = regexp.MustCompile(`^[a-zA-Z0-9\s_\-\.,\!\?\'\"\#\(\)\[\]]{1,500}$`)
+	// namePattern accepts Unicode letters/digits/marks (so Turkish session
+	// titles like "Göz taraması" or an auto-title from a Turkish first message
+	// validate) plus whitespace and a small set of safe punctuation. It still
+	// rejects HTML-significant and shell-significant characters (< > etc. are
+	// simply not in the set), bounded to 100 chars.
+	namePattern   = regexp.MustCompile(`^[\p{L}\p{N}\p{M}\s_.,:;!?'"()…@%+#/=-]{1,100}$`)
+	titlePattern  = regexp.MustCompile(`^[a-zA-Z0-9\s_\-\.,\!\?\'\"\#\(\)\[\]]{1,200}$`)
+	reasonPattern = regexp.MustCompile(`^[a-zA-Z0-9\s_\-\.,\!\?\'\"\#\(\)\[\]]{1,500}$`)
 )
 
 func isValidSessionID(id string) bool {

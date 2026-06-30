@@ -1,3 +1,8 @@
+# NOTE: this file is reference documentation only — it is not loaded by any
+# Go code (the real model/context/thinking-mode values are hardcoded in
+# orchestrator/internal/conductor/tier.go's DefaultTierRegistry()). Keep this
+# description in sync with tier.go by hand; editing only this file changes
+# nothing at runtime.
 version: "0.1"
 tier: "standard"
 model: "qwen3:8b"

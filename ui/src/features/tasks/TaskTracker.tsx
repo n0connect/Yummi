@@ -52,9 +52,17 @@ type Props = {
   onClose: () => void
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
+  // subTask is set when this task delegated to a sub-agent (via [HANDOFF])
+  // and that sub-agent's own task is awaiting operator approval. Without
+  // this, a sub-task's pending approval was structurally invisible — it has
+  // its own task ID the UI never otherwise learns about, so the operator had
+  // no way to discover or act on it (fail-closed, but stuck forever from
+  // their point of view).
+  subTask?: AgentTask | null
+  onApproveSub?: (proposalID: string, approved: boolean) => void
 }
 
-export function TaskTracker({ liveTask: t, onClose, onApprove, onStop }: Props): JSX.Element {
+export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, subTask, onApproveSub }: Props): JSX.Element {
   const pct      = t.step_budget > 0 ? Math.min(100, (t.steps_used / t.step_budget) * 100) : 0
   const terminal = isTerminal(t.status)
 
@@ -100,6 +108,33 @@ export function TaskTracker({ liveTask: t, onClose, onApprove, onStop }: Props):
             <button
               className="tt-btn tt-btn-deny"
               onClick={() => onApprove(t.pending_proposal_id!, false)}
+            >
+              ✕ Reddet
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-agent's own pending approval, nested under the parent it was
+          delegated from — see the Props.subTask doc comment above. */}
+      {subTask?.status === 'awaiting_approval' && subTask.pending_proposal_id && (
+        <div className="tt-gate tt-gate-nested">
+          <div className="tt-gate-head">
+            <span className="tt-gate-nested-badge">↳ alt-görev</span>
+            <span className={`tt-risk tt-risk-${subTask.pending_risk}`}>{subTask.pending_risk}</span>
+            <span className="tt-gate-title">Komut onayı gerekiyor</span>
+          </div>
+          <code className="tt-gate-cmd">$ {subTask.pending_command}</code>
+          <div className="tt-actions">
+            <button
+              className="tt-btn tt-btn-approve"
+              onClick={() => onApproveSub?.(subTask.pending_proposal_id!, true)}
+            >
+              ✓ Onayla &amp; Çalıştır
+            </button>
+            <button
+              className="tt-btn tt-btn-deny"
+              onClick={() => onApproveSub?.(subTask.pending_proposal_id!, false)}
             >
               ✕ Reddet
             </button>
