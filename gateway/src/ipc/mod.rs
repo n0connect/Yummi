@@ -492,7 +492,70 @@ fn process_request(
             }
             IpcResponse::EgressMode { mode: m.as_str().to_string() }
         }
+
+        IpcRequest::AddHostnameRule { list, pattern } => {
+            handle_hostname_edit(policy, audit, peer_uid, allowed_uids, &list, &pattern, true)
+        }
+        IpcRequest::RemoveHostnameRule { list, pattern } => {
+            handle_hostname_edit(policy, audit, peer_uid, allowed_uids, &list, &pattern, false)
+        }
     }
+}
+
+/// Shared add/remove handler for runtime hostname patterns. Write op — UID-
+/// gated, audited. Returns the updated HostnamePolicy view on success.
+#[allow(clippy::too_many_arguments)]
+fn handle_hostname_edit(
+    policy: &PolicyEngine,
+    audit: &AuditLog,
+    peer_uid: Option<u32>,
+    allowed_uids: &[u32],
+    list: &str,
+    pattern: &str,
+    add: bool,
+) -> IpcResponse {
+    if !is_write_authorized(peer_uid, allowed_uids) {
+        warn!(peer_uid, "hostname rule edit denied: UID not allowlisted");
+        return IpcResponse::Error {
+            message: "permission denied: UID not allowlisted for write operations".to_string(),
+        };
+    }
+    if pattern.is_empty() || pattern.len() > 253 {
+        return IpcResponse::Error {
+            message: "hostname pattern must be 1-253 characters".to_string(),
+        };
+    }
+    let hl = match crate::policy::hostname::HostnameList::parse(list) {
+        Some(hl) => hl,
+        None => {
+            return IpcResponse::Error {
+                message: format!("invalid list: {list} (expected allow|block)"),
+            };
+        }
+    };
+
+    let changed = if add {
+        policy.add_hostname_pattern(hl, pattern)
+    } else {
+        policy.remove_hostname_pattern(hl, pattern)
+    };
+    if add && !changed {
+        return IpcResponse::Error {
+            message: format!("malformed hostname pattern: {pattern}"),
+        };
+    }
+
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+    let event = if add { "hostname_rule_added" } else { "hostname_rule_removed" };
+    if let Err(e) = audit.record_rule_event(now_ns, pattern, event, &format!("[operator] list={list}")) {
+        warn!(error = %e, "failed to audit hostname rule edit (edit itself succeeded)");
+    }
+
+    let (allow, block) = policy.hostname_patterns();
+    IpcResponse::HostnamePolicy { allow, block }
 }
 
 /// Extract the peer UID from a Unix stream via SO_PEERCRED (Linux only).
@@ -595,6 +658,55 @@ mod tests {
         assert!(verified, "audit chain must verify");
         assert_eq!(rows.len(), 2, "expected 2 hostname-block audit rows");
         assert!(rows.iter().all(|r| r.reason == "hostname_blocked"));
+    }
+
+    #[test]
+    fn test_runtime_hostname_add_remove() {
+        let policy = make_hostname_policy(); // allow=[*.acme.com], block=[*.evil.com]
+        let audit = AuditLog::open(":memory:").expect("audit log");
+
+        // Add to the block list at runtime → takes effect immediately.
+        let resp = process_request(
+            IpcRequest::AddHostnameRule { list: "block".into(), pattern: "*.tracker.com".into() },
+            &policy, Some(0), &[0], None, &audit, std::time::Instant::now(),
+        );
+        match resp {
+            IpcResponse::HostnamePolicy { block, .. } => {
+                assert!(block.contains(&"*.tracker.com".to_string()), "added pattern missing: {block:?}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(policy.check_hostname("a.tracker.com"), crate::policy::hostname::HostnameVerdict::Block);
+
+        // Remove it → no longer blocked (and since a whitelist is set, it
+        // becomes a whitelist-miss → block, but not via the explicit blocklist).
+        let resp = process_request(
+            IpcRequest::RemoveHostnameRule { list: "block".into(), pattern: "*.tracker.com".into() },
+            &policy, Some(0), &[0], None, &audit, std::time::Instant::now(),
+        );
+        match resp {
+            IpcResponse::HostnamePolicy { block, .. } => {
+                assert!(!block.contains(&"*.tracker.com".to_string()), "removed pattern still present");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        // Both edits were audited.
+        let (rows, verified) = audit.recent_rows(10).expect("rows");
+        assert!(verified);
+        assert!(rows.iter().any(|r| r.reason.contains("hostname_rule_added") || r.decision == "hostname_rule_added"));
+    }
+
+    #[test]
+    fn test_hostname_edit_requires_authorized_uid() {
+        let policy = make_hostname_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        // peer_uid 1000 not in allowlist [0] → denied.
+        let resp = process_request(
+            IpcRequest::AddHostnameRule { list: "block".into(), pattern: "*.x.com".into() },
+            &policy, Some(1000), &[0], None, &audit, std::time::Instant::now(),
+        );
+        assert!(matches!(resp, IpcResponse::Error { .. }), "unauthorized edit must be denied");
     }
 
     #[test]

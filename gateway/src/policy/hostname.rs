@@ -75,6 +75,61 @@ impl HostnamePolicy {
     pub fn block_patterns(&self) -> Vec<String> {
         self.block.iter().map(HostPattern::original).collect()
     }
+
+    /// Add a pattern to the allow or block list at runtime. Idempotent (a
+    /// pattern already present is a no-op). Returns false if the pattern is
+    /// malformed (empty / bare "*."). Runtime additions are in-memory only —
+    /// they reset on restart when the config patterns reload (the same
+    /// ephemeral model as temporary IP rules and the egress mode).
+    pub fn add(&mut self, list: HostnameList, raw: &str) -> bool {
+        let Some(p) = HostPattern::parse(raw) else {
+            return false;
+        };
+        let canon = p.original();
+        let target = match list {
+            HostnameList::Allow => &mut self.allow,
+            HostnameList::Block => &mut self.block,
+        };
+        if target.iter().any(|e| e.original() == canon) {
+            return true; // already present — idempotent
+        }
+        target.push(p);
+        true
+    }
+
+    /// Remove a pattern from the allow or block list. Returns true if one was
+    /// removed. In-memory; a config-seeded pattern removed at runtime reappears
+    /// on restart.
+    pub fn remove(&mut self, list: HostnameList, raw: &str) -> bool {
+        let Some(p) = HostPattern::parse(raw) else {
+            return false;
+        };
+        let canon = p.original();
+        let target = match list {
+            HostnameList::Allow => &mut self.allow,
+            HostnameList::Block => &mut self.block,
+        };
+        let before = target.len();
+        target.retain(|e| e.original() != canon);
+        target.len() != before
+    }
+}
+
+/// Which list a runtime add/remove targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostnameList {
+    Allow,
+    Block,
+}
+
+impl HostnameList {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "allow" => Some(HostnameList::Allow),
+            "block" => Some(HostnameList::Block),
+            _ => None,
+        }
+    }
 }
 
 /// A single hostname pattern: an exact name or a `*.suffix` wildcard.
