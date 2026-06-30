@@ -38,10 +38,10 @@ CREATE TABLE IF NOT EXISTS executions (
     status TEXT NOT NULL,
     output TEXT,
     error TEXT,
+    pinned_ips TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -100,6 +100,9 @@ func OpenDB(path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+
+	// Migrate databases whose executions table predates the pinned_ips column.
+	_, _ = db.Exec(`ALTER TABLE executions ADD COLUMN pinned_ips TEXT`)
 
 	// Limit connections for SQLite
 	db.SetMaxOpenConns(1)

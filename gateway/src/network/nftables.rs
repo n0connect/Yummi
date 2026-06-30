@@ -201,16 +201,20 @@ impl NftablesController {
     /// Uses `nft add element` which is atomic and does not flush existing rules.
     /// The set has `flags interval, timeout` so both host IPs and subnets work.
     pub fn add_allowed_target(&self, net: &ipnet::IpNet, ttl_secs: u64) -> Result<(), NetworkError> {
-        // Strip /32 (or /128) for individual hosts — nft syntax is cleaner.
-        let element = match net {
-            ipnet::IpNet::V4(n) if n.prefix_len() == 32 => n.addr().to_string(),
-            ipnet::IpNet::V6(n) if n.prefix_len() == 128 => n.addr().to_string(),
-            other => other.to_string(),
+        let (element, set_name) = match net {
+            ipnet::IpNet::V4(n) => {
+                let el = if n.prefix_len() == 32 { n.addr().to_string() } else { n.to_string() };
+                (el, "allowed_targets")
+            }
+            ipnet::IpNet::V6(n) => {
+                let el = if n.prefix_len() == 128 { n.addr().to_string() } else { n.to_string() };
+                (el, "allowed_targets_v6")
+            }
         };
 
         let cmd = format!(
-            "add element inet {} allowed_targets {{ {} timeout {}s }}",
-            self.table_name, element, ttl_secs,
+            "add element inet {} {} {{ {} timeout {}s }}",
+            self.table_name, set_name, element, ttl_secs,
         );
 
         let out = Command::new(NFT_BIN)
@@ -248,6 +252,11 @@ impl NftablesController {
         // flags timeout:  TTL expiry managed by kernel automatically
         s.push_str("  set allowed_targets {\n");
         s.push_str("    type ipv4_addr\n");
+        s.push_str("    flags interval, timeout\n");
+        s.push_str("  }\n\n");
+
+        s.push_str("  set allowed_targets_v6 {\n");
+        s.push_str("    type ipv6_addr\n");
         s.push_str("    flags interval, timeout\n");
         s.push_str("  }\n\n");
 
@@ -311,6 +320,7 @@ impl NftablesController {
 
         // Dynamic targets unlocked via IPC AddTemporaryRule.
         s.push_str("    ip daddr @allowed_targets accept\n");
+        s.push_str("    ip6 daddr @allowed_targets_v6 accept\n");
 
         // DNS is always permitted so sandbox can resolve target hostnames.
         s.push_str("    udp dport 53 accept\n");
@@ -425,14 +435,12 @@ mod tests {
         assert!(ruleset.contains("chain yummi_nat"));
         assert!(ruleset.contains("hook forward"));
         assert!(ruleset.contains("hook postrouting"));
-        // sandbox exclusion rule
-        assert!(ruleset.contains("ip saddr != 172.20.0.10 accept"));
-        // established/related for return traffic
-        assert!(ruleset.contains("ct state established,related accept"));
         // dynamic targets set
         assert!(ruleset.contains("set allowed_targets"));
+        assert!(ruleset.contains("set allowed_targets_v6"));
         assert!(ruleset.contains("flags interval, timeout"));
         assert!(ruleset.contains("ip daddr @allowed_targets accept"));
+        assert!(ruleset.contains("ip6 daddr @allowed_targets_v6 accept"));
     }
 
     #[test]

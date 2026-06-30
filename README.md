@@ -1,8 +1,13 @@
 <div align="center">
 
-# Yummi
+<img src="ui/src/shared/assets/yummi_logo.svg" alt="Yummi Logo" width="280">
+
+<br/>
+<br/>
 
 **A privacy-first, fail-closed AI pentest conductor.**
+
+<br/>
 
 Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red-Team brain drives a hardened, network-isolated Kali sandbox — and a memory-safe Rust trust boundary makes sure the AI can never touch a target it was not allowed to.
 
@@ -94,7 +99,7 @@ The signal runs straight down one spine — operator → API → conductor → a
 ### Network topology
 
 ```
-yummi_internal (172.20.0.0/24): sandbox .10 · gateway .2 (also DNS) · orchestrator .3 · ui .4
+yummi_internal (172.20.0.0/24): sandbox .10 · gateway .2 (also DNS) · orchestrator .3 · ui .4 · docker-proxy .5
 yummi_external:                 gateway · orchestrator · ui only — the sandbox is intentionally absent.
                                 Its only path out is through the gateway's nftables rules.
 Host ports: 3000 → ui nginx · 9080 → orchestrator API (localhost only)

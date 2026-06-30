@@ -106,7 +106,7 @@ start: _check-deps _ollama-ensure
 	@set -o pipefail; docker compose build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to build images.); exit 1; }
 	@$(call log_pass,docker compose,Images built successfully.)
 	@$(call log_info,docker compose,Bringing up all services in background...)
-	@set -o pipefail; docker compose up -d gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to start services.); exit 1; }
+	@set -o pipefail; docker compose up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to start services.); exit 1; }
 	@$(call log_pass,services,Running — UI on http://localhost:3000)
 
 ## start-tui Start services and immediately launch the Terminal UI
@@ -119,7 +119,7 @@ start-tui: start
 stop:
 	@$(call log_section,Stopping Services)
 	@$(call log_info,docker compose,Stopping all services...)
-	@set -o pipefail; docker compose stop gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to stop services.); exit 1; }
+	@set -o pipefail; docker compose stop gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to stop services.); exit 1; }
 	@$(call log_pass,services,All services stopped.)
 
 ## clean   Remove all build artifacts
@@ -146,7 +146,7 @@ force-restart: _check-deps
 	@$(call log_info,docker compose,Building images...)
 	@set -o pipefail; docker compose build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to build images.); exit 1; }
 	@$(call log_info,docker compose,Bringing up all services...)
-	@set -o pipefail; docker compose up -d gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to start services.); exit 1; }
+	@set -o pipefail; docker compose up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,docker compose,Failed to start services.); exit 1; }
 	@$(call log_pass,force-restart,Services forcibly restarted successfully.)
 
 ## close          Stop all services, Docker, LLM models, and free RAM

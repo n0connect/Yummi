@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 212 64" width="280" height="84">
+  <defs>
+    <!-- Light theme thickness filter (sharp shadow) -->
+    <filter id="thick-light" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="1.5" dy="1.5" stdDeviation="0" flood-color="#8c959f" flood-opacity="1"/>
+    </filter>
+    <!-- Dark theme thickness filter (sharp shadow) -->
+    <filter id="thick-dark" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="1.5" dy="1.5" stdDeviation="0" flood-color="#484f58" flood-opacity="1"/>
+    </filter>
+  </defs>
+  <style>
+    .pixel {
+      fill: #24292f;
+      filter: url(#thick-light);
+    }
+    @media (prefers-color-scheme: dark) {
+      .pixel {
+        fill: #f0f6fc;
+        filter: url(#thick-dark);
+      }
+    }
+  </style>
+  
+  <!-- y -->
+  <rect x="0" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="20" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="0" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="20" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="0" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="10" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="20" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="20" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="0" y="50" width="8" height="8" rx="1" class="pixel" />
+  <rect x="10" y="50" width="8" height="8" rx="1" class="pixel" />
+  <rect x="20" y="50" width="8" height="8" rx="1" class="pixel" />
+
+  <!-- u -->
+  <rect x="40" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="60" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="40" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="60" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="40" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="60" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="40" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="50" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="60" y="40" width="8" height="8" rx="1" class="pixel" />
+
+  <!-- m -->
+  <rect x="80" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="90" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="100" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="110" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="120" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="80" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="100" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="120" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="80" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="100" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="120" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="80" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="100" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="120" y="40" width="8" height="8" rx="1" class="pixel" />
+
+  <!-- m -->
+  <rect x="140" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="150" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="160" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="170" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="180" y="10" width="8" height="8" rx="1" class="pixel" />
+  <rect x="140" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="160" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="180" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="140" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="160" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="180" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="140" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="160" y="40" width="8" height="8" rx="1" class="pixel" />
+  <rect x="180" y="40" width="8" height="8" rx="1" class="pixel" />
+
+  <!-- i -->
+  <rect x="200" y="0" width="8" height="8" rx="1" class="pixel" />
+  <rect x="200" y="10" width="8" height="8" rx="1" class="pixel" style="visibility:hidden" />
+  <rect x="200" y="20" width="8" height="8" rx="1" class="pixel" />
+  <rect x="200" y="30" width="8" height="8" rx="1" class="pixel" />
+  <rect x="200" y="40" width="8" height="8" rx="1" class="pixel" />
+</svg>
