@@ -118,3 +118,57 @@ export async function removeGatewayRule(id: string): Promise<void> {
     throw new Error(`failed to remove rule: ${text}`)
   }
 }
+
+// ─── Hostname policy ──────────────────────────────────────────────────────────
+
+export type HostnameList = 'allow' | 'block'
+
+export function useHostnamePolicy() {
+  const [allow, setAllow] = useState<string[]>([])
+  const [block, setBlock] = useState<string[]>([])
+  const [status, setStatus] = useState<GatewayStatus['status']>('not_configured')
+
+  const apply = useCallback((data: { allow?: string[]; block?: string[]; status?: string }) => {
+    setAllow(data.allow ?? [])
+    setBlock(data.block ?? [])
+    setStatus((data.status as GatewayStatus['status']) ?? 'connected')
+  }, [])
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/gateway/hostname-policy')
+      if (res.ok) apply(await res.json())
+    } catch {
+      setStatus('disconnected')
+    }
+  }, [apply])
+
+  // add/remove return the updated lists, so apply them directly (no refetch).
+  const add = useCallback(async (list: HostnameList, pattern: string) => {
+    apply(await editHostnameRule('POST', list, pattern))
+  }, [apply])
+  const remove = useCallback(async (list: HostnameList, pattern: string) => {
+    apply(await editHostnameRule('DELETE', list, pattern))
+  }, [apply])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, POLL_MS)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  return { allow, block, status, add, remove }
+}
+
+async function editHostnameRule(method: 'POST' | 'DELETE', list: HostnameList, pattern: string) {
+  const res = await fetch('/api/v1/gateway/hostname-policy', {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ list, pattern })
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`failed to ${method === 'POST' ? 'add' : 'remove'} hostname pattern: ${text}`)
+  }
+  return res.json()
+}

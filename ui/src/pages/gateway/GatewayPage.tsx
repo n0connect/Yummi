@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode } from '../../features/gateway/useGatewayData'
+import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, type HostnameList } from '../../features/gateway/useGatewayData'
 import type { GatewayEgressMode } from '../../entities/types'
 import './GatewayPage.css'
 
@@ -13,6 +13,30 @@ export function GatewayPage(): JSX.Element {
   const { rules, status, refresh: refreshRules } = useGatewayRules()
   const { rows, chainVerified } = useGatewayAudit(50)
   const { mode: egressMode, status: egressStatus, setMode: setEgress } = useEgressMode()
+  const hostnamePolicy = useHostnamePolicy()
+  const [hnPattern, setHnPattern] = useState('')
+  const [hnList, setHnList] = useState<HostnameList>('block')
+  const [hnError, setHnError] = useState<string | null>(null)
+
+  async function handleAddHostname() {
+    const p = hnPattern.trim()
+    if (!p) return
+    setHnError(null)
+    try {
+      await hostnamePolicy.add(hnList, p)
+      setHnPattern('')
+    } catch (err) {
+      setHnError(err instanceof Error ? err.message : 'failed to add pattern')
+    }
+  }
+  async function handleRemoveHostname(list: HostnameList, pattern: string) {
+    setHnError(null)
+    try {
+      await hostnamePolicy.remove(list, pattern)
+    } catch (err) {
+      setHnError(err instanceof Error ? err.message : 'failed to remove pattern')
+    }
+  }
   const [egressBusy, setEgressBusy] = useState(false)
   const [egressError, setEgressError] = useState<string | null>(null)
   const egressReachable = egressStatus === 'connected'
@@ -106,6 +130,50 @@ export function GatewayPage(): JSX.Element {
           </p>
         )}
         {egressError && <div className="gateway-form-error">{egressError}</div>}
+      </div>
+
+      <div className="gateway-card">
+        <h3>Hostname Policy</h3>
+        <p className="gateway-egress-hint">
+          İsim bazlı kapsam. <code>*.google.com</code> apex + tüm subdomainleri kapsar. Engel kuralı her şeyi yener;
+          izin listesi doluysa whitelist gibi davranır. Buradan eklenenler geçicidir (yeniden başlatınca config'ten yüklenir).
+        </p>
+        <div className="gateway-hostname-lists">
+          <div className="gateway-hostname-col">
+            <span className="gateway-hostname-label gateway-hostname-allow">İzinli (allow)</span>
+            {hostnamePolicy.allow.length === 0 && <span className="gateway-empty">— boş —</span>}
+            {hostnamePolicy.allow.map(p => (
+              <div key={`allow-${p}`} className="gateway-hostname-item">
+                <code>{p}</code>
+                <button onClick={() => handleRemoveHostname('allow', p)} title="Kaldır">✕</button>
+              </div>
+            ))}
+          </div>
+          <div className="gateway-hostname-col">
+            <span className="gateway-hostname-label gateway-hostname-block">Engelli (block)</span>
+            {hostnamePolicy.block.length === 0 && <span className="gateway-empty">— boş —</span>}
+            {hostnamePolicy.block.map(p => (
+              <div key={`block-${p}`} className="gateway-hostname-item">
+                <code>{p}</code>
+                <button onClick={() => handleRemoveHostname('block', p)} title="Kaldır">✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="gateway-add-form">
+          <select value={hnList} onChange={e => setHnList(e.target.value as HostnameList)}>
+            <option value="block">Engelle</option>
+            <option value="allow">İzin ver</option>
+          </select>
+          <input
+            placeholder="*.example.com veya example.com"
+            value={hnPattern}
+            onChange={e => setHnPattern(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') void handleAddHostname() }}
+          />
+          <button disabled={hnPattern.trim() === ''} onClick={() => void handleAddHostname()}>Ekle</button>
+        </div>
+        {hnError && <div className="gateway-form-error">{hnError}</div>}
       </div>
 
       <div className="gateway-card">
