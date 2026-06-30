@@ -129,6 +129,32 @@ func (c *Client) GetHostnamePolicy() (*HostnamePolicy, error) {
 	return &HostnamePolicy{Allow: resp.Allow, Block: resp.Block}, nil
 }
 
+// AddHostnameRule adds a pattern to the "allow" or "block" hostname list at
+// runtime (in-memory; resets on restart). Returns the updated policy.
+func (c *Client) AddHostnameRule(list, pattern string) (*HostnamePolicy, error) {
+	resp, err := c.send(Request{Type: "add_hostname_rule", List: list, Pattern: pattern})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == "error" {
+		return nil, fmt.Errorf("gateway: %s", resp.Message)
+	}
+	return &HostnamePolicy{Allow: resp.Allow, Block: resp.Block}, nil
+}
+
+// RemoveHostnameRule removes a pattern from the "allow" or "block" hostname
+// list at runtime. Returns the updated policy.
+func (c *Client) RemoveHostnameRule(list, pattern string) (*HostnamePolicy, error) {
+	resp, err := c.send(Request{Type: "remove_hostname_rule", List: list, Pattern: pattern})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == "error" {
+		return nil, fmt.Errorf("gateway: %s", resp.Message)
+	}
+	return &HostnamePolicy{Allow: resp.Allow, Block: resp.Block}, nil
+}
+
 func validEgressMode(mode string) bool {
 	switch mode {
 	case "block", "allow", "ask":

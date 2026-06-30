@@ -56,6 +56,12 @@ pub enum IpcRequest {
     CheckHostname { host: String },
     /// Read the configured hostname allow/block patterns (read-only).
     GetHostnamePolicy,
+    /// Add a hostname pattern to the "allow" or "block" list at runtime.
+    /// Write op — UID-gated. In-memory only (resets on restart).
+    AddHostnameRule { list: String, pattern: String },
+    /// Remove a hostname pattern from the "allow" or "block" list at runtime.
+    /// Write op — UID-gated.
+    RemoveHostnameRule { list: String, pattern: String },
 }
 
 /// Response from gateway to orchestrator.
