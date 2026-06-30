@@ -4,11 +4,80 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 )
+
+// hostnamePatternPattern allows a hostname glob: optional leading "*.", then
+// dot-separated alphanumeric/hyphen labels. Rejects whitespace, slashes,
+// schemes, and other junk before it reaches the gateway.
+var hostnamePatternPattern = regexp.MustCompile(`^(\*\.)?([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$`)
+
+type hostnameRuleRequest struct {
+	List    string `json:"list"`    // "allow" | "block"
+	Pattern string `json:"pattern"` // e.g. "*.example.com"
+}
+
+func decodeHostnameRule(w http.ResponseWriter, r *http.Request) (hostnameRuleRequest, bool) {
+	var req hostnameRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body", err)
+		return req, false
+	}
+	if req.List != "allow" && req.List != "block" {
+		writeError(w, http.StatusBadRequest, "list must be 'allow' or 'block'", nil)
+		return req, false
+	}
+	if len(req.Pattern) < 1 || len(req.Pattern) > 253 || !hostnamePatternPattern.MatchString(req.Pattern) {
+		writeError(w, http.StatusBadRequest, "pattern must be a hostname or wildcard (e.g. example.com or *.example.com)", nil)
+		return req, false
+	}
+	return req, true
+}
+
+// HandleGatewayAddHostnameRule adds a hostname pattern to the allow/block list
+// at runtime (in-memory; resets on restart). Body: {list, pattern}.
+func HandleGatewayAddHostnameRule(c *gateway.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := decodeHostnameRule(w, r)
+		if !ok {
+			return
+		}
+		if c == nil {
+			writeError(w, http.StatusServiceUnavailable, "gateway not configured", nil)
+			return
+		}
+		hp, err := c.AddHostnameRule(req.List, req.Pattern)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "failed to add hostname rule", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"allow": hp.Allow, "block": hp.Block, "status": "connected"})
+	}
+}
+
+// HandleGatewayRemoveHostnameRule removes a hostname pattern. Body: {list, pattern}.
+func HandleGatewayRemoveHostnameRule(c *gateway.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := decodeHostnameRule(w, r)
+		if !ok {
+			return
+		}
+		if c == nil {
+			writeError(w, http.StatusServiceUnavailable, "gateway not configured", nil)
+			return
+		}
+		hp, err := c.RemoveHostnameRule(req.List, req.Pattern)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "failed to remove hostname rule", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"allow": hp.Allow, "block": hp.Block, "status": "connected"})
+	}
+}
 
 // validNetwork reports whether s is a syntactically valid IP address or CIDR
 // prefix. net/netip bound-checks octets and prefix length, so this rejects
