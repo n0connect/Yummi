@@ -46,6 +46,75 @@ func TestRunScopedCommandBlocksOutOfScope(t *testing.T) {
 	}
 }
 
+// TestRunScopedCommandBlocksByHostnamePolicy proves a hostname target whose
+// name the gateway blocks (e.g. *.facebook.com) is rejected BEFORE any
+// resolution or IP-egress check — a hard, name-level deny.
+func TestRunScopedCommandBlocksByHostnamePolicy(t *testing.T) {
+	var sawScopeCheck bool
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		switch req.Type {
+		case "check_hostname":
+			return gateway.Response{Type: "hostname_result", Host: req.Host, Verdict: "block"}
+		case "check_scope":
+			sawScopeCheck = true // must NOT happen — hostname block short-circuits
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "allow"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge("yummi-sandbox-test-nonexistent")
+
+	_, err := RunScopedCommand(context.Background(), bridge, pc, "curl https://www.facebook.com")
+	if err == nil {
+		t.Fatal("expected a hostname-policy block error")
+	}
+	if !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("expected ErrOutOfScope for hostname block, got: %v", err)
+	}
+	if sawScopeCheck {
+		t.Fatal("hostname block must short-circuit BEFORE the IP scope check")
+	}
+}
+
+// TestRunScopedCommandHostnameAllowedProceeds proves an allow/neutral hostname
+// verdict does not block — it falls through to the IP-egress flow (which here
+// blocks on its own, proving the hostname gate let it pass).
+func TestRunScopedCommandHostnameAllowedProceeds(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		switch req.Type {
+		case "check_hostname":
+			return gateway.Response{Type: "hostname_result", Host: req.Host, Verdict: "allow"}
+		case "check_scope":
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "block"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge("yummi-sandbox-test-nonexistent")
+
+	// example.com resolves; the hostname gate allows it, then the IP egress
+	// check blocks — so the error is the IP block, not a hostname block.
+	_, err := RunScopedCommand(context.Background(), bridge, pc, "curl https://example.com")
+	if !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("expected the IP-egress block to surface (hostname allowed), got: %v", err)
+	}
+}
+
+func TestIsHostnameTarget(t *testing.T) {
+	cases := map[string]bool{
+		"example.com":    true,
+		"a.b.google.com": true,
+		"8.8.8.8":        false,
+		"10.0.0.0/24":    false,
+		"2606:4700::1":   false,
+	}
+	for target, want := range cases {
+		if got := isHostnameTarget(target); got != want {
+			t.Errorf("isHostnameTarget(%q) = %v, want %v", target, got, want)
+		}
+	}
+}
+
 func TestRunScopedCommandHoldsOnApprovalRequired(t *testing.T) {
 	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
 		if req.Type == "check_scope" {
