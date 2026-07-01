@@ -1,87 +1,142 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 212 64" width="280" height="84">
-  <defs>
-    <!-- Light theme thickness filter (sharp shadow) -->
-    <filter id="thick-light" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="1.5" dy="1.5" stdDeviation="0" flood-color="#8c959f" flood-opacity="1"/>
-    </filter>
-    <!-- Dark theme thickness filter (sharp shadow) -->
-    <filter id="thick-dark" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="1.5" dy="1.5" stdDeviation="0" flood-color="#484f58" flood-opacity="1"/>
-    </filter>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 218 71" width="300" height="98">
+  <!-- Single-file wordmark: theme switching lives entirely inside this SVG's
+       own CSS (matches the technique the original logo used), so a single
+       plain <img> tag works everywhere — GitHub, raw file viewers, and local
+       markdown previewers that don't support <picture>/<source>. Depth comes
+       from real offset geometry (a shadow layer drawn behind the face layer),
+       not an SVG filter, so it renders identically wherever SVG is supported
+       at all. -->
   <style>
-    .pixel {
-      fill: #24292f;
-      filter: url(#thick-light);
-    }
+    .face   { fill: #1a1e24; }
+    .shadow { fill: #c4cbd4; }
     @media (prefers-color-scheme: dark) {
-      .pixel {
-        fill: #f0f6fc;
-        filter: url(#thick-dark);
-      }
+      .face   { fill: #f5f8fc; }
+      .shadow { fill: #3d4451; }
     }
   </style>
-  
-  <!-- y -->
-  <rect x="0" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="20" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="0" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="20" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="0" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="10" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="20" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="20" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="0" y="50" width="8" height="8" rx="1" class="pixel" />
-  <rect x="10" y="50" width="8" height="8" rx="1" class="pixel" />
-  <rect x="20" y="50" width="8" height="8" rx="1" class="pixel" />
 
-  <!-- u -->
-  <rect x="40" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="60" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="40" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="60" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="40" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="60" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="40" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="50" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="60" y="40" width="8" height="8" rx="1" class="pixel" />
+  <!-- shadow layer (drawn first, offset +2,+3) -->
+  <g class="shadow">
+    <rect x="2" y="13" width="8" height="8" rx="1.5" />
+    <rect x="22" y="13" width="8" height="8" rx="1.5" />
+    <rect x="2" y="23" width="8" height="8" rx="1.5" />
+    <rect x="22" y="23" width="8" height="8" rx="1.5" />
+    <rect x="2" y="33" width="8" height="8" rx="1.5" />
+    <rect x="12" y="33" width="8" height="8" rx="1.5" />
+    <rect x="22" y="33" width="8" height="8" rx="1.5" />
+    <rect x="22" y="43" width="8" height="8" rx="1.5" />
+    <rect x="2" y="53" width="8" height="8" rx="1.5" />
+    <rect x="12" y="53" width="8" height="8" rx="1.5" />
+    <rect x="22" y="53" width="8" height="8" rx="1.5" />
 
-  <!-- m -->
-  <rect x="80" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="90" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="100" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="110" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="120" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="80" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="100" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="120" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="80" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="100" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="120" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="80" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="100" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="120" y="40" width="8" height="8" rx="1" class="pixel" />
+    <rect x="42" y="13" width="8" height="8" rx="1.5" />
+    <rect x="62" y="13" width="8" height="8" rx="1.5" />
+    <rect x="42" y="23" width="8" height="8" rx="1.5" />
+    <rect x="62" y="23" width="8" height="8" rx="1.5" />
+    <rect x="42" y="33" width="8" height="8" rx="1.5" />
+    <rect x="62" y="33" width="8" height="8" rx="1.5" />
+    <rect x="42" y="43" width="8" height="8" rx="1.5" />
+    <rect x="52" y="43" width="8" height="8" rx="1.5" />
+    <rect x="62" y="43" width="8" height="8" rx="1.5" />
 
-  <!-- m -->
-  <rect x="140" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="150" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="160" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="170" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="180" y="10" width="8" height="8" rx="1" class="pixel" />
-  <rect x="140" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="160" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="180" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="140" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="160" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="180" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="140" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="160" y="40" width="8" height="8" rx="1" class="pixel" />
-  <rect x="180" y="40" width="8" height="8" rx="1" class="pixel" />
+    <rect x="82" y="13" width="8" height="8" rx="1.5" />
+    <rect x="92" y="13" width="8" height="8" rx="1.5" />
+    <rect x="102" y="13" width="8" height="8" rx="1.5" />
+    <rect x="112" y="13" width="8" height="8" rx="1.5" />
+    <rect x="122" y="13" width="8" height="8" rx="1.5" />
+    <rect x="82" y="23" width="8" height="8" rx="1.5" />
+    <rect x="102" y="23" width="8" height="8" rx="1.5" />
+    <rect x="122" y="23" width="8" height="8" rx="1.5" />
+    <rect x="82" y="33" width="8" height="8" rx="1.5" />
+    <rect x="102" y="33" width="8" height="8" rx="1.5" />
+    <rect x="122" y="33" width="8" height="8" rx="1.5" />
+    <rect x="82" y="43" width="8" height="8" rx="1.5" />
+    <rect x="102" y="43" width="8" height="8" rx="1.5" />
+    <rect x="122" y="43" width="8" height="8" rx="1.5" />
 
-  <!-- i -->
-  <rect x="200" y="0" width="8" height="8" rx="1" class="pixel" />
-  <rect x="200" y="10" width="8" height="8" rx="1" class="pixel" style="visibility:hidden" />
-  <rect x="200" y="20" width="8" height="8" rx="1" class="pixel" />
-  <rect x="200" y="30" width="8" height="8" rx="1" class="pixel" />
-  <rect x="200" y="40" width="8" height="8" rx="1" class="pixel" />
+    <rect x="142" y="13" width="8" height="8" rx="1.5" />
+    <rect x="152" y="13" width="8" height="8" rx="1.5" />
+    <rect x="162" y="13" width="8" height="8" rx="1.5" />
+    <rect x="172" y="13" width="8" height="8" rx="1.5" />
+    <rect x="182" y="13" width="8" height="8" rx="1.5" />
+    <rect x="142" y="23" width="8" height="8" rx="1.5" />
+    <rect x="162" y="23" width="8" height="8" rx="1.5" />
+    <rect x="182" y="23" width="8" height="8" rx="1.5" />
+    <rect x="142" y="33" width="8" height="8" rx="1.5" />
+    <rect x="162" y="33" width="8" height="8" rx="1.5" />
+    <rect x="182" y="33" width="8" height="8" rx="1.5" />
+    <rect x="142" y="43" width="8" height="8" rx="1.5" />
+    <rect x="162" y="43" width="8" height="8" rx="1.5" />
+    <rect x="182" y="43" width="8" height="8" rx="1.5" />
+
+    <rect x="202" y="3" width="8" height="8" rx="1.5" />
+    <rect x="202" y="23" width="8" height="8" rx="1.5" />
+    <rect x="202" y="33" width="8" height="8" rx="1.5" />
+    <rect x="202" y="43" width="8" height="8" rx="1.5" />
+  </g>
+
+  <!-- face layer (on top) -->
+  <g class="face">
+    <!-- y -->
+    <rect x="0" y="10" width="8" height="8" rx="1.5" />
+    <rect x="20" y="10" width="8" height="8" rx="1.5" />
+    <rect x="0" y="20" width="8" height="8" rx="1.5" />
+    <rect x="20" y="20" width="8" height="8" rx="1.5" />
+    <rect x="0" y="30" width="8" height="8" rx="1.5" />
+    <rect x="10" y="30" width="8" height="8" rx="1.5" />
+    <rect x="20" y="30" width="8" height="8" rx="1.5" />
+    <rect x="20" y="40" width="8" height="8" rx="1.5" />
+    <rect x="0" y="50" width="8" height="8" rx="1.5" />
+    <rect x="10" y="50" width="8" height="8" rx="1.5" />
+    <rect x="20" y="50" width="8" height="8" rx="1.5" />
+
+    <!-- u -->
+    <rect x="40" y="10" width="8" height="8" rx="1.5" />
+    <rect x="60" y="10" width="8" height="8" rx="1.5" />
+    <rect x="40" y="20" width="8" height="8" rx="1.5" />
+    <rect x="60" y="20" width="8" height="8" rx="1.5" />
+    <rect x="40" y="30" width="8" height="8" rx="1.5" />
+    <rect x="60" y="30" width="8" height="8" rx="1.5" />
+    <rect x="40" y="40" width="8" height="8" rx="1.5" />
+    <rect x="50" y="40" width="8" height="8" rx="1.5" />
+    <rect x="60" y="40" width="8" height="8" rx="1.5" />
+
+    <!-- m -->
+    <rect x="80" y="10" width="8" height="8" rx="1.5" />
+    <rect x="90" y="10" width="8" height="8" rx="1.5" />
+    <rect x="100" y="10" width="8" height="8" rx="1.5" />
+    <rect x="110" y="10" width="8" height="8" rx="1.5" />
+    <rect x="120" y="10" width="8" height="8" rx="1.5" />
+    <rect x="80" y="20" width="8" height="8" rx="1.5" />
+    <rect x="100" y="20" width="8" height="8" rx="1.5" />
+    <rect x="120" y="20" width="8" height="8" rx="1.5" />
+    <rect x="80" y="30" width="8" height="8" rx="1.5" />
+    <rect x="100" y="30" width="8" height="8" rx="1.5" />
+    <rect x="120" y="30" width="8" height="8" rx="1.5" />
+    <rect x="80" y="40" width="8" height="8" rx="1.5" />
+    <rect x="100" y="40" width="8" height="8" rx="1.5" />
+    <rect x="120" y="40" width="8" height="8" rx="1.5" />
+
+    <!-- m -->
+    <rect x="140" y="10" width="8" height="8" rx="1.5" />
+    <rect x="150" y="10" width="8" height="8" rx="1.5" />
+    <rect x="160" y="10" width="8" height="8" rx="1.5" />
+    <rect x="170" y="10" width="8" height="8" rx="1.5" />
+    <rect x="180" y="10" width="8" height="8" rx="1.5" />
+    <rect x="140" y="20" width="8" height="8" rx="1.5" />
+    <rect x="160" y="20" width="8" height="8" rx="1.5" />
+    <rect x="180" y="20" width="8" height="8" rx="1.5" />
+    <rect x="140" y="30" width="8" height="8" rx="1.5" />
+    <rect x="160" y="30" width="8" height="8" rx="1.5" />
+    <rect x="180" y="30" width="8" height="8" rx="1.5" />
+    <rect x="140" y="40" width="8" height="8" rx="1.5" />
+    <rect x="160" y="40" width="8" height="8" rx="1.5" />
+    <rect x="180" y="40" width="8" height="8" rx="1.5" />
+
+    <!-- i -->
+    <rect x="200" y="0" width="8" height="8" rx="1.5" />
+    <rect x="200" y="20" width="8" height="8" rx="1.5" />
+    <rect x="200" y="30" width="8" height="8" rx="1.5" />
+    <rect x="200" y="40" width="8" height="8" rx="1.5" />
+  </g>
 </svg>

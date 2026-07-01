@@ -1,24 +1,36 @@
-<div align="center">
+<p align="center">
+  <a href="https://github.com/n0connect/yummi">
+    <img src="ui/src/shared/assets/yummi_logo.svg" alt="Yummi logo" width="300">
+  </a>
+</p>
 
-<img src="ui/src/shared/assets/yummi_logo.svg" alt="Yummi Logo" width="280">
+<p align="center">A privacy-first, fail-closed AI pentest conductor.</p>
 
-<br/>
-<br/>
+<p align="center">
+  <a href="#quick-start"><img alt="CI" src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" /></a>
+  <a href="https://github.com/n0connect/yummi/releases"><img alt="Version" src="https://img.shields.io/badge/version-v0.1.0-brightgreen?style=flat-square" /></a>
+  <a href="orchestrator/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square" /></a>
+  <a href="gateway/Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square" /></a>
+  <a href="ui/package.json"><img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square" /></a>
+</p>
 
-**A privacy-first, fail-closed AI pentest conductor.**
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.tr.md">Türkçe</a> |
+  <a href="README.zh.md">简体中文</a> |
+  <a href="README.de.md">Deutsch</a> |
+  <a href="README.es.md">Español</a> |
+  <a href="README.fr.md">Français</a> |
+  <a href="README.ja.md">日本語</a> |
+  <a href="README.ko.md">한국어</a> |
+  <a href="README.ru.md">Русский</a> |
+  <a href="README.pt-BR.md">Português (Brasil)</a>
+</p>
 
-<br/>
-
+<p align="center">
 Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red-Team brain drives a hardened, network-isolated Kali sandbox — and a memory-safe Rust trust boundary makes sure the AI can never touch a target it was not allowed to.
-
-![CI](https://img.shields.io/badge/CI-pending-lightgrey)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Version](https://img.shields.io/badge/version-v0.1.0-lightgrey)
-![Go](https://img.shields.io/badge/Go-1.22-00ADD8)
-![Rust](https://img.shields.io/badge/Rust-stable-DEA584)
-![React](https://img.shields.io/badge/React-18-61DAFB)
-
-</div>
+</p>
 
 ---
 
@@ -70,7 +82,7 @@ User / Operator  →  Orchestrator (Go)  →  Gateway (Rust, IPC)  →  Sandbox 
 
 ```text
         ┌──────────────────────────────────────────────────────┐
-        │            Web Dashboard   ·   Terminal TUI          │
+        │          Web Dashboard   ·   Terminal TUI            │
         └───────────────────────────┬──────────────────────────┘
                                     │  REST + WebSocket · :9080
         ┌───────────────────────────▼──────────────────────────┐
