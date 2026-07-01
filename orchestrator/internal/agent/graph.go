@@ -15,16 +15,16 @@ import (
 
 // Node name constants.
 const (
-	nodeStep      = "step"
-	nodeTool      = "tool"
-	nodeConsult   = "consult"
-	nodeRetry     = "retry"
-	nodeSummarize = "summarize"
-	nodeApproval  = "approval"
-	nodeFinish    = "finish"
-	nodeAsk       = "ask"
-	nodeHandoff   = "handoff"
-	nodeRemember  = "remember"
+	nodeStep       = "step"
+	nodeTool       = "tool"
+	nodeConsult    = "consult"
+	nodeRetry      = "retry"
+	nodeSummarize  = "summarize"
+	nodeApproval   = "approval"
+	nodeFinish     = "finish"
+	nodeAsk        = "ask"
+	nodeHandoff    = "handoff"
+	nodeRemember   = "remember"
 	nodeThreatHold = "threat_hold"
 )
 
@@ -130,16 +130,16 @@ var nodes map[string]NodeFunc
 
 func init() {
 	nodes = map[string]NodeFunc{
-		nodeStep:      stepNode,
-		nodeTool:      toolNode,
-		nodeConsult:   consultNode,
-		nodeRetry:     retryNode,
-		nodeSummarize: summarizeNode,
-		nodeApproval:  approvalNode,
-		nodeFinish:    finishNode,
-		nodeAsk:       askNode,
-		nodeHandoff:   handoffNode,
-		nodeRemember:  rememberNode,
+		nodeStep:       stepNode,
+		nodeTool:       toolNode,
+		nodeConsult:    consultNode,
+		nodeRetry:      retryNode,
+		nodeSummarize:  summarizeNode,
+		nodeApproval:   approvalNode,
+		nodeFinish:     finishNode,
+		nodeAsk:        askNode,
+		nodeHandoff:    handoffNode,
+		nodeRemember:   rememberNode,
 		nodeThreatHold: threatHoldNode,
 	}
 }

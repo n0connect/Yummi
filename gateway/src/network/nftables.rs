@@ -464,6 +464,22 @@ mod tests {
         assert!(!ruleset.contains("ip6 daddr 127.0.0.0/8"));
     }
 
+    // Config-level parity check: an IPv6 unique-local block entry (the
+    // RFC4193 analogue of RFC1918, e.g. the fc00::/7 entry shipped in
+    // gateway/config/default.yaml) must render as an `ip6 daddr ... drop`
+    // rule, the same as an IPv4 private range does — proving the block list
+    // isn't silently IPv4-only.
+    #[test]
+    fn test_ruleset_ipv6_block_cidr_renders_as_ip6_drop() {
+        let mut cfg = test_config();
+        cfg.scope.block.push("fc00::/7".parse().unwrap());
+        let ctrl = NftablesController::new(&cfg);
+        let ruleset = ctrl.build_ruleset();
+
+        assert!(ruleset.contains("ip6 daddr fc00::/7 drop"));
+        assert!(!ruleset.contains("ip daddr fc00::/7"));
+    }
+
     #[test]
     fn test_ruleset_dns_always_allowed() {
         let ctrl = NftablesController::new(&test_config());
