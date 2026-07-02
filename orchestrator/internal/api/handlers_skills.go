@@ -67,8 +67,23 @@ func HandleApprovePendingSkill(store *skillcurator.Store, reg *skill.Registry, s
 			writeError(w, http.StatusInternalServerError, "malformed draft", err)
 			return
 		}
-		if msg := threatscan.FirstThreatMessage(s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
+		if msg := threatscan.FirstThreatMessage(s.Name+"\n"+s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
 			writeError(w, http.StatusConflict, "draft failed re-scan", errors.New(msg))
+			return
+		}
+
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		// Claim the row FIRST (atomic pending->approved transition), then act
+		// on the claim. This ordering matters: if the file write / reg.Add()
+		// ran before Resolve, two concurrent approvals of the same id could
+		// both pass the checks above and both mutate the live registry —
+		// Resolve is what guarantees only the winner proceeds.
+		if _, err := store.Resolve(r.Context(), id, true, req.Reason); err != nil {
+			writeError(w, http.StatusConflict, "resolve failed", err)
 			return
 		}
 
@@ -89,15 +104,6 @@ func HandleApprovePendingSkill(store *skillcurator.Store, reg *skill.Registry, s
 		}
 		if reg != nil {
 			reg.Add(s)
-		}
-
-		var req struct {
-			Reason string `json:"reason"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if _, err := store.Resolve(r.Context(), id, true, req.Reason); err != nil {
-			writeError(w, http.StatusConflict, "resolve failed", err)
-			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"resolved": true})
 	}

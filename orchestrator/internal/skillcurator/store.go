@@ -162,11 +162,17 @@ func (s *Store) List(ctx context.Context, status string) ([]PendingSkill, error)
 
 // Resolve transitions a pending row to approved or rejected. Resolving a
 // missing or already-resolved row is an error (no silent double-resolve).
+// The whole check-then-write is atomic: s.mu is held for the entire method
+// (not just the final write), and the DB path additionally guards the UPDATE
+// with `WHERE status='pending'` + a RowsAffected check. Without this, two
+// concurrent approvals of the same row could both observe status="pending"
+// and both proceed — letting a racing REST handler write the skill file and
+// hot-add it to the live registry twice.
 func (s *Store) Resolve(ctx context.Context, id string, approved bool, reason string) (PendingSkill, error) {
-	ps, ok, err := s.Get(ctx, id)
-	if err != nil {
-		return PendingSkill{}, err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ps, ok := s.rows[id]
 	if !ok {
 		return PendingSkill{}, fmt.Errorf("pending skill %s not found", id)
 	}
@@ -182,16 +188,21 @@ func (s *Store) Resolve(ctx context.Context, id string, approved bool, reason st
 	ps.ResolvedAt = time.Now().Unix()
 
 	if s.db != nil {
-		_, err := s.db.ExecContext(ctx,
-			`UPDATE pending_skills SET status=?, reject_reason=?, resolved_at=? WHERE id=?`,
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE pending_skills SET status=?, reject_reason=?, resolved_at=? WHERE id=? AND status='pending'`,
 			ps.Status, nullStr(ps.RejectReason), ps.ResolvedAt, id)
 		if err != nil {
 			return PendingSkill{}, fmt.Errorf("resolve pending skill: %w", err)
 		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return PendingSkill{}, fmt.Errorf("resolve pending skill: %w", err)
+		}
+		if n == 0 {
+			return PendingSkill{}, fmt.Errorf("pending skill %s already resolved", id)
+		}
 	}
-	s.mu.Lock()
 	s.rows[id] = ps
-	s.mu.Unlock()
 	return ps, nil
 }
 

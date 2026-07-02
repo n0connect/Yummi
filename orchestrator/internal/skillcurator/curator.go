@@ -59,7 +59,7 @@ func (c *Curator) ProposeFromTask(ctx context.Context, traj Trajectory) {
 		DraftYAML:  string(yamlBytes),
 		Trajectory: string(trajJSON),
 	}
-	if msg := threatscan.FirstThreatMessage(drafted.Description+"\n"+drafted.Knowledge, threatscan.ScopeStrict); msg != "" {
+	if msg := threatscan.FirstThreatMessage(drafted.Name+"\n"+drafted.Description+"\n"+drafted.Knowledge, threatscan.ScopeStrict); msg != "" {
 		ps.Status = "rejected"
 		ps.ThreatScanResult = msg
 		ps.RejectReason = "threat scan: " + msg
