@@ -15,12 +15,15 @@ import (
 
 // Store owns the world-model tables. db may be nil (in-memory map, for tests).
 type Store struct {
-	mu       sync.RWMutex
-	findings map[string]Finding // id -> finding (mirror of DB for nil-db path)
-	targets  map[string]Target
-	tactics  map[string]Tactic
-	contexts map[string]PersistentContext
-	db       *sql.DB
+	mu         sync.RWMutex
+	findings   map[string]Finding // id -> finding (mirror of DB for nil-db path)
+	targets    map[string]Target
+	tactics    map[string]Tactic
+	contexts   map[string]PersistentContext
+	embeddings map[string]embeddingRow // key: embeddingKey(sourceTable, sourceID, model)
+	embedder   Embedder                // optional; set via SetEmbedder, used by RecordTactic's embed-on-write hook
+	embedModel string
+	db         *sql.DB
 }
 
 const schema = `
@@ -75,15 +78,19 @@ CREATE INDEX IF NOT EXISTS idx_k_context_session ON persistent_context(session_i
 // rows that lack the provenance columns.
 func NewStore(db *sql.DB) (*Store, error) {
 	s := &Store{
-		findings: make(map[string]Finding),
-		targets:  make(map[string]Target),
-		tactics:  make(map[string]Tactic),
-		contexts: make(map[string]PersistentContext),
-		db:       db,
+		findings:   make(map[string]Finding),
+		targets:    make(map[string]Target),
+		tactics:    make(map[string]Tactic),
+		contexts:   make(map[string]PersistentContext),
+		embeddings: make(map[string]embeddingRow),
+		db:         db,
 	}
 	if db != nil {
 		if _, err := db.Exec(schema); err != nil {
 			return nil, fmt.Errorf("knowledge schema: %w", err)
+		}
+		if _, err := db.Exec(embeddingsSchema); err != nil {
+			return nil, fmt.Errorf("knowledge embeddings schema: %w", err)
 		}
 		// Migrate databases whose findings table predates provenance columns.
 		_, _ = db.Exec(`ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`)

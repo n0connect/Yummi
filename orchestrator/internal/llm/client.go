@@ -60,6 +60,7 @@ type Client struct {
 	keepAlive  any // Ollama keep_alive: integer -1 = never unload, or string "5m"
 	opts       Options
 	httpClient *http.Client
+	embedModel string // Ollama embedding model tag (e.g. "nomic-embed-text"); empty = Embed disabled
 }
 
 // NewClient creates an Ollama client with Qwen3-optimised defaults.
