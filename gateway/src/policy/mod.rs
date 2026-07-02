@@ -477,9 +477,11 @@ mod tests {
     }
 
     // With an empty allow-list and default_allow=true, evaluate() is observe-
-    // only: everything not explicitly blocked is allowed.
+    // only: everything not explicitly blocked is allowed. (Named for the
+    // behavior, not the now-removed PolicyConfig.observe_only field, which
+    // was a dead/unread config knob distinct from this.)
     #[test]
-    fn test_observe_only_mode() {
+    fn test_default_allow_true_is_observe_only() {
         let scope = ScopeConfig {
             allow: vec![],
             block: vec!["127.0.0.0/8".parse().unwrap()],
