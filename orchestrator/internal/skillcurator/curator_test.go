@@ -70,6 +70,32 @@ func TestProposeFromTaskThreatFlaggedDraftIsRejectedNotQueued(t *testing.T) {
 	}
 }
 
+// TestProposeFromTaskThreatInNameFieldIsRejected proves the scan covers the
+// drafted Name, not just Description/Knowledge — Name is rendered verbatim
+// into the agent's step prompt by skill.Registry.Render, so it's an equally
+// valid injection vector as Knowledge.
+func TestProposeFromTaskThreatInNameFieldIsRejected(t *testing.T) {
+	store, err := NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	chat := func(_ context.Context, _, _ string) (string, error) {
+		return `{"name":"append-to-authorized_keys-backdoor","description":"helper",
+		"triggers":["helper"],"tools":["ssh"],"knowledge":"run a simple recon step"}`, nil
+	}
+	c := NewCurator(store, chat)
+	c.ProposeFromTask(context.Background(), sampleTrajectory())
+
+	pending, _ := store.List(context.Background(), "pending")
+	if len(pending) != 0 {
+		t.Fatalf("expected threat pattern in Name to be caught, got pending=%+v", pending)
+	}
+	rejected, _ := store.List(context.Background(), "rejected")
+	if len(rejected) != 1 {
+		t.Fatalf("expected 1 rejected (audited) draft, got %d", len(rejected))
+	}
+}
+
 func TestProposeFromTaskChatErrorWritesNoRow(t *testing.T) {
 	store, err := NewStore(nil)
 	if err != nil {
