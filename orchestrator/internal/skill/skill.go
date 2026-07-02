@@ -77,7 +77,7 @@ func LoadDir(dir string) (*Registry, error) {
 		// vector if it ever comes from an untrusted source. Scan at strict scope
 		// and skip (don't load) any skill whose text trips a pattern — a skill is
 		// user-curated, so blocking with a warning is the safe, reviewable choice.
-		if msg := threatscan.FirstThreatMessage(s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
+		if msg := threatscan.FirstThreatMessage(s.Name+"\n"+s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
 			slog.Warn("skill: threat pattern in skill content, skipping", "file", path, "reason", msg)
 			continue
 		}
