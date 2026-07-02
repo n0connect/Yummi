@@ -358,14 +358,25 @@ func (r *Runner) ApprovalMode() ApprovalMode {
 
 // SetApprovalMode changes the mode applied to tasks started from this point
 // on; tasks already mid-loop keep the mode they were built with (cfg is
-// copied by value into GraphState in buildState).
+// copied by value into GraphState in buildState). Also propagates to every
+// configured sub-agent Runner (handoff depth is capped at 1, so recursion
+// terminates immediately — a sub-agent's own SubAgents map is always empty).
+// Without this, sub-agents were built with an independent Config that always
+// defaulted to ask_permission and had no way to be switched at all: the
+// operator-facing mode toggle silently didn't apply to delegated work, and
+// GET /api/v1/agent/mode (which only reads the top-level runner) could
+// misreport the true state of sub-agent gating.
 func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 	if mode != ModeAskPermission && mode != ModeAuto {
 		return fmt.Errorf("invalid approval mode: %q", mode)
 	}
 	r.mu.Lock()
 	r.cfg.ApprovalMode = mode
+	subAgents := r.cfg.SubAgents
 	r.mu.Unlock()
+	for _, sub := range subAgents {
+		_ = sub.SetApprovalMode(mode)
+	}
 	return nil
 }
 
@@ -374,6 +385,9 @@ func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 // buildState constructs GraphState for a task, restoring from checkpoint if one exists.
 func (r *Runner) buildState(taskID string) *GraphState {
 	task, _ := r.store.Get(taskID)
+	r.mu.Lock()
+	cfg := r.cfg
+	r.mu.Unlock()
 	s := &GraphState{
 		taskID:       taskID,
 		store:        r.store,
@@ -381,9 +395,9 @@ func (r *Runner) buildState(taskID string) *GraphState {
 		validator:    r.validator,
 		exec:         r.exec,
 		gate:         r.gate,
-		cfg:          r.cfg,
+		cfg:          cfg,
 		parentTaskID: task.ParentTaskID,
-		memCtx:       MemoryContext{TokenBudget: r.cfg.TokenBudget},
+		memCtx:       MemoryContext{TokenBudget: cfg.TokenBudget},
 	}
 	// Restore from checkpoint on crash-recovery resume.
 	if task.Checkpoint.CurrentNode != "" {

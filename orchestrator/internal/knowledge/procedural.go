@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
+	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
 
 // procedureCandidateCap bounds how many rows are pulled per tool before
@@ -80,6 +82,16 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 	pattern, ok := scrubTarget(command)
 	if !ok {
 		return nil // fail-closed: could not guarantee target removal
+	}
+	// Content-layer fail-closed: command_pattern/note are rendered verbatim
+	// into a future task's MEMORY prompt block (retrieval.go), the same
+	// cross-task prompt-injection persistence vector recordTaskFindings
+	// already guards findings against. ScopeContext (detect, don't
+	// hard-block on borderline patterns) since this is agent-authored
+	// content, not user-mediated like a skill file.
+	if msg := threatscan.FirstThreatMessage(pattern+"\n"+note+"\n"+strings.Join(tags, "\n"), threatscan.ScopeContext); msg != "" {
+		slog.Warn("knowledge: tactic rejected by threat scan", "tool", tool, "reason", msg)
+		return nil
 	}
 	now := time.Now().Unix()
 	tagsJSON, _ := json.Marshal(tags)
