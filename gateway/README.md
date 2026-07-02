@@ -143,7 +143,8 @@ cargo test policy_engine::tests::test_allow_rule
 ## Platform notes
 
 - **Linux**: full nftables enforcement. Requires the `NET_ADMIN` capability.
-- **macOS**: the crate *compiles* (it shells out to the `nft` CLI), so `make _build-gateway` works — but enforcement **fails at runtime** off Linux. Local macOS dev is **not** a real isolation boundary.
+- **macOS via Docker Desktop** (`make start`, the real product path): gateway runs as a container on Docker Desktop's Linux VM, which is a genuine Linux kernel with `nf_tables` support — nftables enforcement works normally. Verified end-to-end: FORWARD-chain DROP-all + a single-target Allow rule correctly let through an allowed destination and dropped a blocked one.
+- **Raw binary on the macOS host** (`cargo run`/`cargo build --release` outside Docker, e.g. for quick local iteration): the crate *compiles* (it shells out to the `nft` CLI) but there is no Linux kernel to enforce against on macOS, so this specific invocation path is not a real isolation boundary. This is a different scenario from the containerized path above — always run gateway via `docker compose`/`make start`, never as a bare host process, if you want real enforcement.
 
 ## Watchdog
 

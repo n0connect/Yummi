@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,57 @@ import (
 	"github.com/google/uuid"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
+
+// procedureCandidateCap bounds how many rows are pulled per tool before
+// ranking — procedural_memory dedups on (tool, command_pattern, outcome), so
+// the distinct-pattern count per tool stays small in practice; this is a
+// safety ceiling, not a tuning knob.
+const procedureCandidateCap = 500
+
+// maxTacticComplexity caps how many extra tokens (beyond the tool name) count
+// toward a tactic's complexity weight, so one absurdly long one-off command
+// can't dominate ranking forever.
+const maxTacticComplexity = 6
+
+// tacticScore ranks a tactic by how useful it is to recall, not by raw
+// repetition. A trivial always-succeed command (id, whoami, pwd) run 50 times
+// used to outrank a specific, technique-carrying command (nmap -sV -p-
+// <TARGET>) run 3 times under plain hit_count DESC — the trivial command
+// isn't actually saving the model any rediscovery work. Two adjustments:
+//  1. hit_count is log-scaled, so repetition still matters but can't grow
+//     without bound relative to complexity.
+//  2. command_pattern complexity (token count beyond the tool name, capped)
+//     multiplies the score, rewarding tactics that encode an actual approach
+//     (flags, args) over bare tool invocations.
+//
+// A "worked" outcome gets a modest edge over "failed" at equal hit_count/
+// complexity — recalling a successful approach is more valuable than
+// recalling a dead end, though failed tactics remain visible (useful as
+// "don't repeat this").
+func tacticScore(t Tactic) float64 {
+	complexity := min(strings.Count(strings.TrimSpace(t.CommandPattern), " "), maxTacticComplexity)
+	weight := 1.0 + float64(complexity)
+	if t.Outcome == "worked" {
+		weight *= 1.5
+	}
+	return math.Log2(float64(t.HitCount)+1) * weight
+}
+
+// rankTactics sorts candidates by tacticScore descending, tie-broken by
+// recency, and truncates to limit.
+func rankTactics(candidates []Tactic, limit int) []Tactic {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		si, sj := tacticScore(candidates[i]), tacticScore(candidates[j])
+		if si != sj {
+			return si > sj
+		}
+		return candidates[i].LastUsedAt > candidates[j].LastUsedAt
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates
+}
 
 // targetPlaceholder replaces the concrete target token in a stored command
 // pattern so no target-specific data enters the portable procedural layer.
@@ -41,26 +93,35 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 		if err != nil {
 			return fmt.Errorf("bump tactic: %w", err)
 		}
+		id := uuid.NewString()
 		if n, _ := res.RowsAffected(); n == 0 {
 			_, err = s.db.ExecContext(ctx,
 				`INSERT INTO procedural_memory(id,tool,command_pattern,outcome,context_tags,note,hit_count,last_used_at,created_at)
 				 VALUES(?,?,?,?,?,?,?,?,?)`,
-				uuid.NewString(), tool, pattern, outcome, string(tagsJSON), note, 1, now, now)
+				id, tool, pattern, outcome, string(tagsJSON), note, 1, now, now)
 			if err != nil {
 				return fmt.Errorf("insert tactic: %w", err)
 			}
+		} else {
+			// Bumped an existing row: re-fetch its id for the embed-on-write hook
+			// below (a bare UPDATE doesn't return the row's id).
+			_ = s.db.QueryRowContext(ctx,
+				`SELECT id FROM procedural_memory WHERE tool=? AND command_pattern=? AND outcome=?`,
+				tool, pattern, outcome).Scan(&id)
 		}
+		s.embedAndSave(ctx, id, pattern)
 		return nil
 	}
 
 	// In-memory path: dedup by composite key.
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for id, tac := range s.tactics {
 		if tac.Tool == tool && tac.CommandPattern == pattern && tac.Outcome == outcome {
 			tac.HitCount++
 			tac.LastUsedAt = now
 			s.tactics[id] = tac
+			s.mu.Unlock()
+			s.embedAndSave(ctx, id, pattern)
 			return nil
 		}
 	}
@@ -69,18 +130,26 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 		ID: id, Tool: tool, CommandPattern: pattern, Outcome: outcome,
 		ContextTags: tags, Note: note, HitCount: 1, LastUsedAt: now, CreatedAt: now,
 	}
+	s.mu.Unlock()
+	s.embedAndSave(ctx, id, pattern)
 	return nil
 }
 
-// ListTactics returns tactics for a tool, most-used/most-recent first.
+// ListTactics returns tactics for a tool, ranked by tacticScore (usefulness
+// to recall, not raw repetition — see tacticScore) descending.
 func (s *Store) ListTactics(tool string, limit int) []Tactic {
 	if limit <= 0 {
 		limit = 10
 	}
 	if s.db != nil {
+		// Pull a generous, unranked candidate pool (bounded by
+		// procedureCandidateCap) and rank in Go — a SQL ORDER BY hit_count DESC
+		// LIMIT would truncate BEFORE complexity/outcome are weighed in, so a
+		// low-hit-count-but-high-value tactic could be cut before it's ever
+		// scored.
 		rows, err := s.db.Query(
 			`SELECT id,tool,command_pattern,outcome,COALESCE(context_tags,''),COALESCE(note,''),hit_count,last_used_at,created_at
-			 FROM procedural_memory WHERE tool=? ORDER BY hit_count DESC, last_used_at DESC LIMIT ?`, tool, limit)
+			 FROM procedural_memory WHERE tool=? LIMIT ?`, tool, procedureCandidateCap)
 		if err != nil {
 			return nil
 		}
@@ -98,7 +167,10 @@ func (s *Store) ListTactics(tool string, limit int) []Tactic {
 			}
 			out = append(out, tac)
 		}
-		return out
+		if err := rows.Err(); err != nil {
+			return nil
+		}
+		return rankTactics(out, limit)
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -108,16 +180,7 @@ func (s *Store) ListTactics(tool string, limit int) []Tactic {
 			out = append(out, tac)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].HitCount != out[j].HitCount {
-			return out[i].HitCount > out[j].HitCount
-		}
-		return out[i].LastUsedAt > out[j].LastUsedAt
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return rankTactics(out, limit)
 }
 
 // scrubTarget replaces the command's target token with the placeholder.
