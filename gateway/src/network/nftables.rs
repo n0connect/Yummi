@@ -304,23 +304,36 @@ impl NftablesController {
             }
         }
 
-        // Static allow rules from config.
-        for cidr in &self.allow_cidrs {
-            if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
-                let safe = net.to_string();
-                if safe.contains(':') {
-                    s.push_str(&format!("    ip6 daddr {safe} accept\n"));
-                } else {
-                    s.push_str(&format!("    ip daddr {safe} accept\n"));
-                }
-            } else {
-                tracing::error!(cidr, "invalid CIDR in allow list — skipped");
-            }
-        }
+        // Block mode is documented as "no external egress" with no
+        // exceptions, so it must be airtight at the kernel level too: skip
+        // both the static config allow list AND the dynamic @allowed_targets
+        // set (populated by AddTemporaryRule/AddManualRule, which don't
+        // themselves check egress_mode). Without this, a target opened while
+        // in Allow/Ask mode — or a manual rule added directly via the
+        // gateway management API — would stay reachable after switching to
+        // Block, since set_egress_mode's install_rules() rebuild is the only
+        // thing that can retract a live kernel accept rule.
+        let block_all = *self.egress_mode.read().unwrap() == EgressMode::Block;
 
-        // Dynamic targets unlocked via IPC AddTemporaryRule.
-        s.push_str("    ip daddr @allowed_targets accept\n");
-        s.push_str("    ip6 daddr @allowed_targets_v6 accept\n");
+        // Static allow rules from config.
+        if !block_all {
+            for cidr in &self.allow_cidrs {
+                if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
+                    let safe = net.to_string();
+                    if safe.contains(':') {
+                        s.push_str(&format!("    ip6 daddr {safe} accept\n"));
+                    } else {
+                        s.push_str(&format!("    ip daddr {safe} accept\n"));
+                    }
+                } else {
+                    tracing::error!(cidr, "invalid CIDR in allow list — skipped");
+                }
+            }
+
+            // Dynamic targets unlocked via IPC AddTemporaryRule.
+            s.push_str("    ip daddr @allowed_targets accept\n");
+            s.push_str("    ip6 daddr @allowed_targets_v6 accept\n");
+        }
 
         // DNS is always permitted so sandbox can resolve target hostnames.
         s.push_str("    udp dport 53 accept\n");
@@ -428,6 +441,9 @@ mod tests {
     #[test]
     fn test_ruleset_forward_chain() {
         let ctrl = NftablesController::new(&test_config());
+        // Ask mode: allow-list mechanics (static + dynamic) are rendered.
+        // Block mode deliberately omits them — see test_block_mode_excludes_all_allow_rules.
+        *ctrl.egress_mode.write().unwrap() = EgressMode::Ask;
         let ruleset = ctrl.build_ruleset();
 
         assert!(ruleset.contains("table inet yummi_gateway"));
@@ -446,6 +462,7 @@ mod tests {
     #[test]
     fn test_ruleset_block_before_allow() {
         let ctrl = NftablesController::new(&test_config());
+        *ctrl.egress_mode.write().unwrap() = EgressMode::Ask;
         let ruleset = ctrl.build_ruleset();
 
         let block_pos = ruleset.find("127.0.0.0/8").unwrap();
@@ -456,6 +473,7 @@ mod tests {
     #[test]
     fn test_ruleset_cidr_family_prefix() {
         let ctrl = NftablesController::new(&test_config());
+        *ctrl.egress_mode.write().unwrap() = EgressMode::Ask;
         let ruleset = ctrl.build_ruleset();
 
         // IPv4 uses `ip daddr`, not `ip6 daddr`
@@ -569,5 +587,49 @@ mod tests {
         let ruleset = ctrl.build_ruleset();
         // Without sandbox_ip, no source-IP pass-through rule for other containers
         assert!(!ruleset.contains("ip saddr !="));
+    }
+
+    // Block mode is documented as "no external egress" with no exceptions —
+    // but the static config allow list and the dynamic @allowed_targets set
+    // (populated by AddTemporaryRule/AddManualRule, which don't themselves
+    // check egress_mode) used to be emitted into the ruleset unconditionally.
+    // That meant a target opened while in Allow/Ask mode — or a manual rule
+    // added directly via the gateway management API — stayed reachable at
+    // the kernel level even after the operator switched to Block, since
+    // set_egress_mode's install_rules() rebuild never dropped those accept
+    // lines. Block must be airtight: switching to it should immediately
+    // revoke every allow exception, static or dynamic.
+    #[test]
+    fn test_block_mode_excludes_all_allow_rules() {
+        let ctrl = NftablesController::new(&test_config()); // default mode: Block
+        let ruleset = ctrl.build_ruleset();
+
+        // Static config allow list (10.0.0.0/24, 192.168.1.0/24 in test_config) must not appear.
+        assert!(
+            !ruleset.contains("10.0.0.0/24 accept") && !ruleset.contains("192.168.1.0/24 accept"),
+            "Block mode must not emit static config allow rules:\n{ruleset}"
+        );
+        // Dynamic set (IPC-opened temporary/manual rules) must not be referenced either.
+        assert!(
+            !ruleset.contains("@allowed_targets accept") && !ruleset.contains("@allowed_targets_v6 accept"),
+            "Block mode must not emit dynamic allowed_targets accept rules:\n{ruleset}"
+        );
+        // The block (drop) list and the always-on DNS allowance are unaffected.
+        assert!(ruleset.contains("ip daddr 127.0.0.0/8 drop"));
+        assert!(ruleset.contains("udp dport 53 accept"));
+    }
+
+    // Ask mode is documented as relying on the static allow list and
+    // per-target @allowed_targets set (only new/unresolved destinations need
+    // approval) — confirm the allow rules are still emitted there.
+    #[test]
+    fn test_ask_mode_still_emits_allow_rules() {
+        let ctrl = NftablesController::new(&test_config());
+        *ctrl.egress_mode.write().unwrap() = EgressMode::Ask;
+        let ruleset = ctrl.build_ruleset();
+
+        assert!(ruleset.contains("10.0.0.0/24 accept"));
+        assert!(ruleset.contains("@allowed_targets accept"));
+        assert!(ruleset.contains("@allowed_targets_v6 accept"));
     }
 }
