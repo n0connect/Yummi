@@ -130,7 +130,7 @@ This is the **single most important invariant** in the codebase: *deny until exp
 - **Block rules always beat Allow rules.**
 - Pentest commands reach a shell through **exactly one place**: `sandbox.Bridge.Exec`, which runs `docker exec --user 1000:1000 <container> /bin/bash -lc <cmd>`. The agent never calls `exec.Command` itself — it only enqueues into the execution store, which the executor drains (gateway scope check → sandbox exec). No host-side command path is ever reachable from agent/LLM output.
 
-> The gateway is Linux/nftables-only. It compiles on macOS (it shells out to `nft`) but its enforcement only works on Linux — local macOS dev is **not** a real isolation boundary.
+> The gateway runs inside Docker rather than on the host system, relying on the container environment's kernel support. Running the compiled binary directly on a macOS host (outside Docker) lacks the Linux kernel required for enforcement.
 
 ---
 

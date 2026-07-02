@@ -59,4 +59,16 @@ else
   echo "Ollama model ${OLLAMA_MODEL} already present."
 fi
 
+# Embedding model for semantic retrieval (orchestrator/internal/knowledge's
+# SemanticRetrieval). Separate, small pull from the chat model above. If this
+# fails or is skipped, the orchestrator degrades to StructuredRetrieval —
+# never fatal, so failure here doesn't fail the install.
+OLLAMA_EMBED_MODEL="${YUMMI_OLLAMA_EMBED_MODEL:-nomic-embed-text}"
+if ! ollama list 2>/dev/null | grep -q "${OLLAMA_EMBED_MODEL%%:*}"; then
+  echo "Pulling ${OLLAMA_EMBED_MODEL} (embedding model for semantic retrieval)..."
+  ollama pull "${OLLAMA_EMBED_MODEL}" || echo "Embedding model pull failed; semantic retrieval will degrade to structured retrieval."
+else
+  echo "Ollama embedding model ${OLLAMA_EMBED_MODEL} already present."
+fi
+
 echo "Yummi install complete. Home: ${YUMMI_HOME}"

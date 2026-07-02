@@ -22,6 +22,7 @@ type Config struct {
 	OllamaModel         string
 	OllamaTier          string // "lite" | "pro" | "expert" — overrides OllamaModel if set
 	OllamaFallbackModel string // optional lighter LOCAL model the agent loop degrades to when the primary repeatedly fails (empty = no downgrade, breaker still trips)
+	OllamaEmbedModel    string // local Ollama embedding model for semantic retrieval (separate pull from OllamaModel); SemanticRetrieval degrades to StructuredRetrieval if this model isn't actually pulled
 	TLSDir              string // directory holding mTLS certificates for orchestrator ↔ gateway
 	GatewayTLS          bool   // opt-in until the Rust gateway IPC server supports TLS framing
 }
@@ -53,6 +54,7 @@ func Load() *Config {
 		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "qwen3:8b"),
 		OllamaTier:          strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
 		OllamaFallbackModel: strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
+		OllamaEmbedModel:    envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
 		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
 		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
 	}

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main, yummi-dev]
+  pull_request:
+    branches: [main, yummi-dev]
+
+# Cancel superseded runs on the same branch/PR so pushes don't queue up.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-root:
+    name: Go (root module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go test ./...
+
+  go-orchestrator:
+    name: Go (orchestrator module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+      - run: go build ./...
+        working-directory: orchestrator
+      - run: go test ./...
+        working-directory: orchestrator
+
+  go-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Lint root module
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+      - name: Lint orchestrator module
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: orchestrator
+
+  gateway:
+    name: Rust (gateway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gateway
+      - run: cargo test
+        working-directory: gateway
+
+  ui:
+    name: UI (React)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+        working-directory: ui
+      - run: npm run lint
+        working-directory: ui
+      - run: npm test
+        working-directory: ui
+      - run: npm run build
+        working-directory: ui

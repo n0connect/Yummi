@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 	"gopkg.in/yaml.v3"
@@ -29,8 +30,11 @@ type Skill struct {
 	Knowledge   string   `yaml:"knowledge" json:"knowledge"`
 }
 
-// Registry holds the loaded skill set.
+// Registry holds the loaded skill set. Safe for concurrent use — Add can be
+// called from a REST approval handler while agent steps concurrently read
+// via Select/Names/All/Subset.
 type Registry struct {
+	mu     sync.RWMutex
 	skills []Skill
 }
 
@@ -87,7 +91,24 @@ func (r *Registry) All() []Skill {
 	if r == nil {
 		return []Skill{}
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return append([]Skill{}, r.skills...)
+}
+
+// Add appends a skill to the live registry, making it immediately selectable
+// — used when an operator approves a curator-drafted skill (skillcurator),
+// so the newly-approved skill doesn't require an orchestrator restart to
+// take effect. Caller is responsible for any content-layer scanning before
+// calling Add; this method does not re-scan.
+func (r *Registry) Add(s Skill) *Registry {
+	if r == nil {
+		return r
+	}
+	r.mu.Lock()
+	r.skills = append(r.skills, s)
+	r.mu.Unlock()
+	return r
 }
 
 // Names returns the names of all loaded skills (stable order).
@@ -95,6 +116,8 @@ func (r *Registry) Names() []string {
 	if r == nil {
 		return nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, len(r.skills))
 	for i, s := range r.skills {
 		out[i] = s.Name
@@ -112,6 +135,8 @@ func (r *Registry) Subset(names []string) *Registry {
 	for _, n := range names {
 		want[n] = true
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []Skill
 	for _, s := range r.skills {
 		if want[s.Name] {
@@ -126,7 +151,13 @@ func (r *Registry) Subset(names []string) *Registry {
 // substring) in "goal + tools". Deterministic: score desc, then name asc.
 // max <= 0 defaults to 3.
 func (r *Registry) Select(goal string, tools []string, max int) []Skill {
-	if r == nil || len(r.skills) == 0 {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	skills := append([]Skill{}, r.skills...)
+	r.mu.RUnlock()
+	if len(skills) == 0 {
 		return nil
 	}
 	if max <= 0 {
@@ -139,7 +170,7 @@ func (r *Registry) Select(goal string, tools []string, max int) []Skill {
 		score int
 	}
 	var matches []scored
-	for _, s := range r.skills {
+	for _, s := range skills {
 		score := 0
 		for _, tr := range s.Triggers {
 			tr = strings.ToLower(strings.TrimSpace(tr))

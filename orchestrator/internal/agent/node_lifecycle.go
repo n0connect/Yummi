@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // retryNode backs off after an LLM error, then re-enters the calling node.
@@ -196,6 +198,7 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		})
 		if task, ok := s.store.Get(s.taskID); ok {
 			recordTaskFindings(ctx, s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
+			proposeSkillFromTrajectory(s, task, summary)
 		}
 		s.emit(ActFinish, summary, "")
 	case outcomeStopped:
@@ -213,6 +216,34 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		})
 	}
 	return edgeDone, nil
+}
+
+// proposeSkillFromTrajectory fires the optional auto-skill-creation hook,
+// detached from the graph's own context (which is cancelled once the task
+// ends) so a slow curator LLM call doesn't get killed mid-flight, and via
+// `go` so it never delays finishNode's return to the caller. Fired for both
+// top-level and sub-agent completions — finishNode is shared by both.
+func proposeSkillFromTrajectory(s *GraphState, task Task, summary string) {
+	if s.cfg.SkillCurator == nil {
+		return
+	}
+	traj := skillcurator.Trajectory{
+		TaskID:       s.taskID,
+		SessionID:    task.SessionID,
+		Goal:         task.Goal,
+		Summary:      summary,
+		Observations: append([]string{}, s.memCtx.Observations...),
+	}
+	if s.cfg.Knowledge != nil {
+		for _, tool := range toolsFromCommands(s.recentCmds) {
+			for _, tac := range s.cfg.Knowledge.ListTactics(tool, 3) {
+				if tac.Outcome == "worked" {
+					traj.Tactics = append(traj.Tactics, tac)
+				}
+			}
+		}
+	}
+	go s.cfg.SkillCurator(context.Background(), traj)
 }
 
 // mergeSynthesis runs the final-synthesis pass and merges any synthesized
