@@ -3,6 +3,8 @@ package skillcurator
 import (
 	"context"
 	"database/sql"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -148,6 +150,35 @@ func TestResolveAlreadyResolvedIsError(t *testing.T) {
 		}
 		if _, err := s.Resolve(ctx, "p1", true, ""); err == nil {
 			t.Fatal("expected an error resolving an already-resolved id")
+		}
+	}
+}
+
+// TestResolveConcurrentCallsOnlyOneSucceeds proves Resolve's pending->resolved
+// transition is atomic: N concurrent Resolve calls on the same row must
+// produce exactly one success, not a duplicate approval (which would let a
+// racing REST handler write the skill file / hot-add to the registry twice).
+func TestResolveConcurrentCallsOnlyOneSucceeds(t *testing.T) {
+	for _, s := range newStores(t) {
+		ctx := context.Background()
+		_ = s.Put(ctx, samplePending("p1"))
+
+		const n = 20
+		var successes int32
+		var wg sync.WaitGroup
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := s.Resolve(ctx, "p1", true, ""); err == nil {
+					atomic.AddInt32(&successes, 1)
+				}
+			}()
+		}
+		wg.Wait()
+
+		if successes != 1 {
+			t.Fatalf("expected exactly 1 successful resolve out of %d concurrent calls, got %d", n, successes)
 		}
 	}
 }

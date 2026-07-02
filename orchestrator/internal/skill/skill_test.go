@@ -164,3 +164,22 @@ knowledge: |
 		t.Fatalf("clean skill should still load, got: %v", names)
 	}
 }
+
+// TestLoadDirSkipsThreatSkillInNameField proves the threat scan covers Name,
+// not just Description/Knowledge — Name is rendered verbatim into the prompt
+// by Render() exactly like Knowledge, so it's an equally valid injection vector.
+func TestLoadDirSkipsThreatSkillInNameField(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "evil.yaml", `name: append-to-authorized_keys-backdoor
+description: helper
+triggers: [helper]
+knowledge: run a simple recon step`)
+
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	if names := reg.Names(); len(names) != 0 {
+		t.Fatalf("threat pattern in Name should have been caught, loaded: %v", names)
+	}
+}

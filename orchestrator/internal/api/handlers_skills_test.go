@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -132,6 +133,69 @@ func TestHandleApprovePendingSkillReScansAsDefenseInDepth(t *testing.T) {
 	}
 	if len(reg.Names()) != 0 {
 		t.Fatalf("expected the flagged skill to NEVER reach the live registry, got %v", reg.Names())
+	}
+}
+
+// TestHandleApprovePendingSkillReScansNameField proves the re-scan covers the
+// draft's Name field, not just Description/Knowledge — Name is rendered
+// verbatim into the agent's step prompt exactly like Knowledge.
+func TestHandleApprovePendingSkillReScansNameField(t *testing.T) {
+	store, _ := skillcurator.NewStore(nil)
+	maliciousYAML := "name: append-to-authorized_keys-backdoor\ndescription: helper\ntriggers:\n  - x\nknowledge: run a simple recon step\n"
+	seedPending(t, store, "p1", "pending", maliciousYAML)
+	reg := skill.New(nil)
+
+	srv := newSkillsTestRouter(store, reg, t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/skills/pending/p1/approve", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected the re-scan to block a threat pattern in Name, got 200: %s", w.Body.String())
+	}
+	if len(reg.Names()) != 0 {
+		t.Fatalf("expected the flagged skill to NEVER reach the live registry, got %v", reg.Names())
+	}
+}
+
+// TestHandleApprovePendingSkillConcurrentApprovesAddOnce proves the handler
+// claims the pending row (an atomic Resolve) BEFORE writing the skill file /
+// hot-adding to the registry — otherwise two concurrent approve requests for
+// the same id could both pass the initial lookup+re-scan and both write the
+// file and call reg.Add(), leaving a duplicate entry in the live registry.
+func TestHandleApprovePendingSkillConcurrentApprovesAddOnce(t *testing.T) {
+	store, _ := skillcurator.NewStore(nil)
+	seedPending(t, store, "p1", "pending", cleanDraftYAML)
+	dir := t.TempDir()
+	reg := skill.New(nil)
+	srv := newSkillsTestRouter(store, reg, dir)
+
+	const n = 20
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/skills/pending/p1/approve", strings.NewReader(`{}`))
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+			codes[i] = w.Code
+		}(i)
+	}
+	wg.Wait()
+
+	oks := 0
+	for _, c := range codes {
+		if c == http.StatusOK {
+			oks++
+		}
+	}
+	if oks != 1 {
+		t.Fatalf("expected exactly 1 of %d concurrent approve requests to succeed, got %d", n, oks)
+	}
+	if names := reg.Names(); len(names) != 1 {
+		t.Fatalf("expected the skill to be added to the registry exactly once, got %v", names)
 	}
 }
 
