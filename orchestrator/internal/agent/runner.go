@@ -11,6 +11,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // LLM is the minimal model interface the runner needs.
@@ -85,6 +86,13 @@ type Config struct {
 	// and sub-agents themselves are built with an empty map, capping handoff
 	// depth at exactly 1 (no recursion).
 	SubAgents map[string]*Runner
+
+	// SkillCurator, if set, is invoked asynchronously (never blocking the
+	// graph) after a task finishes successfully, to propose a candidate skill
+	// drafted from its trajectory. Nil disables auto-skill-creation. Fired
+	// from both top-level and sub-agent task completions (finishNode is
+	// shared by both).
+	SkillCurator func(ctx context.Context, traj skillcurator.Trajectory)
 }
 
 // Runner drives agentic task loops. One goroutine per running task.

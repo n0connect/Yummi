@@ -8,14 +8,21 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 )
 
-// HandleLLMStatus checks Ollama connectivity and returns health info.
-func HandleLLMStatus(client *llm.Client) http.HandlerFunc {
+// HandleLLMStatus checks Ollama connectivity and returns health info. resilient
+// is the agent loop's circuit-breaker wrapper (nil when the agent loop is
+// disabled, e.g. persona load failed) — when present its breaker/latency
+// snapshot is attached under "resilience" so operators can see primary/
+// fallback model, open-breaker state, and consecutive-failure count without
+// digging through logs.
+func HandleLLMStatus(client *llm.Client, resilient *llm.Resilient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if client == nil {
-			writeJSON(w, http.StatusOK, map[string]any{
+			resp := map[string]any{
 				"status":  "not_configured",
 				"details": "LLM client not initialized",
-			})
+			}
+			attachResilience(resp, resilient)
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
@@ -24,17 +31,28 @@ func HandleLLMStatus(client *llm.Client) http.HandlerFunc {
 
 		err := client.Ping(ctx)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{
+			resp := map[string]any{
 				"status":  "disconnected",
 				"details": "Ollama unreachable",
 				"error":   err.Error(),
-			})
+			}
+			attachResilience(resp, resilient)
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"status":  "connected",
 			"details": "Ollama responding",
-		})
+		}
+		attachResilience(resp, resilient)
+		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+func attachResilience(resp map[string]any, resilient *llm.Resilient) {
+	if resilient == nil {
+		return
+	}
+	resp["resilience"] = resilient.Status()
 }

@@ -831,3 +831,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .trace-skill-desc { color: var(--text-muted); }
 .trace-roles { display: flex; flex-wrap: wrap; gap: 8px; }
 .trace-role { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--cyan); background: var(--cyan-glow, rgba(56,189,248,0.12)); padding: 3px 10px; border-radius: 8px; }
+.trace-pending-skill { border: 1px solid var(--border-subtle, rgba(255,255,255,0.08)); border-radius: 8px; padding: 8px; margin-bottom: 6px; }
+.trace-pending-skill-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trace-pending-skill-actions { display: flex; gap: 6px; flex: none; }
+.trace-skill-error { color: var(--red, #f87171); font-size: 12px; margin-bottom: 6px; }

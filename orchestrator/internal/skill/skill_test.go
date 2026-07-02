@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -79,6 +80,50 @@ func TestSubsetScopesSkills(t *testing.T) {
 	sub := reg.Subset([]string{"web", "unknown"})
 	if got := sub.Names(); len(got) != 1 || got[0] != "web" {
 		t.Fatalf("subset scoping wrong: %v", got)
+	}
+}
+
+// TestAddMakesSkillImmediatelySelectable proves an auto-approved skill (added
+// to a live registry without a restart) is usable the moment Add returns —
+// the whole point of hot-adding instead of requiring a process restart.
+func TestAddMakesSkillImmediatelySelectable(t *testing.T) {
+	reg := New([]Skill{{Name: "web", Triggers: []string{"http"}, Knowledge: "w"}})
+	reg.Add(Skill{Name: "custom-recon", Triggers: []string{"masscan"}, Knowledge: "m"})
+
+	names := reg.Names()
+	if len(names) != 2 {
+		t.Fatalf("want 2 skills after Add, got %d: %v", len(names), names)
+	}
+	sel := reg.Select("run masscan against the target", nil, 3)
+	if len(sel) != 1 || sel[0].Name != "custom-recon" {
+		t.Fatalf("expected newly-added skill to be selectable, got %+v", sel)
+	}
+}
+
+// TestAddIsConcurrencySafe exercises Add racing with Names/Select — the
+// underlying []Skill slice used to be unguarded, unsafe if a REST approval
+// handler calls Add while an in-flight agent step reads the registry.
+func TestAddIsConcurrencySafe(t *testing.T) {
+	reg := New(nil)
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			reg.Add(Skill{Name: "s", Triggers: []string{"t"}, Knowledge: "k"})
+		}(i)
+	}
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = reg.Names()
+			_ = reg.Select("t", nil, 3)
+		}()
+	}
+	wg.Wait()
+	if got := len(reg.Names()); got != 20 {
+		t.Fatalf("expected 20 skills after concurrent Add, got %d", got)
 	}
 }
 
