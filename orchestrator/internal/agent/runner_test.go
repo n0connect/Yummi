@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,78 @@ func waitForStatus(t *testing.T, store *Store, id string, want TaskStatus, timeo
 	tk, _ := store.Get(id)
 	t.Fatalf("timeout waiting for %s; current=%s lastError=%q", want, tk.Status, tk.LastError)
 	return Task{}
+}
+
+// TestSetApprovalModePropagatesToSubAgents proves the operator-facing mode
+// toggle (POST /api/v1/agent/mode -> Runner.SetApprovalMode) actually reaches
+// every configured sub-agent Runner, not just the top-level one. Before this
+// fix, sub-agents were built with an independent Config{} that always
+// defaulted to ModeAskPermission and never changed — so there was no way to
+// switch a sub-agent to auto at all, and GET /api/v1/agent/mode (which only
+// ever reads the top-level runner) could misreport the operator's actual
+// intent for delegated work.
+func TestSetApprovalModePropagatesToSubAgents(t *testing.T) {
+	web := NewRunner(nil, nil, nil, nil, Config{})
+	recon := NewRunner(nil, nil, nil, nil, Config{})
+	top := NewRunner(nil, nil, nil, nil, Config{
+		SubAgents: map[string]*Runner{"web": web, "recon": recon},
+	})
+
+	if top.ApprovalMode() != ModeAskPermission || web.ApprovalMode() != ModeAskPermission || recon.ApprovalMode() != ModeAskPermission {
+		t.Fatalf("expected all runners to default to ask_permission, got top=%s web=%s recon=%s",
+			top.ApprovalMode(), web.ApprovalMode(), recon.ApprovalMode())
+	}
+
+	if err := top.SetApprovalMode(ModeAuto); err != nil {
+		t.Fatalf("SetApprovalMode: %v", err)
+	}
+
+	if top.ApprovalMode() != ModeAuto {
+		t.Fatalf("top-level runner mode = %s, want auto", top.ApprovalMode())
+	}
+	if web.ApprovalMode() != ModeAuto {
+		t.Fatalf("web sub-agent mode = %s, want auto (mode toggle must propagate to sub-agents)", web.ApprovalMode())
+	}
+	if recon.ApprovalMode() != ModeAuto {
+		t.Fatalf("recon sub-agent mode = %s, want auto (mode toggle must propagate to sub-agents)", recon.ApprovalMode())
+	}
+
+	// And back — confirm it's a live toggle, not a one-way default override.
+	if err := top.SetApprovalMode(ModeAskPermission); err != nil {
+		t.Fatalf("SetApprovalMode: %v", err)
+	}
+	if web.ApprovalMode() != ModeAskPermission || recon.ApprovalMode() != ModeAskPermission {
+		t.Fatalf("expected sub-agents back to ask_permission, got web=%s recon=%s", web.ApprovalMode(), recon.ApprovalMode())
+	}
+}
+
+// TestBuildStateConcurrentWithSetApprovalModeIsRaceFree is a regression test
+// for a data race: buildState used to read r.cfg directly (a struct copy)
+// with no lock, while SetApprovalMode writes r.cfg.ApprovalMode under r.mu —
+// concurrent calls (a task starting while an operator flips the mode) would
+// trip `go test -race`. Not a security bypass (the in-flight task keeps
+// whatever mode it captures, which matches the intended "mode change applies
+// to new tasks only" semantics either way) but a real, fixable race.
+func TestBuildStateConcurrentWithSetApprovalModeIsRaceFree(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	r := NewRunner(store, nil, nil, nil, Config{})
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = r.SetApprovalMode(ModeAuto)
+		}()
+	}
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = r.buildState("nonexistent-task-id")
+		}()
+	}
+	wg.Wait()
 }
 
 // TestRunnerE2E_PlanThenMultiStepFinish drives the full Runner lifecycle:

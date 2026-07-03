@@ -39,7 +39,6 @@ scope:
 
 policy:
   default_allow: false
-  observe_only: false
 
 logging:
   level: "info"
