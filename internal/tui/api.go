@@ -229,6 +229,13 @@ func (c *Client) SetApprovalMode(mode string) error {
 		map[string]string{"mode": mode}, nil)
 }
 
+// ResolveEgress settles an execution held in gateway Ask egress mode — the
+// TUI counterpart of AssistantPanel.tsx's resolveEgress POST call.
+func (c *Client) ResolveEgress(executionID string, approved bool) error {
+	return c.postJSON(context.Background(), "/api/v1/executions/"+executionID+"/resolve-egress",
+		map[string]bool{"approved": approved}, nil)
+}
+
 // Module is one component health row (subset of the system status payload).
 type Module struct {
 	Name   string `json:"name"`

@@ -74,6 +74,11 @@ type model struct {
 	width   int
 	height  int
 
+	// egressHolds tracks executions held in gateway Ask mode awaiting operator
+	// approval of their external target — TUI counterpart of AssistantPanel.tsx's
+	// egressHolds state. Oldest first; y/n resolves egressHolds[0].
+	egressHolds []execMsg
+
 	// pendingSkills is the last list fetched by /skills; /skill-approve and
 	// /skill-reject pop its head — mirrors /stop and /resume acting on "the"
 	// active/paused task rather than requiring the operator to type an id.
@@ -206,6 +211,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case execMsg:
+		// Gateway Ask egress mode: the command is held until the operator
+		// approves the external target. Track it as a pending hold (deduped by
+		// id) instead of logging a result — the command hasn't run yet.
+		if msg.Status == "awaiting_egress_approval" {
+			m.egressHolds = append(dropEgressHold(m.egressHolds, msg.ID), msg)
+			break
+		}
+		// A resolved execution leaves the hold list if it was there.
+		if msg.Status == "completed" || msg.Status == "failed" || msg.Status == "canceled" {
+			m.egressHolds = dropEgressHold(m.egressHolds, msg.ID)
+		}
 		// Only log terminal states to the timeline to avoid spamming ✗ for "started" or "running".
 		if msg.Status == "completed" || msg.Status == "failed" || msg.Status == "canceled" {
 			m.append(ExecItem{Command: msg.Command, Status: msg.Status, Output: firstNonEmpty(msg.Output, msg.Error)})
@@ -392,6 +408,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			if m.pendingID != "" {
 				return m.approvePending(true), true
 			}
+			if len(m.egressHolds) > 0 {
+				return m.resolveEgress(true), true
+			}
 			return nil, true
 		}
 		if inSlashMenu {
@@ -418,6 +437,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 				if m.pendingID != "" {
 					return m.approvePending(true), true
 				}
+				if len(m.egressHolds) > 0 {
+					return m.resolveEgress(true), true
+				}
 			case 'n', 'N':
 				if len(m.proposals) > 0 {
 					m.proposals = nil
@@ -426,6 +448,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 				}
 				if m.pendingID != "" {
 					return m.approvePending(false), true
+				}
+				if len(m.egressHolds) > 0 {
+					return m.resolveEgress(false), true
 				}
 			}
 		}
@@ -646,6 +671,38 @@ func (m *model) approvePending(approved bool) tea.Cmd {
 	return func() tea.Msg { return approveDoneMsg{err: m.client.ApproveTask(taskID, propID, approved)} }
 }
 
+// dropEgressHold returns holds with id removed (no-op if absent).
+func dropEgressHold(holds []execMsg, id string) []execMsg {
+	out := holds[:0:0]
+	for _, h := range holds {
+		if h.ID != id {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// resolveEgress resolves the oldest pending egress hold. Optimistically clears
+// it from the list (mirrors AssistantPanel.tsx's resolveEgress) — the
+// resulting completed/failed execMsg will confirm it, or a future
+// awaiting_egress_approval re-adds it if the call itself failed.
+func (m *model) resolveEgress(approved bool) tea.Cmd {
+	h := m.egressHolds[0]
+	m.egressHolds = m.egressHolds[1:]
+	verb := "approved"
+	if !approved {
+		verb = "denied"
+	}
+	target := orDash(h.EgressTarget)
+	m.append(SystemItem{Text: "egress " + verb + ": " + target})
+	return func() tea.Msg {
+		if err := m.client.ResolveEgress(h.ID, approved); err != nil {
+			return cmdResultMsg{note: "egress decision failed: " + err.Error()}
+		}
+		return nil
+	}
+}
+
 func (m *model) onTask(t taskMsg) {
 	// Print the plan once, as soon as it exists — this is the LLM's primary
 	// planning artifact and the operator's window into the agent's intent.
@@ -699,7 +756,7 @@ func (m *model) updateViewportHeight() {
 		return
 	}
 	occupied := 6
-	if len(m.proposals) > 0 || m.pendingID != "" {
+	if len(m.proposals) > 0 || m.pendingID != "" || len(m.egressHolds) > 0 {
 		occupied = 8
 	}
 	if strings.HasPrefix(m.input.Value(), "/") {
@@ -761,6 +818,15 @@ func (m model) View() string {
 	case m.pendingID != "":
 		left := pendingStyle.Render("awaiting approval") + statusStyle.Render("  $ ") + proposalCmdStyle.Render(m.pendingCm)
 		right := proposalKeyStyle.Render("[y]") + " run  " + proposalKeyStyle.Render("[n]") + " skip"
+		pad := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+		if pad < 0 {
+			pad = 0
+		}
+		banner = "\n  " + left + strings.Repeat(" ", pad) + right + "\n"
+	case len(m.egressHolds) > 0:
+		h := m.egressHolds[0]
+		left := pendingStyle.Render("⚠ egress approval") + statusStyle.Render("  → ") + proposalCmdStyle.Render(orDash(h.EgressTarget))
+		right := proposalKeyStyle.Render("[y]") + " allow  " + proposalKeyStyle.Render("[n]") + " deny"
 		pad := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
 		if pad < 0 {
 			pad = 0

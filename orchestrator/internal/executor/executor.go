@@ -255,15 +255,13 @@ func openAllowRules(pc *gateway.Client, target string, ips []string, command str
 }
 
 // resolvedNetworks turns a target + its resolved IPs into the CIDR list the
-// gateway needs. Resolved IPs each become a single-address /32 prefix; an
-// IP-literal target with no resolution falls back to its own /32; a bare
-// unresolvable hostname yields nothing (no rule can be opened).
-//
-// IPv6 is intentionally dropped: the gateway's nftables `allowed_targets` set
-// is `type ipv4_addr`, so a v6 allow rule is accepted over IPC but fails the
-// kernel unlock. Filtering here avoids opening rules that cannot work (an
-// IPv6-only target is simply unreachable through this gateway). If the gateway
-// gains a v6 set, lift this filter.
+// gateway needs. Resolved IPs each become a single-address /32 (v4) or /128
+// (v6) prefix via ipNetwork; an IP-literal target with no resolution falls
+// back to its own prefix; a bare unresolvable hostname yields nothing (no
+// rule can be opened). Both address families are supported end to end — the
+// gateway's nftables ruleset carries a parallel `allowed_targets_v6` set
+// (gateway/src/network/nftables.rs) that CheckEgress/AddTemporaryRule route
+// into based on the IP's own family, so no filtering is needed here.
 func resolvedNetworks(target string, ips []string) []string {
 	if len(ips) == 0 {
 		if n := ipNetwork(target); n != "" {
