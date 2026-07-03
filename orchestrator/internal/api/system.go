@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -263,7 +264,19 @@ func HandleSystemStatus(bridge *sandbox.Bridge, pc *gateway.Client, dockerSocket
 	}
 }
 
+// checkDockerDaemon probes Docker availability. When DOCKER_HOST is set to a
+// tcp:// address — the hardened deployment's docker-compose.yml points the
+// orchestrator at docker-proxy:2375 rather than mounting /var/run/docker.sock
+// directly (see the docker-proxy service's CONTAINERS/EXEC/POST allowlist) —
+// it dials that instead: the orchestrator container has no socket file to
+// stat in that setup, so falling through to the socketPath check would always
+// misreport "down" even though `docker` CLI calls (sandbox.Bridge.Exec) work
+// fine through the proxy. socketPath remains the fallback for the
+// no-DOCKER_HOST, direct-socket-mount case.
 func checkDockerDaemon(socketPath string) ModuleStatus {
+	if host := os.Getenv("DOCKER_HOST"); strings.HasPrefix(host, "tcp://") {
+		return checkDockerTCPHost(strings.TrimPrefix(host, "tcp://"))
+	}
 	mod := ModuleStatus{Name: "docker"}
 	if socketPath == "" {
 		mod.Status = "not_configured"
@@ -285,6 +298,21 @@ func checkDockerDaemon(socketPath string) ModuleStatus {
 	mod.Status = "healthy"
 	mod.Details = "daemon responding"
 	mod.Meta = map[string]any{"socket": socketPath}
+	return mod
+}
+
+func checkDockerTCPHost(hostPort string) ModuleStatus {
+	mod := ModuleStatus{Name: "docker"}
+	conn, err := net.DialTimeout("tcp", hostPort, 2*time.Second)
+	if err != nil {
+		mod.Status = "down"
+		mod.Details = "docker proxy unreachable: " + err.Error()
+		return mod
+	}
+	_ = conn.Close()
+	mod.Status = "healthy"
+	mod.Details = "daemon responding (via docker-proxy)"
+	mod.Meta = map[string]any{"docker_host": hostPort}
 	return mod
 }
 
