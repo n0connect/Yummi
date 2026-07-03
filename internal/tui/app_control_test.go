@@ -288,3 +288,20 @@ func TestSlashCommandsIncludeControls(t *testing.T) {
 		}
 	}
 }
+
+// Regression: ChatResult.TaskGoal was decoded off the chat response but never
+// surfaced anywhere — an operator starting an agent task from chat saw only
+// "task started — watching…" with no indication of what goal was actually
+// kicked off, until the first taskMsg with a plan arrived over WS (which can
+// lag). The "task started" notice must include the goal when the server sent
+// one.
+func TestChatResultTaskStartedIncludesGoal(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(chatResultMsg{res: ChatResult{TaskID: "t1", TaskGoal: "recon the host"}})
+	got := updated.(model)
+
+	last := got.items[len(got.items)-1].Render(80)
+	if !strings.Contains(last, "recon the host") {
+		t.Fatalf("expected task-started notice to include the goal, got %q", last)
+	}
+}

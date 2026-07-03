@@ -23,6 +23,7 @@ type chatResultMsg struct {
 type approveDoneMsg struct{ err error }
 type healthMsg struct{ mods []Module }
 type healthTickMsg struct{}
+type skillsListMsg struct{ items []PendingSkill }
 
 // cmdResultMsg is the async result of an operator control command (/stop,
 // /resume, /auto, /ask, /mode). note (if set) is appended to the timeline;
@@ -72,6 +73,17 @@ type model struct {
 	ready   bool
 	width   int
 	height  int
+
+	// pendingSkills is the last list fetched by /skills; /skill-approve and
+	// /skill-reject pop its head — mirrors /stop and /resume acting on "the"
+	// active/paused task rather than requiring the operator to type an id.
+	pendingSkills []PendingSkill
+
+	// sessionBackoff tracks the retry delay for EnsureSession after a failed
+	// startup attempt (orchestrator unreachable). Without this, a TUI launched
+	// while the orchestrator is down failed once and never recovered — no WS
+	// stream, no health ticks, nothing short of quitting and relaunching.
+	sessionBackoff time.Duration
 }
 
 // Run starts the Bubble Tea operator console against the orchestrator at apiURL.
@@ -101,6 +113,14 @@ func Run(apiURL string) error {
 	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
+}
+
+// retrySession schedules another EnsureSession attempt after delay — the
+// startup-failure counterpart to newStream's WS-level reconnect loop in ws.go.
+func retrySession(client *Client, delay time.Duration) tea.Cmd {
+	return tea.Tick(jittered(delay), func(time.Time) tea.Msg {
+		return sessionCreatedMsg{err: client.EnsureSession()}
+	})
 }
 
 func (m model) Init() tea.Cmd {
@@ -153,8 +173,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionCreatedMsg:
 		if msg.err != nil {
-			m.append(SystemItem{Text: "session init failed: " + msg.err.Error()})
+			if m.sessionBackoff == 0 {
+				m.sessionBackoff = baseBackoff
+			}
+			m.append(SystemItem{Text: fmt.Sprintf("session init failed: %s — retrying in %s", msg.err.Error(), m.sessionBackoff)})
+			cmds = append(cmds, retrySession(m.client, m.sessionBackoff))
+			m.sessionBackoff = nextBackoff(m.sessionBackoff)
 		} else {
+			m.sessionBackoff = 0
 			m.append(SystemItem{Text: fmt.Sprintf("session active [%s] — ready", short(m.client.SessionID))})
 			m.stream = newStream(m.base, m.client.SessionID)
 			cmds = append(cmds, waitForEvent(m.stream), tickHealth())
@@ -172,7 +198,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.res.Proposals) > 0 {
 			m.proposals = msg.res.Proposals
 		} else if msg.res.TaskID != "" {
-			m.append(SystemItem{Text: "task started — watching…"})
+			note := "task started — watching…"
+			if goal := strings.TrimSpace(msg.res.TaskGoal); goal != "" {
+				note = "task started: " + goal + " — watching…"
+			}
+			m.append(SystemItem{Text: note})
 		}
 
 	case execMsg:
@@ -217,6 +247,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.note != "" {
 			m.append(SystemItem{Text: msg.note})
+		}
+
+	case skillsListMsg:
+		m.pendingSkills = msg.items
+		if len(msg.items) == 0 {
+			m.append(SystemItem{Text: "no pending skill drafts"})
+		} else {
+			var b strings.Builder
+			fmt.Fprintf(&b, "%d pending skill draft(s):\n", len(msg.items))
+			for _, p := range msg.items {
+				fmt.Fprintf(&b, "  %s (task %s)\n", p.Name, short(p.TaskID))
+			}
+			b.WriteString("/skill-approve or /skill-reject acts on the oldest one.")
+			m.append(SystemItem{Text: b.String()})
 		}
 
 	case healthMsg:
@@ -287,7 +331,11 @@ func (m *model) expandPastedBlocks(text string) string {
 }
 
 func (m *model) slashCommands() []string {
-	return []string{"/stop", "/resume", "/auto", "/ask", "/mode", "/help", "/clear", "/quit"}
+	return []string{
+		"/stop", "/resume", "/auto", "/ask", "/mode",
+		"/gateway", "/skills", "/skill-approve", "/skill-reject",
+		"/help", "/clear", "/quit",
+	}
 }
 
 // handleKey processes keys that the console consumes; returns handled=true to
@@ -510,6 +558,48 @@ func (m *model) handleSlashCommand(cmd string) tea.Cmd {
 			}
 			return cmdResultMsg{note: "approval mode: " + mode, mode: mode}
 		}
+	case "/gateway":
+		return func() tea.Msg {
+			gs, err := m.client.GatewaySnapshot()
+			if err != nil {
+				return cmdResultMsg{note: "gateway query failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: fmt.Sprintf("gateway: egress=%s  active rules=%d  status=%s", orDash(gs.Mode), gs.Rules, orDash(gs.Status))}
+		}
+	case "/skills":
+		return func() tea.Msg {
+			pending, err := m.client.PendingSkills()
+			if err != nil {
+				return cmdResultMsg{note: "skills query failed: " + err.Error()}
+			}
+			return skillsListMsg{items: pending}
+		}
+	case "/skill-approve":
+		if len(m.pendingSkills) == 0 {
+			m.append(SystemItem{Text: "no pending skill draft — run /skills first"})
+			return nil
+		}
+		id, name := m.pendingSkills[0].ID, m.pendingSkills[0].Name
+		m.pendingSkills = m.pendingSkills[1:]
+		return func() tea.Msg {
+			if err := m.client.ApproveSkill(id); err != nil {
+				return cmdResultMsg{note: "skill approve failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "skill approved and loaded: " + name}
+		}
+	case "/skill-reject":
+		if len(m.pendingSkills) == 0 {
+			m.append(SystemItem{Text: "no pending skill draft — run /skills first"})
+			return nil
+		}
+		id, name := m.pendingSkills[0].ID, m.pendingSkills[0].Name
+		m.pendingSkills = m.pendingSkills[1:]
+		return func() tea.Msg {
+			if err := m.client.RejectSkill(id); err != nil {
+				return cmdResultMsg{note: "skill reject failed: " + err.Error()}
+			}
+			return cmdResultMsg{note: "skill draft rejected: " + name}
+		}
 	case "/clear":
 		m.items = []TimelineItem{SystemItem{Text: "timeline cleared."}}
 		m.refresh()
@@ -518,14 +608,18 @@ func (m *model) handleSlashCommand(cmd string) tea.Cmd {
 		return tea.Quit
 	case "/help":
 		m.append(SystemItem{Text: "Available commands:\n" +
-			"  /stop   - Stop the active agent task\n" +
-			"  /resume - Resume a paused task\n" +
-			"  /auto   - Agent runs commands without asking\n" +
-			"  /ask    - Agent asks approval for every command\n" +
-			"  /mode   - Show current approval mode\n" +
-			"  /clear  - Clear timeline\n" +
-			"  /quit   - Exit application\n" +
-			"  /help   - Show this help"})
+			"  /stop          - Stop the active agent task\n" +
+			"  /resume        - Resume a paused task\n" +
+			"  /auto          - Agent runs commands without asking\n" +
+			"  /ask           - Agent asks approval for every command\n" +
+			"  /mode          - Show current approval mode\n" +
+			"  /gateway       - Show gateway egress mode + active rule count\n" +
+			"  /skills        - List auto-drafted skills awaiting approval\n" +
+			"  /skill-approve - Approve the oldest pending skill draft\n" +
+			"  /skill-reject  - Reject the oldest pending skill draft\n" +
+			"  /clear         - Clear timeline\n" +
+			"  /quit          - Exit application\n" +
+			"  /help          - Show this help"})
 		return nil
 	default:
 		m.append(SystemItem{Text: "Unknown command: " + cmd})
@@ -657,6 +751,13 @@ func (m model) View() string {
 			pad = 0
 		}
 		banner = "\n  " + left + strings.Repeat(" ", pad) + right + "\n"
+		// Surface the model's own rationale for the proposal — previously
+		// decoded into Proposal.Rationale but never rendered anywhere, so an
+		// operator deciding [y]/[n] had no visibility into why the model
+		// suggested this command (the web UI's proposal card shows it).
+		if r := strings.TrimSpace(p.Rationale); r != "" {
+			banner += "  " + statusStyle.Render(r) + "\n"
+		}
 	case m.pendingID != "":
 		left := pendingStyle.Render("awaiting approval") + statusStyle.Render("  $ ") + proposalCmdStyle.Render(m.pendingCm)
 		right := proposalKeyStyle.Render("[y]") + " run  " + proposalKeyStyle.Render("[n]") + " skip"
@@ -715,7 +816,7 @@ func (m model) renderFramedTimeline(body string) string {
 	status := fmt.Sprintf("%s %s %s", sessLabel, dotSep, sessValue)
 	if m.mode != "" {
 		modeStyle := modeAskStyle
-		label := "ask"
+		label := "ask_permission" // matches the API's mode value verbatim (GET/POST /api/v1/agent/mode), not a TUI-only abbreviation
 		if m.mode == "auto" {
 			modeStyle, label = modeAutoStyle, "auto"
 		}

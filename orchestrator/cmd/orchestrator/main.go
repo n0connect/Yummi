@@ -236,6 +236,14 @@ func main() {
 						Retrieval:    retrieval,
 						Skills:       skillReg.Subset(d.Skills),
 						SkillCurator: skillCuratorFn,
+						// Sub-agents get a higher step budget than the top-level
+						// agent's default (15): a HANDOFF delegates one focused,
+						// narrower subtask, so the specialist should be able to
+						// run more tool calls against it than the generalist top-
+						// level loop needs for open-ended recon. Paired with the
+						// parent's SubAgentTimeout bump below, which is the actual
+						// wall-clock ceiling this step budget runs against.
+						StepBudget: 40,
 					},
 				)
 			}
@@ -255,6 +263,12 @@ func main() {
 					Skills:       skillReg,
 					SubAgents:    subAgents,
 					SkillCurator: skillCuratorFn,
+					// Room for the sub-agents' own StepBudget:40 above to actually
+					// run to completion — the default 10m ceiling was sized for
+					// StepBudget:15 (matches the top-level loop); a sub-agent with
+					// a larger budget needs proportionally more wall clock or the
+					// timeout, not the step count, becomes the real limiter.
+					SubAgentTimeout: 20 * time.Minute,
 				},
 			)
 		}
