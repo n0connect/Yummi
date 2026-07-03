@@ -223,8 +223,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.egressHolds = dropEgressHold(m.egressHolds, msg.ID)
 		}
 		// Only log terminal states to the timeline to avoid spamming ✗ for "started" or "running".
+		// Output comes from a (possibly hostile) pentest target — use the
+		// ANSI-stripped copies (falling back to raw only if the orchestrator
+		// didn't send one, e.g. an older server) so a target can't inject
+		// terminal escape sequences into the operator's real terminal via
+		// bubbletea's direct stdout rendering. See ws.go's execMsg doc comment.
 		if msg.Status == "completed" || msg.Status == "failed" || msg.Status == "canceled" {
-			m.append(ExecItem{Command: msg.Command, Status: msg.Status, Output: firstNonEmpty(msg.Output, msg.Error)})
+			out := firstNonEmpty(msg.SanitizedOutput, msg.Output)
+			errOut := firstNonEmpty(msg.SanitizedError, msg.Error)
+			m.append(ExecItem{Command: msg.Command, Status: msg.Status, Output: firstNonEmpty(out, errOut), Banner: msg.Banner})
 		}
 		// Feed completed/failed results from the single-command chat loop back to
 		// the conductor so it can analyze the output, same as AssistantPanel.tsx's

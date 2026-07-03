@@ -344,6 +344,37 @@ func TestExecMsgTerminalClearsEgressHold(t *testing.T) {
 	}
 }
 
+// Security regression: command output originates on a (possibly hostile)
+// pentest target. ws.go's own comment on execMsg.SanitizedOutput says "Never
+// the raw fields: those may carry target-controlled escape sequences" — but
+// the terminal-timeline ExecItem built in the execMsg branch of Update used
+// the raw Output/Error fields instead, so a malicious target response (e.g. an
+// HTTP body or service banner containing ANSI/OSC escape sequences) would be
+// written verbatim to the operator's real terminal by bubbletea. The web UI's
+// equivalent path is inert (React renders text nodes, not a real terminal),
+// but the TUI writes straight to stdout, so this must prefer the ANSI-stripped
+// copy exactly like analyzeExecution already does.
+func TestExecMsgTerminalItemUsesSanitizedOutput(t *testing.T) {
+	m := newTestModel()
+	raw := "\x1b]0;pwned\x07innocuous-looking output"
+	updated, _ := m.Update(execMsg{
+		ID: "exec1", Command: "curl target.example", Status: "completed",
+		Output: raw, SanitizedOutput: "innocuous-looking output",
+	})
+	got := updated.(model)
+
+	for _, it := range got.items {
+		if ei, ok := it.(ExecItem); ok {
+			if strings.Contains(ei.Output, "\x1b") {
+				t.Fatalf("ExecItem.Output must never contain a raw escape byte from target-controlled output: %q", ei.Output)
+			}
+			if ei.Output != "innocuous-looking output" {
+				t.Fatalf("expected ExecItem.Output to be the sanitized copy, got %q", ei.Output)
+			}
+		}
+	}
+}
+
 // 'y'/'n' must resolve the oldest egress hold when one is pending and there's
 // no active proposal/task-approval ahead of it in the priority chain (mirrors
 // the existing proposal/pendingID y-n routing in handleKey).
