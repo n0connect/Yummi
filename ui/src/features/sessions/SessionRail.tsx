@@ -78,7 +78,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
         Geçmiş
       </button>
 
-      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label="Sohbet geçmişi" aria-modal="false">
+      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label="Sohbet geçmişi paneli" aria-modal="false">
         <div className="rail-header">
           <span className="rail-title">Sohbetler</span>
         </div>
