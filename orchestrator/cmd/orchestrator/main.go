@@ -214,7 +214,7 @@ func main() {
 
 			// Auto-skill-creation curator: nil-safe (skillcurator.Curator's
 			// ProposeFromTask tolerates a nil store) if curatorStore init failed above.
-			skillCuratorFn := skillcurator.NewCurator(curatorStore, resilientLLM.Chat).ProposeFromTask
+			skillCuratorFn := skillcurator.NewCurator(curatorStore, resilientLLM.Chat, skillReg).ProposeFromTask
 
 			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
 			// execution pipeline. Built with no SubAgents of their own, capping
