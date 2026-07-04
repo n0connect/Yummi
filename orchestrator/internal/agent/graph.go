@@ -322,25 +322,41 @@ func toolThrash(commands []string) (string, bool) {
 }
 
 // markStepStatus records the outcome on the plan step the model referenced.
+// If stepID is empty or doesn't match any plan step — the prompt shows every
+// step's ID clearly, but a model's compliance can't be guaranteed, and this
+// was observed live: a completed task with real findings still showed every
+// plan step frozen at "pending" because the model's step_id never matched —
+// it falls back to the first step still Pending or Running, so the plan view
+// tracks real progress instead of silently showing nothing happened.
 func markStepStatus(store *Store, taskID, stepID string, status StepStatus, detail string) {
-	if stepID == "" {
-		return
-	}
 	_ = store.Update(taskID, func(t *Task) {
+		idx := -1
 		for i := range t.Plan {
 			if t.Plan[i].ID == stepID {
-				t.Plan[i].Status = status
-				d := detail
-				if len(d) > 200 {
-					d = d[:200] + "…"
-				}
-				if status == StepFailed {
-					t.Plan[i].Error = d
-				} else {
-					t.Plan[i].Result = d
-				}
-				return
+				idx = i
+				break
 			}
+		}
+		if idx == -1 {
+			for i := range t.Plan {
+				if t.Plan[i].Status == StepPending || t.Plan[i].Status == StepRunning {
+					idx = i
+					break
+				}
+			}
+		}
+		if idx == -1 {
+			return
+		}
+		t.Plan[idx].Status = status
+		d := detail
+		if len(d) > 200 {
+			d = d[:200] + "…"
+		}
+		if status == StepFailed {
+			t.Plan[idx].Error = d
+		} else {
+			t.Plan[idx].Result = d
 		}
 	})
 }

@@ -246,7 +246,11 @@ func BuildStepPrompt(task Task, lastObservation, summary, preamble string) strin
 	b.WriteString(`
 ─────────────────────────────────────────
 Decide the single next move. Reply with ONE control tag on its own line (see
-PROTOCOL in the system prompt), followed by its JSON body. Example:
+PROTOCOL in the system prompt), followed by its JSON body. Every "findings"
+entry (here or in FINISH) MUST be traceable to a command you actually ran —
+one shown above with a ✓ or in LAST TOOL OUTPUT. Never attribute a finding to
+a tool or technique you did not execute, even if it was in your original
+plan. Example:
 [RUN_COMMAND]
 {"command":"<exact shell command>","step_id":"<plan step id>","rationale":"<1 sentence>","risk_level":"low|medium|high|critical","findings":["<discovery — omit if none>"]}`)
 	return b.String()

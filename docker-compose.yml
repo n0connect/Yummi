@@ -106,8 +106,8 @@ services:
       YUMMI_SANDBOX_CONTAINER: "yummi-sandbox"
       YUMMI_PERSONA_DIR: "/persona/v0.1"
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
-      YUMMI_OLLAMA_MODEL: "qwen3:8b"
-      YUMMI_OLLAMA_TIER: "standard"
+      YUMMI_OLLAMA_MODEL: "qwen3:14b"
+      YUMMI_OLLAMA_TIER: "pro"
       DOCKER_HOST: "tcp://docker-proxy:2375"
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
