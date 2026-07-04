@@ -195,6 +195,75 @@ func TestNearestTacticsPrefersWorkedOverHigherRawSimilarityFailed(t *testing.T) 
 	}
 }
 
+// TestNearestTacticsExcludesLowSimilarityNoise is a regression test for a
+// live-observed cross-session contamination bug: with the embedding model
+// running (nomic-embed-text) and semantic retrieval active, an OSINT task
+// whose only commands were dig/whois/curl had completely unrelated tactics
+// from OTHER concurrently-running sessions (`ps aux`, `cat /etc/passwd`,
+// `nmap -sT <TARGET>`) injected into its MEMORY prompt block. Root cause:
+// NearestTactics (called with tool="" for semantic retrieval's cross-tool
+// generalization) always returns the top `limit` candidates by cosine
+// similarity, with NO floor — so once there aren't enough genuinely relevant
+// matches, it happily pads the result with whatever is left, however
+// unrelated. A short query like a bare tool name ("dig") embeds with little
+// semantic signal, so "closest available" can still be nearly orthogonal.
+// NearestTactics must drop candidates below a minimum similarity instead of
+// force-filling the limit with noise.
+func TestNearestTacticsExcludesLowSimilarityNoise(t *testing.T) {
+	for _, db := range []*sql.DB{nil, openTestDB(t)} {
+		s, err := NewStore(db)
+		if err != nil {
+			t.Fatalf("NewStore: %v", err)
+		}
+		ctx := context.Background()
+
+		if err := s.RecordTactic(ctx, "dig example.com +nocmd", "worked", nil, ""); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+		if err := s.RecordTactic(ctx, "cat /etc/passwd && cat /etc/group && ls -la /home", "worked", nil, ""); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+
+		tacs := append(s.ListTactics("dig", 10), s.ListTactics("cat", 10)...)
+		var digID, catID string
+		for _, tac := range tacs {
+			switch tac.Tool {
+			case "dig":
+				digID = tac.ID
+			case "cat":
+				catID = tac.ID
+			}
+		}
+		if digID == "" || catID == "" {
+			t.Fatalf("expected both tactics recorded, got %+v", tacs)
+		}
+
+		// Query vector matches the "dig" tactic closely; the "cat" tactic is
+		// nearly orthogonal (unrelated) — cosine ~0.1.
+		if err := s.SaveEmbedding(ctx, "procedural_memory", digID, "m", []float32{1, 0}); err != nil {
+			t.Fatalf("save embedding: %v", err)
+		}
+		if err := s.SaveEmbedding(ctx, "procedural_memory", catID, "m", []float32{0.1, 0.995}); err != nil {
+			t.Fatalf("save embedding: %v", err)
+		}
+
+		// Ask for 2 results (limit=2) — without a similarity floor, both would
+		// come back even though "cat" is essentially unrelated noise.
+		got, err := s.NearestTactics(ctx, "m", []float32{1, 0}, "", 2)
+		if err != nil {
+			t.Fatalf("NearestTactics: %v", err)
+		}
+		for _, tac := range got {
+			if tac.Tool == "cat" {
+				t.Fatalf("expected the near-orthogonal 'cat' tactic to be excluded as noise, got it in results: %+v", got)
+			}
+		}
+		if len(got) != 1 || got[0].Tool != "dig" {
+			t.Fatalf("expected exactly the relevant 'dig' tactic, got %+v", got)
+		}
+	}
+}
+
 func TestNearestTacticsEmptyToolMatchesAcrossTools(t *testing.T) {
 	// Semantic retrieval's whole value-add is cross-tool generalization: an
 	// empty tool argument must NOT filter by tool at all, so a "masscan"

@@ -111,15 +111,31 @@ func (s *Store) getEmbedding(sourceTable, sourceID, model string) ([]float32, bo
 	return row.Vector, true
 }
 
+// minTacticSimilarity is the floor a candidate's outcome-weighted cosine score
+// must clear to be returned at all. Found necessary via live testing: with
+// tool="" (semantic retrieval's cross-tool generalization) and a short query
+// text (often just a bare tool name, which embeds with little semantic
+// signal), NearestTactics used to always pad its result up to `limit` with
+// whatever was left over, however unrelated — a query about "dig" could
+// surface a stored "cat /etc/passwd" tactic from a completely different task
+// just because nothing better was available. Without a floor, "closest
+// available" silently substitutes for "actually relevant," polluting the
+// model's MEMORY prompt block with cross-session noise. 0.5 is deliberately
+// conservative: better to return fewer, genuinely-related results (or none)
+// than force-fill with noise.
+const minTacticSimilarity = 0.5
+
 // NearestTactics returns up to limit tactics for tool, ranked by cosine
 // similarity of their stored embedding to queryVec, weighted by outcomeWeight
 // (descending) — the same "a proven approach beats a dead end" preference
 // tacticScore applies to the structured-retrieval path, so switching to
 // semantic ranking for its cross-tool generalization doesn't silently let a
-// merely-similar failed tactic outrank a less-similar worked one. Tactics with
-// no saved embedding for model are excluded. An empty/missing embedding index
-// returns an empty slice, not an error — callers (SemanticRetrieval) treat
-// "nothing to rank" as a normal, non-fatal case.
+// merely-similar failed tactic outrank a less-similar worked one. Candidates
+// scoring below minTacticSimilarity are dropped rather than used to pad the
+// result up to limit — see its doc comment. Tactics with no saved embedding
+// for model are excluded. An empty/missing embedding index returns an empty
+// slice, not an error — callers (SemanticRetrieval) treat "nothing to rank" as
+// a normal, non-fatal case.
 func (s *Store) NearestTactics(ctx context.Context, model string, queryVec []float32, tool string, limit int) ([]Tactic, error) {
 	if limit <= 0 {
 		limit = 5
@@ -183,6 +199,13 @@ func (s *Store) NearestTactics(ctx context.Context, model string, queryVec []flo
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	filtered := candidates[:0]
+	for _, c := range candidates {
+		if c.score >= minTacticSimilarity {
+			filtered = append(filtered, c)
+		}
+	}
+	candidates = filtered
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
