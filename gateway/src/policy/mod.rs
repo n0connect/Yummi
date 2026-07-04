@@ -243,7 +243,9 @@ impl PolicyEngine {
     ///
     /// Order of evaluation (all checks within a **single read-lock** to
     /// prevent TOCTOU races between the block and allow phases):
-    /// 1. Block list takes priority (always block dangerous ranges)
+    /// 1. Block list takes priority (always block dangerous ranges) — UNLESS a
+    ///    Manual allow rule at least as specific as the block match exists (see
+    ///    below).
     /// 2. If allow list has non-expired rules, only allow listed ranges
     /// 3. If allow list is empty / all expired, allow everything not blocked
     ///
@@ -261,14 +263,35 @@ impl PolicyEngine {
         // Single read-lock covers both lists — no TOCTOU window.
         let state = self.state.read().unwrap();
 
-        // Block list always wins.
-        for rule in state.block_rules.iter() {
-            if rule.is_expired(now_unix) {
-                continue;
-            }
-            if rule.network.contains(&dst) {
+        // Block list always wins — UNLESS a Manual allow rule carves out this
+        // specific target. Found via live testing: an operator adding a scoped
+        // allow rule for one self-hosted test container (e.g. on Yummi's own
+        // internal Docker network, which falls inside the default-blocked
+        // 172.16.0.0/12 RFC1918 range) had NO way to ever reach it — not
+        // through the gateway management API, not even through the full
+        // egress-approval round trip — because this block-list check ran
+        // unconditionally first. Only a Manual rule (added deliberately by an
+        // operator via the gateway management API, never by the agent loop
+        // itself) at least as specific as the block match counts as a
+        // deliberate exception — an Agent-sourced temporary rule must never be
+        // able to escalate past an operator-configured block, preserving the
+        // "the autonomous loop can't unblock itself" invariant.
+        if let Some(block_rule) = state
+            .block_rules
+            .iter()
+            .filter(|r| !r.is_expired(now_unix) && r.network.contains(&dst))
+            .max_by_key(|r| r.network.prefix_len())
+        {
+            let manual_override = state.allow_rules.iter().any(|r| {
+                !r.is_expired(now_unix)
+                    && r.source == RuleSource::Manual
+                    && r.network.contains(&dst)
+                    && r.network.prefix_len() >= block_rule.network.prefix_len()
+            });
+            if !manual_override {
                 return (Decision::Block, "blocked_range");
             }
+            return (Decision::Allow, "manual_override");
         }
 
         // If allow list is configured, restrict to it.
@@ -459,6 +482,83 @@ mod tests {
         let engine = PolicyEngine::new(&scope);
         assert_eq!(engine.evaluate("224.0.0.1".parse().unwrap()).0, Decision::Block);
         assert_eq!(engine.evaluate("0.0.0.0".parse().unwrap()).0, Decision::Block);
+    }
+
+    // Regression: found via live testing. An operator adds a manual allow rule
+    // for one specific self-hosted test container (e.g. 172.20.0.6/32, on
+    // Yummi's OWN internal Docker network) — but that network falls inside the
+    // default-blocked 172.16.0.0/12 RFC1918 range. evaluate()'s block-list loop
+    // ran unconditionally first and returned Block before ever consulting the
+    // allow list, so the manual rule was completely inert: not through the
+    // gateway management API, not even through the full egress-approval round
+    // trip (resolve-egress calls add_temporary_allow, which hits the exact same
+    // shadowing). There was NO way to open a scoped exception to a broader
+    // block — the operator's only options were to disable the block rule in
+    // config entirely, or switch to blanket "allow" mode, weakening the whole
+    // fail-closed posture instead of just the one target.
+    #[test]
+    fn test_manual_allow_overrides_broader_config_block() {
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec!["172.16.0.0/12".parse().unwrap()],
+            ..Default::default()
+        };
+        let engine = PolicyEngine::new(&scope);
+
+        // Before the manual override: blocked, as expected.
+        let (decision, reason) = engine.evaluate("172.20.0.6".parse().unwrap());
+        assert_eq!(decision, Decision::Block);
+        assert_eq!(reason, "blocked_range");
+
+        engine.add_manual_allow("172.20.0.6/32".parse().unwrap(), 600, "authorized test target".to_string());
+
+        let (decision, reason) = engine.evaluate("172.20.0.6".parse().unwrap());
+        assert_eq!(decision, Decision::Allow, "manual allow rule must override a broader config block");
+        assert_eq!(reason, "manual_override");
+
+        // A different address in the same blocked range, NOT covered by the
+        // manual rule, must remain blocked.
+        let (decision, _) = engine.evaluate("172.20.0.7".parse().unwrap());
+        assert_eq!(decision, Decision::Block);
+    }
+
+    // The security invariant the override must NOT weaken: an AGENT-sourced
+    // temporary rule (add_temporary_allow — triggered automatically by the
+    // executor on approved command execution, i.e. something the autonomous
+    // loop itself can request) must never be able to escalate past an
+    // operator-configured block. Only a Manual rule (added deliberately by an
+    // operator through the gateway management API, independent of the agent
+    // loop) can carve out this kind of exception.
+    #[test]
+    fn test_agent_temporary_allow_does_not_override_config_block() {
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec!["172.16.0.0/12".parse().unwrap()],
+            ..Default::default()
+        };
+        let engine = PolicyEngine::new(&scope);
+        engine.add_temporary_allow("172.20.0.6/32".parse().unwrap(), 600, "agent-requested".to_string());
+
+        let (decision, _) = engine.evaluate("172.20.0.6".parse().unwrap());
+        assert_eq!(decision, Decision::Block, "an agent-sourced rule must never override an operator block");
+    }
+
+    // A manual rule that is BROADER than (or only partially overlaps) the
+    // block match must not count as an override — only a rule at least as
+    // specific as the block match is treated as a deliberate, scoped exception.
+    #[test]
+    fn test_manual_allow_broader_than_block_does_not_override() {
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec!["172.20.0.0/24".parse().unwrap()],
+            ..Default::default()
+        };
+        let engine = PolicyEngine::new(&scope);
+        // Broader than the block rule — not a scoped exception.
+        engine.add_manual_allow("172.0.0.0/8".parse().unwrap(), 600, "too broad".to_string());
+
+        let (decision, _) = engine.evaluate("172.20.0.6".parse().unwrap());
+        assert_eq!(decision, Decision::Block, "a broader manual rule must not override a narrower block");
     }
 
     #[test]
