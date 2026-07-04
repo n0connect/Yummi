@@ -2,11 +2,18 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
+	"github.com/n0connect/yummi/orchestrator/internal/llm"
 )
 
 // waitForStatus polls the store until the task reaches want or a terminal state.
@@ -133,7 +140,7 @@ func TestRunnerE2E_PlanThenMultiStepFinish(t *testing.T) {
 		t.Fatalf("expected 2 plan steps, got %d", len(task.Plan))
 	}
 
-	if err := runner.Start(task.ID); err != nil {
+	if err := runner.Start(task.ID, ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -172,7 +179,7 @@ func TestRunnerE2E_ApprovalGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAndPlan: %v", err)
 	}
-	if err := runner.Start(task.ID); err != nil {
+	if err := runner.Start(task.ID, ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -192,5 +199,79 @@ func TestRunnerE2E_ApprovalGate(t *testing.T) {
 	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
 	if got.Summary != "scan approved and done" {
 		t.Fatalf("summary mismatch: %q", got.Summary)
+	}
+}
+
+// TestResumeAfterAskOperatorInjectsMessageAndContinues is a regression test
+// for a bug found via live stress-testing: once a task paused via
+// [ASK_OPERATOR], resuming it (POST /api/v1/tasks/{id}/start) just re-entered
+// the SAME "ask" checkpoint node, which immediately re-paused with a generic
+// "The agent needs operator input to continue." message — the operator's
+// actual answer had no way to reach the model at all, so ask_operator was a
+// dead end in practice: Resume was a no-op that always re-paused forever.
+// Start must (1) never resume INTO the terminal "ask" node — it should
+// continue from the normal step node instead — and (2) thread an optional
+// operator message in as the next observation so the model actually sees the
+// answer to what it asked.
+func TestResumeAfterAskOperatorInjectsMessageAndContinues(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	es := realShellStore(t)
+
+	var mu sync.Mutex
+	var capturedPrompts []string
+	idx := 0
+	responses := []string{
+		`{"steps":[{"id":"s1","description":"do the thing"}]}`,
+		"[ASK_OPERATOR]\n{\"question\":\"which host should I target?\"}",
+		"[FINISH]\n{\"summary\":\"done after guidance\"}",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		capturedPrompts = append(capturedPrompts, string(body))
+		content := responses[idx]
+		if idx < len(responses)-1 {
+			idx++
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		cj, _ := json.Marshal(content)
+		fmt.Fprintf(w, `{"message":{"role":"assistant","content":%s},"done":true}`, cj)
+	}))
+	t.Cleanup(srv.Close)
+	ollama := llm.NewClient(srv.URL, "test-model")
+
+	cfg := fastRetryCfg()
+	runner := NewRunner(store, ollama, nil, NewStoreExecer(es, 5*time.Second), cfg)
+
+	task, err := runner.CreateAndPlan(context.Background(), "sess-resume", "goal needing guidance")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if err := runner.Start(task.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	paused := waitForStatus(t, store, task.ID, StatusPaused, 5*time.Second)
+	if paused.Question != "which host should I target?" {
+		t.Fatalf("expected the model's actual question, got %q", paused.Question)
+	}
+
+	if err := runner.Start(task.ID, "hedef 10.0.0.5, onu tara"); err != nil {
+		t.Fatalf("Start (resume with guidance): %v", err)
+	}
+
+	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
+	if got.Summary != "done after guidance" {
+		t.Fatalf("expected the task to actually continue and finish, got summary=%q status=%s", got.Summary, got.Status)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(capturedPrompts) < 3 {
+		t.Fatalf("expected at least 3 LLM calls (plan, ask, post-resume), got %d", len(capturedPrompts))
+	}
+	if !strings.Contains(capturedPrompts[2], "10.0.0.5") {
+		t.Fatalf("operator's resume message never reached the model's prompt:\n%s", capturedPrompts[2])
 	}
 }

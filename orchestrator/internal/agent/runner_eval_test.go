@@ -69,7 +69,7 @@ func TestLiveEval_Quality(t *testing.T) {
 			fmt.Printf("  [%s] %s\n", s.ID, s.Description)
 		}
 
-		_ = runner.Start(task.ID)
+		_ = runner.Start(task.ID, "")
 		deadline := time.Now().Add(8 * time.Minute)
 		var final Task
 		for time.Now().Before(deadline) {

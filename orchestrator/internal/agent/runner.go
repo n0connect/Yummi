@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -279,7 +280,11 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 }
 
 // Start launches the step loop for a planned or paused task asynchronously.
-func (r *Runner) Start(taskID string) error {
+// operatorMessage is optional operator input for a task paused via
+// [ASK_OPERATOR] — see loop's checkpoint handling for why this is the only
+// way that answer can reach the model (resuming into the "ask" node itself
+// would just re-pause immediately, discarding it).
+func (r *Runner) Start(taskID string, operatorMessage string) error {
 	task, ok := r.store.Get(taskID)
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
@@ -303,7 +308,7 @@ func (r *Runner) Start(taskID string) error {
 			delete(r.active, taskID)
 			r.mu.Unlock()
 		}()
-		r.loop(ctx, taskID)
+		r.loop(ctx, taskID, operatorMessage)
 	}()
 	return nil
 }
@@ -409,14 +414,25 @@ func (r *Runner) buildState(taskID string) *GraphState {
 }
 
 // loop is the goroutine entry point for async task execution via Start().
-func (r *Runner) loop(ctx context.Context, taskID string) {
+// operatorMessage, if non-empty, is injected as the next observation before
+// the loop resumes — see the "ask" special-case below for why.
+func (r *Runner) loop(ctx context.Context, taskID string, operatorMessage string) {
 	s := r.buildState(taskID)
 
 	// Resume from checkpoint if available; otherwise start at the step node.
+	// "ask" is a terminal node (no outgoing edges in graphEdges) — resuming
+	// INTO it would just re-run askNode, which immediately re-pauses with
+	// nothing new to show the operator. A task can only ever be resumed FROM
+	// a paused ask_operator state via this path, so always fall back to the
+	// normal step node instead, carrying forward whatever operator guidance
+	// was given.
 	startNode := nodeStep
 	task, _ := r.store.Get(taskID)
-	if task.Checkpoint.CurrentNode != "" {
+	if task.Checkpoint.CurrentNode != "" && task.Checkpoint.CurrentNode != nodeAsk {
 		startNode = task.Checkpoint.CurrentNode
+	}
+	if msg := strings.TrimSpace(operatorMessage); msg != "" {
+		s.lastObs = Wrap("OPERATOR_ANSWER", msg)
 	}
 
 	if err := Execute(ctx, s, startNode); err != nil {
