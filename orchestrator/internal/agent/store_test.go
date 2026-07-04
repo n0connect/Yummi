@@ -13,6 +13,16 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	// A bare ":memory:" DSN hands each NEW pooled connection its own private,
+	// empty database (no shared cache) — database/sql opens connections
+	// lazily and can hand a concurrent goroutine a second physical connection
+	// whose schema migration never ran, so its writes silently fail with "no
+	// such table". Any test that exercises concurrent Store access (e.g. a
+	// parallel HANDOFF fan-out, or CreateSubtask from multiple goroutines)
+	// can hit this nondeterministically. Capping the pool at one connection
+	// makes every query go through the exact same in-memory database, the
+	// general fix for the whole package instead of a per-test workaround.
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	return db
 }

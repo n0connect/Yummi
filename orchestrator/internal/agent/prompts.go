@@ -21,9 +21,15 @@ type Action struct {
 	Findings  []string   `json:"findings,omitempty"`
 	Question  string     `json:"question,omitempty"`
 
-	// Role/Subgoal carry a [HANDOFF]: delegate Subgoal to the sub-agent Role.
-	Role    string `json:"role,omitempty"`
-	Subgoal string `json:"subgoal,omitempty"`
+	// Role/Subgoal carry a single-target [HANDOFF]: delegate Subgoal to the
+	// sub-agent Role. Handoffs carries the fan-out form — multiple targets
+	// dispatched CONCURRENTLY in one [HANDOFF] (see handoffTargets in
+	// node_handoff.go, which normalizes either form into one list). Both forms
+	// coexist so a model that only ever emits the single-target shape keeps
+	// working unchanged.
+	Role     string        `json:"role,omitempty"`
+	Subgoal  string        `json:"subgoal,omitempty"`
+	Handoffs []HandoffSpec `json:"handoffs,omitempty"`
 
 	// MemKey/MemValue carry a [REMEMBER]: persist MemValue under MemKey.
 	MemKey   string `json:"key,omitempty"`
@@ -32,6 +38,14 @@ type Action struct {
 	// FindingsDetail is the optional rich form of findings. The brain MAY emit
 	// these; when absent, freetext Findings are wrapped as info notes instead.
 	FindingsDetail []FindingDetail `json:"findings_detail,omitempty"`
+}
+
+// HandoffSpec is one delegation target inside a fan-out [HANDOFF]'s
+// "handoffs" list — the same (role, subgoal) pair the single-target form
+// carries directly on Action.
+type HandoffSpec struct {
+	Role    string `json:"role"`
+	Subgoal string `json:"subgoal"`
 }
 
 // FindingDetail is the optional rich form of a discovery. The brain MAY emit

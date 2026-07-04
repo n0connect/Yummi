@@ -52,7 +52,7 @@ var Registry = []Tag{
 	{"RUN_COMMAND", LLMToAgent, "Run a shell command.", `{"command","step_id","rationale","risk_level","findings"?}`},
 	{"UPDATE_PLAN", LLMToAgent, "Revise the plan.", `{"steps":[...],"reason"}`},
 	{"FINISH", LLMToAgent, "Goal achieved.", `{"summary","findings"}`},
-	{"HANDOFF", LLMToAgent, "Delegate a focused subtask to a named specialist sub-agent.", `{"role","subgoal"}`},
+	{"HANDOFF", LLMToAgent, "Delegate a focused subtask to a named specialist sub-agent. To delegate to several specialists AT ONCE (they run concurrently), use \"handoffs\" instead.", `{"role","subgoal"} or {"handoffs":[{"role","subgoal"},...]}`},
 	{"REMEMBER", LLMToAgent, "Persist a structured memory (e.g. a code/connection map) under a key — never forgotten.", `{"key","value"}`},
 	{"ASK_OPERATOR", LLMToAgent, "Blocked; need a human.", `{"question"}`},
 	{"SEND_FULL", LLMToAgent, "Resend the last truncated output in full.", `{}`},
@@ -170,7 +170,7 @@ func inferControlTag(a Action) string {
 	switch {
 	case strings.TrimSpace(a.Command) != "":
 		return "RUN_COMMAND"
-	case strings.TrimSpace(a.Role) != "" && strings.TrimSpace(a.Subgoal) != "":
+	case (strings.TrimSpace(a.Role) != "" && strings.TrimSpace(a.Subgoal) != "") || len(a.Handoffs) > 0:
 		return "HANDOFF"
 	case strings.TrimSpace(a.MemKey) != "" && strings.TrimSpace(a.MemValue) != "":
 		return "REMEMBER"
