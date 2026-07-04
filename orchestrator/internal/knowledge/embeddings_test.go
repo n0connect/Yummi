@@ -131,6 +131,70 @@ func TestNearestTacticsOrdersBySimilarityNotInsertionOrder(t *testing.T) {
 	}
 }
 
+// TestNearestTacticsPrefersWorkedOverHigherRawSimilarityFailed proves semantic
+// ranking carries the same "a proven approach beats a dead end" preference
+// ListTactics/tacticScore already apply to the structured path — otherwise
+// switching from StructuredRetrieval to SemanticRetrieval for its cross-tool
+// generalization would silently regress ranking quality along another axis: a
+// tactic recorded "failed" that merely happens to be textually closer to the
+// query could outrank one recorded "worked" that helped less literally.
+func TestNearestTacticsPrefersWorkedOverHigherRawSimilarityFailed(t *testing.T) {
+	for _, db := range []*sql.DB{nil, openTestDB(t)} {
+		s, err := NewStore(db)
+		if err != nil {
+			t.Fatalf("NewStore: %v", err)
+		}
+		ctx := context.Background()
+
+		if err := s.RecordTactic(ctx, "curl 10.0.0.1/admin", "failed", nil, ""); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+		if err := s.RecordTactic(ctx, "gobuster dir -u 10.0.0.1", "worked", nil, ""); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+
+		tacs := s.ListTactics("", 10)
+		if len(tacs) < 2 {
+			// ListTactics is tool-scoped; fetch each explicitly instead.
+			tacs = append(s.ListTactics("curl", 10), s.ListTactics("gobuster", 10)...)
+		}
+		var failedID, workedID string
+		for _, tac := range tacs {
+			switch tac.Outcome {
+			case "failed":
+				failedID = tac.ID
+			case "worked":
+				workedID = tac.ID
+			}
+		}
+		if failedID == "" || workedID == "" {
+			t.Fatalf("expected both tactics recorded, got %+v", tacs)
+		}
+
+		// Query vector is a PERFECT match for the failed tactic (cosine=1.0) and
+		// a WORSE match for the worked one (cosine=0.9) — pure cosine ranking
+		// would put the failed one first.
+		if err := s.SaveEmbedding(ctx, "procedural_memory", failedID, "m", []float32{1, 0}); err != nil {
+			t.Fatalf("save embedding: %v", err)
+		}
+		if err := s.SaveEmbedding(ctx, "procedural_memory", workedID, "m", []float32{0.9, 0.43589}); err != nil {
+			t.Fatalf("save embedding: %v", err)
+		}
+
+		got, err := s.NearestTactics(ctx, "m", []float32{1, 0}, "", 2)
+		if err != nil {
+			t.Fatalf("NearestTactics: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(got))
+		}
+		if got[0].Outcome != "worked" {
+			t.Fatalf("expected the WORKED tactic to rank first despite lower raw cosine similarity, got top=%q (outcome=%s)",
+				got[0].CommandPattern, got[0].Outcome)
+		}
+	}
+}
+
 func TestNearestTacticsEmptyToolMatchesAcrossTools(t *testing.T) {
 	// Semantic retrieval's whole value-add is cross-tool generalization: an
 	// empty tool argument must NOT filter by tool at all, so a "masscan"

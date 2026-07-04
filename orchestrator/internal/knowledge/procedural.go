@@ -43,11 +43,22 @@ const maxTacticComplexity = 6
 // "don't repeat this").
 func tacticScore(t Tactic) float64 {
 	complexity := min(strings.Count(strings.TrimSpace(t.CommandPattern), " "), maxTacticComplexity)
-	weight := 1.0 + float64(complexity)
-	if t.Outcome == "worked" {
-		weight *= 1.5
-	}
+	weight := (1.0 + float64(complexity)) * outcomeWeight(t.Outcome)
 	return math.Log2(float64(t.HitCount)+1) * weight
+}
+
+// outcomeWeight is the shared "a proven approach beats a dead end" bonus,
+// applied both to tacticScore (structured retrieval) and to semantic
+// retrieval's cosine-similarity ranking (embeddings.go's NearestTactics) — a
+// single source of truth so the two retrieval strategies agree on how much a
+// tactic's real-world outcome should matter, instead of drifting to two
+// different magic numbers. Failed tactics remain visible (useful as "don't
+// repeat this"), just not ranked above a worked one at equal relevance.
+func outcomeWeight(outcome string) float64 {
+	if outcome == "worked" {
+		return 1.5
+	}
+	return 1.0
 }
 
 // rankTactics sorts candidates by tacticScore descending, tie-broken by

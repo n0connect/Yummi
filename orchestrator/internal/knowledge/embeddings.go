@@ -112,7 +112,11 @@ func (s *Store) getEmbedding(sourceTable, sourceID, model string) ([]float32, bo
 }
 
 // NearestTactics returns up to limit tactics for tool, ranked by cosine
-// similarity of their stored embedding to queryVec (descending). Tactics with
+// similarity of their stored embedding to queryVec, weighted by outcomeWeight
+// (descending) — the same "a proven approach beats a dead end" preference
+// tacticScore applies to the structured-retrieval path, so switching to
+// semantic ranking for its cross-tool generalization doesn't silently let a
+// merely-similar failed tactic outrank a less-similar worked one. Tactics with
 // no saved embedding for model are excluded. An empty/missing embedding index
 // returns an empty slice, not an error — callers (SemanticRetrieval) treat
 // "nothing to rank" as a normal, non-fatal case.
@@ -158,7 +162,7 @@ func (s *Store) NearestTactics(ctx context.Context, model string, queryVec []flo
 			if tags != "" {
 				_ = json.Unmarshal([]byte(tags), &t.ContextTags)
 			}
-			candidates = append(candidates, scored{t, cosineSimilarity(queryVec, decodeVector(blob))})
+			candidates = append(candidates, scored{t, cosineSimilarity(queryVec, decodeVector(blob)) * outcomeWeight(t.Outcome)})
 		}
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("nearest tactics: %w", err)
@@ -173,7 +177,7 @@ func (s *Store) NearestTactics(ctx context.Context, model string, queryVec []flo
 			if !ok || (tool != "" && tac.Tool != tool) {
 				continue
 			}
-			candidates = append(candidates, scored{tac, cosineSimilarity(queryVec, row.Vector)})
+			candidates = append(candidates, scored{tac, cosineSimilarity(queryVec, row.Vector) * outcomeWeight(tac.Outcome)})
 		}
 		s.mu.RUnlock()
 	}
