@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -321,14 +322,19 @@ func toolThrash(commands []string) (string, bool) {
 	return "", false
 }
 
-// markStepStatus records the outcome on the plan step the model referenced.
-// If stepID is empty or doesn't match any plan step — the prompt shows every
-// step's ID clearly, but a model's compliance can't be guaranteed, and this
-// was observed live: a completed task with real findings still showed every
-// plan step frozen at "pending" because the model's step_id never matched —
-// it falls back to the first step still Pending or Running, so the plan view
-// tracks real progress instead of silently showing nothing happened.
-func markStepStatus(store *Store, taskID, stepID string, status StepStatus, detail string) {
+// markStepStatus records the outcome (and the actual command run, if any) on
+// the plan step the model referenced. If stepID is empty or doesn't match any
+// plan step — the prompt shows every step's ID clearly, but a model's
+// compliance can't be guaranteed, and this was observed live: a completed
+// task with real findings still showed every plan step frozen at "pending"
+// because the model's step_id never matched — it falls back to the first
+// step still Pending or Running, so the plan view tracks real progress
+// instead of silently showing nothing happened. Recording the command lets
+// finishNode later cross-check the model's own claimed findings against
+// which tools' commands actually completed (see unverifiedToolWarning) —
+// found necessary live: a model reported "nikto detected vulnerabilities"
+// after nikto was aborted twice with zero real output.
+func markStepStatus(store *Store, taskID, stepID, command string, status StepStatus, detail string) {
 	_ = store.Update(taskID, func(t *Task) {
 		idx := -1
 		for i := range t.Plan {
@@ -349,6 +355,9 @@ func markStepStatus(store *Store, taskID, stepID string, status StepStatus, deta
 			return
 		}
 		t.Plan[idx].Status = status
+		if command != "" {
+			t.Plan[idx].Command = command
+		}
 		d := detail
 		if len(d) > 200 {
 			d = d[:200] + "…"
@@ -359,6 +368,56 @@ func markStepStatus(store *Store, taskID, stepID string, status StepStatus, deta
 			t.Plan[idx].Result = d
 		}
 	})
+}
+
+// unverifiedToolWarning cross-checks the model's own claimed findings against
+// which tools' plan steps actually completed. Found necessary via live
+// testing: a model reported "nikto detected known vulnerabilities" for a
+// nikto invocation that was aborted TWICE with zero real output — the prompt-
+// level instruction to only report grounded findings did not reliably
+// prevent this. Deliberately does NOT strip or rewrite the finding — only the
+// operator can judge whether a specific claim is actually accurate; this just
+// makes the risk visible instead of silently trusting (or silently
+// censoring) the model's own report.
+func unverifiedToolWarning(task Task, findings []string) string {
+	if len(findings) == 0 {
+		return ""
+	}
+	lowerFindings := make([]string, len(findings))
+	for i, f := range findings {
+		lowerFindings[i] = strings.ToLower(f)
+	}
+
+	var suspect []string
+	seen := map[string]bool{}
+	for _, step := range task.Plan {
+		if step.Status != StepFailed || step.Command == "" {
+			continue
+		}
+		fields := strings.Fields(step.Command)
+		if len(fields) == 0 {
+			continue
+		}
+		tool := strings.ToLower(fields[0])
+		if seen[tool] {
+			continue
+		}
+		for _, f := range lowerFindings {
+			if strings.Contains(f, tool) {
+				seen[tool] = true
+				suspect = append(suspect, tool)
+				break
+			}
+		}
+	}
+	if len(suspect) == 0 {
+		return ""
+	}
+	sort.Strings(suspect)
+	return fmt.Sprintf(
+		"⚠ UNVERIFIED: the findings above reference %s, but the corresponding command did not complete successfully (failed/aborted) — treat any claimed result from it as unconfirmed until manually re-run.",
+		strings.Join(suspect, ", "),
+	)
 }
 
 // observeResult verifies a finished command, records the tag-wrapped observation,
@@ -422,7 +481,7 @@ func observeResult(s *GraphState, result ToolResult) string {
 	// Store the FULL output for SEND_FULL retrieval and summarization.
 	s.memCtx.AddObservation(result.Content)
 	s.lastObs = obs
-	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepDone, obs)
+	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepDone, obs)
 	s.emit(ActCommandDone, s.pendingCommand, compressed)
 	if findings := filterEmpty(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
 		_ = s.store.Update(s.taskID, func(t *Task) {
@@ -451,7 +510,7 @@ func (s *GraphState) failStep(tag, body, reason string) string {
 	obs := Wrap(tag, body)
 	s.memCtx.AddObservation(obs)
 	s.lastObs = obs
-	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
+	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepFailed, reason)
 	return edgeIsError
 }
 

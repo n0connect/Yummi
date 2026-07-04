@@ -55,7 +55,7 @@ func threatHoldNode(ctx context.Context, s *GraphState) (string, error) {
 			obs := Wrap("TOOL_FAILED", s.pendingCommand+" — output blocked: "+reason)
 			s.memCtx.AddObservation(obs)
 			s.lastObs = obs
-			markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
+			markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepFailed, reason)
 			return edgeDenied, nil
 		}
 
@@ -77,7 +77,7 @@ func threatHoldNode(ctx context.Context, s *GraphState) (string, error) {
 		// Persist approved/redacted observation to memory context.
 		s.memCtx.AddObservation(output)
 		s.lastObs = obs
-		markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepDone, obs)
+		markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepDone, obs)
 		s.emit(ActCommandDone, s.pendingCommand, compressed)
 
 		// Process findings associated with this command step.

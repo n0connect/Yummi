@@ -331,6 +331,32 @@ func TestObserveResultTagsGatewayBlockedDistinctly(t *testing.T) {
 	}
 }
 
+// TestObserveResultRecordsCommandOnPlanStep proves markStepStatus records the
+// actual command it ran on the plan step — needed so finishNode can later
+// cross-check the model's own claimed findings against which tools' commands
+// really completed (see unverifiedToolWarning). Before this, PlanStep had no
+// record at all of what was literally run, only the model's own natural-
+// language step description.
+func TestObserveResultRecordsCommandOnPlanStep(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "scan a host")
+
+	s := &GraphState{
+		taskID:         task.ID,
+		store:          store,
+		gate:           NewGate(),
+		cfg:            fastRetryCfg(),
+		pendingCommand: "nmap -sV 172.20.0.6",
+		pendingAct:     Action{StepID: "s1"},
+	}
+	observeResult(s, ToolResult{Content: "Nmap scan report..."})
+
+	got, _ := store.Get(task.ID)
+	if planStep(got.Plan, "s1").Command != "nmap -sV 172.20.0.6" {
+		t.Fatalf("expected step to record the command, got %+v", planStep(got.Plan, "s1"))
+	}
+}
+
 // TestMarkStepStatusFallsBackToFirstPendingStepOnUnknownID is a regression
 // test for a live-observed bug: a completed multi-step task (real findings,
 // status=completed) still showed EVERY plan step frozen at "pending" — the

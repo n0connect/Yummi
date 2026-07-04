@@ -64,6 +64,6 @@ func consultNode(ctx context.Context, s *GraphState) (string, error) {
 	// or the plan view is stuck showing "pending" forever even after the task
 	// completes — live-observed on a real task where nikto ran long, got
 	// aborted, and the finished task's plan looked like nothing had happened.
-	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, "command aborted after running too long")
+	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepFailed, "command aborted after running too long")
 	return edgeAbort, nil
 }

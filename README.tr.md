@@ -17,15 +17,7 @@
 
 <p align="center">
   <a href="README.md">English</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.pt-BR.md">Português (Brasil)</a>
+  <a href="README.tr.md">Türkçe</a>
 </p>
 
 <p align="center">
@@ -48,7 +40,7 @@ Yummi, trafik kontrolünü ve operatör yetkisini açık tutarak doğal dili pra
 - [Yetenekler (Skills) — Bildirimsel Tam Zamanında Yol Haritaları](#yetenekler)
 - [Alt Ajanlar — Sınırlı Yetkilendirme](#alt-ajanlar)
 - [TRACE — Ajan Gözlemlenebilirliği](#trace-gozlemlenebilirligi)
-- [Yürütücü, Doğrulayıcı ve Egress Modları](#yurutucu-dogrulayici-ve-egress-modlari)
+- [Yönetici, Doğrulayıcı ve Egress Modları](#yonetici-dogrulayici-ve-egress-modlari)
 - [Geçit (Gateway - Rust Güven Sınırı)](#gecit)
 - [Sandbox](#sandbox)
 - [Arayüzler — Web UI ve TUI](#arayuzler)
@@ -70,7 +62,7 @@ Kullanıcı / Operatör  →  Orkestratör (Go)  →  Geçit (Rust, IPC)  →  S
                          bilgi + API          politika motoru + denetim
 ```
 
-- **orchestrator** (Go) — Yapay zeka yürütücüsünü, ajan tabanlı graf motorunu, bilgi deposunu ve REST/WebSocket API'sini yönetir. nftables kurallarına asla doğrudan dokunmaz.
+- **orchestrator** (Go) — Yapay zeka yöneticisini (conductor), ajan tabanlı graf motorunu, bilgi deposunu ve REST/WebSocket API'sini barındırır. nftables kurallarına asla doğrudan dokunmaz.
 - **gateway** (Rust, binary `yummi-gateway`) — Sandbox'tan dış dünyaya trafik açabilen tek bileşendir. Başlangıçta tüm trafiği engelleyen (`DROP`) nftables kuralları yükler; çökerse, bu kurallar korunur (**fail-closed**).
 - **sandbox** (Kali Docker) — Salt okunur dosya sistemi, root olmayan kullanıcı, yalnızca `NET_RAW`/`NET_ADMIN` yetkileri. Pasiftir: Sadece orkestratör içinde `docker exec` çalıştırdığında harekete geçer.
 - **ui** (React 18 + Vite) — `:3000` portundaki web paneli; `/api/` ve `/ws/` isteklerini `:9080` portundaki orkestratöre yönlendirir.
@@ -130,7 +122,7 @@ Bu, kod tabanındaki **en önemli tek değişmezdir**: *açıkça izin verilene 
 - **Engelleme (Block) kuralları her zaman İzin Verme (Allow) kurallarından üstündür.**
 - Sızma testi komutları bir kabuğa (shell) **yalnızca tek bir yerden** ulaşır: `docker exec --user 1000:1000 <container> /bin/bash -lc <cmd>` çalıştıran `sandbox.Bridge.Exec`. Ajan asla kendisi doğrudan `exec.Command` çağırmaz — yalnızca yürütücünün boşalttığı yürütme deposuna (execution store) ekler (geçit kapsam kontrolü → sandbox exec). Ana makine tarafındaki hiçbir komut yoluna ajan/LLM çıktısından erişilemez.
 
-> Geçit modülü ana bilgisayarda değil, Docker içinde çalıştırılır ve ağ politikalarını konteyner ortamının çekirdek desteğiyle uygular. Doğrudan macOS üzerinde (Docker dışında) çalıştırıldığında, kuralların uygulanabileceği bir Linux çekirdeği bulunmaz.
+> Geçit modülü ana bilgisayarda değil, Docker içinde çalıştırılır ve ağ politikalarını konteyner ortamının çekirdek desteğiyle uygular.
 
 ---
 
@@ -185,7 +177,7 @@ Motor `orchestrator/internal/agent` dizininde yer alır. `graph.go` düğüm kü
 | `handoff` | `node_handoff.go` | Odaklanmış bir alt görevi uzman bir alt ajana devreder ve özetini geri besler. |
 | `remember` | `node_remember.go` | Yapılandırılmış bir belleği (örn. kod haritası) bilgi deposuna kaydeder. |
 
-**Yolculuk** (`graph.go` içindeki `Execute` fonksiyonu) — Çalışan her düğüm `step` düğümüne geri yönlendirir, yani motorun kendisi döngüdür; yalnızca terminal bir dügümde sonlanır:
+**Gezinme** (`graph.go` içindeki `Execute` fonksiyonu) — Çalışan her düğüm `step` düğümüne geri yönlendirir, yani motorun kendisi döngüdür; yalnızca terminal bir düğümde sonlanır:
 
 ```text
                      (her çalışan düğüm STEP düğümüne geri döner)
@@ -194,9 +186,9 @@ Motor `orchestrator/internal/agent` dizininde yer alır. `graph.go` düğüm kü
         ▼               run_command          ok / is_error           │
     ┌─────────┐ ─────────────────────────▶ ┌──────┐ ──────────────────┤
     │  STEP   │                            │ TOOL │                   │
-    │ LLM'den │ ◀───── PLAN_UPDATED ─────  │ exec │── onay_gerekli ──────▶ approval ─▶ STEP
-    │ sıradaki│                            │ +    │── uzun_suren ────────▶ consult  ─▶ STEP
-    │ eylemi  │                            │guard │── sikisma / kısırdng ─▶ consult  ─▶ STEP
+    │ LLM'den │ ◀───── PLAN_UPDATED ─────  │ exec │── onay_gerekli ───▶ approval ─▶ STEP
+    │ sıradaki│                            │ +    │── uzun_süren ─────▶ consult  ─▶ STEP
+    │ eylemi  │                            │guard │── sıkışma/döngü ──▶ consult  ─▶ STEP
     │ iste    │                            └──────┘
     └────┬────┘
          │  finish · bütçe_bitti ──▶ FINISH  (terminal)
@@ -212,7 +204,7 @@ Terminal düğümlerin (`finish`, `ask`) giden kenarları yoktur — `Execute` b
 
 **Döngü kırma mekanizması katmanlıdır** (`tool` düğümü): Birebir kopya tespiti (`[DUPLICATE_BLOCKED]`), `A→B→A→B` döngüleri için kayan pencereli sıkışma algılayıcı (`[STUCK]`), hash eşleşmelerinin kaçırdığı anlamsal yakın kopyaları yakalayan bir **tool-thrash** koruması — örn. `ps -ef` / `ps -ejH` / `ps aux` döngüleri (`[ABNORMAL_PATTERN]`) ve operatöre teslim olmadan önce farklı bir yaklaşımı zorlayan ardışık hata kademelendirmesi (`[REPEATED_FAILURE]`). En kritik olanı, yöntemsel bellek *bu görevde* zaten çalıştırılmış bir komutu asla hatırlamaz, böylece öğrenme döngüsü tekrarlama döngüsünü pekiştiremez.
 
-### Etiket Protokolü <a id="the-tag-protocol"></a>
+### Etiket Protokolü <a id="etiket-protokolu"></a>
 
 Ajan ve LLM, köşeli parantezlerle etiketlenmiş **kapalı bir kelime dağarcığı** ile konuşur (`protocol.go` içindeki `Registry`). Bu serbest metin veya XML *değildir* — kendi satırında yer alan bir `[TAG]` yardımıyla isteğe bağlı bir JSON gövdesidir. Kayıt defteri tek doğruluk kaynağıdır; istemin protokol referansı buradan üretilir.
 
@@ -339,7 +331,7 @@ TUI arayüzü de aynı aktivite çiplerini terminalde canlı olarak gösterir.
 
 ---
 
-## Yürütücü, Doğrulayıcı ve Egress Modları <a id="yurutucu-dogrulayici-ve-egress-modlari"></a>
+## Yönetici, Doğrulayıcı ve Egress Modları <a id="yonetici-dogrulayici-ve-egress-modlari"></a>
 
 - **conductor** (`internal/conductor`) — Bir persona yönlendirmeli sistem istemiyle doğrudan Ollama ile konuşur. **Kural tabanlı bir geri dönüş (fallback) yoktur**: LLM yapılandırılmamışsa veya erişilemez durumdaysa, iki dilli (Türkçe/İngilizce, otomatik algılanan) bir açıklamayla birlikte `intent: decline` döner. Yanıtlar yapılandırılmış JSON niyetleridir: `suggest_command`, `start_task`, `explain`, `ask_clarification`, `decline`.
 - **validator** — Sadece **risk sınıflandırması** yapar, ağ kapsam kararları vermez. Risk derecesi, modelin kendi `risk_level` değerinden artı muhafazakar bir yapısal tabandan gelir (`classifyRisk` yalnızca kabuk zincirleme operatörlerinde `critical` seviyesine yükseltilir). **Sert kodlanmış bir araç izin listesi yoktur** — ajana yeni bir araç öğretmek için bir kayıt defterini değil, `persona/v0.1/` altındaki bilgileri düzenleyin.
