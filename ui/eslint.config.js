@@ -32,6 +32,11 @@ export default tseslint.config(
       ...react.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
       'react/react-in-jsx-scope': 'off',
+      // A leading underscore is the project's convention for an intentionally
+      // unused binding (e.g. a mock callback param kept only so a later
+      // assertion can index into the mock's recorded call args) — recognize it
+      // instead of flagging it as dead code.
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
 )

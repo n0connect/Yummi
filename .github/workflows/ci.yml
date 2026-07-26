@@ -45,11 +45,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Lint root module
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
       - name: Lint orchestrator module
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           working-directory: orchestrator

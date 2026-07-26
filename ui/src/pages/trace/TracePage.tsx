@@ -93,7 +93,7 @@ export function TracePage(): JSX.Element {
     <main className="trace-page">
       <div className="trace-header">
         <span className="trace-page-title">TRACE</span>
-        <span className="trace-page-sub">agent'ın yaptığı ve öğrendiği her şey</span>
+        <span className="trace-page-sub">agent tarafından yapılan ve öğrenilen her şey</span>
         <button className="small-button" onClick={refresh}>Yenile</button>
       </div>
 

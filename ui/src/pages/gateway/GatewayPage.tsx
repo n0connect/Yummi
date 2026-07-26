@@ -136,7 +136,7 @@ export function GatewayPage(): JSX.Element {
         <h3>Hostname Policy</h3>
         <p className="gateway-egress-hint">
           İsim bazlı kapsam. <code>*.google.com</code> apex + tüm subdomainleri kapsar. Engel kuralı her şeyi yener;
-          izin listesi doluysa whitelist gibi davranır. Buradan eklenenler geçicidir (yeniden başlatınca config'ten yüklenir).
+          izin listesi doluysa whitelist gibi davranır. Buradan eklenenler geçicidir (yeniden başlatınca config dosyasından yüklenir).
         </p>
         <div className="gateway-hostname-lists">
           <div className="gateway-hostname-col">
