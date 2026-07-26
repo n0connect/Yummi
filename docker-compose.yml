@@ -106,15 +106,15 @@ services:
       YUMMI_SANDBOX_CONTAINER: "yummi-sandbox"
       YUMMI_PERSONA_DIR: "/persona/v0.1"
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
-      YUMMI_OLLAMA_MODEL: "qwen3:8b"
-      YUMMI_OLLAMA_TIER: "standard"
+      YUMMI_OLLAMA_MODEL: "qwen3:14b"
+      YUMMI_OLLAMA_TIER: "pro"
+      DOCKER_HOST: "tcp://docker-proxy:2375"
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
       # the orchestrator no longer reads any scope env vars.
     ports:
       - "127.0.0.1:9080:9080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - gateway_ipc:/run/yummi:ro
       - orchestrator_data:/var/lib/yummi/orchestrator:rw
       - ./persona:/persona:ro
@@ -128,11 +128,61 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+      docker-proxy:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:9080/healthz"]
       interval: 15s
       timeout: 5s
       retries: 3
+
+  # ── docker-proxy — secure docker API socket filter ──────────────────────────────
+  # orchestrator's only real Docker need is `docker exec`/`docker inspect` into
+  # yummi-sandbox (sandbox.Bridge, internal/sandbox/bridge.go) — never create,
+  # kill, or otherwise manage containers. POST=1 is required for EXEC to work
+  # (creating + starting an exec instance are POST calls), but combined with
+  # CONTAINERS=1 it would ALSO unlock generic container lifecycle control
+  # (start/stop/restart/kill/rename/prune) on every container reachable on this
+  # network unless explicitly denied — ALLOW_START/ALLOW_STOP/ALLOW_RESTARTS
+  # close that gap. Every other resource family is explicitly zeroed so the
+  # allowlist is self-documenting instead of relying on the image's defaults.
+  docker-proxy:
+    container_name: yummi-docker-proxy
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      POST: 1
+      ALLOW_START: 0
+      ALLOW_STOP: 0
+      ALLOW_RESTARTS: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      IMAGES: 0
+      NETWORKS: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      VOLUMES: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      yummi_internal:
+        ipv4_address: 172.20.0.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "2375"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 
   # ── yummi-ui — React dashboard ────────────────────────────────────────────────
   yummi-ui:

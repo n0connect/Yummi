@@ -33,8 +33,6 @@ pub struct GatewayConfig {
 pub struct PolicyConfig {
     #[serde(default)]
     pub default_allow: bool,
-    #[serde(default)]
-    pub observe_only: bool,
 }
 
 

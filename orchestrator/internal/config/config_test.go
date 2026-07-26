@@ -10,7 +10,7 @@ func TestConfigDefaults(t *testing.T) {
 	unset(t, "YUMMI_ORCHESTRATOR_HOST", "YUMMI_ORCHESTRATOR_PORT", "YUMMI_DB_PATH",
 		"YUMMI_GATEWAY_SOCKET", "YUMMI_SANDBOX_CONTAINER", "YUMMI_PERSONA_DIR",
 		"YUMMI_OLLAMA_URL", "YUMMI_OLLAMA_MODEL", "YUMMI_OLLAMA_TIER", "YUMMI_TLS_DIR",
-		"YUMMI_GATEWAY_TLS")
+		"YUMMI_GATEWAY_TLS", "YUMMI_OLLAMA_EMBED_MODEL")
 
 	cfg := Load()
 
@@ -31,6 +31,19 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.GatewayTLS {
 		t.Error("expected GatewayTLS disabled by default")
+	}
+	if cfg.OllamaEmbedModel != "nomic-embed-text" {
+		t.Errorf("expected default OllamaEmbedModel nomic-embed-text, got %q", cfg.OllamaEmbedModel)
+	}
+}
+
+func TestConfigOllamaEmbedModelOverride(t *testing.T) {
+	t.Setenv("YUMMI_OLLAMA_EMBED_MODEL", "custom-embed-model")
+
+	cfg := Load()
+
+	if cfg.OllamaEmbedModel != "custom-embed-model" {
+		t.Errorf("expected overridden OllamaEmbedModel, got %q", cfg.OllamaEmbedModel)
 	}
 }
 

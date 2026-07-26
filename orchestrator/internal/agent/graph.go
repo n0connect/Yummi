@@ -5,25 +5,28 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
 
 // Node name constants.
 const (
-	nodeStep      = "step"
-	nodeTool      = "tool"
-	nodeConsult   = "consult"
-	nodeRetry     = "retry"
-	nodeSummarize = "summarize"
-	nodeApproval  = "approval"
-	nodeFinish    = "finish"
-	nodeAsk       = "ask"
-	nodeHandoff   = "handoff"
-	nodeRemember  = "remember"
+	nodeStep       = "step"
+	nodeTool       = "tool"
+	nodeConsult    = "consult"
+	nodeRetry      = "retry"
+	nodeSummarize  = "summarize"
+	nodeApproval   = "approval"
+	nodeFinish     = "finish"
+	nodeAsk        = "ask"
+	nodeHandoff    = "handoff"
+	nodeRemember   = "remember"
+	nodeThreatHold = "threat_hold"
 )
 
 // Edge name constants.
@@ -53,6 +56,7 @@ const (
 	edgeChangeGoal  = "change_goal"
 	edgeStopTask    = "stop_task"
 	edgeSendFull    = "send_full"
+	edgeThreatHold  = "threat_hold"
 )
 
 // NodeFunc is a state machine node function.
@@ -87,6 +91,7 @@ var graphEdges = map[string]map[string]string{
 		edgeRequiresApproval: nodeApproval,
 		edgeStuck:            nodeConsult,
 		edgeLongRunning:      nodeConsult,
+		edgeThreatHold:       nodeThreatHold,
 	},
 	nodeConsult: {
 		edgeContinue:    nodeStep,
@@ -108,6 +113,11 @@ var graphEdges = map[string]map[string]string{
 		edgeDenied:   nodeStep,
 		edgeGiveUp:   nodeAsk,
 	},
+	nodeThreatHold: {
+		edgeApproved: nodeStep,
+		edgeDenied:   nodeStep,
+		edgeGiveUp:   nodeAsk,
+	},
 	nodeSummarize: {
 		edgeDone: nodeStep,
 	},
@@ -121,16 +131,17 @@ var nodes map[string]NodeFunc
 
 func init() {
 	nodes = map[string]NodeFunc{
-		nodeStep:      stepNode,
-		nodeTool:      toolNode,
-		nodeConsult:   consultNode,
-		nodeRetry:     retryNode,
-		nodeSummarize: summarizeNode,
-		nodeApproval:  approvalNode,
-		nodeFinish:    finishNode,
-		nodeAsk:       askNode,
-		nodeHandoff:   handoffNode,
-		nodeRemember:  rememberNode,
+		nodeStep:       stepNode,
+		nodeTool:       toolNode,
+		nodeConsult:    consultNode,
+		nodeRetry:      retryNode,
+		nodeSummarize:  summarizeNode,
+		nodeApproval:   approvalNode,
+		nodeFinish:     finishNode,
+		nodeAsk:        askNode,
+		nodeHandoff:    handoffNode,
+		nodeRemember:   rememberNode,
+		nodeThreatHold: threatHoldNode,
 	}
 }
 
@@ -182,6 +193,7 @@ type GraphState struct {
 	finishOutcome   finishOutcome      // how finishNode terminates the task
 	finishMsg       string             // summary (completed/stopped) or error (failed) for finishNode
 
+	pendingThreatResult ToolResult // quarantined threat tool result awaiting approval
 	// consecutiveFailures counts back-to-back command failures; any success
 	// resets it. At failureLimit() the failure observation escalates to a
 	// forceful REPEATED_FAILURE directive; at 2×limit stepNode halts to the
@@ -310,28 +322,102 @@ func toolThrash(commands []string) (string, bool) {
 	return "", false
 }
 
-// markStepStatus records the outcome on the plan step the model referenced.
-func markStepStatus(store *Store, taskID, stepID string, status StepStatus, detail string) {
-	if stepID == "" {
-		return
-	}
+// markStepStatus records the outcome (and the actual command run, if any) on
+// the plan step the model referenced. If stepID is empty or doesn't match any
+// plan step — the prompt shows every step's ID clearly, but a model's
+// compliance can't be guaranteed, and this was observed live: a completed
+// task with real findings still showed every plan step frozen at "pending"
+// because the model's step_id never matched — it falls back to the first
+// step still Pending or Running, so the plan view tracks real progress
+// instead of silently showing nothing happened. Recording the command lets
+// finishNode later cross-check the model's own claimed findings against
+// which tools' commands actually completed (see unverifiedToolWarning) —
+// found necessary live: a model reported "nikto detected vulnerabilities"
+// after nikto was aborted twice with zero real output.
+func markStepStatus(store *Store, taskID, stepID, command string, status StepStatus, detail string) {
 	_ = store.Update(taskID, func(t *Task) {
+		idx := -1
 		for i := range t.Plan {
 			if t.Plan[i].ID == stepID {
-				t.Plan[i].Status = status
-				d := detail
-				if len(d) > 200 {
-					d = d[:200] + "…"
-				}
-				if status == StepFailed {
-					t.Plan[i].Error = d
-				} else {
-					t.Plan[i].Result = d
-				}
-				return
+				idx = i
+				break
 			}
 		}
+		if idx == -1 {
+			for i := range t.Plan {
+				if t.Plan[i].Status == StepPending || t.Plan[i].Status == StepRunning {
+					idx = i
+					break
+				}
+			}
+		}
+		if idx == -1 {
+			return
+		}
+		t.Plan[idx].Status = status
+		if command != "" {
+			t.Plan[idx].Command = command
+		}
+		d := detail
+		if len(d) > 200 {
+			d = d[:200] + "…"
+		}
+		if status == StepFailed {
+			t.Plan[idx].Error = d
+		} else {
+			t.Plan[idx].Result = d
+		}
 	})
+}
+
+// unverifiedToolWarning cross-checks the model's own claimed findings against
+// which tools' plan steps actually completed. Found necessary via live
+// testing: a model reported "nikto detected known vulnerabilities" for a
+// nikto invocation that was aborted TWICE with zero real output — the prompt-
+// level instruction to only report grounded findings did not reliably
+// prevent this. Deliberately does NOT strip or rewrite the finding — only the
+// operator can judge whether a specific claim is actually accurate; this just
+// makes the risk visible instead of silently trusting (or silently
+// censoring) the model's own report.
+func unverifiedToolWarning(task Task, findings []string) string {
+	if len(findings) == 0 {
+		return ""
+	}
+	lowerFindings := make([]string, len(findings))
+	for i, f := range findings {
+		lowerFindings[i] = strings.ToLower(f)
+	}
+
+	var suspect []string
+	seen := map[string]bool{}
+	for _, step := range task.Plan {
+		if step.Status != StepFailed || step.Command == "" {
+			continue
+		}
+		fields := strings.Fields(step.Command)
+		if len(fields) == 0 {
+			continue
+		}
+		tool := strings.ToLower(fields[0])
+		if seen[tool] {
+			continue
+		}
+		for _, f := range lowerFindings {
+			if strings.Contains(f, tool) {
+				seen[tool] = true
+				suspect = append(suspect, tool)
+				break
+			}
+		}
+	}
+	if len(suspect) == 0 {
+		return ""
+	}
+	sort.Strings(suspect)
+	return fmt.Sprintf(
+		"⚠ UNVERIFIED: the findings above reference %s, but the corresponding command did not complete successfully (failed/aborted) — treat any claimed result from it as unconfirmed until manually re-run.",
+		strings.Join(suspect, ", "),
+	)
 }
 
 // observeResult verifies a finished command, records the tag-wrapped observation,
@@ -370,28 +456,32 @@ func observeResult(s *GraphState, result ToolResult) string {
 		return s.failStep(tag, body, reason)
 	}
 	s.consecutiveFailures = 0 // any success clears the failure streak
+	// Content-layer fail-closed: check if raw output trips known threat patterns.
+	// If a threat is detected, quarantine the output and transition to threat hold node.
+	if banner := threatscan.Banner(result.Content); banner != "" {
+		slog.Warn("agent: tool output tripped threat patterns, quarantining",
+			"task", s.taskID, "command", s.pendingCommand)
+		s.pendingThreatResult = result
+		s.pendingProposal = conductor.Proposal{
+			ID:        uuid.NewString(),
+			Command:   s.pendingCommand,
+			Rationale: "Threat Scan flagged potential injection in output",
+			RiskLevel: "threat_approval",
+		}
+		return edgeThreatHold
+	}
+
 	compressed := CompressObservation(result.Content)
 	tag := "TOOL_RESPONSE"
 	if compressed != result.Content {
 		tag = "TOOL_RESPONSE_TRUNCATED"
 	}
-	// Content-layer fail-closed: tool output originates on the (hostile) target,
-	// so it is adversarial content. Scan the FULL output (not the truncated head)
-	// for prompt-injection / C2 / exfiltration and, if it trips, prepend a banner
-	// telling the model to treat the output as untrusted DATA, not instructions.
-	// Detection, not blocking — the operator can't intervene mid-command and a
-	// researcher may legitimately be reading attacker write-ups.
 	body := s.pendingCommand + "\n" + compressed
-	if banner := threatscan.Banner(result.Content); banner != "" {
-		slog.Warn("agent: tool output tripped threat patterns",
-			"task", s.taskID, "command", s.pendingCommand)
-		body = banner + "\n\n" + body
-	}
 	obs := Wrap(tag, body)
 	// Store the FULL output for SEND_FULL retrieval and summarization.
 	s.memCtx.AddObservation(result.Content)
 	s.lastObs = obs
-	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepDone, obs)
+	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepDone, obs)
 	s.emit(ActCommandDone, s.pendingCommand, compressed)
 	if findings := filterEmpty(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
 		_ = s.store.Update(s.taskID, func(t *Task) {
@@ -420,7 +510,7 @@ func (s *GraphState) failStep(tag, body, reason string) string {
 	obs := Wrap(tag, body)
 	s.memCtx.AddObservation(obs)
 	s.lastObs = obs
-	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, StepFailed, reason)
+	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepFailed, reason)
 	return edgeIsError
 }
 

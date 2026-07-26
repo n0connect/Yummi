@@ -107,9 +107,19 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		// orchestrator). A sub-agent has an empty SubAgents map, so a HANDOFF it
 		// emits — or one naming an unknown role / empty subgoal — is rejected as
 		// an invalid action rather than wedging the loop. This caps depth at 1.
-		role := strings.TrimSpace(msg.Action.Role)
-		if _, ok := s.cfg.SubAgents[role]; !ok || strings.TrimSpace(msg.Action.Subgoal) == "" {
+		// handoffTargets normalizes the single-target (Role/Subgoal) and
+		// fan-out (Handoffs) forms into one list; every entry must resolve to a
+		// configured sub-agent, or the whole action is rejected — a partially
+		// valid fan-out silently dropping a target would be a confusing way to
+		// fail.
+		targets := handoffTargets(msg.Action)
+		if len(targets) == 0 {
 			return s.rejectStepAction()
+		}
+		for _, t := range targets {
+			if _, ok := s.cfg.SubAgents[strings.TrimSpace(t.Role)]; !ok || strings.TrimSpace(t.Subgoal) == "" {
+				return s.rejectStepAction()
+			}
 		}
 		return edgeHandoff, nil
 	case "REMEMBER":
@@ -197,6 +207,8 @@ func (s *GraphState) buildDelegation() string {
 	sort.Strings(roles)
 	return "DELEGATION: hand a focused subtask to a specialist with " +
 		`[HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}` +
+		". To delegate to SEVERAL specialists AT ONCE — they run concurrently, not one after another — use " +
+		`[HANDOFF] {"handoffs":[{"role":"<role>","subgoal":"<...>"},{"role":"<role>","subgoal":"<...>"}]}` +
 		". Available roles: " + strings.Join(roles, ", ") + ".\n"
 }
 

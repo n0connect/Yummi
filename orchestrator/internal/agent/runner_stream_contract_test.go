@@ -56,7 +56,7 @@ func TestStreamContract_FullTaskEmitsUIEventSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAndPlan: %v", err)
 	}
-	if err := runner.Start(task.ID); err != nil {
+	if err := runner.Start(task.ID, ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 

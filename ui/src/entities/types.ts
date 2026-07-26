@@ -171,6 +171,24 @@ export type SkillInfo = {
   knowledge?: string
 }
 
+// A curator-drafted skill awaiting operator review (from
+// /api/v1/skills/pending). Never auto-loaded — approval writes it to disk
+// and hot-adds it to the live registry; rejection just marks the row.
+export type PendingSkill = {
+  id: string
+  status: 'pending' | 'approved' | 'rejected' | string
+  origin: string
+  task_id: string
+  session_id: string
+  name: string
+  draft_yaml: string
+  trajectory: string
+  threat_scan_result?: string
+  reject_reason?: string
+  created_at: number
+  resolved_at?: number
+}
+
 // ─── Gateway types (from /api/v1/gateway/rules + /audit + gateway.status WS) ──
 
 export type GatewayRule = {

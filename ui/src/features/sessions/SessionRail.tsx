@@ -32,41 +32,67 @@ function shortWhen(ts?: number): string {
 export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSelect }: Props): JSX.Element {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   const load = useCallback(() => {
-    fetchJSON<SessionSummary[]>('/api/v1/sessions')
+    const controller = new AbortController()
+    setLoading(true)
+    fetchJSON<SessionSummary[]>('/api/v1/sessions', { signal: controller.signal })
       .then(rows => {
         // Active sessions only, newest first (the server already sorts by
         // updated_at desc, but guard against nulls).
         setSessions((rows ?? []).filter(s => s.status !== 'closed'))
         setError(false)
       })
-      .catch(() => setError(true))
+      .catch(err => { if (err?.name !== 'AbortError') setError(true) })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
   }, [])
 
   // Reload whenever the rail opens or a session is created/renamed elsewhere.
+  // load() returns an abort function so a stale in-flight request from a
+  // rapid open/close/open never overwrites fresher data.
   useEffect(() => {
-    if (open) load()
+    if (!open) return
+    return load()
   }, [open, refreshKey, load])
+
+  // Escape closes the rail, matching AssistantPanel's proposal-bar behavior.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onToggle() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onToggle])
 
   return (
     <>
       <button
-        className="rail-toggle"
+        className={`rail-toggle ${open ? 'open' : ''}`}
         onClick={onToggle}
         title={open ? 'Sohbet listesini kapat' : 'Sohbet geçmişi'}
         aria-label="Sohbet geçmişi"
+        aria-expanded={open}
       >
-        {open ? '‹' : '☰'}
+        <span className="rail-toggle-icon" aria-hidden="true">{open ? '‹' : '🕘'}</span>
+        Geçmiş
       </button>
 
-      <aside className={`session-rail ${open ? 'open' : ''}`}>
+      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label="Sohbet geçmişi paneli" aria-modal="false">
         <div className="rail-header">
           <span className="rail-title">Sohbetler</span>
         </div>
         <div className="rail-list">
-          {error && <div className="rail-empty">Sohbetler yüklenemedi.</div>}
-          {!error && sessions.length === 0 && (
+          {loading && sessions.length === 0 && !error && (
+            <div className="rail-empty">Yükleniyor…</div>
+          )}
+          {error && (
+            <div className="rail-empty rail-error">
+              <span>Sohbetler yüklenemedi.</span>
+              <button className="rail-retry" onClick={() => load()}>Tekrar dene</button>
+            </div>
+          )}
+          {!error && !loading && sessions.length === 0 && (
             <div className="rail-empty">Henüz kayıtlı sohbet yok.</div>
           )}
           {sessions.map(s => (
@@ -75,6 +101,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
               className={`rail-item ${s.id === activeSessionID ? 'active' : ''}`}
               onClick={() => onSelect(s.id)}
               title={s.name}
+              aria-current={s.id === activeSessionID ? 'true' : undefined}
             >
               <span className="rail-item-name">{s.name}</span>
               <span className="rail-item-when">{shortWhen(s.updated_at)}</span>

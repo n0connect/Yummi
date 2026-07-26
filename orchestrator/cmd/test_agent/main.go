@@ -116,7 +116,7 @@ func runScenario(runner *agent.Runner, store *agent.Store, sc scenario, report *
 		fmt.Fprintf(report, "- %s: %s\n", s.ID, s.Description)
 	}
 
-	if err := runner.Start(task.ID); err != nil {
+	if err := runner.Start(task.ID, ""); err != nil {
 		fmt.Fprintf(report, "\n❌ FAIL — start error: %v\n\n", err)
 		return false
 	}

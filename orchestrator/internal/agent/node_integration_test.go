@@ -215,6 +215,16 @@ func TestConsult_LongRunning_AbortCancelsCommand(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Fatalf("ABORT should have cancelled the 3s sleep; took %s", elapsed)
 	}
+	// Regression: an aborted long-running command used to leave its plan step
+	// frozen at "pending" forever — consultNode's abort branch recorded a
+	// TOOL_FAILED observation but never called markStepStatus, unlike every
+	// other termination path (success, failure, gateway-block). Live-observed
+	// on a real Web Red Team task: nikto ran long, got aborted, and the task
+	// completed with real findings while every plan step still showed
+	// "pending" — confusing for an operator looking at the plan view.
+	if planStep(got.Plan, "s1").Status != StepFailed {
+		t.Fatalf("expected the aborted step (s1) to be marked failed, got %s", planStep(got.Plan, "s1").Status)
+	}
 }
 
 // TestConsult_AbnormalPattern_RecoversAutonomously: an A→B→A→B loop surfaces an

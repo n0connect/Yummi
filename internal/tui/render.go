@@ -96,6 +96,10 @@ type ExecItem struct {
 	Command string
 	Status  string
 	Output  string
+	// Banner is the orchestrator's threat-scan warning (execution.SecurityBanner)
+	// when tool output looked like a content-layer injection attempt — shown to
+	// the operator the same way AssistantPanel.tsx's "execution-threat" alert does.
+	Banner string
 }
 
 func (e ExecItem) Render(width int) string {
@@ -104,6 +108,9 @@ func (e ExecItem) Render(width int) string {
 		mark, style = "✗", execErrStyle
 	}
 	head := "  " + style.Render(mark) + " " + cmdStyle.Render(e.Command)
+	if banner := strings.TrimSpace(e.Banner); banner != "" {
+		head += "\n  " + execErrStyle.Render("⚠ "+banner)
+	}
 	out := strings.TrimSpace(e.Output)
 	if out == "" {
 		return head

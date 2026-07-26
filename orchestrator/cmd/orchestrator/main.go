@@ -27,6 +27,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 	"github.com/n0connect/yummi/orchestrator/internal/tlsutil"
 )
 
@@ -100,6 +101,17 @@ func main() {
 	}
 	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel)
 
+	// Semantic retrieval: an optional local embedding model (separate Ollama
+	// pull from the chat model) lets procedural memory rank by similarity
+	// instead of exact tool-name match. embedClient stays nil (and
+	// SemanticRetrieval degrades to StructuredRetrieval on first use) if the
+	// operator hasn't pulled cfg.OllamaEmbedModel — this is never fatal.
+	var embedClient *llm.Client
+	if cfg.OllamaURL != "" && cfg.OllamaEmbedModel != "" {
+		embedClient = llmClient.WithEmbedModel(cfg.OllamaEmbedModel)
+		ks.SetEmbedder(embedClient, cfg.OllamaEmbedModel)
+	}
+
 	// Preload the model into VRAM before serving requests — guarantees a single
 	// cold-start. Failure is non-fatal; the model lazy-loads on the first chat.
 	// With keep_alive="-1", once loaded it stays resident for the process lifetime,
@@ -142,10 +154,26 @@ func main() {
 		slog.Error("agent task store init failed", "error", err)
 		os.Exit(1)
 	}
+
+	// Auto-skill-creation: candidate skills drafted from successful task
+	// trajectories, quarantined pending operator approval (see
+	// internal/skillcurator). curatorStore init failure is non-fatal —
+	// degrades to auto-skill-creation disabled, same as other optional stores.
+	curatorStore, cerr := skillcurator.NewStore(db)
+	if cerr != nil {
+		slog.Warn("skill curator store init failed; auto-skill-creation disabled", "error", cerr)
+		curatorStore = nil
+	}
+
 	var taskRunner *agent.Runner
 	// skillReg is also exposed read-only via the TRACE API, so it lives at this
 	// scope (nil-safe: skill.Registry methods tolerate a nil receiver).
 	var skillReg *skill.Registry
+	// resilientLLM is the agent loop's circuit-breaker wrapper. Kept at its
+	// concrete type (not just the agent.LLM interface it also satisfies) so the
+	// /api/v1/llm/status handler can read its breaker/latency snapshot; nil when
+	// the agent loop is disabled (persona load failed).
+	var resilientLLM *llm.Resilient
 	if assistant != nil && assistant.LLM() != nil {
 		// The agent persona is document-driven (no hard-coded prose). Without it
 		// the loop cannot run, so disable the agent rather than improvise.
@@ -160,7 +188,11 @@ func main() {
 				slog.Warn("skills load failed; continuing without skills", "error", serr)
 				skillReg = skill.New(nil)
 			}
-			retrieval := knowledge.NewStructuredRetrieval(ks)
+			structuredRetrieval := knowledge.NewStructuredRetrieval(ks)
+			var retrieval knowledge.RetrievalStrategy = structuredRetrieval
+			if embedClient != nil {
+				retrieval = knowledge.NewSemanticRetrieval(ks, embedClient, cfg.OllamaEmbedModel, structuredRetrieval)
+			}
 
 			// Resilience: wrap the agent loop's LLM in a circuit breaker + EMA
 			// latency tracker, with an optional downgrade to a lighter LOCAL model
@@ -176,8 +208,13 @@ func main() {
 				fallbackName = fb
 				slog.Info("agent LLM fallback configured", "primary", primaryLLM.Model(), "fallback", fb)
 			}
-			var agentLLM agent.LLM = llm.NewResilient(
+			resilientLLM = llm.NewResilient(
 				primaryLLM.Chat, fallbackChat, primaryLLM.Model(), fallbackName, 3, 60*time.Second)
+			var agentLLM agent.LLM = resilientLLM
+
+			// Auto-skill-creation curator: nil-safe (skillcurator.Curator's
+			// ProposeFromTask tolerates a nil store) if curatorStore init failed above.
+			skillCuratorFn := skillcurator.NewCurator(curatorStore, resilientLLM.Chat, skillReg).ProposeFromTask
 
 			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
 			// execution pipeline. Built with no SubAgents of their own, capping
@@ -194,10 +231,19 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					agent.Config{
-						Persona:   d.Persona(),
-						Knowledge: ks,
-						Retrieval: retrieval,
-						Skills:    skillReg.Subset(d.Skills),
+						Persona:      d.Persona(),
+						Knowledge:    ks,
+						Retrieval:    retrieval,
+						Skills:       skillReg.Subset(d.Skills),
+						SkillCurator: skillCuratorFn,
+						// Sub-agents get a higher step budget than the top-level
+						// agent's default (15): a HANDOFF delegates one focused,
+						// narrower subtask, so the specialist should be able to
+						// run more tool calls against it than the generalist top-
+						// level loop needs for open-ended recon. Paired with the
+						// parent's SubAgentTimeout bump below, which is the actual
+						// wall-clock ceiling this step budget runs against.
+						StepBudget: 40,
 					},
 				)
 			}
@@ -211,11 +257,18 @@ func main() {
 				assistant.Validator(),
 				agent.NewStoreExecer(executionStore, 10*time.Minute),
 				agent.Config{ // defaults: budget 15, ask_permission mode
-					Persona:   agentPersona,
-					Knowledge: ks,
-					Retrieval: retrieval,
-					Skills:    skillReg,
-					SubAgents: subAgents,
+					Persona:      agentPersona,
+					Knowledge:    ks,
+					Retrieval:    retrieval,
+					Skills:       skillReg,
+					SubAgents:    subAgents,
+					SkillCurator: skillCuratorFn,
+					// Room for the sub-agents' own StepBudget:40 above to actually
+					// run to completion — the default 10m ceiling was sized for
+					// StepBudget:15 (matches the top-level loop); a sub-agent with
+					// a larger budget needs proportionally more wall clock or the
+					// timeout, not the step count, becomes the real limiter.
+					SubAgentTimeout: 20 * time.Minute,
 				},
 			)
 		}
@@ -230,7 +283,7 @@ func main() {
 	)
 	go agg.Start(ctx)
 
-	router := api.NewRouter(sm, ks, skillReg, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, agg, taskStore, taskRunner)
+	router := api.NewRouter(sm, ks, skillReg, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, resilientLLM, agg, taskStore, taskRunner, curatorStore)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	srv := &http.Server{

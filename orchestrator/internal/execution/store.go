@@ -5,6 +5,7 @@ package execution
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -62,47 +63,38 @@ var (
 	ErrEgressApprovalRequired = errors.New("egress approval required")
 )
 
+// EgressApprovalRequiredError represents a detailed error when egress approval is required,
+// carrying the specific IPs that were resolved at the check time to prevent TOCTOU.
+type EgressApprovalRequiredError struct {
+	Target string
+	IPs    []string
+}
+
+func (e EgressApprovalRequiredError) Error() string {
+	return fmt.Sprintf("egress approval required: target %s (IPs: %v)", e.Target, e.IPs)
+}
+
+func (e EgressApprovalRequiredError) Is(target error) bool {
+	return target == ErrEgressApprovalRequired || target.Error() == "egress approval required"
+}
+
 // Record describes one execution lifecycle item.
 type Record struct {
-	ID         string `json:"id"`
-	SessionID  string `json:"session_id"`
-	ProposalID string `json:"proposal_id"`
-	Command    string `json:"command"`
-	Mode       string `json:"mode"`
-	Status     string `json:"status"`
-	Output     string `json:"output,omitempty"`
-	Error      string `json:"error,omitempty"`
-	// SecurityBanner is the content-layer threat verdict for this command's
-	// output: a non-empty warning string when the raw output trips known
-	// prompt-injection / C2 / exfiltration patterns, "" when clean. It is
-	// DERIVED from Output (never persisted as authoritative state — recomputed
-	// on load) and computed ONCE here at the store chokepoint so that BOTH
-	// execution paths inherit it: the agent loop AND the single-command chat
-	// path. Consumers (UI, any LLM re-feed) must surface it so the model treats
-	// the output as untrusted DATA, not instructions. Output itself is left raw
-	// for the audit record — the banner is a separate signal, never mutates it.
-	SecurityBanner string `json:"security_banner,omitempty"`
-	// SanitizedOutput/SanitizedError are ANSI/C1-escape-stripped copies of
-	// Output/Error (threatscan.StripANSI), DERIVED the same way SecurityBanner
-	// is — never persisted as authoritative state, recomputed on load. Output
-	// itself stays raw for the operator's audit record (a researcher may
-	// legitimately need to see attacker write-ups verbatim, escapes included).
-	// But any consumer that re-feeds this content back into the LLM (the UI's
-	// chat feedback loop, any future server-side re-feed) MUST use the
-	// sanitized copy, mirroring how the agent loop already strips ANSI from
-	// its own observations (agent/graph.go) before reusing the same prompt
-	// channel — otherwise a target could use escape sequences to smuggle a
-	// payload past the banner scan and back into model context.
+	ID              string `json:"id"`
+	SessionID       string `json:"session_id"`
+	ProposalID      string `json:"proposal_id"`
+	Command         string `json:"command"`
+	Mode            string `json:"mode"`
+	Status          string `json:"status"`
+	Output          string `json:"output,omitempty"`
+	Error           string `json:"error,omitempty"`
+	SecurityBanner  string `json:"security_banner,omitempty"`
 	SanitizedOutput string `json:"sanitized_output,omitempty"`
 	SanitizedError  string `json:"sanitized_error,omitempty"`
-	// EgressTarget is the host/IP the command targets, set only while the
-	// execution is held in StatusAwaitingEgressApproval so the UI can name what
-	// external access is pending. DERIVED from Command (scope.ExtractTarget),
-	// never persisted as authoritative state — recomputed on load like
-	// SecurityBanner/SanitizedOutput.
-	EgressTarget string `json:"egress_target,omitempty"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	EgressTarget    string `json:"egress_target,omitempty"`
+	PinnedIPs       string `json:"pinned_ips,omitempty"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
 }
 
 // Event is published whenever an execution lifecycle changes.
@@ -249,10 +241,9 @@ func (s *Store) Cancel(id string) (Record, error) {
 }
 
 // holdForEgressApproval transitions a running execution into
-// StatusAwaitingEgressApproval and records the (derived) target so the UI can
-// name the pending external access. Returns (record, true) only when the
-// execution was running; a no-op otherwise.
-func (s *Store) holdForEgressApproval(id, target string) (Record, bool) {
+// StatusAwaitingEgressApproval and records the (derived) target and resolved IPs.
+// Returns (record, true) only when the execution was running; a no-op otherwise.
+func (s *Store) holdForEgressApproval(id, target string, ips []string) (Record, bool) {
 	now := time.Now().Unix()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -262,6 +253,11 @@ func (s *Store) holdForEgressApproval(id, target string) (Record, bool) {
 	}
 	rec.Status = StatusAwaitingEgressApproval
 	rec.EgressTarget = target
+	if len(ips) > 0 {
+		if buf, err := json.Marshal(ips); err == nil {
+			rec.PinnedIPs = string(buf)
+		}
+	}
 	rec.UpdatedAt = now
 	s.items[id] = rec
 	return rec, true
@@ -340,12 +336,12 @@ func (s *Store) Get(id string) (Record, bool) {
 		return Record{}, false
 	}
 	var r Record
-	var proposalID, output, errText sql.NullString
+	var proposalID, output, errText, pinnedIPs sql.NullString
 	err := s.db.QueryRow(`
-		SELECT id,session_id,proposal_id,command,mode,status,output,error,created_at,updated_at
+		SELECT id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at
 		FROM executions WHERE id=?`, id).Scan(
 		&r.ID, &r.SessionID, &proposalID, &r.Command, &r.Mode,
-		&r.Status, &output, &errText, &r.CreatedAt, &r.UpdatedAt,
+		&r.Status, &output, &errText, &pinnedIPs, &r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
 		return Record{}, false
@@ -353,6 +349,7 @@ func (s *Store) Get(id string) (Record, bool) {
 	r.ProposalID = proposalID.String
 	r.Output = output.String
 	r.Error = errText.String
+	r.PinnedIPs = pinnedIPs.String
 	return r, true
 }
 
@@ -454,7 +451,12 @@ func (s *Store) process(id string) {
 			// target may be reached. Hold the execution (fail-closed, no
 			// traffic) instead of failing it — ResolveEgress resumes or ends it.
 			if errors.Is(err, ErrEgressApprovalRequired) {
-				held, ok := s.holdForEgressApproval(id, scope.ExtractTarget(running.Command))
+				var ips []string
+				var egressErr EgressApprovalRequiredError
+				if errors.As(err, &egressErr) {
+					ips = egressErr.IPs
+				}
+				held, ok := s.holdForEgressApproval(id, scope.ExtractTarget(running.Command), ips)
 				if ok {
 					s.publish(Event{
 						Type:      "execution.awaiting_egress_approval",
@@ -646,15 +648,16 @@ func (s *Store) dbPersist(rec Record) {
 		return
 	}
 	_, _ = s.db.Exec(`
-		INSERT INTO executions(id,session_id,proposal_id,command,mode,status,output,error,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)
+		INSERT INTO executions(id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status,
 			output=excluded.output,
 			error=excluded.error,
+			pinned_ips=excluded.pinned_ips,
 			updated_at=excluded.updated_at`,
 		rec.ID, rec.SessionID, rec.ProposalID, rec.Command, rec.Mode,
-		rec.Status, rec.Output, rec.Error, rec.CreatedAt, rec.UpdatedAt,
+		rec.Status, rec.Output, rec.Error, rec.PinnedIPs, rec.CreatedAt, rec.UpdatedAt,
 	)
 }
 
@@ -665,7 +668,7 @@ func (s *Store) loadFromDB() error {
 		return nil
 	}
 	rows, err := s.db.Query(`
-		SELECT id,session_id,proposal_id,command,mode,status,output,error,created_at,updated_at
+		SELECT id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at
 		FROM executions ORDER BY created_at ASC`)
 	if err != nil {
 		return err
@@ -676,16 +679,17 @@ func (s *Store) loadFromDB() error {
 	defer s.mu.Unlock()
 	for rows.Next() {
 		var rec Record
-		var proposalID, output, errText sql.NullString
+		var proposalID, output, errText, pinnedIPs sql.NullString
 		if err := rows.Scan(
 			&rec.ID, &rec.SessionID, &proposalID, &rec.Command, &rec.Mode,
-			&rec.Status, &output, &errText, &rec.CreatedAt, &rec.UpdatedAt,
+			&rec.Status, &output, &errText, &pinnedIPs, &rec.CreatedAt, &rec.UpdatedAt,
 		); err != nil {
 			continue
 		}
 		rec.ProposalID = proposalID.String
 		rec.Output = output.String
 		rec.Error = errText.String
+		rec.PinnedIPs = pinnedIPs.String
 		// SecurityBanner/SanitizedOutput/SanitizedError are derived, not stored —
 		// recompute them on load so a restored record carries the same
 		// content-layer verdict and LLM-safe copy it had live.

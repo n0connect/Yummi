@@ -161,6 +161,24 @@ func (s *Store) ListBySession(sessionID string, limit int) []Task {
 	return out
 }
 
+// cloneTaskSlices replaces t's slice fields with independent backing arrays.
+// Task is stored and handed out BY VALUE (Get/ListBySession/Event.Task), so a
+// bare struct copy still shares the same backing array for Plan/Findings/
+// ObservationHistory with whatever the map currently holds. Update/Transition
+// mutators (markStepStatus in particular) write into a slice ELEMENT in place
+// (t.Plan[i].Result = ...), which — without this clone — mutates that shared
+// backing array while some other goroutine may be concurrently reading it
+// through an earlier Get() snapshot, entirely outside this store's lock. That
+// is a genuine data race (found via live stress-testing: hammering GET
+// /api/v1/tasks/{id} during an active run produced intermittent invalid JSON,
+// a torn string read). Cloning here, BEFORE mutate runs, guarantees every
+// mutation touches a backing array nobody else has ever seen.
+func cloneTaskSlices(t *Task) {
+	t.Plan = append([]PlanStep(nil), t.Plan...)
+	t.Findings = append([]string(nil), t.Findings...)
+	t.ObservationHistory = append([]string(nil), t.ObservationHistory...)
+}
+
 // Transition moves a task to a new status, applying mutate (may be nil) under
 // the lock before validation-persisting. Returns ErrInvalidTransition for
 // illegal moves.
@@ -175,6 +193,7 @@ func (s *Store) Transition(id string, to TaskStatus, mutate func(*Task)) error {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s → %s", ErrInvalidTransition, t.Status, to)
 	}
+	cloneTaskSlices(&t)
 	if mutate != nil {
 		mutate(&t)
 	}
@@ -195,6 +214,7 @@ func (s *Store) Update(id string, mutate func(*Task)) error {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 	}
+	cloneTaskSlices(&t)
 	mutate(&t)
 	t.UpdatedAt = time.Now().Unix()
 	s.items[id] = t

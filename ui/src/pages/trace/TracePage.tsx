@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ActivityEvent, ActivityKind } from '../../entities/types'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
+import { usePendingSkills } from '../../features/skills/usePendingSkills'
 
 const KIND_META: Record<ActivityKind, [string, string]> = {
   plan:              ['🗺️', 'plan'],
@@ -68,12 +69,31 @@ function Section({ title, count, children }: { title: string; count: number; chi
 export function TracePage(): JSX.Element {
   const [sessionID] = useState(resolveSessionID)
   const { activity, findings, tactics, context, skills, roles, refresh } = useTraceData(sessionID)
+  const { pending: pendingSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
+  const [skillError, setSkillError] = useState<string | null>(null)
+
+  async function handleApproveSkill(id: string) {
+    setSkillError(null)
+    try {
+      await approveSkill(id)
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'failed to approve skill')
+    }
+  }
+  async function handleRejectSkill(id: string) {
+    setSkillError(null)
+    try {
+      await rejectSkill(id)
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'failed to reject skill')
+    }
+  }
 
   return (
     <main className="trace-page">
       <div className="trace-header">
         <span className="trace-page-title">TRACE</span>
-        <span className="trace-page-sub">agent'ın yaptığı ve öğrendiği her şey</span>
+        <span className="trace-page-sub">agent tarafından yapılan ve öğrenilen her şey</span>
         <button className="small-button" onClick={refresh}>Yenile</button>
       </div>
 
@@ -124,6 +144,28 @@ export function TracePage(): JSX.Element {
             <div key={s.name} className="trace-skill">
               <span className="trace-skill-name">{s.name}</span>
               {s.description && <span className="trace-skill-desc">{s.description}</span>}
+            </div>
+          ))}
+        </Section>
+
+        {/* Auto-skill-creation: curator-drafted skills awaiting operator review.
+            Never auto-loaded — approve() writes to disk + hot-adds to the live
+            registry, reject() just marks the row. */}
+        <Section title="Bekleyen Skill Taslakları" count={pendingSkills.length}>
+          {skillError && <div className="trace-skill-error">{skillError}</div>}
+          {pendingSkills.map(p => (
+            <div key={p.id} className="trace-skill trace-pending-skill">
+              <div className="trace-pending-skill-head">
+                <span className="trace-skill-name">{p.name}</span>
+                <div className="trace-pending-skill-actions">
+                  <button className="small-button" onClick={() => handleApproveSkill(p.id)}>Onayla</button>
+                  <button className="small-button" onClick={() => handleRejectSkill(p.id)}>Reddet</button>
+                </div>
+              </div>
+              <details>
+                <summary>taslak YAML</summary>
+                <pre className="trace-context-val">{p.draft_yaml}</pre>
+              </details>
             </div>
           ))}
         </Section>

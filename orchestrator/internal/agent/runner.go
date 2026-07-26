@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // LLM is the minimal model interface the runner needs.
@@ -85,6 +87,13 @@ type Config struct {
 	// and sub-agents themselves are built with an empty map, capping handoff
 	// depth at exactly 1 (no recursion).
 	SubAgents map[string]*Runner
+
+	// SkillCurator, if set, is invoked asynchronously (never blocking the
+	// graph) after a task finishes successfully, to propose a candidate skill
+	// drafted from its trajectory. Nil disables auto-skill-creation. Fired
+	// from both top-level and sub-agent task completions (finishNode is
+	// shared by both).
+	SkillCurator func(ctx context.Context, traj skillcurator.Trajectory)
 }
 
 // Runner drives agentic task loops. One goroutine per running task.
@@ -271,7 +280,11 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 }
 
 // Start launches the step loop for a planned or paused task asynchronously.
-func (r *Runner) Start(taskID string) error {
+// operatorMessage is optional operator input for a task paused via
+// [ASK_OPERATOR] — see loop's checkpoint handling for why this is the only
+// way that answer can reach the model (resuming into the "ask" node itself
+// would just re-pause immediately, discarding it).
+func (r *Runner) Start(taskID string, operatorMessage string) error {
 	task, ok := r.store.Get(taskID)
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
@@ -295,7 +308,7 @@ func (r *Runner) Start(taskID string) error {
 			delete(r.active, taskID)
 			r.mu.Unlock()
 		}()
-		r.loop(ctx, taskID)
+		r.loop(ctx, taskID, operatorMessage)
 	}()
 	return nil
 }
@@ -350,14 +363,25 @@ func (r *Runner) ApprovalMode() ApprovalMode {
 
 // SetApprovalMode changes the mode applied to tasks started from this point
 // on; tasks already mid-loop keep the mode they were built with (cfg is
-// copied by value into GraphState in buildState).
+// copied by value into GraphState in buildState). Also propagates to every
+// configured sub-agent Runner (handoff depth is capped at 1, so recursion
+// terminates immediately — a sub-agent's own SubAgents map is always empty).
+// Without this, sub-agents were built with an independent Config that always
+// defaulted to ask_permission and had no way to be switched at all: the
+// operator-facing mode toggle silently didn't apply to delegated work, and
+// GET /api/v1/agent/mode (which only reads the top-level runner) could
+// misreport the true state of sub-agent gating.
 func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 	if mode != ModeAskPermission && mode != ModeAuto {
 		return fmt.Errorf("invalid approval mode: %q", mode)
 	}
 	r.mu.Lock()
 	r.cfg.ApprovalMode = mode
+	subAgents := r.cfg.SubAgents
 	r.mu.Unlock()
+	for _, sub := range subAgents {
+		_ = sub.SetApprovalMode(mode)
+	}
 	return nil
 }
 
@@ -366,6 +390,9 @@ func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 // buildState constructs GraphState for a task, restoring from checkpoint if one exists.
 func (r *Runner) buildState(taskID string) *GraphState {
 	task, _ := r.store.Get(taskID)
+	r.mu.Lock()
+	cfg := r.cfg
+	r.mu.Unlock()
 	s := &GraphState{
 		taskID:       taskID,
 		store:        r.store,
@@ -373,9 +400,9 @@ func (r *Runner) buildState(taskID string) *GraphState {
 		validator:    r.validator,
 		exec:         r.exec,
 		gate:         r.gate,
-		cfg:          r.cfg,
+		cfg:          cfg,
 		parentTaskID: task.ParentTaskID,
-		memCtx:       MemoryContext{TokenBudget: r.cfg.TokenBudget},
+		memCtx:       MemoryContext{TokenBudget: cfg.TokenBudget},
 	}
 	// Restore from checkpoint on crash-recovery resume.
 	if task.Checkpoint.CurrentNode != "" {
@@ -387,14 +414,25 @@ func (r *Runner) buildState(taskID string) *GraphState {
 }
 
 // loop is the goroutine entry point for async task execution via Start().
-func (r *Runner) loop(ctx context.Context, taskID string) {
+// operatorMessage, if non-empty, is injected as the next observation before
+// the loop resumes — see the "ask" special-case below for why.
+func (r *Runner) loop(ctx context.Context, taskID string, operatorMessage string) {
 	s := r.buildState(taskID)
 
 	// Resume from checkpoint if available; otherwise start at the step node.
+	// "ask" is a terminal node (no outgoing edges in graphEdges) — resuming
+	// INTO it would just re-run askNode, which immediately re-pauses with
+	// nothing new to show the operator. A task can only ever be resumed FROM
+	// a paused ask_operator state via this path, so always fall back to the
+	// normal step node instead, carrying forward whatever operator guidance
+	// was given.
 	startNode := nodeStep
 	task, _ := r.store.Get(taskID)
-	if task.Checkpoint.CurrentNode != "" {
+	if task.Checkpoint.CurrentNode != "" && task.Checkpoint.CurrentNode != nodeAsk {
 		startNode = task.Checkpoint.CurrentNode
+	}
+	if msg := strings.TrimSpace(operatorMessage); msg != "" {
+		s.lastObs = Wrap("OPERATOR_ANSWER", msg)
 	}
 
 	if err := Execute(ctx, s, startNode); err != nil {

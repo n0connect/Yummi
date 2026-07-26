@@ -91,8 +91,7 @@ func firstToken(cmd string) string {
 // simpleCommandPattern allowlists the structural shape of a single,
 // unchained tool invocation: a bare command/path token, followed by
 // whitespace-separated argument tokens. Each argument token is one or more
-// concatenated fragments — a quoted string (any content except the quote
-// char, a backslash, or a literal CR/LF) or an unquoted run of characters
+// concatenated fragments — a quoted string or an unquoted run of characters
 // that have no meaning to a shell (letters, digits, and a fixed set of
 // common flag/path/URL punctuation) — which is what lets ordinary partial
 // quoting like cut -d':' -f1 or awk -F':' match: -d':' is the bareword
@@ -105,13 +104,22 @@ func firstToken(cmd string) string {
 // `bash -lc`. A command line containing any of them outside quotes simply
 // does not match this shape.
 //
+// Single- and double-quoted content are NOT equally inert, though, so they
+// get different allowed-character sets: single quotes suppress every form of
+// expansion in bash, so any byte except the quote char/backslash/CR/LF is
+// genuinely inert data. Double quotes still let $VAR expansion and $()/
+// backtick command substitution through — `echo "$(cat /etc/passwd)"` runs
+// the embedded command — so the double-quoted branch additionally excludes
+// `$` and backtick; a double-quoted fragment containing either doesn't match
+// this shape and falls through to critical, same as if it were unquoted.
+//
 // This is a deliberate default-deny allowlist, not a list of forbidden
 // characters: classifyRisk does not ask "does this command contain a bad
 // character," it asks "does this command match the one shape we understand
 // well enough to call low risk." Anything else — including command
 // structures we didn't anticipate — falls through to critical.
 var simpleCommandPattern = regexp.MustCompile(
-	`^[A-Za-z0-9_./-]+(?:[ \t]+(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|[A-Za-z0-9_.\-/:=,@%+~?*]+)+)*[ \t]*$`,
+	"^[A-Za-z0-9_./-]+(?:[ \t]+(?:\"[^\"$`\\\\\r\n]*\"|'[^'\\\\\r\n]*'|[A-Za-z0-9_.\\-/:=,@%+~?*]+)+)*[ \t]*$",
 )
 
 // classifyRisk returns a floor risk level based purely on structural command

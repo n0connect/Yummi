@@ -288,3 +288,127 @@ func TestSlashCommandsIncludeControls(t *testing.T) {
 		}
 	}
 }
+
+// Regression: the gateway's Ask egress mode holds a command in
+// awaiting_egress_approval until the operator approves/denies its external
+// target. The web UI (AssistantPanel.tsx's egressHolds) already renders this
+// as an approve/reject card; the TUI had no equivalent at all — an operator
+// working from the terminal had no way to ever see or resolve one of these
+// holds. decodeFrame must surface the execution id and egress_target fields
+// an egress hold needs (previously undecoded — wireExec had neither).
+func TestDecodeFrameExtractsEgressHoldFields(t *testing.T) {
+	frame := `{"type":"execution.status","data":{"id":"exec1","command":"curl evil.example",` +
+		`"status":"awaiting_egress_approval","egress_target":"evil.example"}}`
+	msg := decodeFrame([]byte(frame))
+	e, ok := msg.(execMsg)
+	if !ok {
+		t.Fatalf("expected execMsg, got %#v", msg)
+	}
+	if e.ID != "exec1" {
+		t.Fatalf("id not decoded: %q", e.ID)
+	}
+	if e.EgressTarget != "evil.example" {
+		t.Fatalf("egress_target not decoded: %q", e.EgressTarget)
+	}
+}
+
+// An awaiting_egress_approval execMsg must be tracked as a pending hold, not
+// dropped into the timeline like a normal exec result (the operator hasn't
+// seen an outcome yet — the command hasn't run).
+func TestExecMsgAwaitingEgressApprovalAddsHold(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(execMsg{ID: "exec1", Command: "curl evil.example", Status: "awaiting_egress_approval", EgressTarget: "evil.example"})
+	got := updated.(model)
+
+	if len(got.egressHolds) != 1 || got.egressHolds[0].ID != "exec1" {
+		t.Fatalf("expected 1 egress hold for exec1, got %+v", got.egressHolds)
+	}
+	for _, it := range got.items {
+		if _, ok := it.(ExecItem); ok {
+			t.Fatalf("awaiting_egress_approval must not be logged as a normal exec result: %+v", it)
+		}
+	}
+}
+
+// Once the held execution reaches a terminal status, it must leave the hold
+// list (mirrors AssistantPanel.tsx's onExecution filtering egressHolds on
+// completed/failed/canceled).
+func TestExecMsgTerminalClearsEgressHold(t *testing.T) {
+	m := newTestModel()
+	m.egressHolds = []execMsg{{ID: "exec1", Command: "curl evil.example", EgressTarget: "evil.example"}}
+	updated, _ := m.Update(execMsg{ID: "exec1", Command: "curl evil.example", Status: "completed", Output: "ok"})
+	got := updated.(model)
+
+	if len(got.egressHolds) != 0 {
+		t.Fatalf("expected the resolved hold to be removed, got %+v", got.egressHolds)
+	}
+}
+
+// Security regression: command output originates on a (possibly hostile)
+// pentest target. ws.go's own comment on execMsg.SanitizedOutput says "Never
+// the raw fields: those may carry target-controlled escape sequences" — but
+// the terminal-timeline ExecItem built in the execMsg branch of Update used
+// the raw Output/Error fields instead, so a malicious target response (e.g. an
+// HTTP body or service banner containing ANSI/OSC escape sequences) would be
+// written verbatim to the operator's real terminal by bubbletea. The web UI's
+// equivalent path is inert (React renders text nodes, not a real terminal),
+// but the TUI writes straight to stdout, so this must prefer the ANSI-stripped
+// copy exactly like analyzeExecution already does.
+func TestExecMsgTerminalItemUsesSanitizedOutput(t *testing.T) {
+	m := newTestModel()
+	raw := "\x1b]0;pwned\x07innocuous-looking output"
+	updated, _ := m.Update(execMsg{
+		ID: "exec1", Command: "curl target.example", Status: "completed",
+		Output: raw, SanitizedOutput: "innocuous-looking output",
+	})
+	got := updated.(model)
+
+	for _, it := range got.items {
+		if ei, ok := it.(ExecItem); ok {
+			if strings.Contains(ei.Output, "\x1b") {
+				t.Fatalf("ExecItem.Output must never contain a raw escape byte from target-controlled output: %q", ei.Output)
+			}
+			if ei.Output != "innocuous-looking output" {
+				t.Fatalf("expected ExecItem.Output to be the sanitized copy, got %q", ei.Output)
+			}
+		}
+	}
+}
+
+// 'y'/'n' must resolve the oldest egress hold when one is pending and there's
+// no active proposal/task-approval ahead of it in the priority chain (mirrors
+// the existing proposal/pendingID y-n routing in handleKey).
+func TestYNKeyResolvesEgressHold(t *testing.T) {
+	m := newTestModel()
+	m.client = NewClient("http://unused.invalid")
+	m.input = textinput.New()
+	m.egressHolds = []execMsg{{ID: "exec1", Command: "curl evil.example", EgressTarget: "evil.example"}}
+
+	cmd, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if !handled {
+		t.Fatal("expected 'y' to be consumed as an egress-hold approval")
+	}
+	if cmd == nil {
+		t.Fatal("expected a network command to resolve the egress hold")
+	}
+	if len(m.egressHolds) != 0 {
+		t.Fatalf("expected the hold to be optimistically cleared, got %+v", m.egressHolds)
+	}
+}
+
+// Regression: ChatResult.TaskGoal was decoded off the chat response but never
+// surfaced anywhere — an operator starting an agent task from chat saw only
+// "task started — watching…" with no indication of what goal was actually
+// kicked off, until the first taskMsg with a plan arrived over WS (which can
+// lag). The "task started" notice must include the goal when the server sent
+// one.
+func TestChatResultTaskStartedIncludesGoal(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(chatResultMsg{res: ChatResult{TaskID: "t1", TaskGoal: "recon the host"}})
+	got := updated.(model)
+
+	last := got.items[len(got.items)-1].Render(80)
+	if !strings.Contains(last, "recon the host") {
+		t.Fatalf("expected task-started notice to include the goal, got %q", last)
+	}
+}

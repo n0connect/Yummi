@@ -9,13 +9,20 @@ scope:
   # until an operator approves targets via orchestrator's approval flow.
   allow: []
   # Always-blocked CIDRs (loopback, link-local, private ranges).
-  # These protect against SSRF and scope bleed.
+  # These protect against SSRF and scope bleed. IPv4 loopback/link-local and
+  # IPv6 loopback/link-local(fe80::/10)/multicast/unspecified are additionally
+  # enforced unconditionally by the policy engine's is_always_blocked() floor
+  # (gateway/src/policy/mod.rs) regardless of this list; the RFC1918-equivalent
+  # private ranges below are config-level only, so the IPv6 unique-local range
+  # (fc00::/7, RFC 4193 — analogous to RFC1918) needs its own entry here to get
+  # the same default-deny treatment IPv4 private space gets.
   block:
     - "127.0.0.0/8"
     - "169.254.0.0/16"
     - "10.0.0.0/8"
     - "172.16.0.0/12"
     - "192.168.0.0/16"
+    - "fc00::/7"
   # Name-level scope, enforced by the orchestrator before it resolves a name
   # (the gateway sees only IPs in packets). Wildcard: "*.example.com" covers
   # the apex example.com AND any subdomain at any depth.
@@ -32,7 +39,6 @@ scope:
 
 policy:
   default_allow: false
-  observe_only: false
 
 logging:
   level: "info"

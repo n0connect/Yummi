@@ -83,7 +83,7 @@ func TestRunnerLive_RealModelRealContainer(t *testing.T) {
 		t.Logf("  [%s] %s", s.ID, s.Description)
 	}
 
-	if err := runner.Start(task.ID); err != nil {
+	if err := runner.Start(task.ID, ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 

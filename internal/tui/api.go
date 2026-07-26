@@ -76,6 +76,23 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 	return nil
 }
 
+// getJSON issues a GET and decodes the JSON body into out.
+func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, path)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 // getStatus issues a GET and reports only whether the server returned 2xx —
 // used by SessionExists, where the body is irrelevant.
 func (c *Client) getStatus(ctx context.Context, path string) (int, error) {
@@ -212,10 +229,88 @@ func (c *Client) SetApprovalMode(mode string) error {
 		map[string]string{"mode": mode}, nil)
 }
 
+// ResolveEgress settles an execution held in gateway Ask egress mode — the
+// TUI counterpart of AssistantPanel.tsx's resolveEgress POST call.
+func (c *Client) ResolveEgress(executionID string, approved bool) error {
+	return c.postJSON(context.Background(), "/api/v1/executions/"+executionID+"/resolve-egress",
+		map[string]bool{"approved": approved}, nil)
+}
+
 // Module is one component health row (subset of the system status payload).
 type Module struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
+}
+
+// ── Gateway (feature parity with the web UI's GATEWAY tab) ───────────────────
+
+// GatewayRule mirrors gateway.RuleView (network, source, expiry) — only the
+// fields the TUI's compact summary needs.
+type GatewayRule struct {
+	Network string `json:"network"`
+	Source  string `json:"source"`
+}
+
+// GatewayStatus is the TUI-friendly flattening of egress-mode + rule count,
+// the two facts an operator most needs at a glance without leaving the console.
+type GatewayStatus struct {
+	Mode   string // block | allow | ask
+	Rules  int
+	Status string // connected | unreachable | not_configured
+}
+
+// GatewaySnapshot fetches the egress mode and active-rule count in one call.
+func (c *Client) GatewaySnapshot() (GatewayStatus, error) {
+	var modeOut struct {
+		Mode   string `json:"mode"`
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := c.getJSON(context.Background(), "/api/v1/gateway/egress-mode", &modeOut); err != nil {
+		return GatewayStatus{}, err
+	}
+	var rulesOut struct {
+		Rules  []GatewayRule `json:"rules"`
+		Status string        `json:"status"`
+	}
+	if err := c.getJSON(context.Background(), "/api/v1/gateway/rules", &rulesOut); err != nil {
+		return GatewayStatus{}, err
+	}
+	status := modeOut.Status
+	if status == "" {
+		status = rulesOut.Status
+	}
+	return GatewayStatus{Mode: modeOut.Mode, Rules: len(rulesOut.Rules), Status: status}, nil
+}
+
+// ── Pending skills (feature parity with the web UI's skills-approval panel) ──
+
+// PendingSkill mirrors skillcurator.PendingSkill — only the fields the TUI
+// needs to list and act on a draft.
+type PendingSkill struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Name   string `json:"name"`
+	TaskID string `json:"task_id"`
+}
+
+// PendingSkills lists auto-drafted skills awaiting operator approval.
+func (c *Client) PendingSkills() ([]PendingSkill, error) {
+	var out []PendingSkill
+	if err := c.getJSON(context.Background(), "/api/v1/skills/pending", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ApproveSkill promotes a pending draft to a live, loaded skill.
+func (c *Client) ApproveSkill(id string) error {
+	return c.postJSON(context.Background(), "/api/v1/skills/pending/"+id+"/approve", map[string]string{}, nil)
+}
+
+// RejectSkill discards a pending draft.
+func (c *Client) RejectSkill(id string) error {
+	return c.postJSON(context.Background(), "/api/v1/skills/pending/"+id+"/reject", map[string]string{}, nil)
 }
 
 // Health fetches component status (best-effort; empty slice on any error).

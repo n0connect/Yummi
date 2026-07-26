@@ -4,6 +4,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -47,7 +48,7 @@ var ErrEgressApprovalRequired = errors.New("egress approval required")
 // below) and the API's direct-exec endpoint — must route through this
 // function. Gateway is the only component that decides "is this target
 // reachable"; this function never makes that decision itself, only asks.
-func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.Client, command string) (*sandbox.Result, error) {
+func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.Client, command string, pinnedIPs ...string) (*sandbox.Result, error) {
 	if bridge == nil {
 		return nil, fmt.Errorf("sandbox bridge not configured")
 	}
@@ -80,7 +81,12 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 		// An IP literal passes through unchanged; an unresolvable hostname
 		// yields no IPs and falls back to the gateway's mode-based unresolved
 		// verdict (and opens no rule, as before).
-		ips := defaultResolver.Resolve(ctx, target)
+		var ips []string
+		if len(pinnedIPs) > 0 && pinnedIPs[0] != "" {
+			ips = pinnedIPs
+		} else {
+			ips = defaultResolver.Resolve(ctx, target)
+		}
 		checkTarget := target
 		if len(ips) > 0 {
 			checkTarget = ips[0]
@@ -98,7 +104,7 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 		case "block":
 			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
 		case "needs_approval":
-			return nil, fmt.Errorf("EGRESS_APPROVAL_REQUIRED: %q needs operator approval: %w", target, ErrEgressApprovalRequired)
+			return nil, execution.EgressApprovalRequiredError{Target: target, IPs: ips}
 		default:
 			// Unknown/empty verdict: fail closed rather than proceed to exec.
 			slog.Error("RunScopedCommand: unknown gateway egress verdict — blocking execution (fail-closed)",
@@ -106,9 +112,9 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
 		}
 
-		// Open an allow rule for every resolved IPv4 (bounded) so a hostname
+		// Open an allow rule for every resolved IPv4/IPv6 (bounded) so a hostname
 		// that round-robins across a small set stays reachable; a bare IP
-		// target opens just its own /32.
+		// target opens just its own /32 or /128.
 		nftWarning := openAllowRules(pc, target, ips, command)
 
 		result, err := bridge.Exec(ctx, command)
@@ -163,14 +169,19 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 			"command", rec.Command,
 		)
 
-		result, err := RunScopedCommand(ctx, e.bridge, e.gateway, rec.Command)
+		var pinned []string
+		if rec.PinnedIPs != "" {
+			_ = json.Unmarshal([]byte(rec.PinnedIPs), &pinned)
+		}
+
+		result, err := RunScopedCommand(ctx, e.bridge, e.gateway, rec.Command, pinned...)
 		if err != nil {
-			// Egress Ask mode: don't fail the execution and don't record a
-			// tactic outcome — the command never ran. Translate to the store's
-			// sentinel so it holds the record for operator egress approval
-			// (the store deliberately does not import this package).
-			if errors.Is(err, ErrEgressApprovalRequired) {
-				return "", execution.ErrEgressApprovalRequired
+			// Egress Ask mode: the gateway wants operator approval before the
+			// target may be reached. Hold the execution (fail-closed, no
+			// traffic) instead of failing it — ResolveEgress resumes or ends it.
+			var egressErr execution.EgressApprovalRequiredError
+			if errors.As(err, &egressErr) {
+				return "", egressErr
 			}
 			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
 			if result != nil {
@@ -244,25 +255,23 @@ func openAllowRules(pc *gateway.Client, target string, ips []string, command str
 }
 
 // resolvedNetworks turns a target + its resolved IPs into the CIDR list the
-// gateway needs. Resolved IPs each become a single-address /32 prefix; an
-// IP-literal target with no resolution falls back to its own /32; a bare
-// unresolvable hostname yields nothing (no rule can be opened).
-//
-// IPv6 is intentionally dropped: the gateway's nftables `allowed_targets` set
-// is `type ipv4_addr`, so a v6 allow rule is accepted over IPC but fails the
-// kernel unlock. Filtering here avoids opening rules that cannot work (an
-// IPv6-only target is simply unreachable through this gateway). If the gateway
-// gains a v6 set, lift this filter.
+// gateway needs. Resolved IPs each become a single-address /32 (v4) or /128
+// (v6) prefix via ipNetwork; an IP-literal target with no resolution falls
+// back to its own prefix; a bare unresolvable hostname yields nothing (no
+// rule can be opened). Both address families are supported end to end — the
+// gateway's nftables ruleset carries a parallel `allowed_targets_v6` set
+// (gateway/src/network/nftables.rs) that CheckEgress/AddTemporaryRule route
+// into based on the IP's own family, so no filtering is needed here.
 func resolvedNetworks(target string, ips []string) []string {
 	if len(ips) == 0 {
-		if n := ipv4Network(target); n != "" {
+		if n := ipNetwork(target); n != "" {
 			return []string{n}
 		}
 		return nil
 	}
 	out := make([]string, 0, len(ips))
 	for _, ip := range ips {
-		if n := ipv4Network(ip); n != "" {
+		if n := ipNetwork(ip); n != "" {
 			out = append(out, n)
 		}
 	}
@@ -281,19 +290,18 @@ func isHostnameTarget(target string) bool {
 	return true
 }
 
-// ipv4Network returns the single-address CIDR the gateway needs for target,
-// but only when it is an IPv4 address ("1.2.3.4" → "1.2.3.4/32") or an IPv4
-// CIDR (passed through). Returns "" for IPv6, a hostname, or any non-IP — the
-// gateway's allow set is IPv4-only and it has no resolver of its own.
-func ipv4Network(target string) string {
-	if prefix, err := netip.ParsePrefix(target); err == nil {
-		if prefix.Addr().Is4() {
-			return target
-		}
-		return ""
+// ipNetwork returns the single-address CIDR the gateway needs for target.
+// Returns a /32 format for IPv4 addresses or /128 format for IPv6 addresses.
+// Passed CIDR prefixes are returned unchanged. Returns "" for hostnames or invalid IPs.
+func ipNetwork(target string) string {
+	if _, err := netip.ParsePrefix(target); err == nil {
+		return target
 	}
-	if addr, err := netip.ParseAddr(target); err == nil && addr.Is4() {
-		return target + "/32"
+	if addr, err := netip.ParseAddr(target); err == nil {
+		if addr.Is4() {
+			return target + "/32"
+		}
+		return target + "/128"
 	}
 	return ""
 }
@@ -306,11 +314,16 @@ func ipv4Network(target string) string {
 // resolver the sandbox uses) and a rule is opened for each resolved IP. Returns
 // an error only when nothing could be opened — an unresolvable hostname (no IP
 // to rule on) or a gateway IPC failure.
-func UnlockEgressTarget(pc *gateway.Client, target, command string) error {
+func UnlockEgressTarget(pc *gateway.Client, target, command string, pinnedIPs ...string) error {
 	if pc == nil {
 		return fmt.Errorf("gateway client not configured")
 	}
-	ips := defaultResolver.Resolve(context.Background(), target)
+	var ips []string
+	if len(pinnedIPs) > 0 && pinnedIPs[0] != "" {
+		ips = pinnedIPs
+	} else {
+		ips = defaultResolver.Resolve(context.Background(), target)
+	}
 	networks := resolvedNetworks(target, ips)
 	if len(networks) == 0 {
 		return fmt.Errorf("cannot approve egress for %q: it did not resolve to any IP", target)
