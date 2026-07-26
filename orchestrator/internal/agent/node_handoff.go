@@ -4,65 +4,121 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+
+	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
 
-// handoffNode delegates a focused subtask to a specialized sub-agent and feeds
-// its result back to the parent loop as the next observation. The sub-agent
-// shares the Knowledge Store, so its findings join the one world model; only a
-// human-readable summary is threaded back into the parent's prompt. It always
-// returns edgeOK → back to stepNode: success or failure is conveyed in the
-// observation, never as a graph error, so a failed handoff can't wedge the loop.
-//
-// Budget was already consumed for this turn by stepNode; the sub-agent runs on
-// its own independent step budget. Recursion is impossible because sub-agents
-// are built with an empty SubAgents map (handoff depth is capped at 1).
-func handoffNode(ctx context.Context, s *GraphState) (string, error) {
-	role := strings.TrimSpace(s.pendingAct.Role)
-	subgoal := strings.TrimSpace(s.pendingAct.Subgoal)
+// handoffTargets normalizes an Action's two HANDOFF shapes into one list: the
+// fan-out form (Handoffs, one or more targets dispatched concurrently) takes
+// priority when present; otherwise the single-target form (Role/Subgoal)
+// becomes a one-element list. Returns nil when neither is populated.
+func handoffTargets(a Action) []HandoffSpec {
+	if len(a.Handoffs) > 0 {
+		return a.Handoffs
+	}
+	if strings.TrimSpace(a.Role) != "" && strings.TrimSpace(a.Subgoal) != "" {
+		return []HandoffSpec{{Role: a.Role, Subgoal: a.Subgoal}}
+	}
+	return nil
+}
 
-	sub := s.cfg.SubAgents[role]
-	if sub == nil {
-		s.lastObs = Wrap("TOOL_FAILED",
-			fmt.Sprintf("handoff to unknown role %q failed; handle the subtask yourself or finish", role))
+// handoffResult is one target's outcome, collected by index so concurrent
+// goroutines never contend on a shared slice element.
+type handoffResult struct {
+	role, subgoal string
+	res           SubResult
+	err           error
+}
+
+// handoffNode delegates a focused subtask to one or more specialized
+// sub-agents CONCURRENTLY and feeds their merged result back to the parent
+// loop as the next observation. Every sub-agent shares the Knowledge Store, so
+// its findings join the one world model; only a human-readable summary is
+// threaded back into the parent's prompt. It always returns edgeOK → back to
+// stepNode: success or failure of any individual target is conveyed in the
+// observation, never as a graph error, so a failed handoff can't wedge the
+// loop.
+//
+// Budget was already consumed for this turn by stepNode; each sub-agent runs
+// on its own independent step budget. Recursion is impossible because
+// sub-agents are built with an empty SubAgents map (handoff depth is capped
+// at 1). Dispatching N targets concurrently — instead of one after another —
+// is the only change from a single-target handoff: wall-clock cost becomes
+// roughly the SLOWEST sub-agent, not the sum of all of them, and multiple
+// specialists genuinely work in parallel rather than queueing behind each
+// other.
+func handoffNode(ctx context.Context, s *GraphState) (string, error) {
+	targets := handoffTargets(s.pendingAct)
+	if len(targets) == 0 {
+		s.lastObs = Wrap("TOOL_FAILED", "handoff had no valid targets; handle the subtask yourself or finish")
 		return edgeOK, nil
 	}
 
 	task, _ := s.store.Get(s.taskID)
-	s.emit(ActHandoffIn, role+": "+subgoal, "")
 
-	// Cap the sub-agent run so a wedged specialist can't pin the parent loop
-	// forever (autogen's RPC-timeout pattern). The parent ctx still cancels it
-	// early; this only adds an upper bound. A timeout is surfaced as a normal
-	// observation, never a graph error, so the parent keeps control.
+	// One shared deadline for the whole fan-out, not per-target: N specialists
+	// running concurrently should still finish within roughly one specialist's
+	// worth of time, same budget as a single handoff would get.
 	subCtx, cancel := context.WithTimeout(ctx, s.cfg.SubAgentTimeout)
 	defer cancel()
-	res, err := sub.RunSubtask(subCtx, task.SessionID, subgoal, s.taskID)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err() // PARENT cancelled — propagate
-		}
-		reason := err.Error()
-		if subCtx.Err() == context.DeadlineExceeded {
-			reason = fmt.Sprintf("timed out after %s", s.cfg.SubAgentTimeout)
-		}
-		s.lastObs = Wrap("TOOL_FAILED",
-			fmt.Sprintf("sub-agent %q failed on subtask %q: %s; handle it yourself or finish", role, subgoal, reason))
-		s.emit(ActHandoffOut, role+" → failed: "+reason, "")
-		return edgeOK, nil
+
+	results := make([]handoffResult, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		role := strings.TrimSpace(t.Role)
+		subgoal := strings.TrimSpace(t.Subgoal)
+		sub := s.cfg.SubAgents[role]
+		s.emit(ActHandoffIn, role+": "+subgoal, "")
+
+		wg.Add(1)
+		go func(i int, role, subgoal string, sub *Runner) {
+			defer wg.Done()
+			res, err := sub.RunSubtask(subCtx, task.SessionID, subgoal, s.taskID)
+			results[i] = handoffResult{role: role, subgoal: subgoal, res: res, err: err}
+		}(i, role, subgoal, sub)
+	}
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		return "", ctx.Err() // PARENT cancelled — propagate
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Sub-agent %q completed subtask: %s\n", role, subgoal)
-	if res.Summary != "" {
-		fmt.Fprintf(&b, "Summary: %s\n", res.Summary)
-	}
-	if len(res.Findings) > 0 {
-		b.WriteString("Findings (also recorded to shared knowledge):\n")
-		for _, f := range res.Findings {
-			fmt.Fprintf(&b, "  - %s\n", f)
+	for _, r := range results {
+		if r.err != nil {
+			reason := r.err.Error()
+			if subCtx.Err() == context.DeadlineExceeded {
+				reason = fmt.Sprintf("timed out after %s", s.cfg.SubAgentTimeout)
+			}
+			fmt.Fprintf(&b, "Sub-agent %q failed on subtask %q: %s; handle it yourself or finish\n", r.role, r.subgoal, reason)
+			s.emit(ActHandoffOut, r.role+" → failed: "+reason, "")
+			continue
 		}
+
+		// Content-layer fail-closed: res.Summary is LLM-generated by the
+		// sub-agent and can echo injected content it observed from hostile tool
+		// output — the same risk regular tool output carries, which
+		// observeResult() strips/flags before it enters the prompt. This loop
+		// builds s.lastObs directly (never through observeResult()), so without
+		// this each sub-agent's summary would reach the parent's prompt
+		// completely raw, ANSI codes and all, with no threat-pattern detection.
+		summary := threatscan.StripANSI(r.res.Summary)
+		fmt.Fprintf(&b, "Sub-agent %q completed subtask: %s\n", r.role, r.subgoal)
+		if summary != "" {
+			fmt.Fprintf(&b, "Summary: %s\n", summary)
+			if banner := threatscan.Banner(summary); banner != "" {
+				fmt.Fprintf(&b, "%s\n", banner)
+			}
+		}
+		if len(r.res.Findings) > 0 {
+			b.WriteString("Findings (also recorded to shared knowledge):\n")
+			for _, f := range r.res.Findings {
+				fmt.Fprintf(&b, "  - %s\n", f)
+			}
+		}
+		s.emit(ActHandoffOut, r.role+" → "+orDefault(summary, "completed"), "")
 	}
 	s.lastObs = Wrap("TOOL_RESPONSE", b.String())
-	s.emit(ActHandoffOut, role+" → "+orDefault(res.Summary, "completed"), "")
 	return edgeOK, nil
 }

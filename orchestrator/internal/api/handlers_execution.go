@@ -125,7 +125,12 @@ func HandleResolveEgress(store *execution.Store, pc *gateway.Client, sm *session
 		held, _ := store.Get(id)
 		target := held.EgressTarget
 
-		unlock := func() error { return executor.UnlockEgressTarget(pc, target, held.Command) }
+		var pinned []string
+		if held.PinnedIPs != "" {
+			_ = json.Unmarshal([]byte(held.PinnedIPs), &pinned)
+		}
+
+		unlock := func() error { return executor.UnlockEgressTarget(pc, target, held.Command, pinned...) }
 		rec, err := store.ResolveEgress(id, req.Approved, unlock)
 		if err != nil {
 			status := http.StatusInternalServerError

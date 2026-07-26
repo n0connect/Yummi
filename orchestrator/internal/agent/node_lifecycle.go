@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // retryNode backs off after an LLM error, then re-enters the calling node.
@@ -190,12 +192,14 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		if strings.TrimSpace(summary) == "" {
 			summary, findings = mergeSynthesis(ctx, s, findings)
 		}
+		summary = appendUnverifiedToolWarning(s, summary, findings)
 		_ = s.store.Transition(s.taskID, StatusCompleted, func(t *Task) {
 			t.Summary = summary
 			t.Findings = findings
 		})
 		if task, ok := s.store.Get(s.taskID); ok {
 			recordTaskFindings(ctx, s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
+			proposeSkillFromTrajectory(s, task, summary)
 		}
 		s.emit(ActFinish, summary, "")
 	case outcomeStopped:
@@ -204,6 +208,7 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		})
 	default: // outcomeFailed
 		summary, findings := mergeSynthesis(ctx, s, nil)
+		summary = appendUnverifiedToolWarning(s, summary, findings)
 		_ = s.store.Transition(s.taskID, StatusFailed, func(t *Task) {
 			t.LastError = s.finishMsg
 			t.Summary = summary // what was gathered before the failure, if anything
@@ -213,6 +218,48 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		})
 	}
 	return edgeDone, nil
+}
+
+// appendUnverifiedToolWarning looks up the task's current plan and appends
+// unverifiedToolWarning's caveat to summary when findings reference a tool
+// whose step failed. Shared by both the completed and failed outcomes.
+func appendUnverifiedToolWarning(s *GraphState, summary string, findings []string) string {
+	task, ok := s.store.Get(s.taskID)
+	if !ok {
+		return summary
+	}
+	if warning := unverifiedToolWarning(task, findings); warning != "" {
+		return strings.TrimSpace(summary + "\n\n" + warning)
+	}
+	return summary
+}
+
+// proposeSkillFromTrajectory fires the optional auto-skill-creation hook,
+// detached from the graph's own context (which is cancelled once the task
+// ends) so a slow curator LLM call doesn't get killed mid-flight, and via
+// `go` so it never delays finishNode's return to the caller. Fired for both
+// top-level and sub-agent completions — finishNode is shared by both.
+func proposeSkillFromTrajectory(s *GraphState, task Task, summary string) {
+	if s.cfg.SkillCurator == nil {
+		return
+	}
+	traj := skillcurator.Trajectory{
+		TaskID:       s.taskID,
+		SessionID:    task.SessionID,
+		Goal:         task.Goal,
+		Summary:      summary,
+		Observations: append([]string{}, s.memCtx.Observations...),
+	}
+	if s.cfg.Knowledge != nil {
+		for _, tool := range toolsFromCommands(s.recentCmds) {
+			for _, tac := range s.cfg.Knowledge.ListTactics(tool, 3) {
+				if tac.Outcome == "worked" {
+					traj.Tactics = append(traj.Tactics, tac)
+				}
+			}
+		}
+	}
+	go s.cfg.SkillCurator(context.Background(), traj)
 }
 
 // mergeSynthesis runs the final-synthesis pass and merges any synthesized

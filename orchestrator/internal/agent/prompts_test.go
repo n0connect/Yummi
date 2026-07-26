@@ -48,6 +48,20 @@ func TestBuildStepPromptContainsState(t *testing.T) {
 	}
 }
 
+// TestBuildStepPromptWarnsAgainstUnexecutedFindings is a regression test for
+// a live-observed hallucination: a completed Red Team task's FINISH findings
+// included a specific "gobuster found /admin and /api" claim even though
+// gobuster was never actually run that session (only curl/whatweb/nikto
+// were, per the activity log) — the model reported results from a planned
+// but never-executed step as if it had. The step prompt must explicitly warn
+// against this.
+func TestBuildStepPromptWarnsAgainstUnexecutedFindings(t *testing.T) {
+	prompt := BuildStepPrompt(Task{Goal: "g"}, "", "", "")
+	if !strings.Contains(prompt, "MUST be traceable to a command you actually ran") {
+		t.Fatalf("expected an explicit anti-hallucination warning about findings, got:\n%s", prompt)
+	}
+}
+
 func TestStepSystemPromptIncludesProtocol(t *testing.T) {
 	p := StepSystemPrompt(testPersona)
 	for _, tag := range []string{"[RUN_COMMAND]", "[TOOL_FAILED]", "[STOP_TASK]", "[UNKNOWN]"} {

@@ -83,6 +83,13 @@ type PlanStep struct {
 	Duration    time.Duration `json:"duration,omitempty"`
 	RetryCount  int           `json:"retry_count,omitempty"`
 	Error       string        `json:"error,omitempty"`
+	// Command is the actual shell command dispatched for this step (set by
+	// markStepStatus at completion time, whether it succeeded or failed) — the
+	// operator-facing plan view previously only showed the model's own
+	// natural-language step description, with no record of what was literally
+	// run. Also lets finishNode cross-check the final report against which
+	// tools' commands actually completed vs. failed/aborted.
+	Command string `json:"command,omitempty"`
 }
 
 // Checkpoint records the graph position after each node transition for crash recovery.

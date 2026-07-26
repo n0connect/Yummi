@@ -3,6 +3,7 @@ package api
 
 import (
 	"net/http"
+	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -18,10 +19,11 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // NewRouter creates the Chi router with all routes.
-func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, agg *health.Aggregator, taskStore *agent.Store, taskRunner *agent.Runner) http.Handler {
+func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, resilientLLM *llm.Resilient, agg *health.Aggregator, taskStore *agent.Store, taskRunner *agent.Runner, curatorStore *skillcurator.Store) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -61,6 +63,9 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sessions/{sessionID}/context", HandleListContext(ks))
 		r.Get("/tactics", HandleListTactics(ks))
 		r.Get("/skills", HandleListSkills(skillReg))
+		r.Get("/skills/pending", HandleListPendingSkills(curatorStore))
+		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
+		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
 		r.Get("/agent/roles", HandleListRoles(taskRunner))
 		r.Get("/sessions/{sessionID}/audit", HandleListAudit(sm))
 		r.Get("/sessions/{sessionID}/executions", HandleListExecutions(executions))
@@ -91,7 +96,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/system/status", HandleSystemStatus(bridge, pc, cfg.DockerSocket, assistant))
 		r.Get("/system/health-metrics", HandleHealthMetrics(agg))
 		r.Get("/system/logs", HandleSystemLogs(lb))
-		r.Get("/llm/status", HandleLLMStatus(llmClient))
+		r.Get("/llm/status", HandleLLMStatus(llmClient, resilientLLM))
 
 		// Chat
 		r.Post("/chat", HandleChat(assistant, approvals, sm, taskRunner, taskStore))
@@ -115,4 +120,15 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg))
 
 	return r
+}
+
+// autoSkillDir is where an approved curator-drafted skill is written — the
+// same skills/ directory skill.LoadDir already reads at startup, so an
+// approval this session is picked up on the next restart even if the
+// in-process registry Add() were ever bypassed.
+func autoSkillDir(cfg *config.Config) string {
+	if cfg == nil || cfg.PersonaDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.PersonaDir, "skills")
 }

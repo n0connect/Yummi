@@ -200,21 +200,21 @@ func TestNewExecutor(t *testing.T) {
 	}
 }
 
-func TestIPv4Network(t *testing.T) {
+func TestIPNetwork(t *testing.T) {
 	tests := []struct {
 		target string
 		want   string
 	}{
 		{"1.2.3.4", "1.2.3.4/32"},
 		{"10.0.0.0/24", "10.0.0.0/24"},
-		{"2001:db8::1", ""}, // IPv6 dropped — gateway allow set is IPv4-only
-		{"2001:db8::/32", ""},
+		{"2001:db8::1", "2001:db8::1/128"},
+		{"2001:db8::/32", "2001:db8::/32"},
 		{"example.com", ""},
 		{"", ""},
 	}
 	for _, tt := range tests {
-		if got := ipv4Network(tt.target); got != tt.want {
-			t.Errorf("ipv4Network(%q) = %q, want %q", tt.target, got, tt.want)
+		if got := ipNetwork(tt.target); got != tt.want {
+			t.Errorf("ipNetwork(%q) = %q, want %q", tt.target, got, tt.want)
 		}
 	}
 }
@@ -231,7 +231,7 @@ func TestResolvedNetworks(t *testing.T) {
 		{"hostname resolved to several", "example.com", []string{"93.184.216.34", "1.2.3.4"}, []string{"93.184.216.34/32", "1.2.3.4/32"}},
 		{"hostname unresolved", "example.com", nil, nil},
 		{"resolved set drops junk", "h", []string{"5.5.5.5", "not-an-ip"}, []string{"5.5.5.5/32"}},
-		{"ipv6 dropped (gateway is v4-only)", "h", []string{"1.2.3.4", "2606:4700::1"}, []string{"1.2.3.4/32"}},
+		{"ipv6 supported", "h", []string{"1.2.3.4", "2606:4700::1"}, []string{"1.2.3.4/32", "2606:4700::1/128"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

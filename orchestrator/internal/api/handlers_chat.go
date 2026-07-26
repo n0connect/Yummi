@@ -143,7 +143,7 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 		// Start the task loop and return immediately. The UI tracks live
 		// progress via the /ws/events WebSocket (task.status events).
 		if resp.TaskID != "" && taskRunner != nil {
-			if err := taskRunner.Start(resp.TaskID); err != nil {
+			if err := taskRunner.Start(resp.TaskID, ""); err != nil {
 				slog.Warn("agent task start failed from chat", "task_id", resp.TaskID, "error", err)
 				resp.Intent = "decline"
 				resp.Message = "Görev başlatılamadı: " + err.Error()

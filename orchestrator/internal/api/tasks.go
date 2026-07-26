@@ -77,6 +77,10 @@ func HandleListTasks(store *agent.Store) http.HandlerFunc {
 }
 
 // HandleStartTask starts (or resumes) the loop. POST /api/v1/tasks/{id}/start
+// Body is optional: {"message":"..."} carries the operator's answer when
+// resuming a task paused via [ASK_OPERATOR] — without it, the model would
+// resume with nothing to go on. A missing/empty/malformed body is fine (plain
+// resume, or the initial Start of a freshly planned task).
 func HandleStartTask(runner *agent.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -84,7 +88,15 @@ func HandleStartTask(runner *agent.Runner) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid task id format", nil)
 			return
 		}
-		if err := runner.Start(id); err != nil {
+		var req struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Message) > 10000 {
+			writeError(w, http.StatusBadRequest, "message cannot exceed 10000 characters", nil)
+			return
+		}
+		if err := runner.Start(id, req.Message); err != nil {
 			writeError(w, http.StatusConflict, "cannot start", err)
 			return
 		}

@@ -331,6 +331,87 @@ func TestObserveResultTagsGatewayBlockedDistinctly(t *testing.T) {
 	}
 }
 
+// TestObserveResultRecordsCommandOnPlanStep proves markStepStatus records the
+// actual command it ran on the plan step — needed so finishNode can later
+// cross-check the model's own claimed findings against which tools' commands
+// really completed (see unverifiedToolWarning). Before this, PlanStep had no
+// record at all of what was literally run, only the model's own natural-
+// language step description.
+func TestObserveResultRecordsCommandOnPlanStep(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "scan a host")
+
+	s := &GraphState{
+		taskID:         task.ID,
+		store:          store,
+		gate:           NewGate(),
+		cfg:            fastRetryCfg(),
+		pendingCommand: "nmap -sV 172.20.0.6",
+		pendingAct:     Action{StepID: "s1"},
+	}
+	observeResult(s, ToolResult{Content: "Nmap scan report..."})
+
+	got, _ := store.Get(task.ID)
+	if planStep(got.Plan, "s1").Command != "nmap -sV 172.20.0.6" {
+		t.Fatalf("expected step to record the command, got %+v", planStep(got.Plan, "s1"))
+	}
+}
+
+// TestMarkStepStatusFallsBackToFirstPendingStepOnUnknownID is a regression
+// test for a live-observed bug: a completed multi-step task (real findings,
+// status=completed) still showed EVERY plan step frozen at "pending" — the
+// operator-facing plan view looked like nothing had happened at all, despite
+// real work having completed successfully. Root cause: markStepStatus only
+// updates a step whose ID exactly matches pendingAct.StepID; when the model
+// supplies a StepID that doesn't match any plan step (or omits it), the
+// lookup silently matches nothing and the plan is never touched — with no
+// fallback. The prompt clearly shows each step's ID, but a model's own
+// bookkeping compliance can't be guaranteed, so the tracking must degrade
+// gracefully: fall back to the first non-terminal (pending/running) step
+// instead of doing nothing.
+func TestMarkStepStatusFallsBackToFirstPendingStepOnUnknownID(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task, err := store.Create("test-session", "multi-step goal", 10)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{
+			{ID: "s1", Description: "first step", Status: StepPending},
+			{ID: "s2", Description: "second step", Status: StepPending},
+		}
+	}); err != nil {
+		t.Fatalf("transition to planned: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusRunning, nil); err != nil {
+		t.Fatalf("transition to running: %v", err)
+	}
+
+	s := &GraphState{
+		taskID:         task.ID,
+		store:          store,
+		gate:           NewGate(),
+		cfg:            fastRetryCfg(),
+		pendingCommand: "curl -sI http://target",
+		// The model gave a StepID that doesn't match any plan step — this
+		// happens in practice with weaker instruction-following.
+		pendingAct: Action{StepID: "step-1-not-a-real-id"},
+	}
+
+	edge := observeResult(s, ToolResult{Content: "HTTP/1.1 200 OK"})
+	if edge != edgeOK {
+		t.Fatalf("expected edgeOK, got %s", edge)
+	}
+
+	got, _ := store.Get(task.ID)
+	if planStep(got.Plan, "s1").Status != StepDone {
+		t.Fatalf("expected the first pending step (s1) to be marked done as a fallback, got plan=%+v", got.Plan)
+	}
+	if planStep(got.Plan, "s2").Status != StepPending {
+		t.Fatalf("expected s2 to remain untouched, got %s", planStep(got.Plan, "s2").Status)
+	}
+}
+
 // TestIsStuckSlidingWindow tests stuck detection without any LLM or exec.
 func TestIsStuckSlidingWindow(t *testing.T) {
 	// Three identical commands → stuck.

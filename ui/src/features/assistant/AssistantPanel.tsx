@@ -215,6 +215,13 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
   // needsTitleRef marks a freshly-created session whose name should be set from
   // the operator's first message (Claude-style auto-title).
   const needsTitleRef = useRef(false)
+  // historyError is set when hydrating a real session's messages fails, so the
+  // UI can show a distinct "load failed, retry" banner instead of silently
+  // presenting an empty conversation that looks identical to a genuinely new
+  // session (the prior bug: any transient fetch failure wiped the thread to
+  // the welcome message with no indication anything went wrong).
+  const [historyError, setHistoryError] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef       = useRef<HTMLInputElement>(null)
@@ -224,22 +231,39 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
   // Hydrate the thread when the active session changes: real sessions load
   // their persisted turns from the server; the "default" bucket falls back to
   // its sessionStorage copy. Runs on mount and on every rail switch.
-  useEffect(() => {
-    let cancelled = false
-    if (sessionID === 'default') {
+  const loadHistory = useCallback((sid: string) => {
+    const controller = new AbortController()
+    if (sid === 'default') {
       setMessages(loadDefaultMessages())
       setProposals([]); setActiveTask(null); setSubTask(null); setEgressHolds([])
-      return
+      setHistoryError(false); setHistoryLoading(false)
+      return controller
     }
-    fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sessionID}/messages`)
+    setHistoryLoading(true)
+    fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sid}/messages`, { signal: controller.signal })
       .then(rows => {
-        if (cancelled) return
         setMessages(rebuildMessages(rows ?? []))
         setProposals([]); setActiveTask(null); setSubTask(null); setEgressHolds([])
+        setHistoryError(false)
       })
-      .catch(() => { if (!cancelled) setMessages([freshWelcome()]) })
-    return () => { cancelled = true }
-  }, [sessionID])
+      .catch(err => {
+        if (err?.name === 'AbortError') return
+        // Do NOT overwrite the thread on failure — that previously made a
+        // transient network error indistinguishable from "history is gone".
+        // Surface a retryable banner instead (see historyError below).
+        setHistoryError(true)
+      })
+      .finally(() => setHistoryLoading(false))
+    return controller
+  }, [])
+
+  // Hydrate the thread when the active session changes: real sessions load
+  // their persisted turns from the server; the "default" bucket falls back to
+  // its sessionStorage copy. Runs on mount and on every rail switch.
+  useEffect(() => {
+    const controller = loadHistory(sessionID)
+    return () => controller.abort()
+  }, [sessionID, loadHistory])
 
   // Only the ad-hoc "default" bucket mirrors to sessionStorage; real sessions
   // are durably persisted server-side by the chat handler.
@@ -667,6 +691,15 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
       </div>
 
       <div className="chat-area">
+        {historyError && (
+          <div className="history-error-banner">
+            <span>Sohbet geçmişi yüklenemedi.</span>
+            <button className="small-button" onClick={() => loadHistory(sessionID)}>Tekrar dene</button>
+          </div>
+        )}
+        {historyLoading && !historyError && (
+          <div className="history-loading-banner">Geçmiş yükleniyor…</div>
+        )}
         {/* Message thread */}
         <div className="chat-messages">
           {messages.map(msg => {

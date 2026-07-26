@@ -45,6 +45,7 @@ func jittered(d time.Duration) time.Duration {
 // ── Bubble Tea messages delivered from the /ws/events stream ──────────────────
 
 type execMsg struct {
+	ID      string
 	Command string
 	Status  string
 	Output  string
@@ -56,6 +57,10 @@ type execMsg struct {
 	SanitizedError  string
 	Banner          string
 	Mode            string
+	// EgressTarget is set only while Status == "awaiting_egress_approval"
+	// (gateway Ask mode) — the host/IP the command is blocked on, mirrors
+	// ExecutionRecord.egress_target in the web UI.
+	EgressTarget string
 }
 
 // PlanStep mirrors the orchestrator's agent.PlanStep JSON (the fields the TUI
@@ -98,6 +103,7 @@ type wsEnvelope struct {
 }
 
 type wireExec struct {
+	ID              string `json:"id"`
 	Command         string `json:"command"`
 	Status          string `json:"status"`
 	Output          string `json:"output"`
@@ -106,6 +112,7 @@ type wireExec struct {
 	SanitizedError  string `json:"sanitized_error"`
 	SecurityBanner  string `json:"security_banner"`
 	Mode            string `json:"mode"`
+	EgressTarget    string `json:"egress_target"`
 }
 
 type wireTask struct {
@@ -143,9 +150,9 @@ func decodeFrame(raw []byte) tea.Msg {
 			return nil
 		}
 		return execMsg{
-			Command: e.Command, Status: e.Status, Output: e.Output, Error: e.Error,
+			ID: e.ID, Command: e.Command, Status: e.Status, Output: e.Output, Error: e.Error,
 			SanitizedOutput: e.SanitizedOutput, SanitizedError: e.SanitizedError,
-			Banner: e.SecurityBanner, Mode: e.Mode,
+			Banner: e.SecurityBanner, Mode: e.Mode, EgressTarget: e.EgressTarget,
 		}
 	case "task.status":
 		var t wireTask

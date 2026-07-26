@@ -1,19 +1,28 @@
-<div align="center">
+<p align="center">
+  <a href="https://github.com/n0connect/yummi">
+    <img src="ui/src/shared/assets/yummi_logo.svg" alt="Yummi logo" width="300">
+  </a>
+</p>
 
-# Yummi
+<p align="center">A privacy-first, fail-closed AI pentest conductor.</p>
 
-**A privacy-first, fail-closed AI pentest conductor.**
+<p align="center">
+  <a href="#quick-start"><img alt="CI" src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" /></a>
+  <a href="https://github.com/n0connect/yummi/releases"><img alt="Version" src="https://img.shields.io/badge/version-v0.1.0-brightgreen?style=flat-square" /></a>
+  <a href="orchestrator/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square" /></a>
+  <a href="gateway/Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square" /></a>
+  <a href="ui/package.json"><img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square" /></a>
+</p>
 
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.tr.md">Türkçe</a>
+</p>
+
+<p align="center">
 Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red-Team brain drives a hardened, network-isolated Kali sandbox — and a memory-safe Rust trust boundary makes sure the AI can never touch a target it was not allowed to.
-
-![CI](https://img.shields.io/badge/CI-pending-lightgrey)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Version](https://img.shields.io/badge/version-v0.1.0-lightgrey)
-![Go](https://img.shields.io/badge/Go-1.22-00ADD8)
-![Rust](https://img.shields.io/badge/Rust-stable-DEA584)
-![React](https://img.shields.io/badge/React-18-61DAFB)
-
-</div>
+</p>
 
 ---
 
@@ -65,7 +74,7 @@ User / Operator  →  Orchestrator (Go)  →  Gateway (Rust, IPC)  →  Sandbox 
 
 ```text
         ┌──────────────────────────────────────────────────────┐
-        │            Web Dashboard   ·   Terminal TUI          │
+        │          Web Dashboard   ·   Terminal TUI            │
         └───────────────────────────┬──────────────────────────┘
                                     │  REST + WebSocket · :9080
         ┌───────────────────────────▼──────────────────────────┐
@@ -94,7 +103,7 @@ The signal runs straight down one spine — operator → API → conductor → a
 ### Network topology
 
 ```
-yummi_internal (172.20.0.0/24): sandbox .10 · gateway .2 (also DNS) · orchestrator .3 · ui .4
+yummi_internal (172.20.0.0/24): sandbox .10 · gateway .2 (also DNS) · orchestrator .3 · ui .4 · docker-proxy .5
 yummi_external:                 gateway · orchestrator · ui only — the sandbox is intentionally absent.
                                 Its only path out is through the gateway's nftables rules.
 Host ports: 3000 → ui nginx · 9080 → orchestrator API (localhost only)
@@ -113,7 +122,7 @@ This is the **single most important invariant** in the codebase: *deny until exp
 - **Block rules always beat Allow rules.**
 - Pentest commands reach a shell through **exactly one place**: `sandbox.Bridge.Exec`, which runs `docker exec --user 1000:1000 <container> /bin/bash -lc <cmd>`. The agent never calls `exec.Command` itself — it only enqueues into the execution store, which the executor drains (gateway scope check → sandbox exec). No host-side command path is ever reachable from agent/LLM output.
 
-> The gateway is Linux/nftables-only. It compiles on macOS (it shells out to `nft`) but its enforcement only works on Linux — local macOS dev is **not** a real isolation boundary.
+> The gateway runs inside Docker rather than on the host system, relying on the container environment's kernel support.
 
 ---
 

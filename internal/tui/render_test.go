@@ -33,6 +33,20 @@ func TestRenderExecMark(t *testing.T) {
 	}
 }
 
+// Regression: the orchestrator's threat-scan banner (execution.SecurityBanner)
+// warns the operator that tool output looked like a content-layer injection
+// attempt. AssistantPanel.tsx surfaces it as a visible "⚠ security_banner"
+// alert box; the TUI decoded the same field (execMsg.Banner) but only ever
+// used it to guard text fed back to the LLM — the operator's own screen never
+// showed it. A human-visible warning is itself a security control, so
+// ExecItem must render the banner too.
+func TestRenderExecItemShowsSecurityBanner(t *testing.T) {
+	out := ExecItem{Command: "curl target.example", Status: "completed", Output: "ok", Banner: "[THREAT] possible prompt injection in output"}.Render(80)
+	if !strings.Contains(out, "possible prompt injection in output") {
+		t.Fatalf("expected security banner to be visible in rendered exec item, got %q", out)
+	}
+}
+
 func TestDecodeFrameTypes(t *testing.T) {
 	if msg := decodeFrame([]byte(`{"type":"execution.status","data":{"command":"whoami","status":"completed","output":"root"}}`)); func() bool {
 		e, ok := msg.(execMsg)
