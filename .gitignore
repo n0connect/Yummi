@@ -10,7 +10,10 @@
 thirdy-party/*
 thirdy-party/
 /thirdy-party
-FUTURES.md
+
+# ── Local planning/working notes (specs, plans, scratch analysis) ────────────
+# Not shipped docs — see docs/ for the real, tracked documentation.
+.internal/
 
 # ── Go build outputs (make _build-cli / _build-orchestrator → ./bin/*) ───────
 /bin/
@@ -84,7 +87,6 @@ CLAUDE.md
 .agent.md
 
 # ── Cleanups ─────────────────────────────────────────────────────────────────
-docs/
 *.db
 
 # ── Additional Catch-Alls (Windows/Go) ───────────────────────────────────────
