@@ -114,6 +114,12 @@ services:
       # the orchestrator no longer reads any scope env vars.
     ports:
       - "127.0.0.1:9080:9080"
+    # host-gateway resolves host.docker.internal on native Linux Docker Engine
+    # (Docker Desktop on macOS/Windows already provides this mapping natively;
+    # this entry is a harmless no-op there). Without it, YUMMI_OLLAMA_URL above
+    # fails to resolve on Linux hosts and the conductor can never reach Ollama.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - gateway_ipc:/run/yummi:ro
       - orchestrator_data:/var/lib/yummi/orchestrator:rw
