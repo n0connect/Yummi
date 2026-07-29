@@ -482,8 +482,8 @@ func observeResult(s *GraphState, result ToolResult) string {
 	s.memCtx.AddObservation(result.Content)
 	s.lastObs = obs
 	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepDone, obs)
-	s.emit(ActCommandDone, s.pendingCommand, compressed)
-	if findings := filterEmpty(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
+	s.emit(ActCommandDone, "Command result processed", compressed)
+	if findings := sanitizeFindings(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
 		_ = s.store.Update(s.taskID, func(t *Task) {
 			t.Findings = append(t.Findings, findings...)
 		})
@@ -495,7 +495,7 @@ func observeResult(s *GraphState, result ToolResult) string {
 		}
 		for _, d := range s.pendingAct.FindingsDetail {
 			if d.Title != "" {
-				s.emit(ActFinding, d.Title, d.Description)
+				s.emit(ActFinding, sanitizeAgentText(d.Title), sanitizeAgentText(d.Description))
 			}
 		}
 	}
@@ -580,15 +580,4 @@ func Execute(ctx context.Context, s *GraphState, startNode string) error {
 		s.saveCheckpoint(nextNode)
 		current = nextNode
 	}
-}
-
-// filterEmpty removes empty strings from a slice.
-func filterEmpty(ss []string) []string {
-	out := ss[:0]
-	for _, s := range ss {
-		if strings.TrimSpace(s) != "" {
-			out = append(out, s)
-		}
-	}
-	return out
 }

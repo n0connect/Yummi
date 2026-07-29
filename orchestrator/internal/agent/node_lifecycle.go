@@ -187,8 +187,8 @@ func summarizeInput(obs []string, budget int) string {
 func finishNode(ctx context.Context, s *GraphState) (string, error) {
 	switch s.finishOutcome {
 	case outcomeCompleted:
-		summary := s.finishMsg
-		findings := s.pendingAct.Findings
+		summary := sanitizeAgentText(s.finishMsg)
+		findings := sanitizeFindings(s.pendingAct.Findings)
 		if strings.TrimSpace(summary) == "" {
 			summary, findings = mergeSynthesis(ctx, s, findings)
 		}
@@ -302,12 +302,12 @@ func synthesizeSummary(ctx context.Context, s *GraphState) (string, []string) {
 		Findings []string `json:"findings"`
 	}
 	_ = json.Unmarshal([]byte(extractJSON(stripThinkTokens(raw))), &out)
-	return strings.TrimSpace(out.Summary), filterEmpty(out.Findings)
+	return sanitizeAgentText(out.Summary), sanitizeFindings(out.Findings)
 }
 
 // askNode pauses the task for operator input (plain operator-facing text).
 func askNode(ctx context.Context, s *GraphState) (string, error) {
-	question := s.pendingAct.Question
+	question := sanitizeAgentText(s.pendingAct.Question)
 	if question == "" {
 		question = "The agent needs operator input to continue."
 	}

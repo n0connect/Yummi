@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -76,6 +77,43 @@ func stripThinkTokens(s string) string {
 		s = s[:start] + s[start+end+len("</think>"):]
 	}
 	return s
+}
+
+// internalTagLinePattern matches a standalone protocol-tag line — a weak
+// model echoing its own LLM→agent wire format (e.g. a literal "[FINISH]"
+// line) inside free text it authored. Mirrors
+// conductor.sanitizeVisibleModelText's identical pattern; kept as its own
+// copy here rather than a cross-package import, since agent and conductor
+// are deliberately independent (see CLAUDE.md's conductor/executor
+// separation note) and each protects its own wire-visible text.
+var internalTagLinePattern = regexp.MustCompile(`(?m)^\s*\[(RUN_COMMAND|UPDATE_PLAN|FINISH|HANDOFF|REMEMBER|ASK_OPERATOR|SEND_FULL|CONTINUE|ABORT|STOP_TASK)\]\s*$`)
+
+// sanitizeAgentText is the chokepoint for model-authored free text that
+// becomes wire-visible on Task (Summary/Findings/Question, sent to every
+// client — web, Tauri, AND the TUI — via GET /api/v1/tasks/{id} and every
+// task.status websocket event). Unlike the chat/conductor path, agent-task
+// text has no per-client sanitizer to fall back on — internal/tui renders
+// Task.Summary/Findings/Question completely raw, so this must be the only
+// line of defense, applied once here rather than trusted to be re-implemented
+// per client. Strips <think> reasoning-model noise and any standalone
+// protocol-tag line the model echoed from its own wire format.
+func sanitizeAgentText(s string) string {
+	s = stripThinkTokens(s)
+	s = internalTagLinePattern.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
+// sanitizeFindings applies sanitizeAgentText to every finding string, and
+// drops the now-empty ones the same way filterEmpty does — mirrors the
+// existing empty-string reject used elsewhere in this package (graph.go).
+func sanitizeFindings(findings []string) []string {
+	out := make([]string, 0, len(findings))
+	for _, f := range findings {
+		if clean := sanitizeAgentText(f); clean != "" {
+			out = append(out, clean)
+		}
+	}
+	return out
 }
 
 // extractJSON strips think tokens, markdown fences, and surrounding prose,

@@ -128,8 +128,13 @@ type Task struct {
 	// Checkpoint holds the last saved graph position (crash recovery).
 	Checkpoint Checkpoint `json:"checkpoint,omitempty"`
 
-	// ObservationHistory holds full tool outputs for audit (not persisted — runtime only).
-	ObservationHistory []string `json:"observation_history,omitempty"`
+	// ObservationHistory holds full tool outputs for audit (not persisted —
+	// runtime only). Currently unpopulated by any node, but json:"-" (not
+	// omitempty) deliberately, matching ActivityEvent.Detail's pattern: this
+	// is target-controlled command output, which must never reach a wire
+	// client — it exists for server-side diagnostics, if and when something
+	// starts writing to it, not for UI display.
+	ObservationHistory []string `json:"-"`
 
 	// Pending* describe the command the task is blocked on while
 	// awaiting_approval. They are ephemeral (not persisted) and exist so the

@@ -235,7 +235,7 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 	}
 	if sig := items[0].Text; sig != s.lastMemorySig {
 		s.lastMemorySig = sig
-		s.emit(ActMemory, items[0].Text, "")
+		s.emit(ActMemory, "Relevant session context applied", "")
 	}
 	return b.String()
 }

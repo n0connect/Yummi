@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestRecordAndListActivity(t *testing.T) {
 	s, _ := NewStore(openTestDB(t))
@@ -30,5 +34,19 @@ func TestActivityPubSub(t *testing.T) {
 		}
 	default:
 		t.Fatal("no activity published")
+	}
+}
+
+func TestActivityDetailNeverSerializesToClients(t *testing.T) {
+	ev := ActivityEvent{
+		ID: "a1", SessionID: "s1", TaskID: "t1", Kind: ActCommandDone,
+		Summary: "Command result processed", Detail: "private rationale and raw output",
+	}
+	buf, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(buf), "private rationale") || strings.Contains(string(buf), "detail") {
+		t.Fatalf("internal activity detail leaked into JSON: %s", buf)
 	}
 }

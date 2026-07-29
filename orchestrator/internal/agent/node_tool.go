@@ -79,7 +79,9 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 
 	// The command passed validation, stuck, and duplicate checks — it is about
 	// to run (now in auto mode, or after approval). Surface it on the timeline.
-	s.emit(ActCommand, p.Command, p.Rationale)
+	// Exact command + model rationale already have their dedicated audited
+	// records. Activity is a public progress surface, so keep it semantic.
+	s.emit(ActCommand, "Command dispatched", p.Rationale)
 
 	// Approval is mode-driven, not risk-driven: in ask_permission mode EVERY
 	// command gates on the operator; in auto mode none do.

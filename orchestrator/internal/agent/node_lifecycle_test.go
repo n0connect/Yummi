@@ -89,6 +89,59 @@ func TestFinishNodeWarnsWhenFindingsReferenceAFailedTool(t *testing.T) {
 	}
 }
 
+// TestFinishNodeSanitizesSummaryAndFindings proves the fix for a confirmed
+// gap: Task.Summary/Findings/Question are wire-visible to EVERY client (web,
+// Tauri, AND internal/tui, which — unlike the React client's
+// sanitizeOperatorText — applies no client-side cleaning at all). A model's
+// own FINISH action is free text the model authored, which can carry
+// reasoning-model <think> noise or an echoed protocol-tag line; this must be
+// stripped server-side once, not left to a client that (as of internal/tui)
+// may not do it at all.
+func TestFinishNodeSanitizesSummaryAndFindings(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task, err := store.Create("sess", "pentest 172.20.0.6", 15)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusPlanned, nil); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusRunning, nil); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+
+	s := &GraphState{
+		taskID:        task.ID,
+		store:         store,
+		cfg:           fastRetryCfg(),
+		gate:          NewGate(),
+		finishOutcome: outcomeCompleted,
+		finishMsg:     "<think>internal reasoning the operator should never see</think>Scan completed cleanly.\n[FINISH]",
+		pendingAct: Action{
+			Findings: []string{"<think>more reasoning</think>Port 22 open (SSH)."},
+		},
+	}
+	if _, err := finishNode(context.Background(), s); err != nil {
+		t.Fatalf("finishNode: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if strings.Contains(got.Summary, "<think>") || strings.Contains(got.Summary, "internal reasoning") {
+		t.Fatalf("Summary must not leak <think> content, got: %q", got.Summary)
+	}
+	if strings.Contains(got.Summary, "[FINISH]") {
+		t.Fatalf("Summary must not leak a standalone protocol-tag line, got: %q", got.Summary)
+	}
+	if !strings.Contains(got.Summary, "Scan completed cleanly") {
+		t.Fatalf("Summary must still contain the model's real content, got: %q", got.Summary)
+	}
+	for _, f := range got.Findings {
+		if strings.Contains(f, "<think>") {
+			t.Fatalf("Findings must not leak <think> content, got: %+v", got.Findings)
+		}
+	}
+}
+
 // A finding that does NOT reference any failed tool must not trigger a
 // warning — the guard should not cry wolf on legitimate, grounded findings.
 func TestFinishNodeNoWarningWhenFindingsAreGrounded(t *testing.T) {

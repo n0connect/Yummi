@@ -69,7 +69,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 		role := strings.TrimSpace(t.Role)
 		subgoal := strings.TrimSpace(t.Subgoal)
 		sub := s.cfg.SubAgents[role]
-		s.emit(ActHandoffIn, role+": "+subgoal, "")
+		s.emit(ActHandoffIn, role+" specialist delegated", "")
 
 		wg.Add(1)
 		go func(i int, role, subgoal string, sub *Runner) {
@@ -92,7 +92,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 				reason = fmt.Sprintf("timed out after %s", s.cfg.SubAgentTimeout)
 			}
 			fmt.Fprintf(&b, "Sub-agent %q failed on subtask %q: %s; handle it yourself or finish\n", r.role, r.subgoal, reason)
-			s.emit(ActHandoffOut, r.role+" → failed: "+reason, "")
+			s.emit(ActHandoffOut, r.role+" specialist could not complete the subtask", reason)
 			continue
 		}
 
@@ -117,7 +117,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 				fmt.Fprintf(&b, "  - %s\n", f)
 			}
 		}
-		s.emit(ActHandoffOut, r.role+" → "+orDefault(summary, "completed"), "")
+		s.emit(ActHandoffOut, r.role+" specialist completed the subtask", summary)
 	}
 	s.lastObs = Wrap("TOOL_RESPONSE", b.String())
 	return edgeOK, nil

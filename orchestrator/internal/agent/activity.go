@@ -29,8 +29,11 @@ type ActivityEvent struct {
 	ParentTaskID string       `json:"parent_task_id,omitempty"`
 	Kind         ActivityKind `json:"kind"`
 	Summary      string       `json:"summary"`
-	Detail       string       `json:"detail,omitempty"`
-	Timestamp    int64        `json:"timestamp"` // unix millis
+	// Detail is an internal diagnostic payload. It can contain model rationale,
+	// recalled memory, or compressed target-controlled command output, so it is
+	// persisted for server-side diagnostics but never serialized to UI clients.
+	Detail    string `json:"-"`
+	Timestamp int64  `json:"timestamp"` // unix millis
 }
 
 // ActivityEnvelope wraps an event for pub/sub (mirrors Event for tasks).
