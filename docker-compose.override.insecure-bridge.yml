@@ -1,0 +1,32 @@
+# ── Opt-in network workaround — NOT the default, NOT recommended ────────────
+#
+# Only applied when YUMMI_NETWORK_MODE=insecure-bridge is passed to `make`
+# (see Makefile's `_check-network-mode` guard, which requires an explicit
+# interactive confirmation before this file is ever loaded).
+#
+# This removes the `internal: true` flag from `yummi_internal` — the flag
+# that makes sandbox's own network architecturally incapable of reaching the
+# outside world, independent of gateway's nftables rules (see
+# docs/security-model.md § fail-closed and docs/architecture.md § Network
+# topology). Without it, sandbox's containment depends ENTIRELY on gateway's
+# nftables FORWARD chain staying correct — one fewer independent fail-closed
+# layer, not zero security, but a real reduction.
+#
+# Why this exists at all: on some container engines, `internal: true`
+# combined with a container (gateway) forwarding traffic between two custom
+# bridge networks does not work correctly —
+#   - Docker Desktop (vpnkit networking): forwarded traffic is silently
+#     dropped entirely — see docs/installation.md's Docker Desktop callout.
+#   - Podman (aardvark-dns): forwarding itself works, but DNS resolution
+#     for real external hostnames is refused for `internal: true` networks
+#     — see docs/installation.md's Podman callout. Podman also has a SEPARATE,
+#     unrelated docker-proxy socket issue this override does NOT fix.
+#
+# The actually-recommended fix for the Docker Desktop case is switching to
+# OrbStack (zero workarounds, zero config changes) — see
+# docs/installation.md#docker-desktop-internal-network-bug. Reach for this
+# override only if you specifically cannot switch engines and understand
+# the trade-off above.
+networks:
+  yummi_internal:
+    internal: false

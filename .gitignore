@@ -42,6 +42,8 @@ orchestrator/cmd/test_*/results.md
 # ── Rust build outputs (gateway) ─────────────────────────────────────────────
 target/
 **/target/
+# Tauri regenerates capability schemas from Cargo features at build time.
+desktop/src-tauri/gen/
 
 # ── Node / Vite (ui) ─────────────────────────────────────────────────────────
 node_modules/
@@ -65,6 +67,9 @@ orchestrator/internal/ui/dist/
 *.pem
 *.crt
 *.p12
+
+# ── Local per-machine engine config (written by `make conf`) ─────────────────
+.yummi.conf
 
 # ── Local runtime / work files ───────────────────────────────────────────────
 .yummi/
