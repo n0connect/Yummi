@@ -37,6 +37,12 @@ func NewValidator() *Validator {
 // target is reachable; that's discovered at execution time
 // (executor.RunScopedCommand), not here.
 func (v *Validator) ValidateChatResponse(resp ChatResponse) ChatResponse {
+	resp.Message = sanitizeVisibleModelText(resp.Message)
+	resp.TaskGoal = sanitizeVisibleModelText(resp.TaskGoal)
+	for i := range resp.Proposals {
+		resp.Proposals[i].Rationale = sanitizeVisibleModelText(resp.Proposals[i].Rationale)
+	}
+
 	if v == nil || len(resp.Proposals) == 0 {
 		return resp
 	}
@@ -78,6 +84,28 @@ func (v *Validator) ValidateChatResponse(resp ChatResponse) ChatResponse {
 	}
 
 	return resp
+}
+
+var (
+	thinkBlockPattern    = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think\s*>`)
+	unclosedThinkPattern = regexp.MustCompile(`(?is)<think\b[^>]*>.*$`)
+	internalTagPattern   = regexp.MustCompile(`(?m)^\s*\[(RUN_COMMAND|UPDATE_PLAN|FINISH|HANDOFF|REMEMBER|ASK_OPERATOR|SEND_FULL|CONTINUE|ABORT|STOP_TASK)\]\s*$`)
+)
+
+// sanitizeVisibleModelText is the final trust boundary for model-authored text
+// that may reach an operator UI. Structured agent protocol, hidden reasoning,
+// and pathological unbounded fields stay server-side.
+func sanitizeVisibleModelText(text string) string {
+	text = thinkBlockPattern.ReplaceAllString(text, "")
+	text = unclosedThinkPattern.ReplaceAllString(text, "")
+	text = internalTagPattern.ReplaceAllString(text, "")
+	text = strings.TrimSpace(text)
+	const maxVisibleModelText = 16 * 1024
+	runes := []rune(text)
+	if len(runes) > maxVisibleModelText {
+		text = string(runes[:maxVisibleModelText]) + "\n…"
+	}
+	return text
 }
 
 func firstToken(cmd string) string {

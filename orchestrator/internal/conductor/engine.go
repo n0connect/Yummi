@@ -289,11 +289,12 @@ func looksActionable(msg string) bool {
 // parseStructuredResponse tries to unmarshal a ChatResponse from raw text.
 func parseStructuredResponse(raw string) (ChatResponse, bool) {
 	var resp ChatResponse
-	if err := json.Unmarshal([]byte(raw), &resp); err == nil && resp.Intent != "" {
+	clean := sanitizeVisibleModelText(raw)
+	if err := json.Unmarshal([]byte(clean), &resp); err == nil && resp.Intent != "" {
 		return resp, true
 	}
 	// Strip markdown code fences if present.
-	trimmed := strings.TrimSpace(raw)
+	trimmed := strings.TrimSpace(clean)
 	if idx := strings.Index(trimmed, "{"); idx > 0 {
 		trimmed = trimmed[idx:]
 	}

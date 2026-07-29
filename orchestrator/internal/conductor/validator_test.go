@@ -155,3 +155,26 @@ func TestClassifyRiskAllowlistShape(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateChatResponseStripsInternalReasoningFromVisibleFields(t *testing.T) {
+	v := NewValidator()
+	resp := v.ValidateChatResponse(ChatResponse{
+		Message:  "<think>private chain</think>Operator-safe answer",
+		TaskGoal: "<think>hidden plan</think>Assess the target",
+		Proposals: []Proposal{{
+			Command:   "nmap 127.0.0.1",
+			Rationale: "[RUN_COMMAND]\n<think>secret</think>Service discovery",
+			RiskLevel: "low",
+		}},
+	})
+
+	if resp.Message != "Operator-safe answer" {
+		t.Fatalf("visible message was not sanitized: %q", resp.Message)
+	}
+	if resp.TaskGoal != "Assess the target" {
+		t.Fatalf("visible task goal was not sanitized: %q", resp.TaskGoal)
+	}
+	if resp.Proposals[0].Rationale != "Service discovery" {
+		t.Fatalf("visible rationale was not sanitized: %q", resp.Proposals[0].Rationale)
+	}
+}

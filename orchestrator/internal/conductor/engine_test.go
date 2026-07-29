@@ -290,9 +290,17 @@ func TestParseStructuredResponse(t *testing.T) {
 		t.Errorf("expected suggest_command from fenced, got %q", resp2.Intent)
 	}
 
+	// Hidden reasoning before a structured reply must be removed before JSON
+	// parsing, never pushed into the plain-text fallback shown by the UI.
+	reasoningWrapped := "<think>private reasoning</think>\n" + valid
+	resp3, ok3 := parseStructuredResponse(reasoningWrapped)
+	if !ok3 || resp3.Message != "test" {
+		t.Fatalf("expected reasoning-wrapped JSON to parse safely, got ok=%v resp=%+v", ok3, resp3)
+	}
+
 	// Invalid
-	_, ok3 := parseStructuredResponse("not json at all")
-	if ok3 {
+	_, ok4 := parseStructuredResponse("not json at all")
+	if ok4 {
 		t.Error("expected invalid JSON to not parse")
 	}
 }
