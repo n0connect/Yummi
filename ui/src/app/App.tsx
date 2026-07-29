@@ -1,18 +1,22 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
 import './app.css'
 import { StatusBar } from '../features/statusbar/StatusBar'
 import { ChatPage } from '../pages/chat/ChatPage'
-import { TerminalPage } from '../pages/terminal/TerminalPage'
-import { TracePage } from '../pages/trace/TracePage'
-import { LogsPage } from '../pages/logs/LogsPage'
-import { GatewayPage } from '../pages/gateway/GatewayPage'
-import { HealthPage } from '../pages/health/HealthPage'
+
+const TerminalPage = lazy(() => import('../pages/terminal/TerminalPage').then(module => ({ default: module.TerminalPage })))
+const TracePage = lazy(() => import('../pages/trace/TracePage').then(module => ({ default: module.TracePage })))
+const LogsPage = lazy(() => import('../pages/logs/LogsPage').then(module => ({ default: module.LogsPage })))
+const GatewayPage = lazy(() => import('../pages/gateway/GatewayPage').then(module => ({ default: module.GatewayPage })))
+const HealthPage = lazy(() => import('../pages/health/HealthPage').then(module => ({ default: module.HealthPage })))
 
 function Layout() {
   return (
     <>
       <StatusBar />
-      <Outlet />
+      <Suspense fallback={<div className="route-loading">Ekran hazırlanıyor…</div>}>
+        <Outlet />
+      </Suspense>
     </>
   )
 }

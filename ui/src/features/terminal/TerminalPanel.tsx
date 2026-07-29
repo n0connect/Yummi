@@ -4,8 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import './TerminalPanel.css'
-
-const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+import { websocketURL } from '../../shared/api/runtime'
 
 export function TerminalPanel(): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -61,7 +60,7 @@ export function TerminalPanel(): JSX.Element {
     }
 
     const connect = () => {
-      ws = new WebSocket(`${wsScheme}://${window.location.host}/ws/terminal`)
+      ws = new WebSocket(websocketURL('/ws/terminal'))
       // Binary frames: PTY I/O arrives as ArrayBuffer
       ws.binaryType = 'arraybuffer'
       socketRef.current = ws
@@ -69,7 +68,7 @@ export function TerminalPanel(): JSX.Element {
       ws.onopen = () => {
         setConnected(true)
         retries = 0
-        term.write('\r\n\x1b[32m[Connected to sandbox]\x1b[0m\r\n')
+        term.write('\r\n\x1b[32m[Sandbox bağlantısı kuruldu]\x1b[0m\r\n')
         // Send initial terminal size so the PTY allocates correctly.
         sendResize(term.cols, term.rows)
       }
@@ -86,12 +85,12 @@ export function TerminalPanel(): JSX.Element {
         setConnected(false)
         retries++
         const delay = Math.min(1500 * retries, 10_000)
-        term.write(`\r\n\x1b[31m[Disconnected — reconnecting in ${delay / 1000}s…]\x1b[0m\r\n`)
+        term.write(`\r\n\x1b[31m[Bağlantı kesildi — ${delay / 1000} sn içinde yeniden denenecek…]\x1b[0m\r\n`)
         retryTimer = window.setTimeout(connect, delay)
       }
 
       ws.onerror = () => {
-        term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
+        term.write('\r\n\x1b[31m[Bağlantı hatası]\x1b[0m\r\n')
       }
     }
 
@@ -128,17 +127,17 @@ export function TerminalPanel(): JSX.Element {
         <span className="panel-header-title">
           <span
             className={`dot ${connected ? 'dot-ok' : 'dot-err'}`}
-            title={connected ? 'Connected' : 'Disconnected'}
+            title={connected ? 'Bağlı' : 'Bağlı değil'}
           />
-          Terminal — sandbox
+          Terminal — Sandbox
         </span>
         <span className="panel-header-actions">
           <button
             className="small-button"
             onClick={() => termRef.current?.clear()}
-            title="Clear terminal (Ctrl+L)"
+            title="Terminali temizle (Ctrl+L)"
           >
-            Clear
+            Temizle
           </button>
         </span>
       </div>

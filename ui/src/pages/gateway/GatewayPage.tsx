@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, type HostnameList } from '../../features/gateway/useGatewayData'
 import type { GatewayEgressMode } from '../../entities/types'
+import { apiURL } from '../../shared/api/runtime'
 import './GatewayPage.css'
 
 const EGRESS_MODES: { mode: GatewayEgressMode; label: string; hint: string }[] = [
@@ -61,7 +62,7 @@ export function GatewayPage(): JSX.Element {
   const [fingerprint, setFingerprint] = useState<{ ttl_normalize: number | null; mac_randomization: boolean } | null>(null)
 
   useEffect(() => {
-    fetch('/api/v1/gateway/fingerprint')
+    fetch(apiURL('/api/v1/gateway/fingerprint'))
       .then(res => res.ok ? res.json() : null)
       .then(data => { if (data) setFingerprint(data) })
       .catch(() => {})
@@ -92,7 +93,14 @@ export function GatewayPage(): JSX.Element {
   if (status === 'disconnected') {
     return (
       <div className="gateway-page">
-        <div className="gateway-card gateway-unreachable">Gateway unreachable.</div>
+        <div className="gateway-card gateway-unreachable">
+          <span className="gateway-unreachable-mark" aria-hidden="true">⌁</span>
+          <div>
+            <h2>Gateway bağlantısı kurulamadı</h2>
+            <p>Yummi runtime çalıştığında ağ politikaları ve denetim kayıtları burada otomatik görünecek.</p>
+          </div>
+          <button className="small-button" onClick={() => void refreshRules()}>Yeniden dene</button>
+        </div>
       </div>
     )
   }

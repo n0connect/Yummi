@@ -1,41 +1,14 @@
 import { NavLink } from 'react-router-dom'
-import { useSystemStatus } from '../system/useSystemStatus'
-import { dotClass } from '../../shared/lib/statusDot'
+import { isDesktopShell } from '../../shared/api/runtime'
 
 export function StatusBar(): JSX.Element {
-  const data = useSystemStatus()
-
-  const modules = data?.modules ?? []
-  const getStatus = (name: string) =>
-    modules.find(m => m.name === name)?.status ?? 'checking'
-
   return (
     <div className="status-bar">
       <div className="left">
         <span className="logo">YUMMI</span>
-        <span className="status-separator">│</span>
-        {['sandbox', 'gateway', 'orchestrator', 'conductor'].map(name => {
-          const status = getStatus(name)
-          return (
-            <span key={name} className="status-item" title={`${name}: ${status}`}>
-              <span className={dotClass(status)} />
-              {name}
-            </span>
-          )
-        })}
-        {data && (
-          <>
-            <span className="status-separator">│</span>
-            <span className="status-item" style={{ color: 'var(--text-muted)' }}>
-              {data.overall}
-            </span>
-          </>
-        )}
+        {isDesktopShell && <span className="desktop-badge">DESKTOP</span>}
       </div>
       <div className="right">
-        <span className="status-item status-clock" title="last health check">
-          {data ? new Date(data.checked_at).toLocaleTimeString() : '—'}
-        </span>
         <nav className="nav-seg">
           {[
             { to: '/', label: 'Agent', end: true },
