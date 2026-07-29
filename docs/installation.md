@@ -9,6 +9,9 @@ This page is written for two different readers at once: someone installing Yummi
 - [Two ways to run Yummi — pick one first](#two-ways)
 - [Requirements](#requirements)
 - [Platform support matrix](#platform-support)
+  - [⚠️ Docker Desktop VM networking can silently drop `internal: true` traffic — fixed by switching to OrbStack](#docker-desktop-internal-network-bug)
+  - [⚠️ Podman on macOS: two separate compatibility gaps, currently unresolved](#podman-macos-gaps)
+  - [Engine selection and the insecure-bridge workaround](#engine-and-network-mode)
 - [Linux](#linux)
 - [macOS](#macos)
 - [Windows](#windows)
@@ -120,7 +123,7 @@ Read this table before choosing a machine to run Yummi on — one row is a hard 
 |---|---|---|---|
 | **Linux x86_64** | ✅ Full support, real nftables enforcement | ✅ | The reference platform — gateway's `network/nftables.rs` runs against a real Linux kernel directly |
 | **Linux ARM64** (incl. Raspberry Pi 4/5, AWS Graviton) | ✅ Expected to work — every base image (`kalilinux/kali-rolling`, `golang`, `rust`, `node`, `nginx`, `tecnativa/docker-socket-proxy`, `debian:bookworm-slim`) publishes official `arm64` manifests | ✅ | Not independently load-tested on ARM64 hardware as part of this documentation pass — if you hit an ARM64-specific issue, it is almost certainly one specific `apt` package inside `sandbox/Dockerfile` lacking an arm64 build in Kali's repos, not gateway or orchestrator |
-| **macOS (Apple Silicon, arm64)** | ✅ Full support **via Docker Desktop** | ✅ (CLI/TUI + orchestrator natively; gateway builds but enforces nothing outside Docker — see below) | Docker Desktop on macOS runs containers inside a real Linux VM, which genuinely has `nf_tables` support — this has been verified end-to-end (a DROP-all `FORWARD` chain plus a single-target Allow rule correctly gated a real connection) |
+| **macOS (Apple Silicon, arm64)** | ✅ Full support **via OrbStack** (recommended). ⚠️ Docker Desktop works but see [§ VM networking callout](#docker-desktop-internal-network-bug). ⚠️ Podman's network-forwarding is sound but two other gaps currently block the full agent loop — see [§ Podman gaps](#podman-macos-gaps) | ✅ (CLI/TUI + orchestrator natively; gateway builds but enforces nothing outside Docker — see below) | All three engines run containers inside a real Linux VM with genuine `nf_tables` support, and the actual trust-boundary forwarding (gateway's nftables) has been independently verified end-to-end on OrbStack and Podman (a DROP-all `FORWARD` chain plus a single-target Allow rule correctly gated a real connection) — Docker Desktop is the one with the forwarding bug, not the other two |
 | **macOS (Intel, x86_64)** | ✅ Full support via Docker Desktop | ✅ | Same as above; just a different host CPU |
 | **Windows 10/11 with WSL2** | ✅ Full support via Docker Desktop's WSL2 backend | Partial — the CLI/TUI cross-compiles fine (`GOOS=windows go build` — see the `*.exe` handling already in `.gitignore`); the orchestrator has not been validated running bare on Windows, and gateway is architecturally out of scope outside a Linux kernel | Docker Desktop for Windows uses a WSL2-based Linux VM by default, which — like the macOS case — is a real Linux kernel, so the same nftables enforcement path applies |
 | **Windows without WSL2 / native only** | ❌ Not supported | Partial (CLI/TUI only) | No Linux kernel means no nftables anywhere in the stack — don't attempt the full stack here |
@@ -129,6 +132,69 @@ Read this table before choosing a machine to run Yummi on — one row is a hard 
 ### ⚠️ The one combination that silently doesn't enforce anything
 
 Running the **compiled gateway binary directly on a host** — `cd gateway && cargo run` or executing `gateway/target/release/yummi-gateway` outside `docker compose` — will start, open its IPC socket, and *appear* to work. On a bare **macOS** host this genuinely enforces nothing, because there is no Linux kernel at all to hand nftables rules to. On a bare **Linux** host it can actually install real nftables rules (there's a real kernel right there) — but you're then relying on your own host's routing/network namespace setup matching what `docker-compose.yml`'s topology provides, which it doesn't unless you've replicated it yourself. **Treat "gateway enforces traffic" as true only when gateway is the container `yummi-gateway` started via `docker compose` / `make start`.** Any other invocation of the gateway binary is for build-testing or unit tests only, never a security boundary test.
+
+### ⚠️ Docker Desktop VM networking can silently drop `internal: true` traffic <a id="docker-desktop-internal-network-bug"></a>
+
+**Observed on Docker Desktop (multiple versions, including after updating to a newer release), Apple Silicon.** Confirmed to *not* reproduce on [OrbStack](https://orbstack.dev/) — see below. This is an *availability* bug, not a security regression — when it happens, gateway still fails closed and makes correct scope/egress decisions; the symptom is legitimate, approved traffic never actually arriving, not unauthorized traffic getting through.
+
+**Symptom:** an operator approves egress for a real external target (e.g. `scanme.nmap.org`), the UI shows "Dış ağ erişimi onaylandı" / egress approved, the command runs — and then just times out with no data. DNS resolution inside the sandbox fails (`getent hosts <target>` returns nothing), or a tool reports "Cannot resolve hostname" / connection timeouts, even though every gateway-side decision was correct.
+
+**Root cause, isolated with a controlled experiment** (not a guess — this was reproduced outside Yummi's own containers entirely, changing exactly one variable): a container acting as a router between two custom Docker bridge networks (exactly gateway's own role between `yummi_internal` and `yummi_external`) reliably fails to forward *any* traffic — verified with byte-accurate interface counters (`/proc/net/dev`) showing zero packets ever arriving at the router container's internal-facing interface, not just a failed DNS reply — when the "internal" network was created with the `internal: true` flag. The exact same topology, same nftables/iptables rules, same masquerade rule, with `internal: true` removed, forwarded traffic perfectly. A plain single-hop container (no router) on either flag setting also worked fine, and the macOS host's own networking was unaffected throughout. This isolates the failure to Docker Desktop's own VM-level networking overlay (something above the Linux kernel's netfilter, which was independently confirmed correct via `nft list ruleset` inside gateway) specifically mishandling `internal: true` combined with a container forwarding traffic out of it.
+
+Things that were tried and did **not** fix it on the affected machine: restarting or force-recreating the `gateway`/`sandbox` containers, live-disconnecting and reconnecting them from the network, a full Docker Desktop restart, enabling Docker Desktop's own **"Use kernel networking for UDP"** setting (Settings → Resources → Network), disabling an active VPN/network-filtering app, and updating Docker Desktop to a newer version. None of these are Yummi configuration — they're all Docker Desktop / host-level things to rule out first if you hit this, since none of them were the actual cause here.
+
+**Confirmed: switching to [OrbStack](https://orbstack.dev/) (a different Docker Desktop alternative for macOS, using Apple's Virtualization.framework and its own network stack instead of vpnkit) resolves this completely, with zero changes to Yummi's code or `docker-compose.yml`.** The exact same `internal: true` config, the exact same gateway/sandbox images, rebuilt and run unmodified under OrbStack: DNS resolution inside sandbox succeeds, and a real scan against an external target (`scanme.nmap.org`) completes a real HTTP request end to end. This narrows the root cause specifically to Docker Desktop's own vpnkit-based VM networking layer, not a Docker-version quirk, not the Linux kernel, and not anything in this repository — a from-scratch scratch-network reproduction (two custom bridges, a router container, `internal: true` toggled as the only variable) showed the identical pass/fail split between the two engines.
+
+**This is exactly the network flag `docker-compose.yml`'s `yummi_internal` uses by design** (see [Architecture § Network topology](architecture.md#network-topology)) — it is not something to "just remove," since it's load-bearing for the fail-closed security model described throughout this documentation set, not an accidental config choice. If you hit this symptom on Docker Desktop:
+- Confirm it's this bug and not a real scope/config issue: check `docker exec yummi-gateway cat /proc/net/dev | grep eth1` before and after a test command from the sandbox — if the RX counter never increments at all despite the sandbox's own TX counter increasing, you're looking at this, not a gateway policy decision.
+- **The known-good fix: switch to OrbStack.** `docker compose build && docker compose up -d` works unmodified — OrbStack is a drop-in Docker CLI/API-compatible replacement for Docker Desktop on macOS, no compose file changes needed.
+- If you'd rather stay on Docker Desktop, testing on a Linux host (native Docker Engine, no VM in the path at all) is also unaffected — see the [platform support matrix](#platform-support) above. No Docker-Desktop-side setting was found that fixes this while staying on Docker Desktop.
+- **If you genuinely can't switch engines**, there's an opt-in Makefile escape hatch — see [§ Engine selection and the insecure-bridge workaround](#engine-and-network-mode) below. It trades away one of this project's independent fail-closed layers to route around the bug, and requires you to type a confirmation every time; it is not a substitute for OrbStack, just a last resort.
+
+### ⚠️ Podman on macOS: two separate compatibility gaps, currently unresolved <a id="podman-macos-gaps"></a>
+
+**Observed on Podman 6.0.2 (`applehv` machine type), Apple Silicon.** Unlike the Docker Desktop issue above, the core thing this whole security model depends on — traffic from `yummi_internal` actually being forwarded through gateway to a real external target — **works correctly on Podman**. This was verified the same rigorous way as the OrbStack confirmation: a real HTTP request to a real external IP (`scanme.nmap.org`'s own address) completed end to end (`200 OK`, real response body) through gateway's nftables rules, with the interface-counter check (`/proc/net/dev` on gateway's internal-facing interface) confirming real packets actually arrive, not just that a request "looked" successful. **`internal: true` itself is not the problem here** — this rules out, a second time and on a third distinct engine, any theory that the flag itself is what's broken.
+
+What doesn't currently work, though, are two unrelated things:
+
+1. **Hostname resolution from inside `yummi_internal` returns NXDOMAIN for real external names.** Podman's embedded DNS resolver (`aardvark-dns`) refuses to forward queries upstream for any network created with `internal: true`, regardless of what DNS servers are configured — this looks like a deliberate policy in `aardvark-dns` itself (an internal network shouldn't leak DNS queries either), not a bug, but it conflicts with this project's explicit design assumption that "DNS resolution is not the trust boundary, so it's fine for it to succeed even on an internal network" (see [Architecture § Network topology](architecture.md#network-topology)). Concretely: `nikto -h scanme.nmap.org` fails to resolve; the identical command against the target's raw IP works.
+
+   A workaround exists, but it trades away something else: recreating the network with DNS disabled entirely (`podman network create --disable-dns --internal ...` in place of what `podman compose up` would create on its own) makes the sandbox's own `dns:` config (from `docker-compose.yml`) take effect directly, fixing hostname resolution — confirmed working (`getent hosts scanme.nmap.org` returned a real answer). But disabling the network's DNS plugin also removes **container-name** resolution for everything else on that network, and `orchestrator`'s `DOCKER_HOST: tcp://docker-proxy:2375` depends on resolving `docker-proxy` by name — that specific env var would need to change to `docker-proxy`'s static compose IP (`tcp://172.20.0.5:2375`) to keep working. This is a real, workable fix in principle, but it requires an out-of-band `podman network create` step that plain `docker-compose.yml` has no field to express — it isn't currently a "just run `make start`" experience on Podman.
+
+2. **The `docker-proxy` service's `/var/run/docker.sock` mount doesn't reach a working Docker-API-compatible socket under Podman**, independent of the DNS issue above (reproduces with default, unmodified network settings too). Symptom: `docker-proxy`'s own logs show `503` on every request (`GET /v1.24/containers/yummi-sandbox/json` included), and orchestrator's system status reports `"sandbox":"down","details":"container unreachable"` even though every container is individually healthy. `/var/run/docker.sock` on the host does resolve to Podman's own machine socket (`~/.local/share/containers/podman/machine/podman.sock`) — the symlink exists and is correct — but something in how that gets bind-mounted through Podman's virtualization layer into the `docker-proxy` container doesn't produce a live socket on the other end. **Not resolved** — this needs more investigation than this pass covered, and it means `docker exec` into sandbox (i.e. the agent actually running any command at all) does not currently work on Podman even after fixing the DNS issue above.
+
+**Bottom line for Podman on macOS today:** the trust-boundary/network-forwarding architecture this project depends on is sound on Podman — better than on Docker Desktop, in fact, for the exact failure mode described above. But between the DNS-forwarding gap and the docker-proxy socket gap, a plain `make start`/`podman compose up` does not currently give you a fully working agent loop. **OrbStack remains the confirmed, no-workarounds-needed recommendation** for macOS; treat Podman as a promising but not-yet-there option until the docker-proxy socket issue specifically is understood. The Makefile's `insecure-bridge` mode (see [§ Engine selection and the insecure-bridge workaround](#engine-and-network-mode) below) fixes gap #1 (DNS forwarding) if you set `CONTAINER_ENGINE=podman` alongside it, but does **not** fix gap #2 (the docker-proxy socket) — sandbox exec still won't work, so it doesn't get Podman to a fully-working state on its own.
+
+### Engine selection and the insecure-bridge workaround <a id="engine-and-network-mode"></a>
+
+The `Makefile` supports both engines and an explicit, opt-in trade-off for the networking bugs described above, rather than silently picking one behavior.
+
+**Recommended: configure it once with `make conf`.** It asks which of the four setups below you're on, and writes the answer to a gitignored `.yummi.conf` in the repo root, so every later `make build`/`make start`/`make force-restart` picks it up automatically — no flags to remember or repeat:
+
+```bash
+make conf
+#   1) OrbStack                    recommended — no known trade-offs
+#   2) Docker Desktop
+#   3) Podman
+#   4) Linux native Docker Engine   no VM, no known bug
+```
+
+Choosing option 2 or 3 walks you through the same `I UNDERSTAND` trade-off confirmation described below before it writes anything — `make conf` doesn't bypass that gate, it just saves you from retyping the flags on every command afterward. Run `make conf` again anytime to change your answer (it overwrites `.yummi.conf`); a command-line flag on any individual `make` invocation (e.g. `make start CONTAINER_ENGINE=podman`) still overrides whatever `.yummi.conf` has, for one-off use.
+
+Under the hood, `make conf` is just setting these two variables, which you can also pass directly (useful for CI or a one-off run without persisting anything):
+
+```bash
+make start                                            # CONTAINER_ENGINE=docker (default), YUMMI_NETWORK_MODE=secure (default)
+make start CONTAINER_ENGINE=podman                    # same compose file, run through podman compose instead
+make start YUMMI_NETWORK_MODE=insecure-bridge          # drops yummi_internal's `internal: true` — see below
+make start CONTAINER_ENGINE=podman YUMMI_NETWORK_MODE=insecure-bridge
+```
+
+`YUMMI_NETWORK_MODE=insecure-bridge` loads `docker-compose.override.insecure-bridge.yml` on top of the base compose file, which removes `internal: true` from `yummi_internal` — the flag [Architecture § Network topology](architecture.md#network-topology) describes as making sandbox's network "architecturally absent" of any route out, independent of gateway's own nftables rules. Without it, sandbox's containment depends **entirely** on gateway's nftables staying correct — one fewer of the independent fail-closed layers described in [Security Model § The core invariant](security-model.md#fail-closed), not zero security, but a real and permanent reduction for as long as this mode is used.
+
+Because that's a genuine security trade-off and not a default anyone should hit by accident, `make start`/`make force-restart` (and `make conf`, when you pick option 2 or 3) run it through a guard (`_check-network-mode`) that prints the trade-off in full and requires you to type `I UNDERSTAND` before proceeding — every time, not just once. For scripting or CI, `YUMMI_NETWORK_MODE_CONFIRM=yes` skips the interactive prompt (the warning text still prints) — use it deliberately, not as a way to forget the trade-off exists.
+
+**This exists specifically as a workaround for the engine bugs on this page, not as a supported alternative security posture.** If you're on Docker Desktop, switching to OrbStack fixes the underlying bug with zero trade-offs and is the actually-recommended path — reach for `insecure-bridge` (option 2 in `make conf`) only if you genuinely cannot change engines. If you're on Podman, remember it only closes the DNS gap, not the docker-proxy socket gap, so it isn't sufficient on its own today — `make conf`'s option 3 prints that caveat explicitly.
 
 ---
 
@@ -293,14 +359,17 @@ Without this, pulling/using a second model (e.g. the embedding model alongside y
 make start
 ```
 
-This one command: runs the dependency check, ensures Ollama is running and the model is pulled, **rebuilds every Docker image from current source** (never silently reuses a stale image), then brings the stack up in dependency order (each service's `depends_on: condition: service_healthy` enforces this): `gateway` and `docker-proxy` start immediately in parallel (neither depends on anything); `sandbox` waits for `gateway` to report healthy; `orchestrator` waits for **all three** of `gateway`, `sandbox`, and `docker-proxy` to be healthy before it starts; `ui` waits for `orchestrator`. First run takes longer — it's building 4 images from scratch (`docker-proxy` is a pre-built image, pulled rather than built), including a full Kali package install for sandbox.
+This one command: runs the dependency check, ensures Ollama is running and the model is pulled, **rebuilds every Docker image from current source** (never silently reuses a stale image), brings the stack up in dependency order (each service's `depends_on: condition: service_healthy` enforces this): `gateway` and `docker-proxy` start immediately in parallel (neither depends on anything); `sandbox` waits for `gateway` to report healthy; `orchestrator` waits for **all three** of `gateway`, `sandbox`, and `docker-proxy` to be healthy before it starts; `ui` waits for `orchestrator` — **then launches the native Tauri console directly.** No separate step, no browser tab to open by hand; this is the one command for the normal local workflow. First run takes longer — it's building 4 images from scratch (`docker-proxy` is a pre-built image, pulled rather than built), including a full Kali package install for sandbox.
 
 ```bash
-make start-tui   # same as above, then immediately launches the terminal UI
+make app                  # alias for 'start' — kept for anyone with the old habit memorized
+make start NO_DESKTOP=1   # headless: services only, no desktop window (CI/server/remote box)
+make start-tui            # services (headless) + the terminal UI instead of the desktop console
 ```
 
 Once it's up:
-- Web UI: **http://localhost:3000**
+- Desktop console: opens automatically from `make start` — reattach anytime without restarting the stack via **`make desktop-dev`**
+- Web UI (still available for headless/remote use): **http://localhost:3000**
 - Orchestrator API: **http://127.0.0.1:9080** (bound to localhost only — not reachable from other machines on your network by design)
 
 ```bash
@@ -340,6 +409,8 @@ A healthy run ends with:
 ```
 doctor: healthy
 ```
+
+![Terminal output of a healthy `make doctor` run](assets/screenshots/installation/doctor-healthy.png)
 
 ---
 

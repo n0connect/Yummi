@@ -1,5 +1,7 @@
 # ui — Frontend
 
+> Quick local overview. For the full, kept-current reference (directory structure, why `features/` and `pages/` are split, state management), see [docs/modules/ui.md](../docs/modules/ui.md); for what each tab does, see [docs/usage-guide.md](../docs/usage-guide.md).
+
 React 18 + Vite single-page application. Served by nginx on port 3000 in Docker; proxies `/api/` and `/ws/` to orchestrator at port 9080.
 
 ## Stack

@@ -17,15 +17,22 @@ The web dashboard — the only piece of this repository built with Node/npm rath
 
 ```
 ui/src/
-├── app/            App.tsx — top-level routing between the six tabs
+├── app/            App.tsx — top-level routing between the six tabs (routes past the
+│                   first are React.lazy-loaded behind a Suspense boundary)
 ├── entities/       types.ts — shared TypeScript types mirroring orchestrator's JSON shapes
 ├── pages/          One directory per tab: chat/, terminal/, trace/, logs/, gateway/, health/
 ├── features/       One directory per data concern: chat/, gateway/, health/, sessions/,
-│                   skills/, system/, tasks/, terminal/, trace/, assistant/, debuglog/
-├── shared/         api/http.ts (the one fetch wrapper everything else uses), reusable
-│                   components (StatusBadge, ModuleCard, MetricRow, LogLine), assets
+│                   skills/, system/, tasks/, terminal/, trace/, assistant/, debuglog/,
+│                   desktop/ (the Tauri-only connection notice, see below)
+├── shared/         api/http.ts (the one fetch wrapper everything else uses), api/runtime.ts
+│                   (isDesktopShell + apiURL/websocketURL — see below), lib/ (operatorText.ts,
+│                   activityPresentation.ts — client-side counterparts of the server's
+│                   model-text sanitization, see Security Model), reusable components
+│                   (StatusBadge, ModuleCard, MetricRow, LogLine), assets
 └── test/           setup.ts — see "the one mock-adjacent file" below (no mocks/ directory exists)
 ```
+
+The same `ui/src` tree is consumed by two different shells: nginx serves it as a browser SPA (`ui/Dockerfile`), and `desktop/` packages the identical bundle in a Tauri window — not a fork, not a second copy of the components. The only place that distinction is visible in code is `shared/api/runtime.ts`: `isDesktopShell` detects the Tauri bridge at runtime, and `apiURL`/`websocketURL` resolve to the loopback orchestrator directly in that case instead of assuming a same-origin nginx proxy. Every fetch/WebSocket call site in `features/*` goes through those two helpers rather than hardcoding a relative path. See [Security Model § Desktop app isolation](../security-model.md#desktop-isolation) for what the Tauri shell can and can't do.
 
 ## Why `features/` and `pages/` are separate <a id="features-vs-pages"></a>
 

@@ -1,5 +1,7 @@
 # sandbox — Kali Execution Container
 
+> Quick local overview. For the full, kept-current reference (the one exec path, timeouts/caps, what's agent-reachable vs not), see [docs/agent/sandbox-execution.md](../docs/agent/sandbox-execution.md).
+
 sandbox is the Dockerized Kali Linux environment where all pentest commands run. It is isolated from the external network by the gateway trust boundary — it can only reach targets that gateway has explicitly allowed.
 
 ## Security constraints

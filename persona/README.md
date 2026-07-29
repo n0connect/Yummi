@@ -1,5 +1,7 @@
 # persona — AI Assistant Behavior
 
+> Quick local overview. For the full, kept-current reference (the two independent personas, safety boundaries explained in depth, golden tests, why `tier_capabilities/` isn't loaded at runtime), see [docs/persona/persona-and-skills.md](../docs/persona/persona-and-skills.md) and [docs/agent/skills-and-subagents.md](../docs/agent/skills-and-subagents.md).
+
 YAML and JSON configuration files that define the AI assistant's identity, methodology, safety boundaries, and tool knowledge. The conductor engine (`orchestrator/internal/conductor/`) loads these at startup.
 
 ## Layout

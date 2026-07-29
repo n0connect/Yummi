@@ -1,5 +1,7 @@
 # gateway — Trust Boundary
 
+> Quick local overview. For the full, kept-current reference (module map, IPC protocol, startup sequence), see [docs/modules/gateway.md](../docs/modules/gateway.md); for the enforcement behavior itself, see [docs/security-model.md](../docs/security-model.md).
+
 gateway is the Rust daemon that enforces fail-closed network isolation between the Kali execution container (sandbox) and the external network. It is the only component that can permit outbound traffic from sandbox.
 
 ## Design principle

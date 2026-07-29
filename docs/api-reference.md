@@ -97,6 +97,7 @@ The lower-level record of every individual command run (both from single-command
 | `GET` | `/executions/{id}` | Get one execution record |
 | `POST` | `/executions/{id}/cancel` | Cancel a running/queued execution |
 | `POST` | `/executions/{id}/resolve-egress` | Resolve an **Ask-mode** egress hold — see [Security Model § Egress modes](security-model.md#egress-modes) |
+| `POST` | `/executions/{id}/resolve-threat` | Resolve a flagged single-command output hold — body `{approved: true|false}`; approval releases the sanitized result to the chat feedback flow, denial keeps it out of the LLM context |
 
 ## Gateway management <a id="gateway"></a>
 
@@ -146,7 +147,7 @@ Backs the [Gateway tab](usage-guide.md#tab-gateway) — every one of these is an
 
 | `type` | Fired when | Drives |
 |---|---|---|
-| `execution.status` | An execution's status changes (queued → running → done/failed/awaiting-egress-approval) | Live command status in the Agent/Bash tabs |
+| `execution.status` | An execution's status changes (`queued` → `running` → `completed`/`failed`/`canceled`/`awaiting_egress_approval`/`awaiting_threat_approval`) — also re-fired periodically as `execution.running` with `elapsed_secs` set while a still-running command is in flight, so a long real command (a full `nikto`, `nmap`) doesn't look indistinguishable from a hang | Live command status and elapsed time in the Agent/Bash tabs |
 | `task.status` | An agent task's status changes (running → awaiting_approval → completed/failed/stopped, etc.) | The Agent tab's live task tracker |
 | `gateway.status` | A gateway rule or egress mode changes (`health.Aggregator`'s `diffAndPublishRules`, which polls gateway and only emits on an actual diff) | The Gateway tab's live rule table and mode indicator |
 

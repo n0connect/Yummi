@@ -47,6 +47,8 @@ make dev-ui                # cd ui && npm run dev — Vite HMR dev server on :30
 
 `dev-orchestrator` is genuinely useful for iterating on API handlers, the conductor, or the agent's prompt logic with fast recompiles — but remember it has **no sandbox to `docker exec` into**, so any code path that actually runs a pentest command will fail. It's for everything *except* verifying real command execution. For that, you need the full `make start` stack.
 
+`dev-ui`'s Vite server proxies `/api` and `/ws` to `http://127.0.0.1:9080` (`ui/vite.config.ts`), so pairing it with `dev-orchestrator` running on that port gives you HMR on the frontend against a real, fast-iterating backend — no Docker rebuild for either side while you're touching UI + API code together.
+
 ---
 
 ## Running a single test <a id="single-test"></a>

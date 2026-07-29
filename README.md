@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/n0connect/yummi/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square" /></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-brightgreen?style=flat-square" /></a>
   <a href="https://github.com/n0connect/yummi/releases"><img alt="Version" src="https://img.shields.io/badge/version-v0.1.0-brightgreen?style=flat-square" /></a>
   <a href="docs/installation.md"><img alt="Go" src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square" /></a>
   <a href="gateway/Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square" /></a>
@@ -26,6 +26,10 @@
 
 <p align="center">
 Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red-Team agent drives a hardened, network-isolated Kali sandbox — and a memory-safe Rust trust boundary makes sure the AI can never touch a target it was not allowed to.
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/readme/hero-agent-tab.png" alt="Yummi's Agent tab mid-conversation, showing a command proposal with its rationale and risk level" width="800">
 </p>
 
 ---
@@ -64,13 +68,18 @@ Five components in total, not four — a `docker-proxy` sits between the orchest
 
 ```bash
 make install   # bootstrap: Go, Rust, Node, Docker, Ollama
-make start     # bring up the full stack (always rebuilds from current source)
+make start     # start the full stack and open the native Tauri console directly
 ```
 
-Then open **http://localhost:3000**. First run pulls the default model (`qwen3:14b` for the full stack, ~9 GB) — see **[Installation →](docs/installation.md)** for OS/architecture-specific setup (Linux/macOS/Windows, x86_64/ARM64), the exact hardware sizing per model tier, and the specific first-run errors people actually hit.
+For headless/server use, run **`make start NO_DESKTOP=1`** and open
+**http://localhost:3000** instead. First run pulls the default model
+(`qwen3:14b` for the full stack, ~9 GB) — see
+**[Installation →](docs/installation.md)** for OS/architecture-specific setup
+(Linux/macOS/Windows, x86_64/ARM64), the exact hardware sizing per model tier,
+and the specific first-run errors people actually hit.
 
 ```bash
-make start-tui   # same, then launch the terminal UI instead of (or alongside) the browser
+make start-tui   # services (headless), then the terminal UI instead of the desktop console
 ```
 
 ## Development
@@ -87,7 +96,7 @@ This project has a strict, permanent ban on mocking its own components — tests
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)
 
 ---
 

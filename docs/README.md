@@ -43,7 +43,7 @@ docs/
 
 **"I need to find which file owns X."** → [Modules](modules/) — organized by Go/Rust/Node, mirroring the actual module boundaries in the codebase.
 
-**"I'm integrating against the API directly (a custom client, a script).** → [API Reference](api-reference.md).
+**"I'm integrating against the API directly (a custom client, a script)."** → [API Reference](api-reference.md).
 
 ## A note on how this documentation was written
 
