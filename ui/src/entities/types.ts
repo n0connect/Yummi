@@ -11,7 +11,7 @@ export type ExecutionRecord = {
   id: string
   session_id: string
   proposal_id?: string
-  status: 'queued' | 'running' | 'awaiting_egress_approval' | 'completed' | 'failed' | 'canceled' | string
+  status: 'queued' | 'running' | 'awaiting_egress_approval' | 'awaiting_threat_approval' | 'completed' | 'failed' | 'canceled' | string
   command: string
   mode?: string
   output?: string
@@ -34,6 +34,11 @@ export type ExecutionRecord = {
   sanitized_error?: string
   created_at?: number
   updated_at?: number
+  // Set only on periodic "still running" heartbeat events while status is
+  // 'running' — never on a terminal record. Lets the UI show live elapsed
+  // time instead of a static "running" state for however long a real
+  // command takes, so a slow scan doesn't look identical to a hang.
+  elapsed_secs?: number
 }
 
 // ─── Session + persisted chat (from /api/v1/sessions[/{id}/messages]) ─────────

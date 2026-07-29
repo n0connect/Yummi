@@ -4,6 +4,8 @@ import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
 import { ContextBar, type ApprovalMode } from './ContextBar'
 import { TaskTracker } from '../tasks/TaskTracker'
+import { RuntimeConnectionNotice } from '../desktop/RuntimeConnectionNotice'
+import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,22 +34,6 @@ type Message = {
   execution?: ExecutionRecord
   taskID?: string
   activity?: ActivityEvent
-}
-
-// Activity kinds shown inline in the AGENT timeline. Commands/results render via
-// the execution card and plan/finish/ask via the task card, so they are
-// excluded here to avoid duplication — only the "what the agent is drawing on"
-// signals (memory, skills, sub-agents, findings, persistent memory) surface.
-const INLINE_ACTIVITY = new Set<string>([
-  'memory_recalled', 'skill_applied', 'finding', 'handoff_started', 'handoff_completed', 'context_saved',
-])
-const ACTIVITY_META: Record<string, [string, string]> = {
-  memory_recalled:   ['🧠', 'hatırlandı'],
-  skill_applied:     ['📘', 'skill'],
-  finding:           ['🔎', 'bulgu'],
-  handoff_started:   ['🤝', 'devredildi'],
-  handoff_completed: ['↩︎', 'döndü'],
-  context_saved:     ['💾', 'hatırlandı'],
 }
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
@@ -94,12 +80,15 @@ function loadDefaultMessages(): Message[] {
 // already acted on, so they are intentionally not made re-actionable here.
 function rebuildMessages(rows: ServerChatMessage[]): Message[] {
   if (rows.length === 0) return [freshWelcome()]
-  return rows.map(r => ({
-    id: nextId(),
-    role: (r.role === 'user' || r.role === 'assistant' || r.role === 'system') ? r.role : 'system',
-    content: r.content,
-    timestamp: new Date((r.created_at ?? 0) * 1000).toISOString(),
-  }))
+  return rows.map(r => {
+    const role = (r.role === 'user' || r.role === 'assistant' || r.role === 'system') ? r.role : 'system'
+    return {
+      id: nextId(),
+      role,
+      content: role === 'assistant' ? sanitizeOperatorText(r.content) : r.content,
+      timestamp: new Date((r.created_at ?? 0) * 1000).toISOString(),
+    }
+  })
 }
 
 function loadApprovalMode(): ApprovalMode {
@@ -122,8 +111,9 @@ const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'])
 // props it needs and holds no state of its own, so they can be read (and
 // changed) independently of the stateful logic in AssistantPanel below.
 
-function TaskCardMessage({ task, onClose, onApprove, onStop, subTask, onApproveSub }: {
+function TaskCardMessage({ task, activities, onClose, onApprove, onStop, subTask, onApproveSub }: {
   task: AgentTask
+  activities?: ActivityEvent[]
   onClose: () => void
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
@@ -133,39 +123,93 @@ function TaskCardMessage({ task, onClose, onApprove, onStop, subTask, onApproveS
   return (
     <div className="msg-task-card">
       <TaskTracker liveTask={task} onClose={onClose} onApprove={onApprove} onStop={onStop}
-        subTask={subTask} onApproveSub={onApproveSub} />
+        subTask={subTask} onApproveSub={onApproveSub} activities={activities} />
     </div>
   )
 }
 
-function ActivityChipMessage({ activity }: { activity: ActivityEvent }): JSX.Element {
-  const [icon, label] = ACTIVITY_META[activity.kind] ?? ['•', activity.kind]
+const STARTER_PROMPTS = [
+  'Bir hedef için güvenli keşif planı hazırla',
+  'Hedef kapsamını ve öncelikleri değerlendirmeme yardım et',
+  'Mevcut güvenlik durumunu özetle ve sonraki adımları öner',
+]
+
+function EmptyWorkspace({ onUsePrompt }: { onUsePrompt: (prompt: string) => void }): JSX.Element {
   return (
-    <div className={`act act-${activity.kind}`} title={activity.detail || ''}>
-      <span className="act-ico">{icon}</span>
-      <span className="act-label">{label}</span>
-      <span className="act-text">{activity.summary}</span>
+    <div className="chat-empty">
+      <div className="chat-empty-mark" aria-hidden="true">Y</div>
+      <span className="chat-empty-eyebrow">OPERATÖR ÇALIŞMA ALANI</span>
+      <h1>Net bir hedefle başlayın.</h1>
+      <p>
+        Hedefinizi, kapsamı veya yapmak istediğiniz işi yazın. Yummi önce planı
+        netleştirir; hiçbir komut operatör onayı olmadan çalışmaz.
+      </p>
+      <div className="chat-starters" aria-label="Başlangıç önerileri">
+        {STARTER_PROMPTS.map(prompt => (
+          <button key={prompt} className="chat-starter" type="button" onClick={() => onUsePrompt(prompt)}>
+            <span>{prompt}</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
+}
+
+// formatElapsed renders a heartbeat's elapsed_secs as "Ns" or "MdkSs" — long
+// enough that a plain seconds counter would stop being readable at a glance.
+function formatElapsed(secs: number): string {
+  if (secs < 60) return `${secs}sn`
+  return `${Math.floor(secs / 60)}dk ${secs % 60}sn`
 }
 
 function ExecutionMessage({ content, execution }: { content: string; execution: ExecutionRecord }): JSX.Element {
+  const status = execution.status
+  const isActive = ['queued', 'running'].includes(status)
+  const visibleOutput = execution.output || (content !== execution.error ? content : '')
+  const statusLabel: Record<string, string> = {
+    queued: 'Sırada',
+    running: 'Çalışıyor',
+    awaiting_egress_approval: 'Ağ onayı bekliyor',
+    awaiting_threat_approval: 'İçerik incelemesi bekliyor',
+    completed: 'Tamamlandı',
+    failed: 'Başarısız',
+    canceled: 'İptal edildi',
+  }
+  const completedLabel = status === 'completed' && visibleOutput
+    ? 'Tamamlandı · çıktı hazır'
+    : statusLabel[status] ?? status
   return (
-    <details className="msg msg-execution" open={execution.status !== 'completed'}>
+    <details className={`msg msg-execution execution-${status}`} open={isActive}>
       <summary className="execution-summary">
         <span className="execution-chevron">›</span>
-        <span className={`execution-status ${execution.status === 'completed' ? 'status-ok' : 'status-err'}`}>
-          {execution.status === 'completed' ? '✓' : '✗'}
+        <span className={`execution-status ${status === 'completed' ? 'status-ok' : isActive ? 'status-live' : 'status-err'}`}>
+          {status === 'completed' ? '✓' : isActive ? '●' : status === 'awaiting_egress_approval' || status === 'awaiting_threat_approval' ? '!' : '✗'}
         </span>
-        <code className="execution-cmd">{execution.command}</code>
+        <div className="execution-heading">
+          <code className="execution-cmd">{execution.command}</code>
+          <span className="execution-state">{completedLabel}</span>
+        </div>
       </summary>
       <div className="execution-detail">
+        {isActive && (
+          <div className="execution-live" aria-live="polite">
+            <span className="pulse">●</span>
+            <span>
+              {status === 'queued'
+                ? 'Komut yürütme sırasına alındı.'
+                : execution.elapsed_secs
+                  ? `Komut çalışıyor · ${formatElapsed(execution.elapsed_secs)} geçti — çıktı gelir gelmez burada gösterilecek.`
+                  : 'Komut çalışıyor; çıktı gelir gelmez burada gösterilecek.'}
+            </span>
+          </div>
+        )}
         {execution.security_banner && (
           <div className="execution-threat" role="alert">
             ⚠ {execution.security_banner}
           </div>
         )}
-        {content && <pre className="execution-output">{content}</pre>}
+        {!isActive && visibleOutput && <pre className="execution-output">{visibleOutput}</pre>}
         {execution.error && execution.status !== 'completed' && (
           <div className="execution-error">{execution.error}</div>
         )}
@@ -175,12 +219,13 @@ function ExecutionMessage({ content, execution }: { content: string; execution: 
 }
 
 function TextMessage({ role, content, timestamp }: { role: MessageRole; content: string; timestamp: string }): JSX.Element {
+  const visibleContent = role === 'assistant' ? sanitizeOperatorText(content) : content
   return (
     <div className={`msg msg-${role}`} title={new Date(timestamp).toLocaleTimeString()}>
       {role === 'user'      && <span className="msg-prefix">[USER] ❯</span>}
       {role === 'assistant' && <span className="msg-prefix">[YUMMI] ❯</span>}
       {role === 'system'    && <span className="msg-prefix">[SYSTEM] ❯</span>}
-      <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>{content}</span>
+      <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>{visibleContent}</span>
     </div>
   )
 }
@@ -195,9 +240,11 @@ type AssistantPanelProps = {
   onSessionChange: (sessionID: string) => void
   // onSessionsChanged signals the rail to refresh its list (new/renamed session).
   onSessionsChanged: () => void
+  // Incremented by the session rail's compact "Yeni" action.
+  newChatRequest?: number
 }
 
-export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }: AssistantPanelProps): JSX.Element {
+export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged, newChatRequest = 0 }: AssistantPanelProps): JSX.Element {
   const [messages, setMessages]   = useState<Message[]>(loadDefaultMessages)
   const [input, setInput]         = useState('')
   const [proposals, setProposals] = useState<ChatProposal[]>([])
@@ -208,9 +255,18 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
   // activeTask, when one exists. Handoff is synchronous and depth-capped at
   // 1, so there is at most one outstanding sub-task per active task.
   const [subTask, setSubTask] = useState<AgentTask | null>(null)
+  // Keep snapshots independently of the currently-running task. A terminal
+  // task remains a useful, inspectable part of the transcript instead of
+  // vanishing the moment its final websocket event arrives.
+  const [taskSnapshots, setTaskSnapshots] = useState<Record<string, AgentTask>>({})
+  const [taskActivities, setTaskActivities] = useState<Record<string, ActivityEvent[]>>({})
   // egressHolds tracks executions held in gateway Ask mode awaiting operator
   // approval of their external target. Rendered as a pending-approval bar.
   const [egressHolds, setEgressHolds] = useState<ExecutionRecord[]>([])
+  // threatHolds contain target-controlled output that matched the content
+  // scanner. Unlike a banner-only warning, these records cannot be fed back to
+  // the conductor until the operator explicitly releases them.
+  const [threatHolds, setThreatHolds] = useState<ExecutionRecord[]>([])
   const [approvalMode, setApprovalModeState] = useState<ApprovalMode>(loadApprovalMode)
   // needsTitleRef marks a freshly-created session whose name should be set from
   // the operator's first message (Claude-style auto-title).
@@ -233,17 +289,43 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
   // its sessionStorage copy. Runs on mount and on every rail switch.
   const loadHistory = useCallback((sid: string) => {
     const controller = new AbortController()
+    // Reset every session-scoped transient state synchronously, before the
+    // network round-trip — not after it resolves. Otherwise a stale proposal
+    // or active task from the PREVIOUS session stays live for the duration of
+    // the fetch; if approval mode is "auto", the auto-approve effect below can
+    // fire on that stale proposal after `sessionID` has already switched,
+    // running an old command under the new session's id.
+    setProposals([]); setActiveTask(null); setSubTask(null); setTaskSnapshots({}); setTaskActivities({}); setEgressHolds([]); setThreatHolds([])
+    // isLoading isn't session-scoped state, so it must be cleared here too:
+    // an in-flight request from the previous session now skips its own
+    // `finally` (sessionIDRef no longer matches), so nothing else would ever
+    // clear it and the new session's input would look permanently disabled.
+    setIsLoading(false)
+    autoFeedbackCountRef.current = 0
+    analyzedExecutionIDsRef.current = new Set()
     if (sid === 'default') {
       setMessages(loadDefaultMessages())
-      setProposals([]); setActiveTask(null); setSubTask(null); setEgressHolds([])
       setHistoryError(false); setHistoryLoading(false)
       return controller
     }
     setHistoryLoading(true)
-    fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sid}/messages`, { signal: controller.signal })
-      .then(rows => {
-        setMessages(rebuildMessages(rows ?? []))
-        setProposals([]); setActiveTask(null); setSubTask(null); setEgressHolds([])
+    Promise.all([
+      fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sid}/messages`, { signal: controller.signal }),
+      fetchJSON<ActivityEvent[]>(`/api/v1/sessions/${sid}/activity?limit=200`, { signal: controller.signal }).catch(() => []),
+      fetchJSON<ExecutionRecord[]>(`/api/v1/sessions/${sid}/executions?limit=100`, { signal: controller.signal }).catch(() => []),
+    ])
+      .then(([rows, activities, executions]) => {
+        // Activity and execution history are observability aids: an older
+        // server may not expose them, but that must never block chat history.
+        const hydratedExecutions: Message[] = executions.slice().reverse().map(record => ({
+          id: nextId(), role: 'execution', content: record.output || record.error || '',
+          timestamp: new Date((record.created_at ?? 0) * 1000).toISOString(), execution: record,
+        }))
+        setMessages([...rebuildMessages(rows ?? []), ...hydratedExecutions].slice(-120))
+        setTaskActivities(activities.reduce<Record<string, ActivityEvent[]>>((byTask, event) => {
+          byTask[event.task_id] = [...(byTask[event.task_id] ?? []), event]
+          return byTask
+        }, {}))
         setHistoryError(false)
       })
       .catch(err => {
@@ -301,9 +383,34 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
   // ── Message helpers ────────────────────────────────────────────────────────
 
   const appendMessage = useCallback((msg: Omit<Message, 'id' | 'timestamp'>) => {
+    const visibleContent = msg.role === 'assistant'
+      ? sanitizeOperatorText(msg.content)
+      : capMessageContent(msg.content)
     setMessages(prev =>
-      [...prev, { ...msg, content: capMessageContent(msg.content), id: nextId(), timestamp: new Date().toISOString() }].slice(-120)
+      [...prev, { ...msg, content: visibleContent, id: nextId(), timestamp: new Date().toISOString() }].slice(-120)
     )
+  }, [])
+
+  // One execution gets one transcript card. Later websocket lifecycle events
+  // replace that card's data in place, making queued → running → output feel
+  // like a continuous operation rather than three disconnected messages.
+  const upsertExecutionMessage = useCallback((record: ExecutionRecord) => {
+    setMessages(prev => {
+      const at = prev.findIndex(msg => msg.role === 'execution' && msg.execution?.id === record.id)
+      if (at >= 0) {
+        return prev.map((msg, index) => index === at
+          ? { ...msg, execution: record, content: record.output || record.error || msg.content }
+          : msg)
+      }
+      const next: Message = {
+        id: nextId(),
+        role: 'execution',
+        content: record.output || record.error || '',
+        timestamp: new Date().toISOString(),
+        execution: record,
+      }
+      return [...prev, next].slice(-120)
+    })
   }, [])
 
   // newChat starts a fresh, server-persisted conversation. It creates a real
@@ -315,7 +422,10 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
     setProposals([])
     setActiveTask(null)
     setSubTask(null)
+    setTaskSnapshots({})
+    setTaskActivities({})
     setEgressHolds([])
+    setThreatHolds([])
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
         method: 'POST',
@@ -331,13 +441,28 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
     }
   }, [onSessionChange, onSessionsChanged])
 
+  const handledNewChatRequestRef = useRef(newChatRequest)
+  useEffect(() => {
+    if (newChatRequest === handledNewChatRequestRef.current) return
+    handledNewChatRequestRef.current = newChatRequest
+    void newChat()
+  }, [newChatRequest, newChat])
+
   // ── WebSocket stream ───────────────────────────────────────────────────────
 
   const activeTaskRef    = useRef(activeTask)
   activeTaskRef.current  = activeTask
+  // Always holds the currently-active session id. Async chat/proposal/analyze
+  // calls below capture the session they were issued for and check this ref
+  // before touching component state — an in-flight request that resolves
+  // after the operator has switched to a different conversation must not
+  // paint its (now stale) result into whatever session is on screen.
+  const sessionIDRef = useRef(sessionID)
+  sessionIDRef.current = sessionID
   // Counts consecutive auto-feedbacks since the last user message.
   // Capped at 3 to break infinite retry loops.
   const autoFeedbackCountRef = useRef(0)
+  const analyzedExecutionIDsRef = useRef(new Set<string>())
 
   // analyzeOutput feeds every execution result (success OR failure) back to
   // the conductor so the model can react: analyze output, retry on error, or
@@ -379,24 +504,33 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
         `Bu sonucu analiz et ve kullanıcının sorusunu yanıtla.`
     }
 
+    const sid = sessionID
     setIsLoading(true)
     try {
       const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: feedback, session_id: sessionID }),
+        body: JSON.stringify({ message: feedback, session_id: sid }),
       })
+      // The operator may have switched to a different conversation while this
+      // was in flight — its (now-stale) reply/proposals belong to `sid`, not
+      // whatever session is on screen now, so discard rather than paint them
+      // in. The turn is already durably saved server-side under `sid` and
+      // will show up correctly if the operator switches back to it.
+      if (sessionIDRef.current !== sid) return
       const reply = res.data?.message ?? res.reply ?? ''
       if (reply) appendMessage({ role: 'assistant', content: reply })
       // If the model suggests new proposals after a failure, surface them.
       const newProposals = res.data?.proposals ?? []
       if (newProposals.length > 0) setProposals(newProposals)
     } catch { /* silent — execution output already visible in card */ }
-    finally { setIsLoading(false) }
+    finally { if (sessionIDRef.current === sid) setIsLoading(false) }
   }, [sessionID, appendMessage])
 
   const onExecution = useCallback((record: ExecutionRecord) => {
-    if (sessionID !== 'default' && record.session_id !== sessionID) return
+    if (record.session_id !== sessionID) return
+
+    upsertExecutionMessage(record)
 
     // Gateway Ask mode: the command is held until the operator approves the
     // external target. Surface it as a pending egress-approval card (deduped
@@ -407,22 +541,27 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
       return
     }
 
+    // The command has already completed, but its result is untrusted target
+    // content. Do not show it to the conductor or auto-analyze it until the
+    // operator makes an explicit decision in the threat gate below.
+    if (record.status === 'awaiting_threat_approval') {
+      setThreatHolds(prev => [...prev.filter(r => r.id !== record.id), record])
+      return
+    }
+
     if (['completed', 'failed', 'canceled'].includes(record.status)) {
       // A resolved execution leaves the egress-hold list if it was there.
       setEgressHolds(prev => prev.filter(r => r.id !== record.id))
-      appendMessage({
-        role: 'execution',
-        content: record.output || record.error || `Command ${record.status}`,
-        execution: record,
-      })
+      setThreatHolds(prev => prev.filter(r => r.id !== record.id))
       // Feed back both completed AND failed to the conductor so the model can
       // react. Skip 'canceled' (user-initiated) and agent_task mode (the
       // agent loop handles its own feedback internally).
-      if (record.status !== 'canceled' && record.mode === 'assistant_loop') {
+      if (record.status !== 'canceled' && record.mode === 'assistant_loop' && !analyzedExecutionIDsRef.current.has(record.id)) {
+        analyzedExecutionIDsRef.current.add(record.id)
         void analyzeOutput(record)
       }
     }
-  }, [sessionID, appendMessage, analyzeOutput])
+  }, [sessionID, upsertExecutionMessage, analyzeOutput])
 
   const onTask = useCallback((task: AgentTask) => {
     const active = activeTaskRef.current
@@ -439,22 +578,22 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
     if (!active || task.id !== active.id) return
 
     setActiveTask(task)
+    setTaskSnapshots(prev => ({ ...prev, [task.id]: task }))
 
     // When task completes or fails, inject a summary message and clear active.
     if (TERMINAL.has(task.status)) {
       const lines: string[] = []
-      if (task.summary) lines.push(task.summary)
+      if (task.summary) lines.push(sanitizeOperatorText(task.summary))
       if (task.findings && task.findings.length > 0) {
         lines.push('')
-        task.findings.forEach(f => lines.push(`• ${f}`))
+        task.findings.forEach(f => lines.push(`• ${sanitizeOperatorText(f, 'Bulgu kaydedildi.')}`))
       }
       if (task.last_error && task.status !== 'completed') {
-        lines.push(`Hata: ${task.last_error}`)
+        lines.push('Görev tamamlanamadı. Teknik ayrıntılar Logs ekranında.')
       }
       if (lines.length > 0) {
         appendMessage({ role: 'assistant', content: lines.join('\n') })
       }
-      setActiveTask(null)
       setSubTask(null)
     }
 
@@ -462,16 +601,19 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
     if (task.status === 'paused' && task.question) {
       appendMessage({
         role: 'system',
-        content: `Operatör sorusu: ${task.question}`,
+        content: `Operatör sorusu: ${sanitizeOperatorText(task.question, 'Devam etmek için operatör girdisi gerekiyor.')}`,
       })
     }
   }, [appendMessage])
 
   const onActivity = useCallback((ev: ActivityEvent) => {
-    if (sessionID !== 'default' && ev.session_id !== sessionID) return
-    if (!INLINE_ACTIVITY.has(ev.kind)) return
-    appendMessage({ role: 'activity', content: ev.summary, activity: ev })
-  }, [sessionID, appendMessage])
+    if (ev.session_id !== sessionID) return
+    setTaskActivities(prev => {
+      const current = prev[ev.task_id] ?? []
+      if (current.some(item => item.id === ev.id)) return prev
+      return { ...prev, [ev.task_id]: [...current, ev].slice(-80) }
+    })
+  }, [sessionID])
 
   useChatStream({ onExecution, onTask, onActivity })
 
@@ -523,6 +665,28 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
     }
   }, [appendMessage])
 
+  const resolveThreat = useCallback(async (rec: ExecutionRecord, approved: boolean) => {
+    // The terminal event emitted by the API is the source of truth for the
+    // final card and (only on approval) the subsequent LLM feedback.
+    setThreatHolds(prev => prev.filter(r => r.id !== rec.id))
+    try {
+      await fetchJSON(`/api/v1/executions/${rec.id}/resolve-threat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      })
+      appendMessage({
+        role: 'system',
+        content: approved
+          ? 'Şüpheli çıktı operatör tarafından inceleme için ajana iletilmek üzere onaylandı.'
+          : 'Şüpheli çıktı operatör tarafından ajana iletilmeden tutuldu.',
+      })
+    } catch {
+      appendMessage({ role: 'system', content: 'Tehdit taraması kararı gönderilemedi.' })
+      setThreatHolds(prev => [...prev.filter(r => r.id !== rec.id), rec])
+    }
+  }, [appendMessage])
+
   const setApprovalMode = useCallback(async (mode: ApprovalMode) => {
     const previous = approvalMode
     setApprovalModeState(mode)
@@ -546,6 +710,7 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
     const text = input.trim()
     if (!text || isLoading) return
 
+    const sid = sessionID  // the conversation this turn actually belongs to
     autoFeedbackCountRef.current = 0  // reset retry counter on new user message
     setInput('')
     appendMessage({ role: 'user', content: text })
@@ -553,10 +718,10 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
 
     // Auto-title a freshly-created session from the operator's first message
     // (Claude-style), then let the rail pick up the new name.
-    if (needsTitleRef.current && sessionID !== 'default') {
+    if (needsTitleRef.current && sid !== 'default') {
       needsTitleRef.current = false
       const title = text.length > 40 ? text.slice(0, 40).trimEnd() + '…' : text
-      void fetchJSON(`/api/v1/sessions/${sessionID}`, {
+      void fetchJSON(`/api/v1/sessions/${sid}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: title }),
@@ -567,10 +732,17 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
       const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session_id: sessionID }),
+        body: JSON.stringify({ message: text, session_id: sid }),
       })
 
-      if (res.session_id && res.session_id !== sessionID) onSessionChange(res.session_id)
+      // The operator may have switched to a different conversation while this
+      // was in flight. The turn is already durably saved server-side under
+      // `sid` — painting its reply/task/proposals into whatever session is
+      // now on screen would misattribute them, so discard instead. It will
+      // render correctly next time the operator switches back to `sid`.
+      if (sessionIDRef.current !== sid) return
+
+      if (res.session_id && res.session_id !== sid) onSessionChange(res.session_id)
 
       const reply = res.data?.message ?? res.reply ?? 'Cevap alınamadı'
       appendMessage({ role: 'assistant', content: reply })
@@ -580,7 +752,9 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
         // Fetch initial task state and start tracking it live.
         try {
           const task = await fetchJSON<AgentTask>(`/api/v1/tasks/${taskID}`)
+          if (sessionIDRef.current !== sid) return
           setActiveTask(task)
+          setTaskSnapshots(prev => ({ ...prev, [task.id]: task }))
           setSubTask(null) // a brand-new task can't have a stale sub-task from before
           // Inject a task card message so it appears in the message thread.
           appendMessage({
@@ -589,17 +763,16 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
             taskID,
           })
         } catch {
-          appendMessage({ role: 'system', content: 'Görev durumu alınamadı.' })
+          if (sessionIDRef.current === sid) appendMessage({ role: 'system', content: 'Görev durumu alınamadı.' })
         }
       } else {
         const newProposals = res.data?.proposals ?? []
         if (newProposals.length > 0) setProposals(newProposals)
       }
     } catch {
-      appendMessage({ role: 'system', content: 'Bağlantı hatası. Orchestrator çalışıyor mu?' })
+      if (sessionIDRef.current === sid) appendMessage({ role: 'system', content: 'Bağlantı hatası. Orchestrator çalışıyor mu?' })
     } finally {
-      setIsLoading(false)
-      inputRef.current?.focus()
+      if (sessionIDRef.current === sid) { setIsLoading(false); inputRef.current?.focus() }
     }
   }
 
@@ -607,20 +780,27 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
 
   const approveProposal = async (p: ChatProposal) => {
     if (!p.id || isLoading) return
+    const sid = sessionID  // the conversation this proposal was created under
     setIsLoading(true)
     try {
       await fetchJSON<ChatResponse>('/api/v1/chat/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionID, proposal_id: p.id }),
+        body: JSON.stringify({ session_id: sid, proposal_id: p.id }),
       })
+      // If the operator switched conversations while this call was in
+      // flight, the command has already been enqueued server-side under
+      // `sid` — its progress/result will surface via execution.status events
+      // filtered by session_id (see onExecution above), not by anything we'd
+      // do here. Just skip the local proposal/message bookkeeping for a view
+      // that no longer belongs to `sid`.
+      if (sessionIDRef.current !== sid) return
       setProposals(prev => prev.filter(x => x.id !== p.id))
       appendMessage({ role: 'system', content: `Çalıştırıldı: ${p.command}` })
     } catch {
-      appendMessage({ role: 'system', content: 'Komut onaylanamadı' })
+      if (sessionIDRef.current === sid) appendMessage({ role: 'system', content: 'Komut onaylanamadı' })
     } finally {
-      setIsLoading(false)
-      inputRef.current?.focus()
+      if (sessionIDRef.current === sid) { setIsLoading(false); inputRef.current?.focus() }
     }
   }
 
@@ -669,20 +849,26 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
   // ── Derived state ──────────────────────────────────────────────────────────
 
   const taskRunning = activeTask !== null && !TERMINAL.has(activeTask.status)
-  const isBlocked   = isLoading || taskRunning
+  const isFreshWorkspace = !historyLoading && !historyError && !activeTask && proposals.length === 0
+    && messages.length === 1 && messages[0]?.role === 'system' && messages[0]?.content === WELCOME.content
+
+  const useStarterPrompt = (prompt: string) => {
+    setInput(prompt)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <section className="panel panel-left">
       <div className="panel-header">
-        <span className="panel-header-title">
-          {isBlocked && <span className="loading-dot pulse">●</span>}
-          Agent
-          {taskRunning && (
-            <span className="running-indicator">⚡ çalışıyor</span>
-          )}
-        </span>
+        <span className="panel-header-title">Agent</span>
+        {taskRunning && (
+          <span className="running-indicator"><span className="loading-dot pulse">●</span> Görev çalışıyor</span>
+        )}
+        {!taskRunning && isLoading && (
+          <span className="running-indicator"><span className="loading-dot pulse">●</span> Yanıt hazırlanıyor</span>
+        )}
         <span className="panel-header-actions">
           <button className="small-button" onClick={() => void newChat()}>
             Yeni Sohbet
@@ -691,6 +877,7 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
       </div>
 
       <div className="chat-area">
+        <RuntimeConnectionNotice />
         {historyError && (
           <div className="history-error-banner">
             <span>Sohbet geçmişi yüklenemedi.</span>
@@ -702,26 +889,29 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
         )}
         {/* Message thread */}
         <div className="chat-messages">
-          {messages.map(msg => {
+          {isFreshWorkspace ? <EmptyWorkspace onUsePrompt={useStarterPrompt} /> : messages.map(msg => {
             if (msg.role === 'task' && msg.taskID) {
-              // Only the currently-active task has live data to show; a task
-              // card for a past/different task renders nothing.
-              const displayTask = activeTask?.id === msg.taskID ? activeTask : null
+              const displayTask = taskSnapshots[msg.taskID]
               if (!displayTask) return null
               return (
                 <TaskCardMessage
                   key={msg.id}
                   task={displayTask}
-                  onClose={() => { setActiveTask(null); setSubTask(null) }}
+                  activities={taskActivities[msg.taskID]}
+                  onClose={() => {
+                    setTaskSnapshots(prev => {
+                      const next = { ...prev }
+                      delete next[msg.taskID!]
+                      return next
+                    })
+                    if (activeTask?.id === msg.taskID) { setActiveTask(null); setSubTask(null) }
+                  }}
                   onApprove={(pid, approved) => approveTaskGate(msg.taskID!, pid, approved)}
                   onStop={stopActiveTask}
                   subTask={subTask}
                   onApproveSub={(pid, approved) => subTask && approveTaskGate(subTask.id, pid, approved)}
                 />
               )
-            }
-            if (msg.role === 'activity' && msg.activity) {
-              return <ActivityChipMessage key={msg.id} activity={msg.activity} />
             }
             if (msg.role === 'execution' && msg.execution) {
               return <ExecutionMessage key={msg.id} content={msg.content} execution={msg.execution} />
@@ -754,6 +944,31 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
           </div>
         )}
 
+        {/* Content-layer approval holds for single-command assistant output. */}
+        {threatHolds.length > 0 && (
+          <div className="threat-bar">
+            {threatHolds.map(rec => (
+              <div key={rec.id} className="threat-card">
+                <div className="threat-main">
+                  <span className="threat-title">⚠ Şüpheli komut çıktısı — model bağlamı durduruldu</span>
+                  <code className="threat-command">{rec.command}</code>
+                  <span className="threat-hint">{rec.security_banner || 'Çıktı, içerik güvenlik taramasına takıldı.'}</span>
+                  <span className="threat-operator-note">Bu içerik yalnızca operatör incelemesi için gösterilir; karar verilmeden ajana iletilmez.</span>
+                  {(rec.output || rec.error) && <pre className="threat-output">{rec.output || rec.error}</pre>}
+                </div>
+                <div className="threat-actions">
+                  <button className="btn-approve" onClick={() => void resolveThreat(rec, true)}>
+                    İncelemesi için ajana ilet
+                  </button>
+                  <button className="btn-threat-reject" onClick={() => void resolveThreat(rec, false)} title="Model bağlamından uzak tut">
+                    Ajanadan uzak tut
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Proposals */}
         {proposals.length > 0 && (
           <div className="proposals-bar">
@@ -771,7 +986,7 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
                 >
                   <div className="proposal-main">
                     <code className="proposal-command">$ {p.command}</code>
-                    {p.rationale && <div className="proposal-rationale">{p.rationale}</div>}
+                    {p.rationale && <div className="proposal-rationale">{sanitizeOperatorText(p.rationale)}</div>}
                   </div>
                   <div className="proposal-actions">
                     <span className="proposal-risk" style={getRiskStyle(p.risk_level)}>
@@ -832,9 +1047,7 @@ export function AssistantPanel({ sessionID, onSessionChange, onSessionsChanged }
         {/* Context bar */}
         <ContextBar
           charCount={charCount}
-          sessionID={sessionID}
           messageCount={messages.length}
-          isLoading={isBlocked}
           approvalMode={approvalMode}
           onApprovalModeChange={mode => void setApprovalMode(mode)}
         />

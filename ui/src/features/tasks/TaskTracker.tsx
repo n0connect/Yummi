@@ -1,4 +1,6 @@
-import type { AgentTask, PlanStep, TaskStatus } from '../../entities/types'
+import type { ActivityEvent, AgentTask, PlanStep, TaskStatus } from '../../entities/types'
+import { presentActivity } from '../../shared/lib/activityPresentation'
+import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 import './TaskTracker.css'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -35,10 +37,10 @@ function PlanTimeline({ plan }: { plan: PlanStep[] }): JSX.Element {
           <li key={step.id} className={`tt-step tt-step-${g.cls}`}>
             <span className={`tt-step-marker ${g.cls === 'running' ? 'pulse' : ''}`}>{g.icon}</span>
             <div className="tt-step-body">
-              <span className="tt-step-desc">{step.description}</span>
-              {step.status === 'failed' && step.error
-                ? <span className="tt-step-error">{step.error}</span>
-                : step.result && <span className="tt-step-result">{step.result}</span>}
+              <span className="tt-step-desc">{sanitizeOperatorText(step.description, 'Plan adımı')}</span>
+              {step.status === 'failed'
+                ? <span className="tt-step-error">Adım tamamlanamadı.</span>
+                : step.result && <span className="tt-step-result">Sonuç kaydedildi.</span>}
             </div>
           </li>
         )
@@ -47,11 +49,39 @@ function PlanTimeline({ plan }: { plan: PlanStep[] }): JSX.Element {
   )
 }
 
+function LiveActivityFeed({ activities }: { activities: ActivityEvent[] }): JSX.Element | null {
+  if (activities.length === 0) return null
+  return (
+    <section className="tt-live-feed" aria-label="Canlı görev akışı">
+      <div className="tt-live-head">
+        <span>Canlı akış</span>
+        <span>{activities.length} olay</span>
+      </div>
+      <ol className="tt-live-list">
+        {activities.slice(-8).map(ev => {
+          const visible = presentActivity(ev)
+          return (
+            <li key={ev.id} className={`tt-live-event tt-live-${ev.kind}`}>
+              <span className="tt-live-dot" aria-hidden="true" />
+              <div>
+                <span className="tt-live-label">{visible.label}</span>
+                <span className="tt-live-summary">{visible.summary}</span>
+              </div>
+              <time>{new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
 type Props = {
   liveTask: AgentTask
   onClose: () => void
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
+  activities?: ActivityEvent[]
   // subTask is set when this task delegated to a sub-agent (via [HANDOFF])
   // and that sub-agent's own task is awaiting operator approval. Without
   // this, a sub-task's pending approval was structurally invisible — it has
@@ -62,7 +92,7 @@ type Props = {
   onApproveSub?: (proposalID: string, approved: boolean) => void
 }
 
-export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, subTask, onApproveSub }: Props): JSX.Element {
+export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, activities = [], subTask, onApproveSub }: Props): JSX.Element {
   const pct      = t.step_budget > 0 ? Math.min(100, (t.steps_used / t.step_budget) * 100) : 0
   const terminal = isTerminal(t.status)
 
@@ -74,7 +104,7 @@ export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, subTask, 
             {!terminal && <span className="tt-pulse">●</span>}
             {STATUS_LABEL[t.status] ?? t.status}
           </span>
-          <span className="tt-goal">{t.goal}</span>
+          <span className="tt-goal">{sanitizeOperatorText(t.goal, 'Görev')}</span>
         </div>
         {terminal && (
           <button className="tt-x" onClick={onClose} title="Kapat">✕</button>
@@ -89,6 +119,8 @@ export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, subTask, 
 
       {/* Plan timeline */}
       {t.plan && t.plan.length > 0 && <PlanTimeline plan={t.plan} />}
+
+      <LiveActivityFeed activities={activities} />
 
       {/* Awaiting approval — inline gate */}
       {t.status === 'awaiting_approval' && t.pending_proposal_id && (
@@ -145,8 +177,8 @@ export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, subTask, 
       {/* Paused — question or error */}
       {t.status === 'paused' && (
         <div className="tt-paused">
-          {t.question   && <p className="tt-question">{t.question}</p>}
-          {t.last_error && <p className="tt-error">{t.last_error}</p>}
+          {t.question && <p className="tt-question">{sanitizeOperatorText(t.question, 'Operatör girdisi gerekiyor.')}</p>}
+          {t.last_error && <p className="tt-error">Görev devam ettirilemedi. Teknik ayrıntılar Logs ekranında.</p>}
         </div>
       )}
 
@@ -162,10 +194,10 @@ export function TaskTracker({ liveTask: t, onClose, onApprove, onStop, subTask, 
       {/* Terminal — summary + findings */}
       {terminal && (
         <div className="tt-summary">
-          {t.summary && <p className="tt-summary-text">{t.summary}</p>}
+          {t.summary && <p className="tt-summary-text">{sanitizeOperatorText(t.summary)}</p>}
           {t.findings && t.findings.length > 0 && (
             <ul className="tt-findings">
-              {t.findings.map((f, i) => <li key={i}>{f}</li>)}
+              {t.findings.map((f, i) => <li key={i}>{sanitizeOperatorText(f, 'Bulgu kaydedildi.')}</li>)}
             </ul>
           )}
         </div>

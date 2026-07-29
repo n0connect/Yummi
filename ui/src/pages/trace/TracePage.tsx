@@ -1,20 +1,21 @@
 import { useState } from 'react'
 import type { ActivityEvent, ActivityKind } from '../../entities/types'
+import { presentActivity } from '../../shared/lib/activityPresentation'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
 import { usePendingSkills } from '../../features/skills/usePendingSkills'
 
 const KIND_META: Record<ActivityKind, [string, string]> = {
-  plan:              ['🗺️', 'plan'],
-  command:           ['⚡', 'komut'],
+  plan:              ['◇', 'plan'],
+  command:           ['›', 'komut'],
   command_result:    ['✓', 'sonuç'],
-  memory_recalled:   ['🧠', 'hatırlandı'],
-  skill_applied:     ['📘', 'skill'],
-  handoff_started:   ['🤝', 'devredildi'],
-  handoff_completed: ['↩︎', 'döndü'],
-  finding:           ['🔎', 'bulgu'],
-  context_saved:     ['💾', 'bellek'],
-  ask:               ['❓', 'soru'],
-  finish:            ['🏁', 'bitti'],
+  memory_recalled:   ['○', 'hatırlandı'],
+  skill_applied:     ['◆', 'skill'],
+  handoff_started:   ['↗', 'devredildi'],
+  handoff_completed: ['↙', 'döndü'],
+  finding:           ['!', 'bulgu'],
+  context_saved:     ['·', 'bellek'],
+  ask:               ['?', 'soru'],
+  finish:            ['■', 'bitti'],
 }
 
 // Both severity and outcome are typed `<literal> | string` (entities/types.ts)
@@ -42,14 +43,15 @@ function outcomeClass(outcome: string): string {
 }
 
 function ActivityRow({ ev }: { ev: ActivityEvent }): JSX.Element {
-  const [icon, label] = KIND_META[ev.kind] ?? ['•', ev.kind]
+  const [icon] = KIND_META[ev.kind] ?? ['•', ev.kind]
+  const visible = presentActivity(ev)
   const nested = Boolean(ev.parent_task_id)
   return (
     <div className="trace-row" style={{ paddingLeft: nested ? 22 : 0 }}>
       {nested && <span className="trace-thread">└</span>}
       <span className="trace-ico">{icon}</span>
-      <span className="trace-kind">{label}</span>
-      <span className="trace-summary" title={ev.detail || ''}>{ev.summary}</span>
+      <span className="trace-kind">{visible.label}</span>
+      <span className="trace-summary">{visible.summary}</span>
     </div>
   )
 }
@@ -93,7 +95,7 @@ export function TracePage(): JSX.Element {
     <main className="trace-page">
       <div className="trace-header">
         <span className="trace-page-title">TRACE</span>
-        <span className="trace-page-sub">agent tarafından yapılan ve öğrenilen her şey</span>
+        <span className="trace-page-sub">operatöre açık görev kayıtları ve bulgular</span>
         <button className="small-button" onClick={refresh}>Yenile</button>
       </div>
 
@@ -139,7 +141,7 @@ export function TracePage(): JSX.Element {
         </Section>
 
         {/* Skills */}
-        <Section title="Skill'ler" count={skills.length}>
+        <Section title="Çalışma yöntemleri" count={skills.length}>
           {skills.map(s => (
             <div key={s.name} className="trace-skill">
               <span className="trace-skill-name">{s.name}</span>
@@ -151,7 +153,7 @@ export function TracePage(): JSX.Element {
         {/* Auto-skill-creation: curator-drafted skills awaiting operator review.
             Never auto-loaded — approve() writes to disk + hot-adds to the live
             registry, reject() just marks the row. */}
-        <Section title="Bekleyen Skill Taslakları" count={pendingSkills.length}>
+        <Section title="Bekleyen yöntem taslakları" count={pendingSkills.length}>
           {skillError && <div className="trace-skill-error">{skillError}</div>}
           {pendingSkills.map(p => (
             <div key={p.id} className="trace-skill trace-pending-skill">
@@ -171,7 +173,7 @@ export function TracePage(): JSX.Element {
         </Section>
 
         {/* Sub-agent roles */}
-        <Section title="Sub-agent rolleri" count={roles.length}>
+        <Section title="Uzman görev rolleri" count={roles.length}>
           <div className="trace-roles">
             {roles.map(r => <span key={r} className="trace-role">{r}</span>)}
           </div>
