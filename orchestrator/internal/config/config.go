@@ -16,6 +16,10 @@ type Config struct {
 	DatabasePath        string
 	GatewaySocket       string
 	SandboxContainer    string
+	// SandboxExecTimeout bounds a single sandbox command's wall-clock time —
+	// see sandbox.Bridge's defaultTimeout doc comment for why the default is
+	// generous (real pentest tooling routinely runs long).
+	SandboxExecTimeout time.Duration
 	PersonaDir          string
 	DockerSocket        string
 	OllamaURL           string
@@ -48,6 +52,7 @@ func Load() *Config {
 		DatabasePath:        envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
 		GatewaySocket:       envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
 		SandboxContainer:    envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
+		SandboxExecTimeout:  parseDuration(os.Getenv("YUMMI_SANDBOX_EXEC_TIMEOUT")), // 0 = use sandbox.Bridge's own default
 		PersonaDir:          envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
 		DockerSocket:        envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
 		OllamaURL:           os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
@@ -127,6 +132,17 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseDuration parses a Go duration string (e.g. "10m", "600s"); an empty or
+// invalid value returns 0, meaning "let the caller's own default stand" —
+// mirrors SetTimeout's own zero-value-is-ignored contract.
+func parseDuration(v string) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 func parseBool(v string) bool {

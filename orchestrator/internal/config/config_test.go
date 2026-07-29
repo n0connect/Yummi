@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -44,6 +45,38 @@ func TestConfigOllamaEmbedModelOverride(t *testing.T) {
 
 	if cfg.OllamaEmbedModel != "custom-embed-model" {
 		t.Errorf("expected overridden OllamaEmbedModel, got %q", cfg.OllamaEmbedModel)
+	}
+}
+
+func TestConfigSandboxExecTimeoutDefaultsToZero(t *testing.T) {
+	unset(t, "YUMMI_SANDBOX_EXEC_TIMEOUT")
+
+	cfg := Load()
+
+	// Zero is deliberate here — it's the "unset" signal sandbox.Bridge.SetTimeout
+	// treats as a no-op, leaving the Bridge's own generous default in place.
+	if cfg.SandboxExecTimeout != 0 {
+		t.Errorf("expected SandboxExecTimeout 0 (unset) by default, got %v", cfg.SandboxExecTimeout)
+	}
+}
+
+func TestConfigSandboxExecTimeoutOverride(t *testing.T) {
+	t.Setenv("YUMMI_SANDBOX_EXEC_TIMEOUT", "30m")
+
+	cfg := Load()
+
+	if cfg.SandboxExecTimeout != 30*time.Minute {
+		t.Errorf("expected overridden SandboxExecTimeout 30m, got %v", cfg.SandboxExecTimeout)
+	}
+}
+
+func TestConfigSandboxExecTimeoutInvalidFallsBackToZero(t *testing.T) {
+	t.Setenv("YUMMI_SANDBOX_EXEC_TIMEOUT", "not-a-duration")
+
+	cfg := Load()
+
+	if cfg.SandboxExecTimeout != 0 {
+		t.Errorf("expected invalid YUMMI_SANDBOX_EXEC_TIMEOUT to fall back to 0, got %v", cfg.SandboxExecTimeout)
 	}
 }
 

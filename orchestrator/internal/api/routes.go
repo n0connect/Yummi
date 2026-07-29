@@ -72,6 +72,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/executions/{id}", HandleGetExecution(executions))
 		r.Post("/executions/{id}/cancel", HandleCancelExecution(executions, sm))
 		r.Post("/executions/{id}/resolve-egress", HandleResolveEgress(executions, pc, sm))
+		r.Post("/executions/{id}/resolve-threat", HandleResolveThreatApproval(executions, sm))
 
 		// gateway status
 		r.Get("/gateway/status", HandleGatewayStatus(pc))

@@ -12,8 +12,14 @@ import (
 
 const (
 	defaultContainer = "yummi-sandbox"
-	defaultTimeout   = 120 * time.Second
-	maxOutputBytes   = 1 << 20 // 1 MiB
+	// defaultTimeout bounds a single command's wall-clock time. Real pentest
+	// tooling routinely exceeds a couple of minutes — a thorough nikto run or
+	// an nmap -A sweep across several hosts commonly takes 5-20+ minutes — so
+	// this is set generously rather than aggressively; SetTimeout overrides it
+	// per-Bridge (wired to YUMMI_SANDBOX_EXEC_TIMEOUT in cmd/orchestrator) for
+	// operators who need it shorter (fast dev iteration) or longer still.
+	defaultTimeout = 10 * time.Minute
+	maxOutputBytes = 1 << 20 // 1 MiB
 )
 
 // Bridge provides command execution inside the sandbox Docker container.
@@ -126,6 +132,17 @@ func (b *Bridge) Ping(ctx context.Context) error {
 // ContainerName returns the target container name.
 func (b *Bridge) ContainerName() string {
 	return b.container
+}
+
+// SetTimeout overrides the per-command execution timeout (default
+// defaultTimeout). A zero or negative value is ignored, leaving the current
+// timeout in place — callers pass an unvalidated config duration, and silently
+// keeping a sane default beats a config typo turning into a zero-timeout
+// (every command failing instantly).
+func (b *Bridge) SetTimeout(d time.Duration) {
+	if d > 0 {
+		b.timeout = d
+	}
 }
 
 func truncate(s string, max int) string {

@@ -95,6 +95,7 @@ func main() {
 	approvalStore.StartPurger(ctx, 5*time.Minute)
 
 	bridge := sandbox.NewBridge(cfg.SandboxContainer)
+	bridge.SetTimeout(cfg.SandboxExecTimeout) // no-op when unset — Bridge keeps its own generous default
 	gatewayClient := gateway.NewClient(cfg.GatewaySocket)
 	if cfg.GatewayTLS && tlsClientConfig != nil {
 		gatewayClient = gatewayClient.WithTLS(tlsClientConfig)

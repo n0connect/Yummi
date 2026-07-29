@@ -159,3 +159,54 @@ func HandleResolveEgress(store *execution.Store, pc *gateway.Client, sm *session
 		writeJSON(w, http.StatusOK, rec)
 	}
 }
+
+// HandleResolveThreatApproval settles a content-layer hold on a completed
+// single-command assistant execution. Approving lets the UI feed the already
+// sanitized output back into the conductor; rejecting keeps it out of the LLM
+// context while preserving it for the operator's audit trail.
+func HandleResolveThreatApproval(store *execution.Store, sm *session.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			writeError(w, http.StatusServiceUnavailable, "execution store unavailable", nil)
+			return
+		}
+		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid execution id format", nil)
+			return
+		}
+		var req struct {
+			Approved bool `json:"approved"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body", err)
+			return
+		}
+
+		held, _ := store.Get(id)
+		rec, err := store.ResolveThreatApproval(id, req.Approved)
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, execution.ErrExecutionNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, execution.ErrNotAwaitingThreat):
+				status = http.StatusConflict
+			}
+			appendAuditSafe(sm, normalizeSessionID(held.SessionID), "assistant.execution.threat_resolve_failed", "user", map[string]any{
+				"execution_id": id,
+				"approved":     req.Approved,
+				"error":        err.Error(),
+			})
+			writeError(w, status, "failed to resolve threat approval", err)
+			return
+		}
+		appendAuditSafe(sm, normalizeSessionID(rec.SessionID), "assistant.execution.threat_resolved", "user", map[string]any{
+			"execution_id":    rec.ID,
+			"approved":        req.Approved,
+			"status":          rec.Status,
+			"security_banner": rec.SecurityBanner,
+		})
+		writeJSON(w, http.StatusOK, rec)
+	}
+}

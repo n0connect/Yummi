@@ -18,6 +18,28 @@ func TestNewBridge(t *testing.T) {
 	}
 }
 
+// TestSetTimeout proves the zero-guard: real pentest tooling needs the
+// timeout raised well past the default, but a config parse failure landing
+// on the zero value must never silently turn every command instant-fail.
+func TestSetTimeout(t *testing.T) {
+	b := NewBridge("test-container")
+	if b.timeout != defaultTimeout {
+		t.Fatalf("expected default timeout %v, got %v", defaultTimeout, b.timeout)
+	}
+	b.SetTimeout(30 * time.Minute)
+	if b.timeout != 30*time.Minute {
+		t.Fatalf("expected overridden timeout 30m, got %v", b.timeout)
+	}
+	b.SetTimeout(0)
+	if b.timeout != 30*time.Minute {
+		t.Fatalf("SetTimeout(0) must be a no-op, got %v", b.timeout)
+	}
+	b.SetTimeout(-5 * time.Second)
+	if b.timeout != 30*time.Minute {
+		t.Fatalf("SetTimeout(negative) must be a no-op, got %v", b.timeout)
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	short := "hello"
 	if truncate(short, 10) != short {
