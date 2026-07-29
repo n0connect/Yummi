@@ -8,6 +8,7 @@
 
 pub mod protocol;
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -28,6 +29,12 @@ const MAX_CONNECTIONS: usize = 32;
 /// IPC server exposing policy queries to orchestrator.
 pub struct IpcServer {
     socket_path: String,
+    /// Unix file mode applied to the bound socket after creation (config
+    /// `ipc.socket_mode`, default 0o600). Defense-in-depth for deployments
+    /// where the socket path is reachable by more than gateway/orchestrator's
+    /// own containers — SO_PEERCRED UID gating gates write ops regardless,
+    /// but a wide-open socket file is still a wider surface than necessary.
+    socket_mode: u32,
     policy: PolicyEngine,
     audit: AuditLog,
     /// UIDs allowed to perform write operations. Empty = allow any local UID.
@@ -57,6 +64,7 @@ impl IpcServer {
 
         Self {
             socket_path: cfg.socket_path.clone(),
+            socket_mode: cfg.socket_mode,
             policy,
             audit,
             allowed_uids,
@@ -87,6 +95,19 @@ impl IpcServer {
                 return;
             }
         };
+
+        // UnixListener::bind creates the socket file with a mode governed by
+        // the process umask, NOT `ipc.socket_mode` — the config field was
+        // parsed and tested but never actually applied to the file, so an
+        // operator setting socket_mode: 0o600 got no enforcement at all. Set
+        // it explicitly now that the file exists.
+        if let Err(e) = std::fs::set_permissions(
+            &self.socket_path,
+            std::fs::Permissions::from_mode(self.socket_mode),
+        ) {
+            error!(path = %self.socket_path, mode = format!("{:o}", self.socket_mode), error = %e,
+                "failed to set IPC socket file permissions — socket may be more widely reachable than configured");
+        }
 
         info!(path = %self.socket_path, max_connections = MAX_CONNECTIONS, "IPC server listening");
 
@@ -593,6 +614,54 @@ mod tests {
             ..Default::default()
         };
         PolicyEngine::new(&cfg)
+    }
+
+    // TestSetTimeout-style regression: `ipc.socket_mode` was parsed from YAML
+    // and unit-tested at the config layer, but IpcServer::run() never actually
+    // applied it to the bound socket file — UnixListener::bind leaves the file
+    // at whatever the process umask produces, not the configured mode. An
+    // operator setting socket_mode: 0o600 (the documented default) got no
+    // enforcement at all. This spawns a real IpcServer against a temp path and
+    // asserts the file's actual mode matches what was configured.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_run_applies_configured_socket_mode() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        // Deliberately NOT std::env::temp_dir(): on macOS that resolves to a
+        // long /var/folders/.../T path which, combined with a UUID filename,
+        // exceeds a Unix domain socket's SUN_LEN limit (~104 bytes) — a
+        // test-environment issue unrelated to the gateway code under test.
+        // /tmp itself is short enough on every platform this test runs on.
+        let socket_path = format!("/tmp/yummi-test-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let ipc_cfg = crate::config::IpcConfig {
+            socket_path: socket_path.clone(),
+            socket_mode: 0o600,
+        };
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let server = IpcServer::new(&ipc_cfg, policy, audit);
+
+        let handle = tokio::spawn(server.run());
+        // Poll for the socket file to appear rather than a fixed sleep — bind
+        // happens near-instantly, but this avoids a flaky race on a slow CI box.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !std::path::Path::new(&socket_path).exists() {
+            if std::time::Instant::now() > deadline {
+                panic!("socket file never appeared at {socket_path}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let mode = std::fs::metadata(&socket_path)
+            .expect("stat socket file")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "socket file mode must match configured socket_mode, got {mode:o}");
+
+        handle.abort();
+        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[test]
