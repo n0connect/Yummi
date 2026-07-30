@@ -519,9 +519,28 @@ body::before {
 .execution-running .execution-state { color: var(--cyan); }
 .execution-queued .execution-state { color: var(--text-tertiary); }
 .execution-detail { border-top: 1px solid var(--border-subtle); }
+.msg-execution[open] .execution-detail { animation: detailReveal 0.22s ease; }
+@keyframes detailReveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* A running command gets exactly one animated affordance in the collapsed
+   row (the pulsing .status-live dot) — this is deliberately a different
+   motif (a sequential three-dot "typing" indicator, not a second pulsing
+   dot) so the expanded detail doesn't just repeat the same cue. */
 .execution-live { display: flex; align-items: center; gap: var(--space-sm); padding: 10px var(--space-lg); color: var(--text-tertiary); font-size: var(--text-xs); background: rgba(56, 189, 248, 0.04); }
-.execution-live span:first-child { color: var(--cyan); font-size: 9px; }
-.execution-output { margin: 0; padding: var(--space-md) var(--space-lg); font-family: var(--font-mono); font-size: 12px; line-height: 1.65; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 340px; overflow-y: auto; background: var(--bg-base); }
+.typing-dots { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.typing-dots span { width: 4px; height: 4px; border-radius: 50%; background: var(--cyan); animation: typingBounce 1.3s ease-in-out infinite; }
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typingBounce { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
+.execution-output-wrap { background: var(--bg-base); }
+.execution-output-meta {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: 6px var(--space-lg) 0; color: var(--text-muted);
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
+}
+.execution-output-truncated { color: var(--orange); }
+.execution-output { margin: 0; padding: var(--space-sm) var(--space-lg) var(--space-md); font-family: var(--font-mono); font-size: 12px; line-height: 1.65; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: min(55vh, 460px); overflow-y: auto; background: var(--bg-base); }
 .execution-error { padding: var(--space-md) var(--space-lg); background: var(--red-bg); color: var(--red); font-size: var(--text-xs); border-top: 1px solid rgba(255,69,58,0.2); }
 .execution-threat { padding: var(--space-md) var(--space-lg); background: var(--red-bg); color: var(--red); font-size: var(--text-xs); font-weight: 600; line-height: 1.5; border-bottom: 1px solid rgba(255,69,58,0.3); word-break: break-word; }
 

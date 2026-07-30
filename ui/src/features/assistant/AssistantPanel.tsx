@@ -163,10 +163,30 @@ function formatElapsed(secs: number): string {
   return `${Math.floor(secs / 60)}dk ${secs % 60}sn`
 }
 
+// Very large tool output (a full nikto/nmap -A report can run into the
+// hundreds of KB) shouldn't be dumped whole into the DOM just because the
+// operator expanded the row — keep both ends (the start is usually the most
+// orienting part, the end is often the summary/conclusion) and note what was
+// omitted, the same edge-preserving pattern operatorText.ts uses for
+// oversized model text.
+const MAX_DISPLAY_CHARS = 120_000
+function formatOutputForDisplay(text: string): { display: string; truncated: boolean; lineCount: number } {
+  const lineCount = text.length ? text.split('\n').length : 0
+  if (text.length <= MAX_DISPLAY_CHARS) return { display: text, truncated: false, lineCount }
+  const edge = MAX_DISPLAY_CHARS / 2
+  const omitted = (text.length - MAX_DISPLAY_CHARS).toLocaleString('tr-TR')
+  return {
+    display: `${text.slice(0, edge)}\n\n… ${omitted} karakter daha (çok büyük çıktı — başı ve sonu gösteriliyor) …\n\n${text.slice(-edge)}`,
+    truncated: true,
+    lineCount,
+  }
+}
+
 function ExecutionMessage({ content, execution }: { content: string; execution: ExecutionRecord }): JSX.Element {
   const status = execution.status
   const isActive = ['queued', 'running'].includes(status)
   const visibleOutput = execution.output || (content !== execution.error ? content : '')
+  const outputView = useMemo(() => formatOutputForDisplay(visibleOutput), [visibleOutput])
   const statusLabel: Record<string, string> = {
     queued: 'Sırada',
     running: 'Çalışıyor',
@@ -194,7 +214,7 @@ function ExecutionMessage({ content, execution }: { content: string; execution: 
       <div className="execution-detail">
         {isActive && (
           <div className="execution-live" aria-live="polite">
-            <span className="pulse">●</span>
+            <span className="typing-dots" aria-hidden="true"><span /><span /><span /></span>
             <span>
               {status === 'queued'
                 ? 'Komut yürütme sırasına alındı.'
@@ -209,7 +229,15 @@ function ExecutionMessage({ content, execution }: { content: string; execution: 
             ⚠ {execution.security_banner}
           </div>
         )}
-        {!isActive && visibleOutput && <pre className="execution-output">{visibleOutput}</pre>}
+        {!isActive && visibleOutput && (
+          <div className="execution-output-wrap">
+            <div className="execution-output-meta">
+              <span>{outputView.lineCount.toLocaleString('tr-TR')} satır</span>
+              {outputView.truncated && <span className="execution-output-truncated">kısaltıldı — çok büyük çıktı</span>}
+            </div>
+            <pre className="execution-output">{outputView.display}</pre>
+          </div>
+        )}
         {execution.error && execution.status !== 'completed' && (
           <div className="execution-error">{execution.error}</div>
         )}
