@@ -46,6 +46,31 @@ func TestRunScopedCommandBlocksOutOfScope(t *testing.T) {
 	}
 }
 
+func TestRunScopedCommandChecksEveryExplicitTarget(t *testing.T) {
+	var checked []string
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			checked = append(checked, req.IP)
+			verdict := "allow"
+			if req.IP == "8.8.8.8" {
+				verdict = "block"
+			}
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: verdict}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge("yummi-sandbox-test-nonexistent")
+
+	_, err := RunScopedCommand(context.Background(), bridge, pc, "nmap 10.0.0.1 8.8.8.8")
+	if !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("expected second target to be blocked, got: %v", err)
+	}
+	if len(checked) != 2 || checked[0] != "10.0.0.1" || checked[1] != "8.8.8.8" {
+		t.Fatalf("checked targets = %v, want both in argument order", checked)
+	}
+}
+
 // TestRunScopedCommandBlocksByHostnamePolicy proves a hostname target whose
 // name the gateway blocks (e.g. *.facebook.com) is rejected BEFORE any
 // resolution or IP-egress check — a hard, name-level deny.

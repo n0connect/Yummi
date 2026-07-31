@@ -15,8 +15,10 @@ DESKTOP_DIR      := desktop
 DESKTOP_TARGET_DIR := $(DESKTOP_DIR)/src-tauri/target
 DESKTOP_APP      := $(DESKTOP_TARGET_DIR)/release/bundle/macos/Yummi.app
 
-OLLAMA_MODEL ?= qwen3:8b
-OLLAMA_URL   := http://localhost:11434
+OLLAMA_MODEL    ?= $(if $(YUMMI_OLLAMA_MODEL),$(YUMMI_OLLAMA_MODEL),$(if $(filter lite,$(YUMMI_OLLAMA_TIER)),qwen3:4b,$(if $(filter standard,$(YUMMI_OLLAMA_TIER)),qwen3:8b,$(if $(filter expert,$(YUMMI_OLLAMA_TIER)),qwen3:32b,qwen3:14b))))
+LIVE_TEST_MODEL ?= qwen3:8b
+OLLAMA_URL      := http://localhost:11434
+export YUMMI_OLLAMA_MODEL := $(OLLAMA_MODEL)
 
 # ── Local configuration (written by `make conf`; gitignored, per-machine) ────
 # Run `make conf` once to pick your container engine setup interactively; it
@@ -93,7 +95,7 @@ endef
 .PHONY: help conf \
 	build start start-tui stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway \
-	test test-agent-live lint vuln doctor install dev dev-ui dev-orchestrator \
+	test test-agent-live test-agent-eval lint vuln doctor install dev dev-ui dev-orchestrator \
 	app desktop desktop-dev _check-desktop-deps _desktop-deps \
 	_test-cli _test-orchestrator _test-gateway _test-ui \
 	docker-build docker-orchestrator docker-ui \
@@ -278,12 +280,22 @@ test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui
 	@$(call log_pass,test,All suites completed successfully.)
 
 ## test-agent-live  End-to-end agentic loop against the REAL model + sandbox container
-test-agent-live: _check-deps _ollama-ensure
+test-agent-live: _check-deps
 	@$(call log_section,Agent Live E2E)
-	@$(call log_info,go test,Running real $(OLLAMA_MODEL) + sandbox container...)
-	@set -o pipefail; cd orchestrator && YUMMI_LIVE=1 YUMMI_OLLAMA_URL=$(OLLAMA_URL) YUMMI_OLLAMA_MODEL=$(OLLAMA_MODEL) \
+	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
+	@$(call log_info,go test,Running real $(LIVE_TEST_MODEL) + sandbox container...)
+	@set -o pipefail; cd orchestrator && YUMMI_LIVE=1 YUMMI_OLLAMA_URL=$(OLLAMA_URL) YUMMI_OLLAMA_MODEL=$(LIVE_TEST_MODEL) \
 		go test ./internal/agent/ -run TestRunnerLive -v -timeout 15m 2>&1 | sed 's/^/  /' || { $(call log_error,agent live,Test failed.); exit 1; }
 	@$(call log_pass,agent live e2e,Test passed.)
+
+## test-agent-eval  Assertion-bearing multi-scenario quality gate against the REAL model + sandbox
+test-agent-eval: _check-deps
+	@$(call log_section,Agent Quality Evaluation)
+	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
+	@$(call log_info,go test,Running quality scenarios with $(LIVE_TEST_MODEL) + sandbox...)
+	@set -o pipefail; cd orchestrator && YUMMI_EVAL=1 YUMMI_OLLAMA_URL=$(OLLAMA_URL) YUMMI_OLLAMA_MODEL=$(LIVE_TEST_MODEL) \
+		go test ./internal/agent/ -run TestLiveEval_Quality -v -timeout 45m 2>&1 | sed 's/^/  /' || { $(call log_error,agent eval,Quality thresholds failed.); exit 1; }
+	@$(call log_pass,agent quality eval,All thresholds passed.)
 
 ## lint    Run Go static analysis
 lint: _check-deps
@@ -311,7 +323,7 @@ doctor:
 install: _check-deps
 	@$(call log_section,Install)
 	@$(call log_info,install,Running scripts/install.sh...)
-	@./scripts/install.sh || { $(call log_error,install,Install script failed.); exit 1; }
+	@YUMMI_OLLAMA_MODEL=$(OLLAMA_MODEL) ./scripts/install.sh || { $(call log_error,install,Install script failed.); exit 1; }
 	@$(call log_pass,install,Environment bootstrapped.)
 
 ## dev     Run local development bootstrap (hot reload)

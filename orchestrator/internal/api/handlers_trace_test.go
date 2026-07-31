@@ -37,6 +37,19 @@ func TestHandleListContextAndActivityEmpty(t *testing.T) {
 	}
 }
 
+func TestHandleDeleteContext(t *testing.T) {
+	ks, _ := knowledge.NewStore(nil)
+	_ = ks.RecordContext(context.Background(), knowledge.PersistentContext{SessionID: "s1", Key: "auth-map", Value: "data"})
+	r := chi.NewRouter()
+	r.Delete("/sessions/{sessionID}/context/{key}", HandleDeleteContext(ks))
+	req := httptest.NewRequest(http.MethodDelete, "/sessions/s1/context/auth-map", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || len(ks.ListContexts("s1")) != 0 {
+		t.Fatalf("context delete failed: code=%d contexts=%+v", rec.Code, ks.ListContexts("s1"))
+	}
+}
+
 func TestHandleListRolesNilSafe(t *testing.T) {
 	r := chi.NewRouter()
 	r.Get("/agent/roles", HandleListRoles(nil))

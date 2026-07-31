@@ -97,6 +97,7 @@ func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 			}
 			return "", fmt.Errorf("exec (post-approval): %w", err)
 		}
+		s.executedCmds = append(s.executedCmds, p.Command)
 		_ = observeResult(s, result)
 		return edgeApproved, nil
 	}
@@ -193,9 +194,18 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 			summary, findings = mergeSynthesis(ctx, s, findings)
 		}
 		summary = appendUnverifiedToolWarning(s, summary, findings)
+		summary = appendEvidenceDigest(s, summary)
+		// FINISH isn't tied to one just-run step, so there is no live output
+		// to check against — verification here can only look up whichever
+		// step each finding cites in the plan as it stands right now.
+		var records []FindingRecord
+		if task0, ok := s.store.Get(s.taskID); ok {
+			records = buildFindingRecords(s.pendingAct.FindingsDetail, "", "", task0.Plan)
+		}
 		_ = s.store.Transition(s.taskID, StatusCompleted, func(t *Task) {
 			t.Summary = summary
 			t.Findings = findings
+			t.FindingRecords = append(t.FindingRecords, records...)
 		})
 		if task, ok := s.store.Get(s.taskID); ok {
 			recordTaskFindings(ctx, s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
@@ -209,6 +219,7 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 	default: // outcomeFailed
 		summary, findings := mergeSynthesis(ctx, s, nil)
 		summary = appendUnverifiedToolWarning(s, summary, findings)
+		summary = appendEvidenceDigest(s, summary)
 		_ = s.store.Transition(s.taskID, StatusFailed, func(t *Task) {
 			t.LastError = s.finishMsg
 			t.Summary = summary // what was gathered before the failure, if anything
@@ -234,11 +245,47 @@ func appendUnverifiedToolWarning(s *GraphState, summary string, findings []strin
 	return summary
 }
 
+// appendEvidenceDigest adds a bounded, server-authored audit trail to the
+// model's prose. This guarantees that a vague synthesis cannot hide the exact
+// commands and observations that support (or limit) the final answer.
+func appendEvidenceDigest(s *GraphState, summary string) string {
+	task, ok := s.store.Get(s.taskID)
+	if !ok {
+		return summary
+	}
+	var lines []string
+	for _, step := range task.Plan {
+		if step.Status != StepDone && step.Status != StepFailed {
+			continue
+		}
+		detail := step.Result
+		if step.Status == StepFailed {
+			detail = step.Error
+		}
+		detail = sanitizeAgentText(detail)
+		if len(detail) > 320 {
+			detail = detail[:utf8SafeCut(detail, 320)] + "…"
+		}
+		line := fmt.Sprintf("- [%s] %s", step.Status, strings.TrimSpace(step.Command))
+		if detail != "" {
+			line += "\n  " + strings.ReplaceAll(detail, "\n", "\n  ")
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return summary
+	}
+	digest := "EVIDENCE DIGEST (server-recorded):\n" + strings.Join(lines, "\n")
+	if strings.TrimSpace(summary) == "" {
+		return digest
+	}
+	return "MODEL NARRATIVE (unverified; evidence digest is authoritative):\n" + strings.TrimSpace(summary) + "\n\n" + digest
+}
+
 // proposeSkillFromTrajectory fires the optional auto-skill-creation hook,
-// detached from the graph's own context (which is cancelled once the task
-// ends) so a slow curator LLM call doesn't get killed mid-flight, and via
-// `go` so it never delays finishNode's return to the caller. Fired for both
-// top-level and sub-agent completions — finishNode is shared by both.
+// The callback is expected to be a non-blocking submission into the bounded
+// skillcurator.Worker. Fired for both top-level and sub-agent completions —
+// finishNode is shared by both.
 func proposeSkillFromTrajectory(s *GraphState, task Task, summary string) {
 	if s.cfg.SkillCurator == nil {
 		return
@@ -259,14 +306,17 @@ func proposeSkillFromTrajectory(s *GraphState, task Task, summary string) {
 			}
 		}
 	}
-	go s.cfg.SkillCurator(context.Background(), traj)
+	s.cfg.SkillCurator(context.WithoutCancel(context.Background()), traj)
 }
 
 // mergeSynthesis runs the final-synthesis pass and merges any synthesized
 // findings with the caller's existing ones.
 func mergeSynthesis(ctx context.Context, s *GraphState, existing []string) (string, []string) {
-	summary, syn := synthesizeSummary(ctx, s)
-	return summary, append(existing, syn...)
+	summary, _ := synthesizeSummary(ctx, s)
+	// Fallback synthesis is allowed to explain observations, but it cannot
+	// mint findings because it provides no evidence-bearing FindingDetail.
+	// Findings already produced by the normal protocol remain intact.
+	return summary, existing
 }
 
 // synthesizeSummary makes one LLM call over the gathered observations to produce

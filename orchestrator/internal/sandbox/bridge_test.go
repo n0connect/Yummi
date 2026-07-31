@@ -40,18 +40,20 @@ func TestSetTimeout(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
-	short := "hello"
-	if truncate(short, 10) != short {
-		t.Fatal("short string should not be truncated")
+func TestCappedBuffer(t *testing.T) {
+	b := newCappedBuffer(50)
+	if n, err := b.Write([]byte("hello")); err != nil || n != 5 {
+		t.Fatalf("first write = (%d, %v), want (5, nil)", n, err)
 	}
 	long := strings.Repeat("x", 100)
-	result := truncate(long, 50)
-	if len(result) <= 50 {
-		t.Fatal("truncated result should include suffix")
+	if n, err := b.Write([]byte(long)); err != nil || n != len(long) {
+		t.Fatalf("overflow write = (%d, %v), want (%d, nil)", n, err, len(long))
 	}
-	if !strings.Contains(result, "[truncated]") {
-		t.Fatal("truncated result should contain marker")
+	if b.buf.Len() != 50 {
+		t.Fatalf("retained %d bytes, want hard cap 50", b.buf.Len())
+	}
+	if !strings.HasSuffix(b.String(), truncationMark) {
+		t.Fatalf("result should end with truncation marker: %q", b.String())
 	}
 }
 

@@ -132,7 +132,7 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 				`SELECT id FROM procedural_memory WHERE tool=? AND command_pattern=? AND outcome=?`,
 				tool, pattern, outcome).Scan(&id)
 		}
-		s.embedAndSave(ctx, id, pattern)
+		s.embedAndSave(ctx, "procedural_memory", id, pattern)
 		return nil
 	}
 
@@ -144,7 +144,7 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 			tac.LastUsedAt = now
 			s.tactics[id] = tac
 			s.mu.Unlock()
-			s.embedAndSave(ctx, id, pattern)
+			s.embedAndSave(ctx, "procedural_memory", id, pattern)
 			return nil
 		}
 	}
@@ -154,7 +154,7 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 		ContextTags: tags, Note: note, HitCount: 1, LastUsedAt: now, CreatedAt: now,
 	}
 	s.mu.Unlock()
-	s.embedAndSave(ctx, id, pattern)
+	s.embedAndSave(ctx, "procedural_memory", id, pattern)
 	return nil
 }
 

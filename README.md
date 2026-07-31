@@ -25,11 +25,7 @@
 </p>
 
 <p align="center">
-Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red-Team agent drives a hardened, network-isolated Kali sandbox — and a memory-safe Rust trust boundary makes sure the AI can never touch a target it was not allowed to.
-</p>
-
-<p align="center">
-  <img src="docs/assets/screenshots/readme/hero-agent-tab.png" alt="Yummi's Agent tab mid-conversation, showing a command proposal with its rationale and risk level" width="800">
+Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red-Team agent drives a hardened Kali sandbox, while a small Rust gateway enforces the documented network policy independently of the model-facing code.
 </p>
 
 ---
@@ -48,7 +44,7 @@ The [`docs/`](docs/) directory is the full, in-depth reference — start at **[d
 
 ## What Yummi is
 
-*The AI proposes, the gateway disposes.* Every pentest command the agent runs flows through exactly one execution path and is gated by a fail-closed network policy that survives a crash of any single component.
+*The AI proposes, the gateway disposes.* Agent and direct-exec commands converge on one scoped execution path. The interactive terminal is a separate human-driven path: it bypasses orchestrator's target parser, but its packets still cross the gateway's kernel policy.
 
 ```
 User / Operator  →  Orchestrator (Go)  →  Gateway (Rust, IPC)  →  Sandbox (Kali Docker)
@@ -67,7 +63,7 @@ Five components in total, not four — a `docker-proxy` sits between the orchest
 ## Quick start
 
 ```bash
-make install   # bootstrap: Go, Rust, Node, Docker, Ollama
+make install   # prepare Yummi directories/deps, build sandbox, install/pull Ollama models
 make start     # start the full stack and open the native Tauri console directly
 ```
 
@@ -92,7 +88,7 @@ make lint    # golangci-lint, root and orchestrator modules
 
 See **[docs/development.md](docs/development.md)** for fast per-component build loops, running a single test, and a real gotcha worth knowing up front: this repo is **two separate Go modules** (root CLI/TUI vs. `orchestrator/`) — `go test ./...` from the repo root silently skips every orchestrator test.
 
-This project has a strict, permanent ban on mocking its own components — tests exercise real stores and engines; only genuinely external dependencies (the LLM boundary) are ever stubbed.
+Tests favor real stores and engines. Scripted substitutes are used at external or nondeterministic boundaries such as the LLM and test HTTP servers; live suites cover the real model and sandbox when explicitly enabled.
 
 ## License
 

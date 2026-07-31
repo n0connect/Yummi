@@ -24,7 +24,7 @@ The `yummi` binary is the root Go module (`go.mod`, `github.com/n0connect/yummi`
 
 ## The TUI is a real second front-end, not a subset <a id="real-frontend"></a>
 
-It's tempting to assume a terminal UI is a stripped-down fallback for when a browser isn't available. `internal/tui` is not that — it talks to the **same** REST/WS API surface the React UI does (see [API Reference](../api-reference.md)), supports the same core operator loop (send a goal, watch the live activity timeline, approve/deny gated commands and threat-scan holds), and is built on `bubbletea`'s proper Elm-style architecture (a `model` struct, a pure `Update` function reacting to typed messages, a `View` function rendering from state) rather than being an ad-hoc script wrapping `curl`. Reach for it specifically when you're already in a terminal — over SSH to a remote box running Yummi, for instance — and don't want to also keep a browser tab open just to approve the occasional gated command.
+The TUI talks to the same versioned-in-practice REST/WS surface as the React UI and supports the core loop: send a goal, watch task/activity events, resolve task command gates, and resolve egress holds. It also renders threat-scan warnings, but the single-execution `resolve-threat` action is currently exposed through the web UI/raw API rather than a dedicated TUI command. The implementation follows Bubble Tea's `model`/`Update`/`View` architecture rather than wrapping `curl`.
 
 ## Why this module has no dependency on orchestrator's code <a id="no-orchestrator-dep"></a>
 

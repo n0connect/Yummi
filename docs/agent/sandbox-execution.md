@@ -2,7 +2,7 @@
 
 # Sandbox Execution
 
-This page traces the **one** path every command takes, from something the model or an operator wants to run, to a real shell inside a real Kali container. Understanding this chain is what makes the rest of the agent's design legible: no matter how many nodes, sub-agents, or skills are involved in *deciding* what to run, there is exactly one place where "run it" actually happens, and everything else routes through it.
+This page traces the single **scheduled command** path used by agent tasks, approved chat proposals, and `POST /sandbox/exec`. The interactive Bash WebSocket is a separate human-driven PTY path and is documented explicitly below.
 
 ## Table of contents
 
@@ -26,16 +26,15 @@ agent (any node)
   → execution.Store.Enqueue(command)                       [orchestrator/internal/execution/store.go]
   → executor.ProcessFunc drains the queue                    [orchestrator/internal/executor/executor.go]
   → executor.RunScopedCommand(ctx, bridge, gatewayClient, command)
-      1. scope.ExtractTarget(command)                        [orchestrator/internal/scope/scope.go]
-      2. if the target is a hostname: gateway.CheckHostname() — name-level policy, BEFORE resolution
-      3. dnsresolve.Resolve(target)                           [orchestrator/internal/dnsresolve] — Cloudflare 1.1.1.1
-      4. gateway.CheckEgress(resolvedIP)  →  "allow" | "block" | "needs_approval"
-      5. if allow: gateway.AddTemporaryRule(ip/32 or /128, ttl=3600s)   — opens the nftables hole
-      6. sandbox.Bridge.Exec(ctx, command)
+      1. scope.ExtractTargets(command)                       [orchestrator/internal/scope/scope.go]
+      2. for every explicit hostname: gateway.CheckHostname() — name-level policy, BEFORE resolution
+      3. resolve and gateway.CheckEgress() every target       →  "allow" | "block" | "needs_approval"
+      4. only if all allow: AddTemporaryRule(ip/32 or /128, ttl=3600s)
+      5. sandbox.Bridge.Exec(ctx, command)
            → docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"
 ```
 
-Every one of these six steps is real code you can read start to finish — there is no step where "and then the agent just runs it" happens outside this sequence. `RunScopedCommand` is, by its own doc comment, the single call path every Go code path that executes a pentest command must go through — both the agent/chat pipeline (`ProcessFunc`, above) and the API's direct-exec endpoint (`POST /api/v1/sandbox/exec`, see [API Reference](../api-reference.md#sandbox)) converge on this exact function. **Gateway is the only component that decides "is this target reachable" — `RunScopedCommand` never makes that decision itself, only asks and obeys the answer**, including a fail-closed `default:` branch for any verdict string it doesn't recognize (see [Security Model § The core invariant](../security-model.md#fail-closed)).
+Every step is real code you can read start to finish — there is no step where "and then the agent just runs it" happens outside this sequence. `RunScopedCommand` is, by its own doc comment, the single call path every Go code path that executes a pentest command must go through — both the agent/chat pipeline (`ProcessFunc`, above) and the API's direct-exec endpoint (`POST /api/v1/sandbox/exec`, see [API Reference](../api-reference.md#sandbox)) converge on this exact function. **Gateway is the only component that decides "is this target reachable" — `RunScopedCommand` never makes that decision itself, only asks and obeys the answer**, including a fail-closed `default:` branch for any verdict string it doesn't recognize (see [Security Model § The core invariant](../security-model.md#fail-closed)).
 
 ## What the agent itself is and isn't allowed to touch <a id="agent-boundary"></a>
 
@@ -45,9 +44,9 @@ Looking at this chain end to end, notice what the agent package genuinely has no
 - It cannot open its own nftables rule — `AddTemporaryRule` is called by the executor, using a gateway client the agent package has no reference to.
 - It cannot bypass the 10-minute default timeout or the 1 MiB output cap `sandbox.Bridge` enforces (`defaultTimeout`, `maxOutputBytes` in `sandbox/bridge.go`) — a runaway or extremely verbose command is bounded regardless of what the model asked for. The timeout is an operator-configurable ceiling (`YUMMI_SANDBOX_EXEC_TIMEOUT`, `Bridge.SetTimeout`), not something the model itself can raise or lower.
 
-## The other agent-reachable exec path: the terminal <a id="terminal-path"></a>
+## The other sandbox exec path: the operator terminal <a id="terminal-path"></a>
 
-The [Bash tab](../usage-guide.md#tab-bash)'s interactive terminal (`api/terminal.go`, backing `/ws/terminal`) is the **one other** path that reaches the sandbox, and it is also `docker exec` under the hood — a human typing into it hits the same container the same way a `RunScopedCommand` call does. It is deliberately not a bypass of the trust boundary; it's a different *initiator* (a human at a keyboard instead of the model), reaching the same enforced destination.
+The [Bash tab](../usage-guide.md#tab-bash)'s interactive terminal (`api/terminal.go`, backing `/ws/terminal`) is the **one other** path that reaches the sandbox. It is `docker exec` under the hood, but unlike `RunScopedCommand` it does not parse each shell line, call `CheckHostname`, or pre-open target rules. Its network packets still traverse gateway's nftables policy. Consequently, hostname-only rules cannot govern terminal commands or opaque targets loaded from files; use the agent/direct-exec path plus `block`/`ask` when that distinction matters.
 
 ## Paths that exist but are not agent-controllable <a id="non-agent-paths"></a>
 
@@ -68,4 +67,4 @@ docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"
 
 - **`--user 1000:1000`** — every command runs as the unprivileged `pentester` user (`sandbox/Dockerfile` creates it at UID/GID 1000), never root, regardless of what the command itself is. `nmap`'s specific need for raw-socket privileges is handled by a targeted `setcap cap_net_admin,cap_net_raw=eip` on the `nmap` binary itself at image build time — a scalpel, not a blanket root grant.
 - **`/bin/bash -lc`** — a login, non-interactive shell for each invocation. There is no persistent shell session across commands; the container's own entrypoint (`sandbox/entrypoint.sh`) just sets the default route through gateway and then `exec sleep infinity` — every single command is a fresh `docker exec`, with no state (environment variables set by a previous command, a `cd` into a directory) carrying over between one command and the next unless the sandbox's filesystem itself was changed.
-- **Output is capped at 1 MiB per stream** (stdout/stderr independently) and the whole call has a **10-minute default timeout** (`YUMMI_SANDBOX_EXEC_TIMEOUT` to override) — both hard limits in `sandbox/bridge.go`, not configurable per-command by the model. A timeout or a cancellation both produce a structured `Result` (exit code `-1`, a descriptive `Stderr`) rather than an ambiguous error, so the graph's `observeResult` can tell a real command failure apart from an infrastructure-level cutoff. Because `Exec` is a single blocking call with no incremental output streaming, `execution.Store.runWithHeartbeat` republishes a "still running" event with elapsed time every few seconds while a long command is in flight — see [Architecture § Data flow: a single chat command](../architecture.md#flow-single-command).
+- **Output is capped while it is being read at 1 MiB per stream** (stdout/stderr independently); excess bytes are discarded and a truncation marker is appended. The whole call has a **10-minute default timeout** (`YUMMI_SANDBOX_EXEC_TIMEOUT` to override). Both are hard limits in `sandbox/bridge.go`, not configurable per-command by the model. A timeout or cancellation produces a structured `Result` (exit code `-1`, descriptive `Stderr`). Because `Exec` is a single blocking call with no incremental UI streaming, `execution.Store.runWithHeartbeat` republishes a "still running" event with elapsed time every few seconds while a command is in flight — see [Architecture § Data flow: a single chat command](../architecture.md#flow-single-command).

@@ -74,7 +74,15 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 		wg.Add(1)
 		go func(i int, role, subgoal string, sub *Runner) {
 			defer wg.Done()
-			res, err := sub.RunSubtask(subCtx, task.SessionID, subgoal, s.taskID)
+			delegationID, childCtx, beginErr := s.cfg.Delegations.Begin(subCtx, s.taskID, role, subgoal)
+			if beginErr != nil {
+				results[i] = handoffResult{role: role, subgoal: subgoal, err: beginErr}
+				return
+			}
+			res, err := sub.runSubtask(childCtx, task.SessionID, subgoal, s.taskID, func(taskID string) {
+				s.cfg.Delegations.BindTask(delegationID, taskID)
+			})
+			s.cfg.Delegations.Finish(delegationID, err)
 			results[i] = handoffResult{role: role, subgoal: subgoal, res: res, err: err}
 		}(i, role, subgoal, sub)
 	}

@@ -470,11 +470,13 @@ func (s *Store) process(id string) {
 			// traffic) instead of failing it — ResolveEgress resumes or ends it.
 			if errors.Is(err, ErrEgressApprovalRequired) {
 				var ips []string
+				target := scope.ExtractTarget(running.Command)
 				var egressErr EgressApprovalRequiredError
 				if errors.As(err, &egressErr) {
+					target = egressErr.Target
 					ips = egressErr.IPs
 				}
-				held, ok := s.holdForEgressApproval(id, scope.ExtractTarget(running.Command), ips)
+				held, ok := s.holdForEgressApproval(id, target, ips)
 				if ok {
 					s.publish(Event{
 						Type:      "execution.awaiting_egress_approval",

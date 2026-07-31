@@ -120,6 +120,39 @@ func HandleStopTask(runner *agent.Runner) http.HandlerFunc {
 	}
 }
 
+// HandleListDelegations returns active and recent specialist runs.
+// GET /api/v1/agent/delegations
+func HandleListDelegations(runner *agent.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if runner == nil {
+			writeJSON(w, http.StatusOK, []agent.DelegationRun{})
+			return
+		}
+		writeJSON(w, http.StatusOK, runner.DelegationRuns())
+	}
+}
+
+// HandleInterruptDelegation cancels one specialist while leaving its parent
+// and siblings running. POST /api/v1/agent/delegations/{id}/interrupt
+func HandleInterruptDelegation(runner *agent.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if runner == nil {
+			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
+			return
+		}
+		id := chi.URLParam(r, "id")
+		if !isValidSessionID(id) {
+			writeError(w, http.StatusBadRequest, "invalid delegation id format", nil)
+			return
+		}
+		if err := runner.InterruptDelegation(id); err != nil {
+			writeError(w, http.StatusConflict, "cannot interrupt delegation", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "interrupted"})
+	}
+}
+
 // HandleGetApprovalMode returns the agent's current approval mode.
 // GET /api/v1/agent/mode
 func HandleGetApprovalMode(runner *agent.Runner) http.HandlerFunc {

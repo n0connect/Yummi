@@ -45,7 +45,7 @@ make dev-orchestrator      # cd orchestrator && go run ./cmd/orchestrator — no
 make dev-ui                # cd ui && npm run dev — Vite HMR dev server on :3000
 ```
 
-`dev-orchestrator` is genuinely useful for iterating on API handlers, the conductor, or the agent's prompt logic with fast recompiles — but remember it has **no sandbox to `docker exec` into**, so any code path that actually runs a pentest command will fail. It's for everything *except* verifying real command execution. For that, you need the full `make start` stack.
+`dev-orchestrator` is useful for API and prompt iteration, but it does not start a sandbox or set an Ollama URL. Export `YUMMI_OLLAMA_URL=http://127.0.0.1:11434` when model calls are needed. Any code path that executes a pentest command still needs the supporting sandbox/gateway/proxy stack.
 
 `dev-ui`'s Vite server proxies `/api` and `/ws` to `http://127.0.0.1:9080` (`ui/vite.config.ts`), so pairing it with `dev-orchestrator` running on that port gives you HMR on the frontend against a real, fast-iterating backend — no Docker rebuild for either side while you're touching UI + API code together.
 
@@ -66,9 +66,9 @@ go test ./internal/cli -run TestParseTopLevelOptionsDefaultUI
 cd gateway && cargo test test_allow_in_scope
 ```
 
-Table-driven Go tests are the norm (e.g. `validator_test.go`), against real in-memory SQLite (`":memory:"`) fixtures — **this project has a strict, permanent, project-wide ban on mocking its own components.** The one file in the repository with "mock" in its vocabulary is `ui/src/test/setup.ts`, and even that isn't a mock of Yummi's own code — it's two jsdom environment stubs (`scrollIntoView`, `ResizeObserver`) for browser APIs jsdom doesn't implement, so components that call them don't throw during a test. Its own comment goes out of its way to state the boundary explicitly: *"No mocks allowed. `EventSource` tests must run against real E2E environment or be designed without mocks"* — i.e. `EventSource` (the SSE client the Logs tab uses) is deliberately left unstubbed, not stubbed. `-race` is used for concurrency-sensitive Go packages (the agent's graph state machine, the gate, the execution store).
+Table-driven Go tests are common (for example `validator_test.go`), with map-backed stores or in-memory SQLite where appropriate. Scripted clients and local test servers isolate external/nondeterministic boundaries such as Ollama, HTTP, and gateway IPC; integration/live tests retain the real execution path. `ui/src/test/setup.ts` only supplies missing jsdom browser APIs (`scrollIntoView`, `ResizeObserver`). Use `-race` for concurrency-sensitive Go packages such as the graph, gate, and execution store.
 
-`make test-agent-live` deserves a special mention: it drives a **real** `qwen3:8b` model against a **real, running** sandbox container — it's an actual end-to-end test, not a simulation, and it self-skips if the sandbox isn't already up (`make start` first):
+`make test-agent-live` deserves a special mention: it enables the real-model/real-sandbox test with `LIVE_TEST_MODEL` (default `qwen3:8b`). Start the stack first; missing Ollama, model, or sandbox dependencies are test failures once `YUMMI_LIVE=1` is enabled by the Make target:
 
 ```bash
 make test-agent-live
@@ -111,3 +111,15 @@ go run ./cmd/test_agent    # exercise the full agent Runner
 ```
 
 These compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchestrator/test_loop` if built in place — already covered by `.gitignore`, so building one locally won't accidentally get committed.
+
+## Agent quality gates
+
+`go test ./...` includes two model-independent quality contracts: `TestPersonaGoldenFixtures` reads every checked-in `persona/v0.1/golden_tests/*.yaml`, and `EvaluateTaskQuality` rejects cosmetic completion, repeated *executions* (blocked proposals are tracked separately), failed plans, empty summaries, missing evidence digests, unsupported finding claims, wrong command families, and scenario-specific failure markers. The live suite loads the same skill registry and runs as the same UID `1000:1000` as the production sandbox bridge. For real-model regression testing against the sandbox, run:
+
+```bash
+make test-agent-eval LIVE_TEST_MODEL=qwen3:14b
+```
+
+To reproduce one failing scenario while iterating, set `YUMMI_EVAL_CASE` to its ID, for example `E5-largest`.
+
+The live suite is assertion-bearing: plan failure, non-termination, missing successful work, command repetition, or threshold violations fail the test after the transcript is printed.

@@ -45,7 +45,7 @@ func (r *SemanticRetrieval) Retrieve(ctx context.Context, q Query) ([]MemoryItem
 	if r.embedder == nil || r.store == nil || r.model == "" {
 		return r.retrieveFallback(ctx, q)
 	}
-	queryText := strings.TrimSpace(strings.Join(q.Tools, " "))
+	queryText := strings.TrimSpace(strings.Join(append([]string{q.Goal}, q.Tools...), " "))
 	if queryText == "" {
 		return r.retrieveFallback(ctx, q)
 	}
@@ -59,11 +59,27 @@ func (r *SemanticRetrieval) Retrieve(ctx context.Context, q Query) ([]MemoryItem
 	if limit <= 0 {
 		limit = 5
 	}
-	items := make([]MemoryItem, 0)
+	items := make([]MemoryItem, 0, limit*3)
 
-	// Factual: same as StructuredRetrieval — findings aren't embedded (v1
-	// scope: only procedural memory gets semantic ranking).
-	findings := r.store.ListFindings(q.SessionID)
+	// Prefer semantically-ranked explicit contexts when embeddings exist;
+	// degrade to deterministic lexical+recency ranking for old/unembedded rows.
+	contexts, err := r.store.NearestContexts(ctx, r.model, vec, q.SessionID, limit)
+	if err != nil || len(contexts) == 0 {
+		contexts = relevantContexts(r.store.ListContexts(q.SessionID), q.Goal, limit)
+	}
+	for _, pc := range contexts {
+		items = append(items, MemoryItem{
+			Kind: "context",
+			Text: fmt.Sprintf("[%s] %s", pc.Key, boundedMemoryText(pc.Value, 1200)),
+		})
+	}
+
+	// Findings are embedded on write. Databases created before this feature may
+	// have unembedded rows, so an empty semantic result falls back to recency.
+	findings, err := r.store.NearestFindings(ctx, r.model, vec, q.SessionID, limit)
+	if err != nil || len(findings) == 0 {
+		findings = r.store.ListFindings(q.SessionID)
+	}
 	for i, f := range findings {
 		if i >= limit {
 			break

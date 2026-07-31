@@ -72,6 +72,20 @@ func TestValidatorEmptyCommandDropped(t *testing.T) {
 	}
 }
 
+func TestValidatorPreservesBalancedCommandQuotes(t *testing.T) {
+	v := NewValidator()
+	for _, command := range []string{`echo "Hostname: sandbox"`, `which mysql || echo 'MySQL not found'`} {
+		resp := v.ValidateChatResponse(ChatResponse{Proposals: []Proposal{{Command: command, RiskLevel: "low"}}})
+		if len(resp.Proposals) != 1 || resp.Proposals[0].Command != command {
+			t.Fatalf("balanced command %q was corrupted: %+v", command, resp.Proposals)
+		}
+	}
+	resp := v.ValidateChatResponse(ChatResponse{Proposals: []Proposal{{Command: `'hostname -f'`, RiskLevel: "low"}}})
+	if got := resp.Proposals[0].Command; got != "hostname -f" {
+		t.Fatalf("whole-command quote wrapper not removed: %q", got)
+	}
+}
+
 func TestValidatorShellChainingEscalation(t *testing.T) {
 	v := NewValidator()
 

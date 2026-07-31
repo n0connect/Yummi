@@ -29,17 +29,17 @@ Yummi's threat model has an unusual property: **the thing it defends against is 
 
 ## The core invariant: fail-closed <a id="fail-closed"></a>
 
-Every layer in this document answers to one sentence, repeated throughout the codebase's own comments because it is the thing that must never regress: **when a component doesn't know, hasn't decided, or has crashed, the answer is deny, not allow.**
+For new execution decisions, the invariant is: **an unknown, missing, malformed, or unrecognized verdict is deny, not allow.** Process death is different: nftables preserves the last installed kernel policy until the container/network namespace is replaced, so a crash does not itself convert an already-installed `allow` policy into `block`.
 
-Concretely, this shows up as several *independent* mechanisms that all default to "no," so that a bug in any one of them doesn't cascade into "yes":
+Concretely, the shipped stack applies these controls:
 
 - gateway installs a DROP-all nftables ruleset **before** it even opens its IPC socket (see [below](#startup-ordering)) — there is no window where the socket exists but no rules do.
-- The sandbox container's own network (`yummi_internal`) has `internal: true` at the Docker level — it has no route out at all independent of any nftables rule (see [Architecture § Network topology](architecture.md#network-topology)). This specific layer is opt-out: `make start YUMMI_NETWORK_MODE=insecure-bridge` removes it as a workaround for engine-specific bugs (see [Installation § Engine selection and the insecure-bridge workaround](installation.md#engine-and-network-mode)) — gated behind a typed confirmation precisely because it's a real reduction from four independent layers to three, not a cosmetic flag.
+- The sandbox is attached only to `yummi_internal`, whose `internal: true` setting removes Docker's ordinary external gateway. Its entrypoint deliberately installs one custom default route through the multi-homed gateway container, where nftables applies. `YUMMI_NETWORK_MODE=insecure-bridge` restores Docker-provided bridge egress and therefore weakens this topology (see [Installation § Engine selection](installation.md#engine-and-network-mode)).
 - Gateway's own runtime egress mode defaults to `block` and **resets to `block` on every restart** — an operator has to actively choose to open things up, every single time gateway restarts, rather than that choice persisting silently.
-- A watchdog inside gateway itself triggers emergency lockdown if gateway's own memory or heartbeat looks wrong (see [The watchdog](#watchdog)) — the system doesn't trust its own continued healthy operation blindly either.
+- A watchdog writes an external heartbeat signal and exits after flushing audit state if the gateway process exceeds its RSS ceiling (see [The watchdog](#watchdog)). This is availability/self-monitoring, not a separate policy-decision layer.
 - An unknown or empty egress verdict from gateway is treated by the orchestrator as a **block**, not a pass-through (`executor.RunScopedCommand`'s `default:` case in the verdict switch) — a new verdict value gateway might one day return that the orchestrator doesn't yet recognize fails closed, not open.
 
-None of these are the "same" fail-closed check repeated four times for redundancy's sake — they're four *different* mechanisms (Docker network topology, nftables rule ordering, a runtime mode default, an unrecognized-value branch) that each independently have to fail permissively for the whole system to fail open. That's the actual security property: not "there's a firewall," but "there is no single bug that turns this off."
+These controls reduce reliance on any single application decision, but they are not interchangeable. In particular, a gateway crash preserves the last rules—including a blanket allow if the operator selected it—until Docker restarts/replaces the container and startup installs the default block policy. Host compromise, container-root takeover, explicit cleanup, and operator-selected insecure networking remain outside the claim.
 
 ---
 
@@ -47,7 +47,7 @@ None of these are the "same" fail-closed check repeated four times for redundanc
 
 ### Startup ordering: rules before sockets <a id="startup-ordering"></a>
 
-gateway's own README and code comments are explicit about ordering: on process start, it installs its DROP-all `FORWARD`-chain nftables rules for the sandbox's source IP (`172.20.0.10`, configured via `network.sandbox_ip`) *before* it opens the Unix-socket IPC listener that orchestrator talks to. This ordering means there is no gap — however brief — where gateway is "up" (accepting IPC requests) but hasn't yet locked down traffic. If gateway crashes after this point, the **rules it already installed into the kernel persist** — nftables state lives in the Linux kernel, not in gateway's own process memory, so gateway disappearing doesn't undo what it configured.
+On process start, gateway installs its `FORWARD`/NAT rules for the sandbox source IP (`172.20.0.10`) before the IPC task can bind its Unix socket. There is therefore no request-serving window before initial policy installation. If the daemon exits without `--cleanup`, the rules already installed in that container namespace remain; this preserves the **last policy**, not necessarily the default block state. Docker's `restart: unless-stopped` normally starts a fresh process, whose installation resets the in-memory egress mode and ruleset to the startup configuration.
 
 ### The always-blocked floor <a id="always-blocked-floor"></a>
 
@@ -69,9 +69,9 @@ Above the per-target allow/block list sits a single **runtime, operator-controll
 
 **Egress mode is orthogonal to the agent's own approval mode.** These are two independent axes that are easy to conflate because they're both "should this be allowed":
 - **Egress mode** (gateway, this section) — is the *network destination* reachable at all?
-- **Agent approval mode** (`auto` / `ask_permission`, orchestrator, see [Usage Guide](usage-guide.md)) — does this specific *command* need an operator's sign-off before it runs, based on its risk classification?
+- **Agent approval mode** (`auto` / `ask_permission`, orchestrator, see [Usage Guide](usage-guide.md)) — does every command run automatically, or pause for an operator decision? Risk classification remains visible metadata, not the mode selector.
 
-A command can be fully approved by the operator (agent approval mode says "go") and still get held by the gateway because its target isn't reachable under the current egress mode, or vice versa — approved network access doesn't bypass the agent's own risk-based approval gate for what the command actually does.
+A command can pass the command-approval layer and still get held by gateway because its target is not reachable under the current egress mode, or vice versa. Network approval and command approval never override one another.
 
 ### Hostname policy: scope by name, before resolution <a id="hostname-policy"></a>
 
@@ -84,7 +84,9 @@ verdict precedence (first match wins):
   3. otherwise                  → NEUTRAL (defer entirely to the IP-egress flow / mode)
 ```
 
-`*.example.com` matches the apex `example.com` **and** any subdomain at any depth (`api.internal.example.com` included) — a pattern with no `*` must match exactly. A `hostname_block` hit is recorded in the audit chain with `reason: hostname_blocked`. The lists start from `gateway/config/default.yaml` at startup, but — like the egress mode above — an operator can also add or remove individual patterns **at runtime** via `GET`/`POST`/`DELETE /api/v1/gateway/hostname-policy` (wire calls `add_hostname_rule`/`remove_hostname_rule`); those runtime changes live in gateway's in-memory policy state only and **do not persist across a gateway restart** — the config file is what a restart falls back to, not what a running gateway is necessarily still enforcing after a live edit.
+`*.example.com` matches the apex `example.com` **and** any subdomain at any depth (`api.internal.example.com` included) — a pattern with no `*` must match exactly. `RunScopedCommand` checks every explicit IP/hostname/URL argument before opening any rule, so a later positional target cannot hide behind an allowed first target. A `hostname_block` hit is recorded in the audit chain with `reason: hostname_blocked`. The lists start from `gateway/config/default.yaml` at startup, but — like the egress mode above — an operator can also add or remove individual patterns **at runtime** via `GET`/`POST`/`DELETE /api/v1/gateway/hostname-policy` (wire calls `add_hostname_rule`/`remove_hostname_rule`); those runtime changes live in gateway's in-memory policy state only and **do not persist across a gateway restart** — the config file is what a restart falls back to, not what a running gateway is necessarily still enforcing after a live edit.
+
+Name-level enforcement only applies where orchestrator can see the literal target. The interactive Bash terminal, targets read from a file (`nmap -iL`), and shell-generated values are opaque to this pre-exec check; their packets remain subject to gateway's IP/nftables policy. Use `block`/`ask` and the agent/direct-exec path when hostname policy is a required control.
 
 The one edge case worth knowing about explicitly: a CDN-backed hostname that round-robins to a brand-new IP **between** the moment orchestrator resolves it for approval and the moment the sandbox's own retry resolves it again could theoretically get a different IP than the one gateway just opened a rule for. In practice this is rare (stable A-records, and Cloudflare's answers staying consistent within a TTL window), and it self-heals on re-approval — but it's a genuine, acknowledged residual gap, not something claimed to be airtight.
 
@@ -92,7 +94,7 @@ The one edge case worth knowing about explicitly: a CDN-backed hostname that rou
 
 Every `PolicyRule` gateway holds carries a `source` tag — `Config` (loaded from `gateway/config/default.yaml` at startup), `Agent` (opened automatically by the executor when a command's target is approved and needs a temporary nftables hole), or `Manual` (added by an operator directly through the GATEWAY tab's UI, independent of any approval flow). This isn't just bookkeeping — it's what lets the management UI show *why* a given rule exists, and it's what an audit reviewer would actually want to distinguish: a rule the operator explicitly typed in versus one the agent's own execution flow opened on its behalf.
 
-![Gateway tab's audit log showing hash-chained rule and scope decision rows](assets/screenshots/security-model/gateway-audit-rules.png)
+Source also affects precedence. An agent temporary allow cannot override a configured block. A manual allow can carve out a blocked destination only when its prefix is at least as specific as the matching configured block (for example, a manual `/32` inside a blocked `/12`). The unconditional loopback/link-local/multicast/unspecified floor cannot be overridden by either source.
 
 ---
 
@@ -114,7 +116,7 @@ threatscan deliberately does **not** flag bossy-sounding English on its own ("yo
 | **`context`** | Role-hijack ("you are now a..."), C2/promptware vocabulary, known offensive-framework brand names | **Tool output** (from sandbox commands) and sub-agent summaries — surface a warning and require an operator decision before the flagged result is injected into model context; raw evidence remains available to the operator |
 | **`strict`** | Persistence/SSH-backdoor patterns, `authorized_keys`, hardcoded-secret-shaped strings, agent-config-file modification attempts | **User-mediated writes** — `REMEMBER` (persistent memory) and skill-file loading — where a false positive is cheap (the operator can just re-word it) and a true positive should hard-block the write, not just warn |
 
-This tiering is the reason a `REMEMBER` write and a tool-output observation get treated differently for what looks like similar content: memory is *re-injected into every future prompt, indefinitely* (the whole point of persistent memory), so a poisoned value there is a standing cross-session risk in a way that a single observation isn't — it earns the stricter, block-on-hit treatment.
+This tiering is the reason a `REMEMBER` write and a tool-output observation get treated differently for what looks like similar content: memory is re-injected into future session prompts until explicitly forgotten, so a poisoned value there is a standing risk in a way that a single observation is not — it earns the stricter, block-on-hit treatment.
 
 One specific, easy-to-miss detail worth calling out for anyone extending this code: **ANSI stripping always happens before the threat scan runs, never after.** A target could otherwise split a banned phrase across bytes using a terminal escape sequence in between, in a way that would render as contiguous text to a human looking at a terminal but wouldn't match a naive regex scanning the raw bytes with the escape codes still in them. `graph.go`'s `observeResult()` and `node_remember.go`'s `rememberNode()` both do `StripANSI` immediately before scanning, in that order, for exactly this reason.
 
@@ -142,7 +144,7 @@ Every gateway decision worth reviewing later — a scope check, a rule added or 
 
 ## Container isolation: docker-proxy and sandbox <a id="container-isolation"></a>
 
-The Docker-level isolation that backs all of the above is covered in full in [Architecture § The five components](architecture.md#five-components) and [§ docker-proxy](architecture.md#docker-proxy) — the short version repeated here for completeness: orchestrator never gets `/var/run/docker.sock` mounted directly (that would be root-equivalent host access); it goes through `docker-proxy`, which is allowlisted down to exactly the two Docker API resource families `docker exec` actually needs (`CONTAINERS`, `EXEC`, plus `POST` as the HTTP verb both ride on), with container lifecycle control (`ALLOW_START`/`ALLOW_STOP`/`ALLOW_RESTARTS`) and every other resource family explicitly zeroed. The sandbox container itself runs read-only rootfs, non-root (UID 1000), with only `NET_RAW`/`NET_ADMIN` capabilities and `no-new-privileges` — see `sandbox/Dockerfile` and `docker-compose.yml`'s `sandbox` service for the literal capability list.
+The Docker-level isolation that backs all of the above is covered in full in [Architecture § The five components](architecture.md#five-components) and [§ docker-proxy](architecture.md#docker-proxy) — the short version repeated here for completeness: orchestrator never gets `/var/run/docker.sock` mounted directly; it goes through `docker-proxy`, configured for container inspection/exec while lifecycle and other resource families are disabled. The sandbox uses a read-only rootfs and agent commands run as UID 1000. The container nevertheless has `NET_RAW` and `NET_ADMIN`, and Compose deliberately sets `no-new-privileges:false` so nmap's file capabilities work for that user. This is an explicit trade-off: container-root compromise is outside the claimed boundary.
 
 ---
 
@@ -171,7 +173,7 @@ Both default to **off** in `gateway/config/default.yaml` — they're operator op
 
 ## The watchdog <a id="watchdog"></a>
 
-gateway monitors its own health via an RSS memory ceiling (`watchdog.max_memory_mb`, default 512 MB) and a heartbeat freshness check (`watchdog.heartbeat_interval_secs`, default 5s, written to `/run/yummi/gateway.heartbeat`). A breach of either — gateway ballooning in memory, or gateway's own main loop failing to check in — triggers an emergency lockdown and the daemon exits. Combined with the startup-ordering guarantee above, this means gateway going down for *any* reason (crash, OOM, watchdog-triggered self-exit) leaves the kernel holding whatever nftables rules were last installed — it does not, and architecturally cannot, fail open just because gateway itself stopped running.
+gateway's watchdog writes a timestamp to `/run/yummi/gateway.heartbeat` at `watchdog.heartbeat_interval_secs` and checks process RSS against `watchdog.max_memory_mb` (shipped config 512 MB). It does **not** check its own heartbeat freshness. On an RSS breach it flushes the audit log, removes the heartbeat file, and exits. It does not install an additional emergency ruleset; the normal daemon-exit property is that startup-installed nftables rules are not cleaned up. External supervision can use heartbeat freshness to detect a stalled process, but that consumer is not implemented in this repository.
 
 ---
 
@@ -179,7 +181,8 @@ gateway monitors its own health via an RSS memory ceiling (`watchdog.max_memory_
 
 Being precise about limits is part of taking this model seriously, not a weakness to hide:
 
-- **Bare-metal gateway outside Docker is not a security boundary.** See [Installation § The one combination that silently doesn't enforce anything](installation.md#platform-support) — running the compiled binary directly, outside `docker compose`, either enforces nothing (macOS — no Linux kernel underneath) or requires you to have independently replicated the exact network topology `docker-compose.yml` provides (bare Linux host).
+- **Bare gateway execution is not the supported boundary.** On macOS the entry point returns a Linux-only error; on Linux it can manipulate the host namespace, but the operator would need to reproduce and audit the routing topology that Compose supplies.
+- **Sandbox root is a meaningful boundary limit.** The container receives `NET_ADMIN` for route setup and `no-new-privileges` is disabled for nmap file capabilities. Ordinary agent commands run as UID 1000, but a container-root compromise could alter routing or packet policy.
 - **On Docker Desktop for macOS, legitimate approved traffic can silently fail to arrive at all** — an availability gap, not a fail-open. See [Installation § Docker Desktop VM networking callout](installation.md#docker-desktop-internal-network-bug): a container forwarding between two `internal: true`-adjacent bridge networks (gateway's own role) can have its traffic dropped by Docker Desktop's vpnkit-based VM networking layer even though gateway's own nftables rules and decisions stay correct throughout. Confirmed absent on [OrbStack](https://orbstack.dev/) with the identical, unmodified config — this is specific to Docker Desktop's own networking implementation, not to Yummi, not to `internal: true` itself, and not fixed by a Docker Desktop version update.
 - **threatscan is pattern-based, not a general-purpose injection classifier.** It catches the vocabulary and structural tricks its own comments describe (C2 brand names, exfiltration shapes, invisible Unicode) — it is not claimed to catch every possible novel phrasing of a prompt-injection attack, and false negatives against a sufficiently creative attacker are expected, not ruled out.
 - **Single-command output needs an operator decision when flagged.** See [§ Single-command chat output](#threatscan-single-command): the gate prevents automatic model feedback, but it does not silently discard evidence or decide whether a security researcher may read it. The operator still chooses whether the sanitized result should enter the conductor context.

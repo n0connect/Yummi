@@ -1,13 +1,13 @@
 # Screenshot catalog
 
-This directory holds the images referenced from `docs/*.md` and the root `README.md`. It is currently a **skeleton**: every page already has an `![alt](...)` reference pointing at the path it expects, but the actual PNGs listed below have not been captured yet — until they land, those references render as a broken image, which is expected and fine for now.
+This directory is the capture queue for future documentation screenshots. The Markdown pages deliberately do not embed these paths until the corresponding real PNG exists, so published documentation never renders broken images.
 
 ## How to add one
 
 1. Bring the full stack up (`make start`) and get the UI into the state described below.
 2. Capture at a reasonable width (~1280px is enough — these render inline in Markdown, not full-bleed).
-3. Save as PNG at the exact path listed in the table (filename matters — it's already wired into the doc).
-4. No other doc change is needed; the reference already exists and will just start rendering.
+3. Save as PNG at the exact path listed in the table.
+4. Add the image reference to the named page only after verifying the capture contains no secrets or stale UI.
 
 ## Shot list
 

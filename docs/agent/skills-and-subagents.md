@@ -62,13 +62,10 @@ triggers:
   - footprint
 tools:
   - nmap
-  - rustscan
-  - masscan
-  - ping
 knowledge: |
   Enumerate before you exploit. Start passive/light, escalate only as needed:
   1. Confirm reachability, then `nmap -sV -sC <target>` for service + version + default scripts.
-  2. For wide ranges, a fast port sweep first (rustscan/masscan), then targeted -sV on open ports.
+  2. For wide ranges, start with an nmap discovery/port sweep, then targeted -sV on open ports.
   3. Record every open port and service version as a structured finding (it becomes shared memory).
   4. Avoid `-A`/aggressive timing on production unless the engagement allows it — it is loud.
 ```
@@ -76,6 +73,8 @@ knowledge: |
 Notice what this file is actually teaching: not "run `nmap`" (the model already knows nmap exists — `persona/v0.1/agent.yaml`'s own identity prose is explicit that the model is "given no catalogue and need[s] none" of *tool* knowledge), but a specific **sequencing discipline** ("confirm reachability, then service+version, escalate breadth-first") and an explicit **operational judgment call** ("avoid aggressive timing on production unless the engagement allows it"). Skills exist to encode this kind of house methodology and judgment, not tool syntax.
 
 **Every skill file is content-scanned at load time**, same [threatscan](../security-model.md#layer-content) at `ScopeStrict` applied to `name+description+knowledge` together. A skill that trips a pattern is simply not loaded (logged as a warning, never a hard crash of the whole registry) — a sensible posture given a skill file is user-curated content that gets rendered verbatim into every matching step's prompt.
+
+Skills use schema version `1` and receive a semantic version (legacy files default to `1.0.0`), provenance (`builtin`, `operator`, or `auto`), source metadata, and a SHA-256 artifact digest. Validation bounds names, triggers, tools, references, prompt content, and optional structured constraints before activation. `plan_step_limit` is a reviewed capability constraint: when a selected atomic skill defines it, planning is bounded server-side as well as explained in the prompt. The live registry is an atomic name-based upsert: approving a newer version replaces the prior entry instead of accumulating duplicate prompt blocks.
 
 ## Sub-agents — bounded delegation <a id="subagents"></a>
 
@@ -105,7 +104,7 @@ The identity prose's last line — *"you do exactly the focused subtask handed t
 
 ## Concurrent hand-off — the fan-out <a id="concurrent-handoff"></a>
 
-`HANDOFF` supports two shapes in one action: a single target (`{"role","subgoal"}`) or a fan-out (`{"handoffs":[{"role","subgoal"}, ...]}`) that dispatches **multiple specialists concurrently**, on one shared deadline for the whole batch. `handoffNode` (`node_handoff.go`) launches one goroutine per target and `sync.WaitGroup`s them together — the wall-clock cost of delegating to three specialists at once is roughly the cost of the *slowest* one, not the sum of all three, and each specialist's failure (including a timeout) is folded into the merged observation individually rather than failing the whole hand-off if one target struggles.
+`HANDOFF` supports a single target (`{"role","subgoal"}`) or a concurrent fan-out (`{"handoffs":[...]}`). A fan-out accepts at most four targets by default, while one shared `DelegationCoordinator` enforces a global default of three running specialists across concurrent parent tasks. Every child receives an addressable lifecycle record (`running/completed/failed/interrupted`), a persisted child task ID, and an individual cancel function. Operators can inspect `GET /agent/delegations` and interrupt one child through `POST /agent/delegations/{id}/interrupt` without stopping its parent or siblings.
 
 Every sub-agent shares the same Knowledge Store as the parent — a finding a recon sub-agent records is immediately visible to the parent's own memory queries, with no separate merge step required, because there was only ever one store to begin with. Only a **human-readable summary** (not the sub-agent's full internal reasoning trace) gets threaded back into the parent's next prompt — this keeps a hand-off cheap in context-window terms regardless of how much work the sub-agent actually did internally.
 
@@ -117,8 +116,6 @@ A sub-agent's own `Runner` is built with an **empty** `SubAgents` map — so a s
 
 ## Auto-skill-creation — drafted, never auto-loaded <a id="auto-skill"></a>
 
-When a task completes, `proposeSkillFromTrajectory` (`node_lifecycle.go`, fired from `finishNode`) optionally hands the task's own trajectory — goal, summary, observations, and any `worked`-outcome tactics touching the tools it used — to a background curator (`s.cfg.SkillCurator`), detached from the task's own (already-cancelled) context and dispatched via `go` so a slow curator LLM call never delays the task's own completion. If the curator decides the trajectory is worth turning into a reusable playbook, it drafts one and writes it to a **quarantined pending-skills store** — visible in the Trace tab's Skills section, exactly like the [usage guide](../usage-guide.md#tab-trace) describes.
+When a task completes, it submits a sanitized trajectory to a bounded, shutdown-aware curator worker. Targets, URLs, email addresses, and credential-shaped values are redacted; hostile observations are dropped; observations and queue depth are bounded. The worker gives each curator LLM call a deadline and writes clean drafts to the quarantined pending-skills store.
 
-![Trace tab's Skills section showing a pending curator-drafted skill with approve/reject controls](../assets/screenshots/agent/pending-skill-approval.png)
-
-**No draft is ever auto-loaded into the live registry.** Every draft passes through the same `threatscan.FirstThreatMessage(..., ScopeStrict)` scan hand-authored skill YAML already goes through at `LoadDir` time — reusing the existing content-layer invariant rather than inventing a parallel one — and then sits quarantined until an operator explicitly approves it (`POST /skills/pending/{id}/approve`, which writes it into the real `persona/v0.1/skills/` directory `LoadDir` already watches, and adds it to the live in-process registry immediately) or rejects it. This mirrors a deliberate design principle stated directly in this project's own roadmap notes: "every skill passes mandatory review before publishing, not an open registry" — the agent can *suggest* new knowledge for itself, but never *grant itself* new knowledge without a human in the loop.
+**No draft is auto-loaded.** Approval performs `pending → activating`, atomically writes the YAML to the separate writable `YUMMI_AUTO_SKILL_DIR`, validates/hot-upserts the registry, and only then commits `approved`. A file or activation failure rolls the row back to retryable `pending` with an error instead of creating a false approval. The shipped Compose configuration stores approved skills under the persistent orchestrator data volume while keeping the source persona mount read-only.

@@ -39,6 +39,7 @@ func (c *Curator) ProposeFromTask(ctx context.Context, traj Trajectory) {
 		return
 	}
 
+	traj = SanitizeTrajectory(traj)
 	drafted, err := DraftSkill(ctx, c.chat, traj)
 	if err != nil {
 		slog.Warn("skillcurator: draft failed", "error", err, "task_id", traj.TaskID)

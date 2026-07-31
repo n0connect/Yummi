@@ -3,7 +3,6 @@ package api
 
 import (
 	"net/http"
-	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -61,12 +60,15 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		// TRACE observability — read-only views of the agent's world model.
 		r.Get("/sessions/{sessionID}/activity", HandleListActivity(taskStore))
 		r.Get("/sessions/{sessionID}/context", HandleListContext(ks))
+		r.Delete("/sessions/{sessionID}/context/{key}", HandleDeleteContext(ks))
 		r.Get("/tactics", HandleListTactics(ks))
 		r.Get("/skills", HandleListSkills(skillReg))
 		r.Get("/skills/pending", HandleListPendingSkills(curatorStore))
 		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
 		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
 		r.Get("/agent/roles", HandleListRoles(taskRunner))
+		r.Get("/agent/delegations", HandleListDelegations(taskRunner))
+		r.Post("/agent/delegations/{id}/interrupt", HandleInterruptDelegation(taskRunner))
 		r.Get("/sessions/{sessionID}/audit", HandleListAudit(sm))
 		r.Get("/sessions/{sessionID}/executions", HandleListExecutions(executions))
 		r.Get("/executions/{id}", HandleGetExecution(executions))
@@ -128,8 +130,8 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 // approval this session is picked up on the next restart even if the
 // in-process registry Add() were ever bypassed.
 func autoSkillDir(cfg *config.Config) string {
-	if cfg == nil || cfg.PersonaDir == "" {
+	if cfg == nil {
 		return ""
 	}
-	return filepath.Join(cfg.PersonaDir, "skills")
+	return cfg.AutoSkillDir
 }

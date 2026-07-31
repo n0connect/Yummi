@@ -25,7 +25,7 @@ The full REST + WebSocket surface orchestrator exposes, as wired in `orchestrato
 - Every route lives under `/api/v1`, except the two WebSocket upgrade endpoints (`/ws/terminal`, `/ws/events`) and the plain health check (`/healthz`).
 - Errors follow **RFC 7807** problem-detail JSON (`Content-Type: application/problem+json`) — expect `{"type":"about:blank","title":"...","status":<code>,"detail":"..."}`, not a bespoke error format per endpoint. `type` is always the literal string `"about:blank"` today — no per-error-kind URIs are defined yet, so don't write client code that branches on it.
 - `{id}` / `{sessionID}` path segments are validated (`isValidSessionID`) before touching any store — a malformed ID is a `400`, not a store lookup that happens to fail.
-- CORS and WebSocket origin headers are both validated against localhost server-side (`CORSMiddleware`, and origin checks inside the WS upgrade handlers) — this is a deliberate CSWSH (cross-site WebSocket hijacking) mitigation, not an oversight that happens to work for local dev.
+- Browser CORS and WebSocket origins are restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`). WebSocket clients without an `Origin` header, such as the CLI/TUI, are accepted.
 
 ---
 
@@ -53,18 +53,21 @@ Owned by the [Knowledge Store](agent/memory-and-knowledge.md), not by the sessio
 
 ## TRACE — observability (read-only) <a id="trace"></a>
 
-Backs the [Trace tab](usage-guide.md#tab-trace) — every one of these is a pure read except the two pending-skill decision endpoints:
+Backs the [Trace tab](usage-guide.md#tab-trace). Most endpoints are read-only; explicit context deletion, skill decisions, and delegation interruption are operator control actions.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/sessions/{sessionID}/activity` | Full activity timeline (plan/command/result/memory/skill/handoff/finding/ask/finish events) |
 | `GET` | `/sessions/{sessionID}/context` | Persistent `REMEMBER`-written memory for this session |
+| `DELETE` | `/sessions/{sessionID}/context/{key}` | Explicitly forget one session memory entry and its embedding |
 | `GET` | `/tactics` | Target-scrubbed procedural memory (cross-session) |
 | `GET` | `/skills` | Currently loaded skill registry |
 | `GET` | `/skills/pending` | Curator-drafted skills awaiting operator review |
-| `POST` | `/skills/pending/{id}/approve` | Approve a drafted skill — writes it into `persona/v0.1/skills/` and adds it to the live registry |
+| `POST` | `/skills/pending/{id}/approve` | Atomically activate a re-scanned draft through the writable `YUMMI_AUTO_SKILL_DIR`; failures return it to `pending` |
 | `POST` | `/skills/pending/{id}/reject` | Reject a drafted skill |
 | `GET` | `/agent/roles` | Available specialist sub-agent roles |
+| `GET` | `/agent/delegations` | Active and recent addressable specialist runs |
+| `POST` | `/agent/delegations/{id}/interrupt` | Interrupt one specialist without stopping its parent/siblings |
 | `GET` | `/sessions/{sessionID}/audit` | Session-level audit trail (distinct from gateway's own network audit log below) |
 
 ## Chat <a id="chat"></a>
@@ -72,7 +75,7 @@ Backs the [Trace tab](usage-guide.md#tab-trace) — every one of these is a pure
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/chat` | Send a message; may return a single command proposal or start an agent task |
-| `POST` | `/chat/approve` | Approve/deny a single-command proposal |
+| `POST` | `/chat/approve` | Approve a single-command proposal. This route has no deny body/operation; clients dismiss or expire an unapproved proposal |
 
 ## Agent tasks <a id="agent-tasks"></a>
 
@@ -105,7 +108,7 @@ Backs the [Gateway tab](usage-guide.md#tab-gateway) — every one of these is an
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/gateway/status` | Reachability + current egress mode |
+| `GET` | `/gateway/status` | Reachability, security level, active-rule flag, and uptime |
 | `GET` | `/gateway/rules` | List active nftables allow/block rules (tagged by `source`) |
 | `POST` | `/gateway/rules` | Add a manual temporary rule — body `{network, ttl_secs, reason}` (`reason` is required) |
 | `DELETE` | `/gateway/rules/{id}` | Remove a rule |
@@ -143,12 +146,13 @@ Backs the [Gateway tab](usage-guide.md#tab-gateway) — every one of these is an
 | `/ws/terminal` | Bridges to a real interactive shell in the sandbox container — backs the [Bash tab](usage-guide.md#tab-bash) |
 | `/ws/events` | Fan-out event stream every other tab subscribes to |
 
-`/ws/events` carries three event `type`s today, each a thin JSON envelope around the relevant record:
+`/ws/events` carries four event `type`s today, each a thin JSON envelope around the relevant record:
 
 | `type` | Fired when | Drives |
 |---|---|---|
 | `execution.status` | An execution's status changes (`queued` → `running` → `completed`/`failed`/`canceled`/`awaiting_egress_approval`/`awaiting_threat_approval`) — also re-fired periodically as `execution.running` with `elapsed_secs` set while a still-running command is in flight, so a long real command (a full `nikto`, `nmap`) doesn't look indistinguishable from a hang | Live command status and elapsed time in the Agent/Bash tabs |
 | `task.status` | An agent task's status changes (running → awaiting_approval → completed/failed/stopped, etc.) | The Agent tab's live task tracker |
-| `gateway.status` | A gateway rule or egress mode changes (`health.Aggregator`'s `diffAndPublishRules`, which polls gateway and only emits on an actual diff) | The Gateway tab's live rule table and mode indicator |
+| `agent.activity` | The graph records a public TRACE event (plan, command, result, memory, skill, handoff, finding, ask, finish) | The Trace timeline |
+| `gateway.status` | Gateway rules or mode differ from the previous health poll. The current wire payload contains the rule list; the mode is refreshed by the Gateway REST hook | The Gateway tab's live rule table |
 
-Both WebSocket endpoints validate the `Origin` header against localhost before completing the upgrade handshake — a page loaded from any other origin cannot open either socket, even from a browser that already has the UI's own tab open.
+Both WebSocket endpoints reject non-loopback browser origins. Non-browser clients that omit `Origin` remain supported.

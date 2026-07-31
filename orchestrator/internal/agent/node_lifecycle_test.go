@@ -142,6 +142,71 @@ func TestFinishNodeSanitizesSummaryAndFindings(t *testing.T) {
 	}
 }
 
+// TestFinishNodeVerifiesFindingsAgainstRealStepOutput proves finishNode
+// computes Task.FindingRecords server-side rather than trusting a
+// self-reported verdict: a finding whose evidence is genuinely present in
+// the completed step's recorded output earns Verified; one that names a step
+// that never completed (or whose output doesn't contain the claimed
+// evidence) is downgraded to Unsupported — regardless of how confident the
+// model's own prose sounds.
+func TestFinishNodeVerifiesFindingsAgainstRealStepOutput(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task, err := store.Create("sess", "pentest 172.20.0.6", 15)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{
+			{ID: "s1", Description: "port scan", Status: StepPending},
+			{ID: "s2", Description: "nikto scan", Status: StepPending},
+		}
+	}); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusRunning, nil); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	markStepStatus(store, task.ID, "s1", "nmap -sV 172.20.0.6", StepDone, "3306/tcp open mysql 5.5.47")
+	markStepStatus(store, task.ID, "s2", "nikto -h 172.20.0.6", StepFailed, "command aborted after running too long")
+
+	s := &GraphState{
+		taskID:        task.ID,
+		store:         store,
+		cfg:           fastRetryCfg(),
+		gate:          NewGate(),
+		finishOutcome: outcomeCompleted,
+		finishMsg:     "Pentest completed.",
+		pendingAct: Action{
+			FindingsDetail: []FindingDetail{
+				{Title: "MySQL exposed", Evidence: "3306/tcp open mysql 5.5.47", StepID: "s1"},
+				{Title: "Nikto findings", Evidence: "known vulnerabilities detected", StepID: "s2"},
+				{Title: "Unbacked claim"}, // no evidence/step at all
+			},
+		},
+	}
+	if _, err := finishNode(context.Background(), s); err != nil {
+		t.Fatalf("finishNode: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if len(got.FindingRecords) != 3 {
+		t.Fatalf("expected 3 finding records, got %d: %+v", len(got.FindingRecords), got.FindingRecords)
+	}
+	byTitle := map[string]FindingRecord{}
+	for _, r := range got.FindingRecords {
+		byTitle[r.Title] = r
+	}
+	if r := byTitle["MySQL exposed"]; r.Verdict != VerdictVerified || r.OracleKind != OracleToolEvidence {
+		t.Fatalf("expected MySQL finding verified via tool_evidence, got %+v", r)
+	}
+	if r := byTitle["Nikto findings"]; r.Verdict != VerdictUnsupported {
+		t.Fatalf("expected Nikto finding unsupported (its step failed), got %+v", r)
+	}
+	if r := byTitle["Unbacked claim"]; r.Verdict != VerdictCandidate {
+		t.Fatalf("expected unbacked claim to stay a candidate, got %+v", r)
+	}
+}
+
 // A finding that does NOT reference any failed tool must not trigger a
 // warning — the guard should not cry wolf on legitimate, grounded findings.
 func TestFinishNodeNoWarningWhenFindingsAreGrounded(t *testing.T) {
@@ -246,15 +311,14 @@ func TestFinishNodeDoesNotFireSkillCuratorOnStopped(t *testing.T) {
 	}
 }
 
-// TestFinishNodeSkillCuratorDoesNotBlockReturn proves the hook is fired async
-// (a slow/hanging curator must never delay finishNode's return to the caller).
-func TestFinishNodeSkillCuratorDoesNotBlockReturn(t *testing.T) {
+// TestFinishNodeSkillCuratorSubmissionDoesNotBlockReturn proves finishNode
+// only performs the worker's non-blocking submission callback.
+func TestFinishNodeSkillCuratorSubmissionDoesNotBlockReturn(t *testing.T) {
 	store, _ := NewStore(openTestDB(t))
 
-	release := make(chan struct{})
+	fired := make(chan struct{}, 1)
 	cfg := fastRetryCfg()
-	cfg.SkillCurator = func(_ context.Context, _ skillcurator.Trajectory) { <-release }
-	defer close(release)
+	cfg.SkillCurator = func(_ context.Context, _ skillcurator.Trajectory) { fired <- struct{}{} }
 
 	task := newRunningTask(t, store, "enumerate the target")
 	s := finishState(t, store, task, cfg, outcomeCompleted, "done")
@@ -268,7 +332,12 @@ func TestFinishNodeSkillCuratorDoesNotBlockReturn(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(1 * time.Second):
-		t.Fatal("finishNode blocked on a slow SkillCurator callback")
+		t.Fatal("finishNode blocked on curator submission")
+	}
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("curator submission was not invoked")
 	}
 }
 

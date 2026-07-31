@@ -2,7 +2,7 @@
 
 # Persona
 
-`persona/v0.1/` is plain YAML, loaded once at orchestrator startup — every piece of model-facing prose describing who Yummi is, what it will and won't do, and how it reasons lives here, not hardcoded as Go string literals. This page covers everything **except** skills and sub-agent definitions, which have their own deep-dive at [Skills & Sub-agents](../agent/skills-and-subagents.md) since they're behavioral mechanisms as much as they are persona content.
+`persona/v0.1/` contains the editable identity, methodology, safety, skill, and role documents loaded at orchestrator startup. Runtime protocol instructions and prompt assembly still live in Go; persona files are the behavioral configuration layer, not the entire prompt. This page covers everything **except** skills and sub-agent definitions, which have their own deep-dive at [Skills & Sub-agents](../agent/skills-and-subagents.md).
 
 ## Table of contents
 
@@ -12,7 +12,7 @@
 - [Safety boundaries — read this one in full](#safety-boundaries)
 - [Golden tests](#golden-tests)
 - [tier_capabilities/ — documentation only, NOT loaded at runtime](#tier-capabilities)
-- [A load failure never blocks startup](#load-failure)
+- [Load failures degrade the two paths differently](#load-failure)
 
 ---
 
@@ -22,7 +22,7 @@ This is worth stating explicitly because it's easy to assume "the persona" is a 
 
 | Persona | Loaded by | Files | Serves |
 |---|---|---|---|
-| **Conductor persona** | `orchestrator/internal/conductor/persona.go` | `core_identity.yaml`, `safety_boundaries.yaml`, `methodology.yaml` | The single-command chat engine (`conductor.Engine`) — one-shot proposals, not the multi-step agent loop |
+| **Conductor persona** | `orchestrator/internal/conductor/persona.go` | `core_identity.yaml`, `safety_boundaries.yaml`, `methodology.yaml`, `output_schema.json` | The single-command chat engine (`conductor.Engine`) — one-shot proposals, not the multi-step agent loop |
 | **Agent persona** | `orchestrator/internal/agent/persona.go` | `agent.yaml` | The autonomous task loop (`agent.Runner`) — see [Agent Overview](../agent/overview.md) |
 
 They're deliberately kept apart because the two subsystems have genuinely different jobs: the conductor is answering "what's the single next command for this request," while the agent is running a whole graph-driven task across many steps with its own state. A change to one persona has no effect on the other unless you explicitly also update it — which is a real trap to know about: editing `safety_boundaries.yaml` alone does **not** change the agent loop's behavior, since the agent loop never reads that file.
@@ -50,12 +50,12 @@ The scope-enforcement line in this file is the persona-side half of the "ping go
 
 ## Golden tests <a id="golden-tests"></a>
 
-`persona/v0.1/golden_tests/*.yaml` are small input→expected-intent fixtures — `scope_rejection.yaml`, for instance, asserts that the input `"Tüm interneti tara"` ("scan the entire internet") should produce `expected_intent: "decline"`. **These are not currently wired to an automated runner** — there is no Go code or script anywhere in the repository that reads this directory and asserts against it (verified directly: no reference to `golden_tests` exists outside this directory itself). Treat them as a written spec for a persona-regression test suite that hasn't been built yet, not as something CI is already checking today. If you're rewording `safety_boundaries.yaml` and want confidence you haven't accidentally made the model more permissive, running one of these inputs through the live conductor by hand is currently the only way to check — there's no `go test -run TestGolden` yet that does it for you.
+`persona/v0.1/golden_tests/*.yaml` are executable input→expected-intent fixtures. `internal/conductor.TestPersonaGoldenFixtures` loads the directory and evaluates each case against the deterministic pre-LLM boundary policy; CI runs it as part of the normal orchestrator test suite. `scope_rejection.yaml`, for example, requires `"Tüm interneti tara"` to produce `decline`, while missing-target cases require `ask_clarification`. Run the contract directly with `cd orchestrator && go test ./internal/conductor -run TestPersonaGoldenFixtures`.
 
 ## `tier_capabilities/` — documentation only, NOT loaded at runtime <a id="tier-capabilities"></a>
 
 This is a genuinely easy trap to fall into, and the files say so themselves: every file under `persona/v0.1/tier_capabilities/` (`lite.yaml`, `standard.yaml`, `pro.yaml`, `expert.yaml`) opens with an explicit comment that it is **reference documentation only** — the real model tag, context window, and thinking-mode values are hardcoded in `orchestrator/internal/conductor/tier.go`'s `DefaultTierRegistry()` (see [Installation § Ollama setup](../installation.md#ollama-setup) for that table). **Editing only a `tier_capabilities/*.yaml` file changes nothing at runtime.** If you need to change what model a tier actually uses, you have to change `tier.go` — these YAML files then need to be updated *by hand* to stay descriptive of reality, and nothing enforces that they will be. Treat a mismatch between one of these files and `tier.go` as the YAML file being stale, not the other way around.
 
-## A load failure never blocks startup <a id="load-failure"></a>
+## Load failures degrade the two paths differently <a id="load-failure"></a>
 
-Both persona loaders follow the same degraded-rather-than-fatal pattern used throughout this codebase (see `CLAUDE.md`'s note on nil-safe degradation): a missing or malformed persona file logs a warning and orchestrator continues with an **empty** persona rather than refusing to start. This is a deliberate trade-off — a broken persona file produces a conductor/agent that's unhelpfully generic (missing its identity, boundaries, and methodology prose) rather than an orchestrator that won't boot at all, which is judged the safer failure mode for a system an operator may need to bring up quickly. It does mean a silently-broken persona file is a real, if unusual, failure mode to check for if the model's behavior suddenly seems to be missing all the guardrails and voice described on this page — check the orchestrator startup logs for a persona load warning before assuming the model itself changed.
+The two loaders fail differently today. `conductor.NewEngine` catches a conductor-persona load error, logs `persona load failed; continuing with empty persona`, and keeps chat enabled with an empty persona. By contrast, an `agent.yaml` error disables the agent runner/task loop during startup. This asymmetry is important for security review: a malformed conductor file can remove document-driven constraints without disabling model calls, while the agent path fails unavailable. After fixing either file, restart orchestrator because personas are loaded only during wiring.

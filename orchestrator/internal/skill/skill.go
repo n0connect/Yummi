@@ -9,10 +9,12 @@
 package skill
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,11 +25,103 @@ import (
 
 // Skill is one declarative playbook.
 type Skill struct {
-	Name        string   `yaml:"name" json:"name"`
-	Description string   `yaml:"description" json:"description"`
-	Triggers    []string `yaml:"triggers" json:"triggers"` // lowercase keywords matched against goal + tools
-	Tools       []string `yaml:"tools" json:"tools"`       // recommended sandbox tools (informational)
-	Knowledge   string   `yaml:"knowledge" json:"knowledge"`
+	SchemaVersion int        `yaml:"schema_version,omitempty" json:"schema_version"`
+	Version       string     `yaml:"version,omitempty" json:"version"`
+	Name          string     `yaml:"name" json:"name"`
+	Description   string     `yaml:"description" json:"description"`
+	Triggers      []string   `yaml:"triggers" json:"triggers"` // lowercase keywords matched against goal + tools
+	Tools         []string   `yaml:"tools" json:"tools"`       // recommended sandbox tools (informational)
+	Knowledge     string     `yaml:"knowledge" json:"knowledge"`
+	References    []string   `yaml:"references,omitempty" json:"references,omitempty"`
+	PlanStepLimit int        `yaml:"plan_step_limit,omitempty" json:"plan_step_limit,omitempty"`
+	Provenance    Provenance `yaml:"provenance,omitempty" json:"provenance"`
+	Digest        string     `yaml:"-" json:"digest"`
+}
+
+// Provenance identifies who supplied a skill and where the reviewed source
+// lives. It is metadata only and never grants execution authority.
+type Provenance struct {
+	Origin string `yaml:"origin,omitempty" json:"origin"` // builtin | operator | auto
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+}
+
+var (
+	skillNamePattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$`)
+	skillVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$`)
+)
+
+// Normalize fills backward-compatible metadata for legacy v0.1 YAML files.
+func Normalize(s Skill) Skill {
+	s.Name = strings.TrimSpace(s.Name)
+	if s.SchemaVersion == 0 {
+		s.SchemaVersion = 1
+	}
+	if strings.TrimSpace(s.Version) == "" {
+		s.Version = "1.0.0"
+	}
+	if strings.TrimSpace(s.Provenance.Origin) == "" {
+		s.Provenance.Origin = "builtin"
+	}
+	s.Digest = digest(s)
+	return s
+}
+
+// Validate enforces the stable declarative skill contract before a skill can
+// enter the live registry. Skills remain knowledge-only: Tools are advisory
+// and every actual command still uses the sandbox execution authority.
+func Validate(s Skill) error {
+	if err := ValidateSchema(s); err != nil {
+		return err
+	}
+	s = Normalize(s)
+	if msg := threatscan.FirstThreatMessage(s.Name+"\n"+s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
+		return fmt.Errorf("skill %s failed threat scan: %s", s.Name, msg)
+	}
+	return nil
+}
+
+// ValidateSchema checks shape/size/version separately from content security.
+// The curator uses this split so a structurally-valid but hostile LLM draft
+// can still be persisted as an audited rejected proposal.
+func ValidateSchema(s Skill) error {
+	s = Normalize(s)
+	if s.SchemaVersion != 1 {
+		return fmt.Errorf("unsupported schema_version %d", s.SchemaVersion)
+	}
+	if !skillNamePattern.MatchString(s.Name) {
+		return fmt.Errorf("invalid skill name %q", s.Name)
+	}
+	if !skillVersionPattern.MatchString(s.Version) {
+		return fmt.Errorf("invalid semantic version %q", s.Version)
+	}
+	if len(s.Triggers) == 0 {
+		return fmt.Errorf("skill %s has no triggers", s.Name)
+	}
+	if len(s.Triggers) > 32 || len(s.Tools) > 32 || len(s.References) > 32 {
+		return fmt.Errorf("skill %s exceeds list limits", s.Name)
+	}
+	if len(s.Description) > 1000 || len(s.Knowledge) > 16000 {
+		return fmt.Errorf("skill %s exceeds content limits", s.Name)
+	}
+	if s.PlanStepLimit < 0 || s.PlanStepLimit > 20 {
+		return fmt.Errorf("skill %s has invalid plan_step_limit %d", s.Name, s.PlanStepLimit)
+	}
+	return nil
+}
+
+func digest(s Skill) string {
+	payload := strings.Join([]string{
+		fmt.Sprint(s.SchemaVersion),
+		s.Name,
+		s.Version,
+		s.Description,
+		strings.Join(s.Triggers, "\x00"),
+		strings.Join(s.Tools, "\x00"),
+		s.Knowledge,
+		strings.Join(s.References, "\x00"),
+		fmt.Sprint(s.PlanStepLimit),
+	}, "\x01")
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(payload)))
 }
 
 // Registry holds the loaded skill set. Safe for concurrent use — Add can be
@@ -41,13 +135,35 @@ type Registry struct {
 // New builds a registry from an explicit skill list (used by tests and by
 // sub-agent scoping).
 func New(skills []Skill) *Registry {
-	return &Registry{skills: skills}
+	r := &Registry{}
+	for _, s := range skills {
+		s = Normalize(s)
+		replaced := false
+		for i := range r.skills {
+			if r.skills[i].Name == s.Name {
+				r.skills[i] = s
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			r.skills = append(r.skills, s)
+		}
+	}
+	return r
 }
 
 // LoadDir loads every *.yaml file in dir as one skill. A file that fails to
 // parse or has no name is skipped with a warning (degraded, never fatal) —
 // consistent with the persona-loading convention.
 func LoadDir(dir string) (*Registry, error) {
+	return LoadDirWithOrigin(dir, "builtin")
+}
+
+// LoadDirWithOrigin loads a directory while preserving provenance declared in
+// each artifact. origin is only used for legacy YAML without provenance, which
+// lets shipped and operator-approved directories retain distinct trust labels.
+func LoadDirWithOrigin(dir, origin string) (*Registry, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("skill: read dir %s: %w", dir, err)
@@ -72,6 +188,17 @@ func LoadDir(dir string) (*Registry, error) {
 			slog.Warn("skill: missing name, skipping", "file", path)
 			continue
 		}
+		if strings.TrimSpace(s.Provenance.Origin) == "" {
+			s.Provenance.Origin = origin
+		}
+		if strings.TrimSpace(s.Provenance.Source) == "" {
+			s.Provenance.Source = path
+		}
+		s = Normalize(s)
+		if err := Validate(s); err != nil {
+			slog.Warn("skill: validation failed, skipping", "file", path, "error", err)
+			continue
+		}
 		// Content-layer fail-closed: a skill's knowledge/description is rendered
 		// verbatim into the step prompt (Render), so a skill file is an injection
 		// vector if it ever comes from an untrusted source. Scan at strict scope
@@ -79,6 +206,17 @@ func LoadDir(dir string) (*Registry, error) {
 		// user-curated, so blocking with a warning is the safe, reviewable choice.
 		if msg := threatscan.FirstThreatMessage(s.Name+"\n"+s.Description+"\n"+s.Knowledge, threatscan.ScopeStrict); msg != "" {
 			slog.Warn("skill: threat pattern in skill content, skipping", "file", path, "reason", msg)
+			continue
+		}
+		duplicate := false
+		for _, existing := range skills {
+			if existing.Name == s.Name {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			slog.Warn("skill: duplicate name, skipping", "file", path, "name", s.Name)
 			continue
 		}
 		skills = append(skills, s)
@@ -105,10 +243,33 @@ func (r *Registry) Add(s Skill) *Registry {
 	if r == nil {
 		return r
 	}
-	r.mu.Lock()
-	r.skills = append(r.skills, s)
-	r.mu.Unlock()
+	if err := r.Upsert(s); err != nil {
+		slog.Warn("skill: add rejected", "name", s.Name, "error", err)
+	}
 	return r
+}
+
+// Upsert validates and atomically activates one version of a named skill.
+// Re-approval replaces the previous version instead of accumulating duplicate
+// prompt blocks in a long-running process.
+func (r *Registry) Upsert(s Skill) error {
+	if r == nil {
+		return fmt.Errorf("skill registry unavailable")
+	}
+	s = Normalize(s)
+	if err := Validate(s); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.skills {
+		if r.skills[i].Name == s.Name {
+			r.skills[i] = s
+			return nil
+		}
+	}
+	r.skills = append(r.skills, s)
+	return nil
 }
 
 // Names returns the names of all loaded skills (stable order).
@@ -208,6 +369,9 @@ func (r *Registry) Render(selected []Skill) string {
 	b.WriteString("SKILLS (relevant playbooks — apply the matching approach):\n")
 	for _, s := range selected {
 		fmt.Fprintf(&b, "- %s: %s\n", s.Name, strings.TrimSpace(s.Knowledge))
+		if s.PlanStepLimit > 0 {
+			fmt.Fprintf(&b, "  Reviewed plan constraint: at most %d step(s).\n", s.PlanStepLimit)
+		}
 	}
 	return b.String()
 }

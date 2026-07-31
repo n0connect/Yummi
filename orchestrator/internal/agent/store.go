@@ -55,12 +55,15 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
 	checkpoint TEXT,
 	tokens_used INTEGER NOT NULL DEFAULT 0,
 	parent_task_id TEXT,
+	finding_records TEXT,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );`
 
 // NewStore creates a task store. db may be nil (in-memory only, for tests).
-// On startup, tasks left in a non-terminal state are marked interrupted.
+// On startup, active top-level tasks are converted to safe, resumable step
+// checkpoints. Active child tasks are stopped so their parent can reconcile
+// the interrupted handoff without double-running side effects.
 func NewStore(db *sql.DB) (*Store, error) {
 	s := &Store{
 		items:        make(map[string]Task),
@@ -76,6 +79,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN checkpoint TEXT`)
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0`)
 		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN parent_task_id TEXT`)
+		_, _ = db.Exec(`ALTER TABLE agent_tasks ADD COLUMN finding_records TEXT`)
 		_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON agent_tasks(session_id)`)
 		_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS agent_activity (
 			id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_id TEXT NOT NULL,
@@ -85,7 +89,9 @@ func NewStore(db *sql.DB) (*Store, error) {
 		if err := s.loadFromDB(); err != nil {
 			return nil, fmt.Errorf("agent load: %w", err)
 		}
-		s.markInterrupted()
+		if err := s.recoverInterrupted(); err != nil {
+			return nil, fmt.Errorf("agent recover interrupted tasks: %w", err)
+		}
 	}
 	return s, nil
 }
@@ -125,10 +131,12 @@ func (s *Store) create(sessionID, goal string, stepBudget int, parentTaskID stri
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	if err := s.persist(task); err != nil {
+		return Task{}, err
+	}
 	s.mu.Lock()
 	s.items[task.ID] = task
 	s.mu.Unlock()
-	s.persist(task)
 	s.publish(task)
 	return task, nil
 }
@@ -176,7 +184,11 @@ func (s *Store) ListBySession(sessionID string, limit int) []Task {
 func cloneTaskSlices(t *Task) {
 	t.Plan = append([]PlanStep(nil), t.Plan...)
 	t.Findings = append([]string(nil), t.Findings...)
+	t.FindingRecords = append([]FindingRecord(nil), t.FindingRecords...)
 	t.ObservationHistory = append([]string(nil), t.ObservationHistory...)
+	t.Checkpoint.RecentCommands = append([]string(nil), t.Checkpoint.RecentCommands...)
+	t.Checkpoint.ExecutedCommands = append([]string(nil), t.Checkpoint.ExecutedCommands...)
+	t.Checkpoint.MemoryObservations = append([]string(nil), t.Checkpoint.MemoryObservations...)
 }
 
 // Transition moves a task to a new status, applying mutate (may be nil) under
@@ -199,9 +211,12 @@ func (s *Store) Transition(id string, to TaskStatus, mutate func(*Task)) error {
 	}
 	t.Status = to
 	t.UpdatedAt = time.Now().Unix()
+	if err := s.persist(t); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.items[id] = t
 	s.mu.Unlock()
-	s.persist(t)
 	s.publish(t)
 	return nil
 }
@@ -217,9 +232,12 @@ func (s *Store) Update(id string, mutate func(*Task)) error {
 	cloneTaskSlices(&t)
 	mutate(&t)
 	t.UpdatedAt = time.Now().Unix()
+	if err := s.persist(t); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.items[id] = t
 	s.mu.Unlock()
-	s.persist(t)
 	s.publish(t)
 	return nil
 }
@@ -262,45 +280,76 @@ func (s *Store) publish(t Task) {
 	}
 }
 
-func (s *Store) markInterrupted() {
+func (s *Store) recoverInterrupted() error {
 	s.mu.Lock()
-	interrupted := make([]Task, 0)
+	defer s.mu.Unlock()
 	for id, t := range s.items {
 		if !t.Status.Terminal() && t.Status != StatusPlanned && t.Status != StatusPaused {
-			t.Status = StatusInterrupted
+			if len(t.Plan) == 0 {
+				t.Status = StatusFailed
+				t.LastError = "orchestrator restarted before planning completed; create a new task"
+			} else if t.ParentTaskID != "" {
+				t.Status = StatusStopped
+				t.LastError = "sub-agent interrupted by orchestrator restart; parent task will reconcile"
+			} else {
+				t.Status = StatusPaused
+				t.LastError = "orchestrator restarted; task recovered at a safe step boundary"
+				t.Checkpoint.CurrentNode = nodeStep
+				t.Checkpoint.ResumeAfterRestart = true
+				t.Checkpoint.LastObservation = Wrap("TASK_RECOVERED",
+					"The orchestrator restarted. An in-flight action may not have completed; verify state before repeating side effects.")
+			}
+			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
 			t.UpdatedAt = time.Now().Unix()
+			if err := s.persist(t); err != nil {
+				return err
+			}
 			s.items[id] = t
-			interrupted = append(interrupted, t)
 		}
 	}
-	s.mu.Unlock()
-	for _, t := range interrupted {
-		s.persist(t)
-	}
+	return nil
 }
 
-func (s *Store) persist(t Task) {
+// Recoverable returns top-level tasks that startup recovery made safe to
+// resume. The returned slice is detached from store-owned backing arrays.
+func (s *Store) Recoverable() []Task {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Task, 0)
+	for _, task := range s.items {
+		if task.Status == StatusPaused && task.Checkpoint.ResumeAfterRestart && task.ParentTaskID == "" {
+			cloneTaskSlices(&task)
+			out = append(out, task)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
+	return out
+}
+
+func (s *Store) persist(t Task) error {
 	if s.db == nil {
-		return
+		return nil
 	}
 	plan, _ := json.Marshal(t.Plan)
 	findings, _ := json.Marshal(t.Findings)
+	findingRecords, _ := json.Marshal(t.FindingRecords)
 	checkpoint, _ := json.Marshal(t.Checkpoint)
 	_, err := s.db.Exec(`
-		INSERT INTO agent_tasks(id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,parent_task_id,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		INSERT INTO agent_tasks(id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,parent_task_id,finding_records,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status, plan=excluded.plan, steps_used=excluded.steps_used,
 			summary=excluded.summary, findings=excluded.findings, question=excluded.question,
 			last_error=excluded.last_error, checkpoint=excluded.checkpoint,
-			tokens_used=excluded.tokens_used, updated_at=excluded.updated_at`,
+			tokens_used=excluded.tokens_used, finding_records=excluded.finding_records, updated_at=excluded.updated_at`,
 		t.ID, t.SessionID, t.Goal, string(t.Status), string(plan), t.StepsUsed,
 		t.StepBudget, t.Summary, string(findings), t.Question, t.LastError,
-		string(checkpoint), t.TokensUsed, nullActStr(t.ParentTaskID), t.CreatedAt, t.UpdatedAt,
+		string(checkpoint), t.TokensUsed, nullActStr(t.ParentTaskID), string(findingRecords), t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
-		slog.Error("agent: persist failed", "task", t.ID, "error", err)
+		return fmt.Errorf("persist task %s: %w", t.ID, err)
 	}
+	return nil
 }
 
 // RecordActivity persists (best-effort) and publishes one activity event.
@@ -395,7 +444,7 @@ func nullActStr(v string) any {
 
 func (s *Store) loadFromDB() error {
 	rows, err := s.db.Query(`
-		SELECT id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,parent_task_id,created_at,updated_at
+		SELECT id,session_id,goal,status,plan,steps_used,step_budget,summary,findings,question,last_error,checkpoint,tokens_used,parent_task_id,finding_records,created_at,updated_at
 		FROM agent_tasks ORDER BY created_at ASC`)
 	if err != nil {
 		return err
@@ -406,10 +455,10 @@ func (s *Store) loadFromDB() error {
 	for rows.Next() {
 		var t Task
 		var status string
-		var plan, findings, summary, question, lastErr, checkpoint, parentTaskID sql.NullString
+		var plan, findings, summary, question, lastErr, checkpoint, parentTaskID, findingRecords sql.NullString
 		if err := rows.Scan(&t.ID, &t.SessionID, &t.Goal, &status, &plan,
 			&t.StepsUsed, &t.StepBudget, &summary, &findings, &question,
-			&lastErr, &checkpoint, &t.TokensUsed, &parentTaskID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&lastErr, &checkpoint, &t.TokensUsed, &parentTaskID, &findingRecords, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			slog.Warn("agent: skipping corrupted row", "error", err)
 			continue
 		}
@@ -426,6 +475,11 @@ func (s *Store) loadFromDB() error {
 		if findings.Valid && findings.String != "" {
 			if err := json.Unmarshal([]byte(findings.String), &t.Findings); err != nil {
 				slog.Warn("agent: findings unmarshal failed", "task", t.ID, "error", err)
+			}
+		}
+		if findingRecords.Valid && findingRecords.String != "" {
+			if err := json.Unmarshal([]byte(findingRecords.String), &t.FindingRecords); err != nil {
+				slog.Warn("agent: finding_records unmarshal failed", "task", t.ID, "error", err)
 			}
 		}
 		if checkpoint.Valid && checkpoint.String != "" && checkpoint.String != "null" {

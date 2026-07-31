@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strings"
 	"testing"
 	"time"
 )
@@ -24,8 +23,8 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.OllamaURL != "" {
 		t.Errorf("expected OllamaURL empty by default, got %s", cfg.OllamaURL)
 	}
-	if cfg.OllamaModel == "" {
-		t.Error("expected a default OllamaModel tag")
+	if cfg.OllamaModel != "qwen3:14b" {
+		t.Errorf("expected default OllamaModel qwen3:14b, got %q", cfg.OllamaModel)
 	}
 	if cfg.TLSDir == "" {
 		t.Error("expected a default TLSDir")
@@ -90,17 +89,27 @@ func TestConfigGatewayTLSOptIn(t *testing.T) {
 	}
 }
 
-func TestConfigTierOverride(t *testing.T) {
+func TestConfigExplicitModelOverridesTier(t *testing.T) {
 	t.Setenv("YUMMI_OLLAMA_TIER", "pro")
-	t.Setenv("YUMMI_OLLAMA_MODEL", "qwen3:4b") // will be overridden by tier
+	t.Setenv("YUMMI_OLLAMA_MODEL", "custom:13b")
 
 	cfg := Load()
 
-	if !strings.Contains(strings.ToLower(cfg.OllamaModel), "14b") {
-		t.Errorf("expected pro tier to map to qwen3:14b, got %s", cfg.OllamaModel)
+	if cfg.OllamaModel != "custom:13b" {
+		t.Errorf("expected explicit model to win, got %s", cfg.OllamaModel)
 	}
 	if cfg.OllamaTier != "pro" {
 		t.Errorf("expected OllamaTier=pro, got %s", cfg.OllamaTier)
+	}
+}
+
+func TestConfigTierSelectsModelWithoutExplicitOverride(t *testing.T) {
+	t.Setenv("YUMMI_OLLAMA_TIER", "lite")
+	t.Setenv("YUMMI_OLLAMA_MODEL", "")
+
+	cfg := Load()
+	if cfg.OllamaModel != "qwen3:4b" {
+		t.Errorf("expected lite tier model, got %s", cfg.OllamaModel)
 	}
 }
 

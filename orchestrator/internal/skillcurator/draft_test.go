@@ -89,3 +89,25 @@ func TestDraftSkillEmptyTrajectoryIsErrorBeforeCallingChat(t *testing.T) {
 		t.Fatal("expected DraftSkill to reject an empty trajectory before calling chat")
 	}
 }
+
+func TestDraftSkillRedactsTargetAndCredentialsBeforeLLM(t *testing.T) {
+	var userPrompt string
+	chat := func(_ context.Context, _, user string) (string, error) {
+		userPrompt = user
+		return `{"name":"safe-generalization","description":"general workflow","triggers":["workflow"],"tools":["curl"],"knowledge":"apply the reviewed workflow without retaining engagement data"}`, nil
+	}
+	traj := sampleTrajectory()
+	traj.Goal = "inspect https://10.20.30.40/admin"
+	traj.Observations = []string{"password=hunter2 token=abc123 from analyst@example.com"}
+	if _, err := DraftSkill(context.Background(), chat, traj); err != nil {
+		t.Fatalf("DraftSkill: %v", err)
+	}
+	for _, secret := range []string{"10.20.30.40", "hunter2", "abc123", "analyst@example.com"} {
+		if strings.Contains(userPrompt, secret) {
+			t.Fatalf("curator prompt leaked %q: %s", secret, userPrompt)
+		}
+	}
+	if !strings.Contains(userPrompt, "<REDACTED>") || !strings.Contains(userPrompt, "<TARGET_URL>") {
+		t.Fatalf("expected explicit redaction markers, got: %s", userPrompt)
+	}
+}

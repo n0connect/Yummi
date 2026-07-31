@@ -13,11 +13,16 @@ import (
 var jsonArtifactPattern = regexp.MustCompile(`['"]\s*,\s*['"]?(rationale|risk_level|requires_approval|target_tool|id|confidence)['"?\s]*:.*$`)
 
 // sanitizeCommand removes JSON metadata that a model may accidentally embed
-// inside the command string, and trims surrounding quotes/whitespace.
+// inside the command string. It only unwraps a quote pair that surrounds the
+// entire command; blindly trimming quote characters corrupts valid commands
+// such as `echo "ready"` into an unterminated shell string.
 func sanitizeCommand(cmd string) string {
 	cmd = jsonArtifactPattern.ReplaceAllString(cmd, "")
-	cmd = strings.Trim(cmd, `"' `)
-	return strings.TrimSpace(cmd)
+	cmd = strings.TrimSpace(cmd)
+	if len(cmd) >= 2 && ((cmd[0] == '"' && cmd[len(cmd)-1] == '"') || (cmd[0] == '\'' && cmd[len(cmd)-1] == '\'')) {
+		cmd = strings.TrimSpace(cmd[1 : len(cmd)-1])
+	}
+	return cmd
 }
 
 // Validator enforces risk classification and approval gating for assistant

@@ -72,7 +72,11 @@ pub enum IpcResponse {
     ///
     /// `verdict` is the egress-mode-aware result ("allow"|"block"|"needs_approval").
     /// `in_scope` is kept for backward compatibility — `true` iff `verdict == "allow"`.
-    ScopeResult { ip: String, in_scope: bool, verdict: String },
+    ScopeResult {
+        ip: String,
+        in_scope: bool,
+        verdict: String,
+    },
     /// Current gateway status.
     Status {
         level: u8,
@@ -103,7 +107,10 @@ pub enum IpcResponse {
     /// Result of ListRules.
     RuleList { rules: Vec<RuleView> },
     /// Result of GetAuditLog.
-    AuditLog { rows: Vec<AuditRowView>, chain_verified: bool },
+    AuditLog {
+        rows: Vec<AuditRowView>,
+        chain_verified: bool,
+    },
     /// Result of GetFingerprintConfig — the gateway's fingerprint-masking settings.
     FingerprintConfig {
         ttl_normalize: Option<u8>,
@@ -117,18 +124,21 @@ pub enum IpcResponse {
     /// match), or "neutral" (no name restriction — defer to the IP-egress flow).
     HostnameResult { host: String, verdict: String },
     /// Result of GetHostnamePolicy — the configured patterns, for operator visibility.
-    HostnamePolicy { allow: Vec<String>, block: Vec<String> },
+    HostnamePolicy {
+        allow: Vec<String>,
+        block: Vec<String>,
+    },
 }
 
 /// Read-only view of a policy rule, returned by ListRules.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleView {
     pub id: String,
-    pub action: String,       // "allow" | "block"
+    pub action: String, // "allow" | "block"
     pub network: String,
     pub description: String,
     pub expires_at: Option<i64>,
-    pub source: String,       // "config" | "agent" | "manual"
+    pub source: String, // "config" | "agent" | "manual"
 }
 
 /// Read-only view of one audit log row, returned by GetAuditLog.
@@ -218,7 +228,11 @@ mod gateway_mgmt_tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: IpcRequest = serde_json::from_str(&json).unwrap();
         match back {
-            IpcRequest::AddManualRule { network, ttl_secs, reason } => {
+            IpcRequest::AddManualRule {
+                network,
+                ttl_secs,
+                reason,
+            } => {
                 assert_eq!(network, "10.0.0.5/32");
                 assert_eq!(ttl_secs, 600);
                 assert_eq!(reason, "emergency access for finding F-12");

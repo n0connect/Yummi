@@ -82,8 +82,15 @@ func threatHoldNode(ctx context.Context, s *GraphState) (string, error) {
 
 		// Process findings associated with this command step.
 		if findings := sanitizeFindings(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
+			// Re-fetch: task was snapshotted before the operator gate wait
+			// above, so its Plan may be stale by now.
+			var records []FindingRecord
+			if fresh, ok := s.store.Get(s.taskID); ok {
+				records = buildFindingRecords(s.pendingAct.FindingsDetail, s.pendingAct.StepID, output, fresh.Plan)
+			}
 			_ = s.store.Update(s.taskID, func(t *Task) {
 				t.Findings = append(t.Findings, findings...)
+				t.FindingRecords = append(t.FindingRecords, records...)
 			})
 			recordTaskFindings(ctx, s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
 			for _, f := range findings {

@@ -4,7 +4,7 @@
 
 Yummi is **five runtime components** working across **three build ecosystems** (Go, Rust, Node/React). This page explains what each component is, why it exists as a *separate* process rather than a library call, and exactly how a command travels from an operator's intent to a real command running against a real target.
 
-If you take away one sentence from this whole page, take this one: **the AI never runs a command. It only ever proposes one, and a component that contains no AI decides whether it is allowed to happen.**
+If you take away one sentence from this whole page, take this one: **the model proposes commands; non-LLM code owns approval state, target checks, execution, and network enforcement.**
 
 ## Table of contents
 
@@ -52,7 +52,7 @@ If you take away one sentence from this whole page, take this one: **the AI neve
 
 Two independent arrows reach `sandbox`, and they do two different jobs: `docker exec` (via `docker-proxy`) is *how a command gets run inside the container*; gateway's `FORWARD` chain is *what that command is allowed to reach once it's running*. The two never substitute for each other — a command still executes even if gateway would eventually block its network target; gateway just stops that specific connection when the command tries to make it.
 
-| # | Component | Language / runtime | What it is allowed to do | What it can *never* do |
+| # | Component | Language / runtime | Primary responsibility | Capability boundary in the shipped stack |
 |---|---|---|---|---|
 | 1 | **orchestrator** | Go binary (built with `CGO_ENABLED=1` for the SQLite driver, so it links against the host's C library — not a fully static binary) | Talk to the LLM, run the agent's state machine, serve the REST/WS API, ask gateway "is this target in scope?" | Open a raw socket to the internet, or write an nftables rule itself |
 | 2 | **gateway** | Rust binary | Install/enforce nftables `FORWARD` rules, decide egress verdicts, hash-chain an audit log | Run a pentest tool, talk to the LLM, know anything about chat/tasks |
@@ -62,11 +62,11 @@ Two independent arrows reach `sandbox`, and they do two different jobs: `docker 
 
 Two **alternative front-ends** talk to that same orchestrator API rather than being separate backends: `desktop/` packages the identical `ui/` React app in a Tauri (Rust) window in place of nginx — same components, same bugs, same fixes, just a native shell whose webview has no capability beyond the loopback API (see [Security Model § Desktop app isolation](security-model.md#desktop-isolation)); and the terminal UI (TUI), a Go binary (`./bin/yummi --tui`), is a from-scratch `bubbletea` client against the same REST/WS surface — see [CLI & TUI](modules/cli-and-tui.md).
 
-> **Why this table matters more than it looks:** every row's "can never do" column is enforced by an *operating-system or container mechanism* (Linux capabilities, a read-only filesystem, an allowlisted API proxy, an isolated Docker network) — not by application code choosing to behave. That distinction is the difference between "the AI was told not to" and "the AI is physically unable to," and it is the whole reason this project exists. See [Security Model](security-model.md) for the full enforcement chain.
+> These are defense-in-depth boundaries, not universal impossibility claims. Linux capabilities, a read-only filesystem, the Docker API proxy, and network topology constrain the normal shipped processes; container-root compromise, host compromise, an `insecure-bridge` run, or operator reconfiguration changes that threat model. See [Security Model](security-model.md) for the enforcement chain and residual limits.
 
 ### docker-proxy — the component most documentation forgets <a id="docker-proxy"></a>
 
-If you've read *any* older internal notes about this project (or a stale copy of this repo), you may see "four components." `docker-proxy` is real, it runs in `docker-compose.yml`, and skipping it in documentation would be actively misleading, because it closes a hole that would otherwise exist: orchestrator needs to run `docker exec` into the sandbox container, and the most obvious way to grant that is mounting `/var/run/docker.sock` straight into the orchestrator container. **Don't do that** — the Docker socket is root-equivalent to the whole host; a container with it mounted can create *any* container with *any* mount, which is a straightforward container-escape primitive.
+`docker-proxy` is a real fifth runtime component in `docker-compose.yml`. It exists because mounting `/var/run/docker.sock` directly into orchestrator would expose a root-equivalent host control surface.
 
 Instead, `docker-proxy` sits between orchestrator and the real socket and is configured (`docker-compose.yml`, `docker-proxy` service) to allow only:
 
@@ -87,7 +87,7 @@ If you're auditing this repository for a security review: this is one of the fir
 
 ## Why separate processes, not one binary <a id="why-separate-processes"></a>
 
-It would be *simpler* to build one Go binary that both talks to the LLM and manages iptables/nftables rules. Yummi deliberately doesn't, for one reason: **process boundaries are the only kind of boundary that survives a crash or a bug.**
+It would be *simpler* to build one Go binary that both talks to the LLM and manages iptables/nftables rules. Yummi separates them so a failure in model-facing Go code does not automatically share the gateway's privileges or mutable state.
 
 Consider what happens if the AI-facing code has a bug — a bad prompt injection, a parsing error, a genuinely malicious jailbreak that gets the model to try something it shouldn't. If firewall logic lives in the *same process*, that bug is one panic, one memory corruption, or one clever function call away from also compromising network policy. If firewall logic lives in a **separate, minimal, memory-safe (Rust) process that installs deny-all rules before it even opens its control socket**, then the AI-facing process crashing, hanging, or being tricked changes nothing about what the sandbox can reach — the rules gateway already installed keep applying whether or not gateway itself is still running.
 
@@ -99,7 +99,7 @@ This is also why gateway is written in **Rust** rather than Go, and why it is de
 
 ```
 yummi_internal (172.20.0.0/24, driver: bridge, internal: true — NO external route)
-  ├─ gateway         172.20.0.2   (also serves as sandbox's DNS + default gateway)
+  ├─ gateway         172.20.0.2   (sandbox's configured default gateway)
   ├─ orchestrator    172.20.0.3
   ├─ ui              172.20.0.4
   ├─ docker-proxy    172.20.0.5
@@ -111,7 +111,7 @@ yummi_external (driver: bridge, normal — has a route to the internet)
   └─ ui
 ```
 
-The load-bearing detail: **`sandbox` is a member of `yummi_internal` only.** Docker Compose's `internal: true` network flag means containers on `yummi_internal` have no gateway-provided route to the outside world at all — not "blocked by a firewall rule that could theoretically be misconfigured," but architecturally absent. The *only* way sandbox traffic reaches anything outside `172.20.0.0/24` is by routing through `gateway` (`172.20.0.2`, which sandbox's entrypoint sets as its default route — see `sandbox/entrypoint.sh`) and then through whatever nftables `FORWARD` rules gateway has installed at that moment. If gateway crashes, sandbox doesn't fail open to the internet — it just has no route anywhere, because `yummi_internal` never had one to begin with. That's fail-closed at two independent layers (Docker network topology *and* nftables), not one.
+The load-bearing detail: **`sandbox` is a member of `yummi_internal` only.** `internal: true` removes Docker's ordinary external gateway. The sandbox entrypoint then deliberately replaces its default route with the multi-homed `gateway` container (`172.20.0.2`), so external packets must traverse gateway's forwarding namespace and nftables rules. If that router disappears, the configured next hop is unavailable rather than transparently falling back to Docker's normal bridge gateway. The opt-in `insecure-bridge` Compose overlay weakens this property by restoring ordinary bridge egress and is documented as a compatibility workaround, not the default posture.
 
 DNS deserves its own callout because it's a common point of confusion: sandbox's `dns:` is set to Cloudflare (`1.1.1.1`, `1.0.0.1`) in `docker-compose.yml`, and orchestrator resolves hostnames through the same resolver (`orchestrator/internal/dnsresolve`) before ever calling gateway. **DNS resolution itself is not a trust boundary** — knowing that `example.com` is `93.184.216.34` grants nothing. The trust boundary is the *connection* to that resolved IP, which still has to cross gateway's `FORWARD` chain. Both sides using the same resolver exists purely so they *agree* on which IP a name means — if orchestrator resolved via one resolver and sandbox via another (e.g. Docker's embedded DNS), a hostname could round-robin to a different IP between the moment orchestrator opens an allow rule and the moment sandbox actually connects, silently reintroducing the exact class of bug this design avoids.
 
@@ -125,20 +125,21 @@ The simplest path — an operator asks for one thing in chat and the model propo
 1. UI  →  POST /api/v1/chat                       {"message": "scan 10.0.0.5 for open ports"}
 2. orchestrator: conductor.Engine.ChatWithHistory() calls the LLM (Ollama)
 3. LLM replies → ChatResponse{ intent: "suggest_command", proposals: [...] }
-4. UI shows a proposal bar; operator clicks Approve
+4. UI shows a proposal bar; in ask_permission the operator clicks Approve (auto resolves it immediately)
 5. POST /api/v1/chat/approve
 6. execution.Store.Enqueue()  →  executor.ProcessFunc drains it
 7. executor.RunScopedCommand():
-     a. scope.ExtractTarget(command)  →  "10.0.0.5"
-     b. gateway.CheckEgress("10.0.0.5")  →  verdict: allow | block | needs_approval
-     c. if allow: gateway.AddTemporaryRule("10.0.0.5/32", ttl=3600s)  (nftables rule opens)
-     d. sandbox.Bridge.Exec()  →  `docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"`
+     a. scope.ExtractTargets(command)  →  ["10.0.0.5"]
+     b. for hostnames: gateway.CheckHostname(), then Cloudflare DNS resolution
+     c. gateway.CheckEgress(IP) for every resolved/explicit target  → allow | block | needs_approval
+     d. only if all allow: gateway.AddTemporaryRule("10.0.0.5/32", ttl=3600s)
+     e. sandbox.Bridge.Exec()  →  `docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"`
 8. WS /ws/events fires execution.status events the whole way through (queued → running → done)
 ```
 
-Step 7d is a single blocking call — `sandbox.Bridge.Exec` buffers the command's entire stdout/stderr and returns only once it exits, there is no incremental output streaming. For a command that legitimately runs for a long time (a full `nikto`, a slow `nmap`), that would mean total silence between the "running" event and the eventual "completed" one, indistinguishable from a hang from the operator's chair. `execution.Store.runWithHeartbeat` (`orchestrator/internal/execution/store.go`) closes that gap: while step 7d is in flight, it republishes the same `"execution.running"` event every few seconds with `ElapsedSecs` set, so the UI can show live elapsed time instead of a frozen spinner. It is not real output streaming (the actual bytes still only arrive at the end) — just a heartbeat proving the command hasn't stalled.
+Step 7e is a single blocking call — `sandbox.Bridge.Exec` retains at most 1 MiB from each stdout/stderr stream and returns only once the process exits; there is no incremental output streaming. For a command that legitimately runs for a long time, `execution.Store.runWithHeartbeat` republishes `"execution.running"` every few seconds with `ElapsedSecs` set. This is liveness feedback, not output streaming; the retained bytes arrive only at completion.
 
-Step 7 is where every real decision happens, and it is the **only** function in the whole Go codebase that is allowed to make it — `executor.RunScopedCommand` (`orchestrator/internal/executor/executor.go`). Every code path that runs a pentest command, whether it came from a one-shot chat approval or from deep inside the agent's task loop, converges on this one function. That's a deliberate invariant, not an accident of how the code happened to get organized — see [Sandbox Execution](agent/sandbox-execution.md) for why it's structured this way and what would go wrong if it weren't.
+`executor.RunScopedCommand` is the shared decision point for scheduled commands from chat, agent tasks, and direct exec. The human PTY terminal is the documented exception: it reaches the same sandbox but does not run pre-exec target extraction. See [Sandbox Execution](agent/sandbox-execution.md).
 
 ---
 
@@ -162,10 +163,10 @@ The graph is the real engine here, and it's detailed in full — every node, eve
 
 ## Data flow: the approval gate <a id="flow-approval-gate"></a>
 
-Both flows above can hit the same gate — any command whose risk classification is medium or higher:
+Command approval is mode-driven. In `ask_permission`, every agent-task command pauses; in `auto`, agent-task commands proceed without this gate. Risk classification remains visible metadata and the single-command validator still computes `requires_approval`, but the UI's `auto` mode resolves arriving proposals immediately through the same approval endpoint.
 
 ```
-risk ≥ medium  →  gate.Request() blocks the task's own goroutine (not the whole server)
+ask_permission → gate.Request() blocks the task's own goroutine (not the whole server)
               →  task/proposal status becomes "awaiting_approval"
               →  WS pushes { pending_command, pending_risk } to every connected UI
               →  operator resolves: POST /api/v1/tasks/{id}/approve  (agent path)
@@ -173,7 +174,7 @@ risk ≥ medium  →  gate.Request() blocks the task's own goroutine (not the wh
               →  gate.Resolve(verdict)  →  the blocked goroutine wakes up and resumes
 ```
 
-The gate (`orchestrator/internal/agent/gate.go`) is intentionally *just* a Go channel wrapped in a small struct — there is no message queue, no polling, no separate approval microservice. A proposal that nobody answers doesn't block forever, though: `conductor.ApprovalStore` runs a 20-minute TTL purger independently of the gate, so a stale proposal a UI never resolved eventually expires rather than sitting as a landmine for someone to accidentally approve a week later.
+The agent-task gate (`orchestrator/internal/agent/gate.go`) is intentionally *just* a Go channel wrapped in a small struct — there is no message queue, polling, or separate approval microservice. Single-command chat proposals use `conductor.ApprovalStore`; its 20-minute TTL purger removes stale proposals a UI never resolved.
 
 ---
 

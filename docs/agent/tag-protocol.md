@@ -50,11 +50,11 @@ Every reply the model sends back is expected to begin with one control tag on it
 
 | Tag | Payload | Meaning |
 |---|---|---|
-| `RUN_COMMAND` | `{"command","step_id","rationale","risk_level","findings"?}` | Run a shell command |
+| `RUN_COMMAND` | `{"command","step_id","rationale","risk_level","findings"?,"findings_detail"?}` | Run a shell command |
 | `UPDATE_PLAN` | `{"steps":[...],"reason"}` | Revise the plan |
-| `FINISH` | `{"summary","findings"}` | Goal achieved — see the note below about grounding findings |
+| `FINISH` | `{"summary","findings"?,"findings_detail"?}` | Goal achieved — see the note below about grounding findings |
 | `HANDOFF` | `{"role","subgoal"}` or `{"handoffs":[{"role","subgoal"},...]}` | Delegate to one specialist, or several concurrently |
-| `REMEMBER` | `{"key","value"}` | Persist a structured, never-forgotten memory |
+| `REMEMBER` | `{"key","value"}` | Persist session-scoped structured memory until an operator explicitly forgets it |
 | `ASK_OPERATOR` | `{"question"}` | Blocked; need a human |
 | `SEND_FULL` | `{}` | Resend the last truncated output in full |
 | `CONTINUE` | `{}` | Keep waiting / proceed (reply to a consult) |

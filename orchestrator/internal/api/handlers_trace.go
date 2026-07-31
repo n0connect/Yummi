@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,6 +20,28 @@ func qLimit(r *http.Request, def int) int {
 		return clampLimit(v)
 	}
 	return def
+}
+
+// HandleDeleteContext explicitly forgets one persistent memory entry.
+// DELETE /api/v1/sessions/{sessionID}/context/{key}
+func HandleDeleteContext(ks *knowledge.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ks == nil {
+			writeError(w, http.StatusServiceUnavailable, "knowledge store unavailable", nil)
+			return
+		}
+		sessionID := chi.URLParam(r, "sessionID")
+		key := strings.TrimSpace(chi.URLParam(r, "key"))
+		if !isValidSessionID(sessionID) || key == "" || len([]rune(key)) > 200 {
+			writeError(w, http.StatusBadRequest, "invalid session id or context key", nil)
+			return
+		}
+		if err := ks.DeleteContext(r.Context(), sessionID, key); err != nil {
+			writeError(w, http.StatusNotFound, "context not found", err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // HandleListActivity returns a session's legible activity trace.

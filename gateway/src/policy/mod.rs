@@ -10,9 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ipnet::IpNet;
 
-use crate::config::ScopeConfig;
 use self::hostname::{HostnameList, HostnamePolicy, HostnameVerdict};
 use self::rules::{EgressMode, PolicyRule, RuleAction, RuleSource};
+use crate::config::ScopeConfig;
 
 /// Policy decision for a traffic flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,7 +328,12 @@ impl PolicyEngine {
 
     /// Add a temporary allow rule with TTL (from IPC request).
     /// Returns the rule ID and expiration timestamp.
-    pub fn add_temporary_allow(&self, net: IpNet, ttl_secs: u64, description: String) -> (String, i64) {
+    pub fn add_temporary_allow(
+        &self,
+        net: IpNet,
+        ttl_secs: u64,
+        description: String,
+    ) -> (String, i64) {
         self.add_allow_rule("temp", RuleSource::Agent, net, ttl_secs, description)
     }
 
@@ -455,7 +460,11 @@ mod tests {
 
     #[test]
     fn test_always_blocks_loopback_even_with_no_block_rule_configured() {
-        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() }; // no block rules at all
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        }; // no block rules at all
         let engine = PolicyEngine::new(&scope);
         let (decision, reason) = engine.evaluate("127.0.0.1".parse().unwrap());
         assert_eq!(decision, Decision::Block);
@@ -478,10 +487,20 @@ mod tests {
 
     #[test]
     fn test_always_blocks_multicast_and_unspecified() {
-        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() };
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        };
         let engine = PolicyEngine::new(&scope);
-        assert_eq!(engine.evaluate("224.0.0.1".parse().unwrap()).0, Decision::Block);
-        assert_eq!(engine.evaluate("0.0.0.0".parse().unwrap()).0, Decision::Block);
+        assert_eq!(
+            engine.evaluate("224.0.0.1".parse().unwrap()).0,
+            Decision::Block
+        );
+        assert_eq!(
+            engine.evaluate("0.0.0.0".parse().unwrap()).0,
+            Decision::Block
+        );
     }
 
     // Regression: found via live testing. An operator adds a manual allow rule
@@ -510,10 +529,18 @@ mod tests {
         assert_eq!(decision, Decision::Block);
         assert_eq!(reason, "blocked_range");
 
-        engine.add_manual_allow("172.20.0.6/32".parse().unwrap(), 600, "authorized test target".to_string());
+        engine.add_manual_allow(
+            "172.20.0.6/32".parse().unwrap(),
+            600,
+            "authorized test target".to_string(),
+        );
 
         let (decision, reason) = engine.evaluate("172.20.0.6".parse().unwrap());
-        assert_eq!(decision, Decision::Allow, "manual allow rule must override a broader config block");
+        assert_eq!(
+            decision,
+            Decision::Allow,
+            "manual allow rule must override a broader config block"
+        );
         assert_eq!(reason, "manual_override");
 
         // A different address in the same blocked range, NOT covered by the
@@ -537,10 +564,18 @@ mod tests {
             ..Default::default()
         };
         let engine = PolicyEngine::new(&scope);
-        engine.add_temporary_allow("172.20.0.6/32".parse().unwrap(), 600, "agent-requested".to_string());
+        engine.add_temporary_allow(
+            "172.20.0.6/32".parse().unwrap(),
+            600,
+            "agent-requested".to_string(),
+        );
 
         let (decision, _) = engine.evaluate("172.20.0.6".parse().unwrap());
-        assert_eq!(decision, Decision::Block, "an agent-sourced rule must never override an operator block");
+        assert_eq!(
+            decision,
+            Decision::Block,
+            "an agent-sourced rule must never override an operator block"
+        );
     }
 
     // A manual rule that is BROADER than (or only partially overlaps) the
@@ -558,7 +593,11 @@ mod tests {
         engine.add_manual_allow("172.0.0.0/8".parse().unwrap(), 600, "too broad".to_string());
 
         let (decision, _) = engine.evaluate("172.20.0.6".parse().unwrap());
-        assert_eq!(decision, Decision::Block, "a broader manual rule must not override a narrower block");
+        assert_eq!(
+            decision,
+            Decision::Block,
+            "a broader manual rule must not override a narrower block"
+        );
     }
 
     #[test]
@@ -620,7 +659,11 @@ mod tests {
     // egress round-trip relies on.
     #[test]
     fn test_ask_mode_needs_approval_with_empty_allowlist() {
-        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() };
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        };
         let engine = PolicyEngine::new(&scope); // default_allow = false
         engine.set_egress_mode(EgressMode::Ask);
         assert_eq!(
@@ -653,10 +696,18 @@ mod tests {
 
     #[test]
     fn test_expired_rule_cleanup() {
-        let scope = ScopeConfig { allow: vec![], block: vec![], ..Default::default() };
+        let scope = ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        };
         let engine = PolicyEngine::new(&scope);
 
-        engine.add_temporary_allow("192.168.1.0/24".parse().unwrap(), 1, "Expires soon".to_string());
+        engine.add_temporary_allow(
+            "192.168.1.0/24".parse().unwrap(),
+            1,
+            "Expires soon".to_string(),
+        );
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         let removed = engine.cleanup_expired();
@@ -685,12 +736,20 @@ mod tests {
             handles.push(thread::spawn(move || {
                 // 10.0.0.1 is explicitly blocked — must always be Block
                 let (d, _) = e.evaluate("10.0.0.1".parse().unwrap());
-                assert_eq!(d, Decision::Block, "blocked IP must stay blocked under concurrency");
+                assert_eq!(
+                    d,
+                    Decision::Block,
+                    "blocked IP must stay blocked under concurrency"
+                );
             }));
         }
 
         // Simultaneously add a temporary allow for 10.0.0.0/8 (which includes 10.0.0.1)
-        engine.add_temporary_allow("10.0.0.0/8".parse().unwrap(), 60, "concurrent test".to_string());
+        engine.add_temporary_allow(
+            "10.0.0.0/8".parse().unwrap(),
+            60,
+            "concurrent test".to_string(),
+        );
 
         for h in handles {
             h.join().unwrap();
@@ -699,25 +758,43 @@ mod tests {
 
     #[test]
     fn test_add_manual_allow_tags_source_manual() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        });
         let (rule_id, _expires) = engine.add_manual_allow(
             "10.0.0.5/32".parse().unwrap(),
             600,
             "operator-supplied reason".to_string(),
         );
         let rules = engine.list_rules();
-        let rule = rules.iter().find(|r| r.id == rule_id).expect("rule present");
+        let rule = rules
+            .iter()
+            .find(|r| r.id == rule_id)
+            .expect("rule present");
         assert_eq!(rule.source, RuleSource::Manual);
         assert_eq!(rule.description, "operator-supplied reason");
     }
 
     #[test]
     fn test_list_rules_excludes_expired() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
-        engine.add_manual_allow("10.0.0.1/32".parse().unwrap(), 0, "expires immediately".to_string());
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        });
+        engine.add_manual_allow(
+            "10.0.0.1/32".parse().unwrap(),
+            0,
+            "expires immediately".to_string(),
+        );
         std::thread::sleep(std::time::Duration::from_secs(1));
         let rules = engine.list_rules();
-        assert!(rules.is_empty(), "expired rule should not appear in list_rules");
+        assert!(
+            rules.is_empty(),
+            "expired rule should not appear in list_rules"
+        );
     }
 
     #[test]
@@ -728,16 +805,30 @@ mod tests {
 
     #[test]
     fn test_check_egress_block_mode_blocks_external() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        });
         // default mode is Block
-        assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Block);
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::Block
+        );
     }
 
     #[test]
     fn test_check_egress_allow_mode_allows_external() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        });
         engine.set_egress_mode(EgressMode::Allow);
-        assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Allow);
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::Allow
+        );
     }
 
     #[test]
@@ -745,12 +836,19 @@ mod tests {
         // A bare hostname (non-IP) is decided purely by the egress mode, never
         // an "invalid IP" error — this is what makes `ping google.com` work in
         // Allow mode and queue for approval in Ask mode.
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        });
         assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Block); // default
         engine.set_egress_mode(EgressMode::Allow);
         assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Allow);
         engine.set_egress_mode(EgressMode::Ask);
-        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::NeedsApproval);
+        assert_eq!(
+            engine.check_egress_unresolved(),
+            EgressVerdict::NeedsApproval
+        );
     }
 
     #[test]
@@ -778,12 +876,19 @@ mod tests {
         };
         let engine = PolicyEngine::new(&scope);
         engine.set_egress_mode(EgressMode::Ask);
-        assert_eq!(engine.check_egress("8.8.8.8".parse().unwrap()), EgressVerdict::Allow);
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::Allow
+        );
     }
 
     #[test]
     fn test_check_egress_always_blocked_floor_wins_in_all_modes() {
-        let engine = PolicyEngine::new(&ScopeConfig { allow: vec![], block: vec![], ..Default::default() });
+        let engine = PolicyEngine::new(&ScopeConfig {
+            allow: vec![],
+            block: vec![],
+            ..Default::default()
+        });
         for mode in [EgressMode::Block, EgressMode::Allow, EgressMode::Ask] {
             engine.set_egress_mode(mode);
             assert_eq!(
@@ -805,7 +910,9 @@ mod tests {
         engine.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
         let rules = engine.list_rules();
         assert_eq!(rules.len(), 2);
-        assert!(rules.iter().any(|r| r.source == RuleSource::Config && r.action == RuleAction::Block));
+        assert!(rules
+            .iter()
+            .any(|r| r.source == RuleSource::Config && r.action == RuleAction::Block));
         assert!(rules.iter().any(|r| r.source == RuleSource::Manual));
     }
 }

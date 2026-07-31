@@ -20,14 +20,15 @@ src/
   entities/       Shared TypeScript types (AgentTask, ExecutionRecord, etc.)
   features/       Self-contained feature modules
     assistant/    Chat panel — message rendering, proposal bar
-    chat/          Chat event stream hook (useChatStream — WS, jittered backoff)
+    chat/          Chat/event stream hook (useChatStream — WS, jittered backoff)
     tasks/        Agent task tracker (live plan steps, approval gate)
     trace/         TRACE tab — activity timeline + Findings/Tactics/Context/Skills/Roles
     gateway/       GATEWAY tab — status, rules, egress mode, tamper-evident audit log
     terminal/     xterm.js PTY panel
     debuglog/     SSE log stream panel
-    events/       WebSocket event hooks (useExecutionEvents)
     health/       Health page widgets
+    sessions/     Session rail and session mutations
+    skills/       Pending-skill review hooks
     statusbar/    Top nav: Agent | Bash | Trace | Logs | Gateway | Health
     system/       System status cards
   pages/          Route-level page wrappers
@@ -35,10 +36,10 @@ src/
   shared/
     api/          fetchJSON wrapper, WebSocket helpers
     components/   Generic UI primitives
-  test/setup.ts   jsdom stubs (scrollIntoView · ResizeObserver · EventSource · xterm) — NOT app mocks
+  test/setup.ts   jsdom stubs for scrollIntoView and ResizeObserver
 ```
 
-> There are **no mocks of app behavior**: `test/setup.ts` only stubs browser-only APIs that jsdom lacks (so xterm.js and the event streams load under Vitest). Tests exercise real components.
+> `test/setup.ts` only supplies two browser APIs missing from jsdom. Individual tests may script network/browser boundaries, while component and hook logic remains the code under test.
 
 ## Development
 
@@ -60,24 +61,20 @@ cd ui && npm test
 ## Adding a new feature
 
 1. Create `src/features/<name>/` with a component, optional CSS, and optional hooks
-2. Export from `src/features/<name>/index.ts`
-3. Wire into a page in `src/pages/` or add a nav entry in `StatusBar.tsx`
-4. Use CSS custom properties from `app.css` for theming — never hardcode colors
+2. Wire it into a page under `src/pages/`, or add a route/nav entry in `app/App.tsx` and `features/statusbar/StatusBar.tsx`
+3. Use the semantic CSS custom properties from `app/app.css` for theming
 
 ## Design tokens (app.css)
 
 | Token | Value | Use |
 |---|---|---|
-| `--bg` | `#0a0c0e` | Page background |
-| `--surface` | `#111315` | Card/panel surface |
-| `--border` | `#1e2124` | Borders |
+| `--bg-base` | `#0a0c0e` | App background |
+| `--bg-primary` / `--bg-secondary` | `#0e1113` / `#14181b` | Panel canvases and surfaces |
+| `--border` | `rgba(255,255,255,0.08)` | Borders |
 | `--accent` | `#2dd4bf` | Phosphor teal — primary interactive |
-| `--text` | `#e2e4e7` | Body text |
-| `--text-muted` | `#6b7280` | Secondary text |
-| `--green` | `#4ade80` | Success/completed |
-| `--yellow` | `#fbbf24` | Warning/medium risk |
-| `--orange` | `#f97316` | High risk |
-| `--red` | `#f87171` | Critical/error |
+| `--text-primary` | `#f4f7f6` | Primary text |
+| `--text-secondary` / `--text-muted` | translucent | Secondary and muted text |
+| `--green` / `--yellow` / `--orange` / `--red` | semantic palette | State, risk, and error colors |
 
 ## API contract
 
@@ -89,7 +86,7 @@ The UI communicates with orchestrator via:
 | `/api/v1/chat/approve` | POST | Approve a proposal by ID |
 | `/api/v1/tasks/{id}` | GET | Poll task state |
 | `/api/v1/tasks/{id}/approve` | POST | Approve agent gate |
-| `/ws/events` | WS | Execution + task status events |
+| `/ws/events` | WS | Execution, task, agent-activity, and gateway status events |
 | `/ws/terminal` | WS | PTY terminal stream |
 | `/api/v1/system/logs` | SSE | Structured log stream |
 

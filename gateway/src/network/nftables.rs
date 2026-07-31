@@ -40,12 +40,18 @@ fn rand_byte() -> u8 {
     // Crate already depends on no extra RNG crate for this one-shot, best-effort
     // value — nanosecond-jitter mixing is sufficient since this is a fingerprint
     // mask, not a cryptographic secret.
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
     (nanos ^ nanos.rotate_left(13)) as u8
 }
 
 fn format_mac(mac: [u8; 6]) -> String {
-    mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
+    mac.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// Linux nftables-based network controller.
@@ -55,38 +61,38 @@ fn format_mac(mac: [u8; 6]) -> String {
 /// - `yummi_nat`:     POSTROUTING hook — masquerades sandbox's packets so they
 ///   appear from the gateway container when forwarded.
 pub struct NftablesController {
-    table_name:    String,
+    table_name: String,
     forward_chain: String,
-    nat_chain:     String,
-    sandbox_ip:    String,
-    allow_cidrs:   Vec<String>,
-    block_cidrs:   Vec<String>,
+    nat_chain: String,
+    sandbox_ip: String,
+    allow_cidrs: Vec<String>,
+    block_cidrs: Vec<String>,
     ttl_normalize: Option<u8>,
     mac_randomization: bool,
-    interface:     String,
-    active:        AtomicBool,
+    interface: String,
+    active: AtomicBool,
     /// The controller's OWN copy of the operator egress mode, used purely for
     /// ruleset generation. The IPC handler keeps it in sync with PolicyEngine
     /// by calling both `PolicyEngine::set_egress_mode` and
     /// `NftablesController::set_egress_mode` together. Defaults to `Block`
     /// (fail-closed) and does not persist across restarts.
-    egress_mode:   RwLock<EgressMode>,
+    egress_mode: RwLock<EgressMode>,
 }
 
 impl NftablesController {
     pub fn new(cfg: &GatewayConfig) -> Self {
         Self {
-            table_name:    cfg.network.table_name.clone(),
+            table_name: cfg.network.table_name.clone(),
             forward_chain: cfg.network.forward_chain.clone(),
-            nat_chain:     cfg.network.nat_chain.clone(),
-            sandbox_ip:    cfg.network.sandbox_ip.clone(),
-            allow_cidrs:   cfg.scope.allow.iter().map(|n| n.to_string()).collect(),
-            block_cidrs:   cfg.scope.block.iter().map(|n| n.to_string()).collect(),
+            nat_chain: cfg.network.nat_chain.clone(),
+            sandbox_ip: cfg.network.sandbox_ip.clone(),
+            allow_cidrs: cfg.scope.allow.iter().map(|n| n.to_string()).collect(),
+            block_cidrs: cfg.scope.block.iter().map(|n| n.to_string()).collect(),
             ttl_normalize: cfg.network.ttl_normalize,
             mac_randomization: cfg.network.mac_randomization,
-            interface:     cfg.network.interface.clone(),
-            active:        AtomicBool::new(false),
-            egress_mode:   RwLock::new(EgressMode::Block),
+            interface: cfg.network.interface.clone(),
+            active: AtomicBool::new(false),
+            egress_mode: RwLock::new(EgressMode::Block),
         }
     }
 
@@ -200,14 +206,26 @@ impl NftablesController {
     ///
     /// Uses `nft add element` which is atomic and does not flush existing rules.
     /// The set has `flags interval, timeout` so both host IPs and subnets work.
-    pub fn add_allowed_target(&self, net: &ipnet::IpNet, ttl_secs: u64) -> Result<(), NetworkError> {
+    pub fn add_allowed_target(
+        &self,
+        net: &ipnet::IpNet,
+        ttl_secs: u64,
+    ) -> Result<(), NetworkError> {
         let (element, set_name) = match net {
             ipnet::IpNet::V4(n) => {
-                let el = if n.prefix_len() == 32 { n.addr().to_string() } else { n.to_string() };
+                let el = if n.prefix_len() == 32 {
+                    n.addr().to_string()
+                } else {
+                    n.to_string()
+                };
                 (el, "allowed_targets")
             }
             ipnet::IpNet::V6(n) => {
-                let el = if n.prefix_len() == 128 { n.addr().to_string() } else { n.to_string() };
+                let el = if n.prefix_len() == 128 {
+                    n.addr().to_string()
+                } else {
+                    n.to_string()
+                };
                 (el, "allowed_targets_v6")
             }
         };
@@ -401,7 +419,10 @@ impl NftablesController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{IpcConfig, LoggingConfig, NetworkConfig, GatewayConfig, PolicyConfig, ScopeConfig, WatchdogConfig};
+    use crate::config::{
+        GatewayConfig, IpcConfig, LoggingConfig, NetworkConfig, PolicyConfig, ScopeConfig,
+        WatchdogConfig,
+    };
 
     fn test_config() -> GatewayConfig {
         GatewayConfig {
@@ -422,16 +443,19 @@ mod tests {
                 audit_db: ":memory:".to_string(),
             },
             ipc: IpcConfig {
-                socket_path: std::env::temp_dir().join("yummi-test.sock").to_string_lossy().to_string(),
+                socket_path: std::env::temp_dir()
+                    .join("yummi-test.sock")
+                    .to_string_lossy()
+                    .to_string(),
                 socket_mode: 0o600,
             },
             watchdog: WatchdogConfig::default(),
             network: NetworkConfig {
-                table_name:    "yummi_gateway".to_string(),
+                table_name: "yummi_gateway".to_string(),
                 forward_chain: "yummi_forward".to_string(),
-                nat_chain:     "yummi_nat".to_string(),
-                interface:     String::new(),
-                sandbox_ip:    "172.20.0.10".to_string(),
+                nat_chain: "yummi_nat".to_string(),
+                interface: String::new(),
+                sandbox_ip: "172.20.0.10".to_string(),
                 ttl_normalize: None,
                 mac_randomization: false,
             },
@@ -467,7 +491,10 @@ mod tests {
 
         let block_pos = ruleset.find("127.0.0.0/8").unwrap();
         let allow_pos = ruleset.find("10.0.0.0/24").unwrap();
-        assert!(block_pos < allow_pos, "block rules must precede allow rules");
+        assert!(
+            block_pos < allow_pos,
+            "block rules must precede allow rules"
+        );
     }
 
     #[test]
@@ -516,7 +543,11 @@ mod tests {
     fn test_random_mac_is_locally_administered_and_unicast() {
         for _ in 0..20 {
             let mac = random_locally_administered_mac();
-            assert_eq!(mac[0] & 0b0000_0010, 0b0000_0010, "locally-administered bit must be set");
+            assert_eq!(
+                mac[0] & 0b0000_0010,
+                0b0000_0010,
+                "locally-administered bit must be set"
+            );
             assert_eq!(mac[0] & 0b0000_0001, 0, "unicast bit must be clear");
         }
     }
@@ -611,7 +642,8 @@ mod tests {
         );
         // Dynamic set (IPC-opened temporary/manual rules) must not be referenced either.
         assert!(
-            !ruleset.contains("@allowed_targets accept") && !ruleset.contains("@allowed_targets_v6 accept"),
+            !ruleset.contains("@allowed_targets accept")
+                && !ruleset.contains("@allowed_targets_v6 accept"),
             "Block mode must not emit dynamic allowed_targets accept rules:\n{ruleset}"
         );
         // The block (drop) list and the always-on DNS allowance are unaffected.

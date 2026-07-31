@@ -20,7 +20,46 @@ const (
 	// operators who need it shorter (fast dev iteration) or longer still.
 	defaultTimeout = 10 * time.Minute
 	maxOutputBytes = 1 << 20 // 1 MiB
+	truncationMark = "\n... [truncated]"
 )
+
+// cappedBuffer accepts the complete writer contract while retaining at most
+// limit bytes. This bounds memory during execution instead of first buffering
+// an unbounded stream and truncating it after the process exits.
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newCappedBuffer(limit int) *cappedBuffer {
+	if limit < 0 {
+		limit = 0
+	}
+	b := &cappedBuffer{limit: limit}
+	b.buf.Grow(min(limit, 4096))
+	return b
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		keep := min(remaining, n)
+		_, _ = b.buf.Write(p[:keep])
+	}
+	if n > remaining {
+		b.truncated = true
+	}
+	return n, nil
+}
+
+func (b *cappedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + truncationMark
+	}
+	return b.buf.String()
+}
 
 // Bridge provides command execution inside the sandbox Docker container.
 type Bridge struct {
@@ -75,11 +114,10 @@ func (b *Bridge) Exec(ctx context.Context, command string) (*Result, error) {
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 
-	var stdout, stderr bytes.Buffer
-	stdout.Grow(4096)
-	stderr.Grow(1024)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCappedBuffer(maxOutputBytes)
+	stderr := newCappedBuffer(maxOutputBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	start := time.Now()
 	err := cmd.Run()
@@ -111,8 +149,8 @@ func (b *Bridge) Exec(ctx context.Context, command string) (*Result, error) {
 	return &Result{
 		Command:  command,
 		ExitCode: exitCode,
-		Stdout:   truncate(stdout.String(), maxOutputBytes),
-		Stderr:   truncate(stderr.String(), maxOutputBytes),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
 		Duration: elapsed,
 	}, nil
 }
@@ -143,11 +181,4 @@ func (b *Bridge) SetTimeout(d time.Duration) {
 	if d > 0 {
 		b.timeout = d
 	}
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "\n... [truncated]"
 }

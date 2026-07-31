@@ -15,6 +15,7 @@ The agent's task loop is implemented as an explicit graph state machine in `orch
 - [Context compaction: how `summarize` actually works](#summarize-detail)
 - [Checkpointing and crash recovery](#checkpointing)
 - [The `finish` node's synthesis fallback](#finish-node)
+- [Finding verification: verdicts, not assertions](#finding-verification)
 - [Content-layer defense inside the graph](#content-defense)
 
 ---
@@ -48,12 +49,12 @@ Every node function has the same signature — `func(ctx, *GraphState) (nextEdge
 
 | Node | File | What it does |
 |---|---|---|
-| **`step`** | `node_step.go` | The core reasoning node — renders the full task state (plan, observations, findings, skills, memory) into a fresh prompt and asks the LLM what to do next. Every step re-renders from scratch rather than relying on conversation history, specifically so a small model like `qwen3:8b` never loses context to a truncated history window. |
+| **`step`** | `node_step.go` | The core reasoning node — renders the full task state (plan, observations, findings, skills, memory) into a fresh prompt and asks the LLM what to do next. Every step re-renders from scratch rather than relying on conversation history, so a local model does not lose state to a truncated history window. |
 | **`tool`** | `node_tool.go` | Runs a validated command via the executor chain (never directly) and calls `observeResult` to interpret what came back. |
 | **`consult`** | `node_consult.go` | A lighter-weight "check in with the model" path for ambiguous situations (a long-running command, an abnormal repetition pattern) that don't yet warrant escalating all the way to the operator. |
 | **`retry`** | `node_lifecycle.go` | Backs off and retries after an LLM call itself fails (network error, malformed response) — distinct from a *command* failing, which is handled entirely differently (see [Failure escalation](#failure-escalation)). |
 | **`summarize`** | `node_lifecycle.go` | Compresses observation history into a running summary when the token budget is under pressure — see [Context compaction](#summarize-detail) below. |
-| **`approval`** | `node_lifecycle.go` | Blocks on the operator gate for a medium+ risk command, then runs it itself on approval (folding the exec + observe steps in, rather than bouncing back to `tool`). |
+| **`approval`** | `node_lifecycle.go` | In `ask_permission` mode, blocks on the operator gate for every command, then runs it on approval (folding exec + observe into the node). `auto` bypasses this command gate. |
 | **`threat_hold`** | `node_threat.go` | A second, content-layer approval gate — pauses when a command's *output* (not the command itself) trips a threatscan pattern. See [Content-layer defense](#content-defense). |
 | **`finish`** | `node_lifecycle.go` | Terminal. Ends the task as completed, failed, or stopped — with a synthesis fallback described [below](#finish-node). |
 | **`ask`** | `node_lifecycle.go` | Terminal. Pauses the task with an operator-facing question; the task stays alive (it can be resumed) rather than ending. |
@@ -110,13 +111,14 @@ remember    → ok → step
 
 ## Walking one real turn <a id="one-turn"></a>
 
-Concretely, "scan this host, then check for common web vulnerabilities" might walk like this:
+Concretely, "scan this host, then check for common web vulnerabilities" in `ask_permission` mode might walk like this:
 
 ```
 step   → model replies RUN_COMMAND (nmap -sV) → edge run_command  → tool
-tool   → command succeeds, no approval needed  → edge ok          → step
+tool   → command needs mode-driven approval    → edge requires_approval → approval
+approval → operator approves → nmap runs, observed inline → edge approved → step
 step   → model replies RUN_COMMAND (nikto)      → edge run_command → tool
-tool   → nikto's classified risk is "medium"    → edge requires_approval → approval
+tool   → command needs mode-driven approval     → edge requires_approval → approval
 approval → operator approves → command runs, observed inline → edge approved → step
 step   → model replies FINISH with a summary + findings → edge finish → finish
 ```
@@ -145,17 +147,41 @@ The assembled text (previous running summary, if any, plus the newly-windowed ob
 
 ## Checkpointing and crash recovery <a id="checkpointing"></a>
 
-`saveCheckpoint()` persists the current node name, retry context, token usage, and running summary to the task store on **every** transition — not just at milestones. This is what makes a task survive an orchestrator restart mid-run: on resume, the graph doesn't replay from the beginning, it re-enters `Execute()` at exactly the node it was last checkpointed at, with its accumulated state intact.
+`saveCheckpoint()` persists the node, retry state, token usage, running summary, last observation, recent proposals, commands actually dispatched, bounded working-memory observations, and consecutive-failure count on every transition. Proposal history and execution history are distinct, so a command rejected by duplicate/stuck guards is not later counted as an executed duplicate. After an orchestrator restart, an active top-level task is moved to a safe `step` boundary and automatically resumed with an explicit recovery observation. The loop does **not** blindly re-enter an in-flight `tool`, approval, or hand-off node, because replaying an uncertain side effect is more dangerous than asking the model to verify state first. Active child tasks are stopped and reconciled by their recovered parent so parent and child cannot both duplicate the same work. Planning calls that never produced a plan cannot be resumed and become failed with a clear reason.
+
+Task persistence is committed before the in-memory store publishes a transition. A SQLite failure therefore returns an error without advancing only the in-memory copy.
 
 ## The `finish` node's synthesis fallback <a id="finish-node"></a>
 
-Weak models frequently never emit `FINISH` on their own — they run out of step budget, or the loop otherwise terminates without a clean summary. `finishNode` checks for this (`strings.TrimSpace(summary) == ""`) and, when it fires, runs **one additional LLM call** (`synthesizeSummary`) purely over the accumulated observations to produce a real report and concrete findings — with an explicit instruction to report only what the observations actually show, and say plainly when something was *not* found rather than claiming a detection that didn't happen. This guarantees the operator always gets a deliverable, even from a model that structurally can't reliably signal "I'm done" on its own — a small, cheap accommodation for weaker tiers that costs nothing when the strongest tier already finishes cleanly on its own.
+Weak models frequently never emit `FINISH` on their own — they run out of step budget, or the loop otherwise terminates without a clean summary. Once a plan is terminal, the model gets one final opportunity to emit structured `FINISH`; a malformed/unavailable response then converges deterministically instead of opening more work or pausing solely on formatting. `finishNode` can run one additional synthesis call over accumulated observations, but fallback synthesis is not allowed to mint findings because it has no evidence-bearing `FindingDetail`.
+
+Every completed or failed report ends with a bounded `EVIDENCE DIGEST (server-recorded)` built from persisted step status, command, and output. Model prose is explicitly labeled `MODEL NARRATIVE (unverified; evidence digest is authoritative)`. This makes the trust boundary visible: the narrative is useful interpretation, while the digest and per-finding verdicts are the auditable source of truth.
 
 A related, separately-discovered safeguard lives right next to this: `unverifiedToolWarning` cross-checks the model's *claimed* findings against which commands actually completed successfully. This exists because of a real observed failure mode during live testing — a model reported "nikto detected known vulnerabilities" for a nikto invocation that had been aborted **twice** with zero real output. The fix deliberately does not strip or silently rewrite the claim (only the operator can judge whether a specific finding is actually accurate) — it appends a visible `⚠ UNVERIFIED` warning naming the suspect tool, making the risk visible rather than either blindly trusting or silently censoring the model's own report.
+
+## Finding verification: verdicts, not assertions <a id="finding-verification"></a>
+
+`unverifiedToolWarning` above is a blanket, whole-summary red flag. `orchestrator/internal/agent/verdict.go` adds a second, finer-grained mechanism: a **per-finding verdict** the model cannot assert into existence.
+
+The model may attach `findings_detail` (instead of, or alongside, plain-text `findings`) to a `RUN_COMMAND` or `FINISH` reply — each entry an object with `title`, `evidence` (a verbatim quote from the tool output it's citing), and `step_id` (which plan step proves it). `verifyFindingDetail` then computes one of three verdicts **server-side**, never from a field the model sets directly:
+
+| Verdict | Meaning |
+|---|---|
+| `candidate` | The honest default for anything not positively confirmed: no evidence/step cited, a cited step not in the plan, **or** a step that completed but whose output doesn't contain the claimed evidence verbatim. That last case is deliberately an *abstain*, not a red flag — a substring-match miss only proves this simple checker couldn't confirm the exact wording (the model may have paraphrased, or synthesized a fact from more than one line of output); it does not prove the claim is false. |
+| `verified` | The claimed evidence is a real, literal (case-insensitive) substring of the cited step's actual captured output, and that step completed successfully. Carries `oracle_kind: "tool_evidence"` — naming the mechanism that earned it, the same way a `Receipt` can't claim `verified` without naming an oracle. |
+| `unsupported` | Reserved for the one case that's a genuine, structural problem with the citation itself: the cited step failed or never completed. If the tool never produced output, nothing it "found" has a real source — stronger than "couldn't confirm the wording." |
+
+Verification prefers the **live bridge result** of a just-run command (`observeResult` in `graph.go` has `result.Content` in hand, capped at 1 MiB per stream, before prompt compression) over the persisted `PlanStep.Result`, which is capped at 500 characters — evidence quoted later in a long result would otherwise be clipped away and wrongly read as unconfirmed. A `FINISH`-time finding isn't tied to a just-run step, so it can only be checked against the cited step's stored result — an honest limitation of a substring-match oracle rather than active exploit reproduction.
+
+An oracle miss is not treated as proof that a claim is false. This verifier can establish traceability to captured output or identify a structurally invalid citation; it cannot generally disprove a security finding.
+
+This is deliberately named `tool_evidence`, not `exploit_verified` or similar: it proves the claim is traceable to real captured output, not that a vulnerability was actually exploited. Yummi does not (yet) re-run an exploit to prove code execution the way an active oracle would; `OracleKind` exists specifically so a stronger oracle can be added later without disturbing anything that already consumes a `FindingRecord`.
+
+Records persist on `Task.FindingRecords` (`finding_records` over the wire) alongside the existing flat `Findings`/`findings` — additive, so existing clients keep working. TaskTracker renders verdict-bearing records and preserves any unmatched plain findings as candidate claims; a partial record set therefore never hides legacy findings.
 
 ## Content-layer defense inside the graph <a id="content-defense"></a>
 
 Two places inside the graph apply Yummi's [content-layer security](../security-model.md#layer-content) directly, and both matter enough to call out here rather than only in the security page:
 
 - **Every tool result** is ANSI-stripped (`threatscan.StripANSI`) *before* anything else happens to it — the interpretation, the observation logging, and the threat scan itself all see clean text, closing off a class of terminal-escape-sequence injection tricks. Only the raw bytes in the execution store's own audit record keep the original formatting.
-- **A threat-scan hit on tool output routes to `threat_hold`, not straight into the prompt.** The output is quarantined (`s.pendingThreatResult`) and the graph pauses on the operator gate exactly like a risk-based command approval — the operator can approve the raw output, deny/discard it, or supply a redacted replacement, and only that decision determines what (if anything) the model ultimately sees.
+- **A threat-scan hit on tool output routes to `threat_hold`, not straight into the prompt.** The output is quarantined (`s.pendingThreatResult`) and the graph pauses on a separate operator gate — the operator can approve the raw output, deny/discard it, or supply a redacted replacement, and only that decision determines what (if anything) the model ultimately sees.

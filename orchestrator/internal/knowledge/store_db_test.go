@@ -133,3 +133,29 @@ func TestDBContextProvenanceRoundTrip(t *testing.T) {
 		t.Fatalf("empty origin should default to agent, got %q", byKey["creds"])
 	}
 }
+
+func TestContextUpsertBySessionKeyAndExplicitForget(t *testing.T) {
+	for _, db := range []*sql.DB{nil, openTestDB(t)} {
+		s, err := NewStore(db)
+		if err != nil {
+			t.Fatalf("NewStore: %v", err)
+		}
+		ctx := context.Background()
+		if err := s.RecordContext(ctx, PersistentContext{SessionID: "s1", Key: "map", Value: "v1"}); err != nil {
+			t.Fatalf("record v1: %v", err)
+		}
+		if err := s.RecordContext(ctx, PersistentContext{SessionID: "s1", Key: "map", Value: "v2"}); err != nil {
+			t.Fatalf("record v2: %v", err)
+		}
+		got := s.ListContexts("s1")
+		if len(got) != 1 || got[0].Value != "v2" {
+			t.Fatalf("session/key upsert produced duplicates: %+v", got)
+		}
+		if err := s.DeleteContext(ctx, "s1", "map"); err != nil {
+			t.Fatalf("DeleteContext: %v", err)
+		}
+		if got := s.ListContexts("s1"); len(got) != 0 {
+			t.Fatalf("forgotten context still present: %+v", got)
+		}
+	}
+}

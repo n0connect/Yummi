@@ -11,20 +11,21 @@ import (
 
 // Config holds orchestrator runtime configuration.
 type Config struct {
-	Host                string
-	Port                int
-	DatabasePath        string
-	GatewaySocket       string
-	SandboxContainer    string
+	Host             string
+	Port             int
+	DatabasePath     string
+	GatewaySocket    string
+	SandboxContainer string
 	// SandboxExecTimeout bounds a single sandbox command's wall-clock time —
 	// see sandbox.Bridge's defaultTimeout doc comment for why the default is
 	// generous (real pentest tooling routinely runs long).
-	SandboxExecTimeout time.Duration
+	SandboxExecTimeout  time.Duration
 	PersonaDir          string
+	AutoSkillDir        string // writable store for operator-approved generated skills
 	DockerSocket        string
 	OllamaURL           string
 	OllamaModel         string
-	OllamaTier          string // "lite" | "pro" | "expert" — overrides OllamaModel if set
+	OllamaTier          string // "lite" | "standard" | "pro" | "expert"; used when no explicit model is set
 	OllamaFallbackModel string // optional lighter LOCAL model the agent loop degrades to when the primary repeatedly fails (empty = no downgrade, breaker still trips)
 	OllamaEmbedModel    string // local Ollama embedding model for semantic retrieval (separate pull from OllamaModel); SemanticRetrieval degrades to StructuredRetrieval if this model isn't actually pulled
 	TLSDir              string // directory holding mTLS certificates for orchestrator ↔ gateway
@@ -46,6 +47,7 @@ func Load() *Config {
 		}
 	}
 
+	explicitOllamaModel := strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_MODEL"))
 	cfg := &Config{
 		Host:                envOr("YUMMI_ORCHESTRATOR_HOST", "127.0.0.1"),
 		Port:                port,
@@ -54,9 +56,10 @@ func Load() *Config {
 		SandboxContainer:    envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
 		SandboxExecTimeout:  parseDuration(os.Getenv("YUMMI_SANDBOX_EXEC_TIMEOUT")), // 0 = use sandbox.Bridge's own default
 		PersonaDir:          envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
+		AutoSkillDir:        envOr("YUMMI_AUTO_SKILL_DIR", filepath.Join(home, "skills")),
 		DockerSocket:        envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
 		OllamaURL:           os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
-		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "qwen3:8b"),
+		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "qwen3:14b"),
 		OllamaTier:          strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
 		OllamaFallbackModel: strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
 		OllamaEmbedModel:    envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
@@ -64,11 +67,9 @@ func Load() *Config {
 		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
 	}
 
-	// When an operator sets YUMMI_OLLAMA_TIER explicitly, use the tier's model
-	// mapping instead of the default OllamaModel string. The resolution is done
-	// by a tiny lookup table here so the config package stays independent of
-	// the conductor package (no import cycle).
-	if cfg.OllamaTier != "" {
+	// A directly configured model is the most specific choice. Otherwise an
+	// explicit tier selects its model; with neither set, qwen3:14b is the default.
+	if explicitOllamaModel == "" && cfg.OllamaTier != "" {
 		if model, ok := tierToModel(cfg.OllamaTier); ok {
 			cfg.OllamaModel = model
 		}

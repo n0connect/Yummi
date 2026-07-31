@@ -123,15 +123,15 @@ Read this table before choosing a machine to run Yummi on — one row is a hard 
 |---|---|---|---|
 | **Linux x86_64** | ✅ Full support, real nftables enforcement | ✅ | The reference platform — gateway's `network/nftables.rs` runs against a real Linux kernel directly |
 | **Linux ARM64** (incl. Raspberry Pi 4/5, AWS Graviton) | ✅ Expected to work — every base image (`kalilinux/kali-rolling`, `golang`, `rust`, `node`, `nginx`, `tecnativa/docker-socket-proxy`, `debian:bookworm-slim`) publishes official `arm64` manifests | ✅ | Not independently load-tested on ARM64 hardware as part of this documentation pass — if you hit an ARM64-specific issue, it is almost certainly one specific `apt` package inside `sandbox/Dockerfile` lacking an arm64 build in Kali's repos, not gateway or orchestrator |
-| **macOS (Apple Silicon, arm64)** | ✅ Full support **via OrbStack** (recommended). ⚠️ Docker Desktop works but see [§ VM networking callout](#docker-desktop-internal-network-bug). ⚠️ Podman's network-forwarding is sound but two other gaps currently block the full agent loop — see [§ Podman gaps](#podman-macos-gaps) | ✅ (CLI/TUI + orchestrator natively; gateway builds but enforces nothing outside Docker — see below) | All three engines run containers inside a real Linux VM with genuine `nf_tables` support, and the actual trust-boundary forwarding (gateway's nftables) has been independently verified end-to-end on OrbStack and Podman (a DROP-all `FORWARD` chain plus a single-target Allow rule correctly gated a real connection) — Docker Desktop is the one with the forwarding bug, not the other two |
-| **macOS (Intel, x86_64)** | ✅ Full support via Docker Desktop | ✅ | Same as above; just a different host CPU |
+| **macOS (Apple Silicon, arm64)** | ✅ Confirmed via OrbStack (recommended). ⚠️ Docker Desktop and Podman caveats are documented below | ✅ CLI/TUI + orchestrator; gateway is Linux-only at runtime | Container engines provide a Linux VM, but working forwarding and Docker-socket behavior depend on the engine; do not infer support only from successful image builds |
+| **macOS (Intel, x86_64)** | ⚠️ Requires a Linux container engine; the same engine-specific caveats apply and this path is not independently validated here | ✅ CLI/TUI + orchestrator; gateway is Linux-only at runtime | Host architecture changes image selection, not the gateway's Linux requirement |
 | **Windows 10/11 with WSL2** | ✅ Full support via Docker Desktop's WSL2 backend | Partial — the CLI/TUI cross-compiles fine (`GOOS=windows go build` — see the `*.exe` handling already in `.gitignore`); the orchestrator has not been validated running bare on Windows, and gateway is architecturally out of scope outside a Linux kernel | Docker Desktop for Windows uses a WSL2-based Linux VM by default, which — like the macOS case — is a real Linux kernel, so the same nftables enforcement path applies |
 | **Windows without WSL2 / native only** | ❌ Not supported | Partial (CLI/TUI only) | No Linux kernel means no nftables anywhere in the stack — don't attempt the full stack here |
-| **Bare Linux host, gateway binary run directly (no Docker)** | ⚠️ Runs, enforces **nothing** | ✅ compiles | This is the one combination that looks like it's working but isn't a security boundary — see the next callout |
+| **Bare Linux host, gateway binary run directly (no Docker)** | ⚠️ Unsupported topology | ✅ compiles/runs | It may change nftables in the host namespace, but Compose's sandbox routing topology is absent unless you reproduce it yourself |
 
 ### ⚠️ The one combination that silently doesn't enforce anything
 
-Running the **compiled gateway binary directly on a host** — `cd gateway && cargo run` or executing `gateway/target/release/yummi-gateway` outside `docker compose` — will start, open its IPC socket, and *appear* to work. On a bare **macOS** host this genuinely enforces nothing, because there is no Linux kernel at all to hand nftables rules to. On a bare **Linux** host it can actually install real nftables rules (there's a real kernel right there) — but you're then relying on your own host's routing/network namespace setup matching what `docker-compose.yml`'s topology provides, which it doesn't unless you've replicated it yourself. **Treat "gateway enforces traffic" as true only when gateway is the container `yummi-gateway` started via `docker compose` / `make start`.** Any other invocation of the gateway binary is for build-testing or unit tests only, never a security boundary test.
+Running the compiled gateway directly is not the supported security topology. On **macOS**, `main.rs` returns a Linux-only error before loading policy. On **Linux**, the process can install nftables rules in its current namespace, but those rules protect the intended sandbox only if you have independently reproduced the Compose routing, source IP, capabilities, and interfaces. Use the Compose-started `yummi-gateway` container for the repository's documented boundary.
 
 ### ⚠️ Docker Desktop VM networking can silently drop `internal: true` traffic <a id="docker-desktop-internal-network-bug"></a>
 
@@ -277,7 +277,7 @@ make start
 
 **Apple Silicon note:** every image this project builds from (`golang`, `rust`, `debian:bookworm-slim`, `kalilinux/kali-rolling`, `node`, `nginx`, `tecnativa/docker-socket-proxy`) publishes an `arm64` manifest, so `docker compose build` on an M-series Mac pulls native arm64 layers — you are not running anything under Rosetta/emulation for this project's own images.
 
-**The nftables question, answered directly:** yes, this genuinely works on macOS, because Docker Desktop doesn't run containers against your Mac's own XNU kernel — it runs a real lightweight Linux VM underneath (`Docker Desktop's Linux VM`), and *that* VM has `nf_tables` support. The gateway container's `FORWARD`-chain rules are real, kernel-enforced rules inside that VM. This was directly verified as part of this project's own hardening work: a DROP-all ruleset plus a single explicit Allow rule correctly gated a real network connection end-to-end on macOS via the normal `make start` path.
+**The nftables question:** a macOS container engine runs gateway inside a Linux VM, so the gateway can use real `nf_tables`; the native macOS binary cannot. Kernel support alone does not prove the whole forwarding path works, which is why the engine-specific availability and socket caveats below still matter.
 
 ---
 
@@ -321,20 +321,18 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 ### Picking a tier for your hardware
 
-`YUMMI_OLLAMA_TIER` selects a preset (model + context window + thinking mode) from `orchestrator/internal/conductor/tier.go`. These are the **only four presets that exist** — there's no config file to tune this beyond what's below, and `YUMMI_OLLAMA_MODEL` set directly will override the tier's model if you set both:
+`YUMMI_OLLAMA_TIER` selects a preset (model + context window + thinking mode) from `orchestrator/internal/conductor/tier.go`. These are the **only four presets that exist** — there's no config file to tune this beyond what's below. If both variables are set, the more specific `YUMMI_OLLAMA_MODEL` override wins.
 
 | Tier | Model | Context window | Thinking mode | Approximate download size¹ | Rough RAM/VRAM needed¹ | Good fit for |
 |---|---|---|---|---|---|---|
 | `lite` | `qwen3:4b` | 8,192 tokens | off | ~2.5 GB | ~4–6 GB | Laptops, low-RAM VMs, quick smoke-testing |
-| `standard` | `qwen3:8b` | 16,384 tokens | off | ~5.2 GB | ~8–10 GB | The Makefile's own default for `make test-agent-live` and local dev |
+| `standard` | `qwen3:8b` | 16,384 tokens | off | ~5.2 GB | ~8–10 GB | The lightweight default for `make test-agent-live` (`LIVE_TEST_MODEL`) |
 | `pro` | `qwen3:14b` | 16,384 tokens | off | ~9 GB | ~14–16 GB | **`docker-compose.yml`'s own default for the full stack** — described in-repo as "recommended default for most hardware" |
 | `expert` | `qwen3:32b` | 32,768 tokens | **on** (extended reasoning) | ~20 GB | ~24–32 GB+ | Workstation-class GPUs; genuinely deeper multi-step reasoning at real latency cost |
 
 ¹ *Sizes and RAM figures are approximate, based on Ollama's default quantization for each tag at the time of writing — always let `ollama pull` and your own `ollama ps`/Activity Monitor be the source of truth for your actual hardware, not this table.*
 
-**Two different defaults exist and that's intentional, not a bug:** the Makefile's own `OLLAMA_MODEL ?= qwen3:8b` (used by `make test-agent-live` and as the fallback for `make install`'s model pull) is the `standard` tier, while `docker-compose.yml` hardcodes `YUMMI_OLLAMA_TIER: "pro"` / `YUMMI_OLLAMA_MODEL: "qwen3:14b"` for the actual running stack. If you're wondering "why did it just pull an 8B model when I expected 14B" (or vice versa), it depends on *which* path you ran — `make install`/`make test-agent-live` vs. `make start`.
-
-> **⚠️ Concretely, this means the exact install sequence recommended everywhere in this guide — `make install` followed by `make start` — pulls *two separate* large models, not one.** `scripts/install.sh` checks for an already-present model with a loose substring match (`ollama list | grep -q "qwen3"` — matches on the family name, not the specific tag), so it happily pulls `qwen3:8b` even though nothing needs it yet. Then `make start`'s own `_ollama-ensure` check is an exact, anchored match against `qwen3:14b` specifically — it doesn't recognize the `qwen3:8b` you just downloaded as satisfying it, so it pulls `qwen3:14b` too. Net result: **~14 GB across two models**, not the ~9 GB you'd expect from `docker-compose.yml`'s own default alone. This isn't dangerous, just a disk/bandwidth surprise worth knowing about before you start — if you only ever intend to run the Docker Compose stack, you can skip `make install`'s model pull altogether and let `make start` pull the one model it actually uses.
+**The install and runtime defaults are intentionally the same:** `make install`, `make start`, Compose, and `scripts/doctor.sh` all use `qwen3:14b` unless `YUMMI_OLLAMA_MODEL`/`OLLAMA_MODEL` overrides it. The only smaller default is the opt-in live agent test: `make test-agent-live` uses `LIVE_TEST_MODEL=qwen3:8b` so a development smoke test does not require the full runtime model.
 
 Set a tier by exporting the env var before `make start`, or editing `docker-compose.yml`'s `orchestrator.environment.YUMMI_OLLAMA_TIER` directly:
 ```bash
@@ -410,8 +408,6 @@ A healthy run ends with:
 doctor: healthy
 ```
 
-![Terminal output of a healthy `make doctor` run](assets/screenshots/installation/doctor-healthy.png)
-
 ---
 
 ## First-run troubleshooting <a id="troubleshooting"></a>
@@ -428,7 +424,7 @@ These are the specific errors people actually hit on a first install, in the ord
 
 **`docker compose up` fails with a permission error on Linux, right after a fresh Docker install** → You were added to the `docker` group but haven't started a new login session yet. Log out and back in, or run `newgrp docker` in your current shell, then retry.
 
-**Every chat message gets declined with a bilingual "the model is unavailable" reply, and nothing about it looks like a normal error** → This is *correct*, not a bug — the conductor has no rule-based fallback. It means orchestrator can't reach Ollama at the URL in `YUMMI_OLLAMA_URL` (default `http://localhost:11434` outside Docker, `http://host.docker.internal:11434` inside the compose stack). Confirm Ollama is running and the URL matches where it's actually listening.
+**Every chat message gets declined with a bilingual "the model is unavailable" reply** → The conductor has no rule-based fallback. `YUMMI_OLLAMA_URL` defaults to empty for a native orchestrator run, so set it explicitly (usually `http://127.0.0.1:11434`). Compose sets `http://host.docker.internal:11434`. Confirm Ollama is running and the configured URL matches where it is listening.
 
 **A pentest command in chat gets refused with something that sounds like "I don't have permission," even for an ordinary target like a public hostname** → This is a **persona/UX issue that has already been fixed** in this repository's prompt design, not a gateway bug — the model is told explicitly not to pre-judge scope and to report a gateway block/approval-pending result factually rather than framing it as its own lack of permission. If you still see this behavior, check whether `persona/v0.1/safety_boundaries.yaml`'s `scope_enforcement` section and `orchestrator/internal/conductor/engine.go`'s `scopeSection` prompt text match what's described in [Security Model](security-model.md#egress-modes) — a stale or hand-edited persona file is the most likely cause.
 

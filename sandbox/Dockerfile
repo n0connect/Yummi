@@ -2,7 +2,7 @@ FROM kalilinux/kali-rolling:latest
 
 LABEL org.opencontainers.image.title="Yummi sandbox"
 LABEL org.opencontainers.image.description="Isolated Kali pentest container — network traffic gated by gateway"
-LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.source="https://github.com/n0connect/yummi"
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,6 +19,7 @@ RUN apt-get update && \
       dnsenum \
       enum4linux \
       ffuf \
+      git \
       gobuster \
       hydra \
       iptables \
@@ -42,8 +43,10 @@ RUN apt-get update && \
       wafw00f \
       wget \
       whatweb \
-      wpscan && \
+      wpscan \
+      ripgrep && \
     if [ -f /usr/lib/nmap/nmap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/lib/nmap/nmap; fi && \
+    for tool in nmap curl ffuf gobuster nikto whatweb grep rg git; do command -v "$tool" >/dev/null; done && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 1000 pentester && \

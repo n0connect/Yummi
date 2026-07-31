@@ -14,14 +14,13 @@ triggers:
 tools:
   - grep
   - rg
-  - semgrep
   - git
 knowledge: |
   Analyze source systematically and leave a durable map behind:
   1. Orient first: read the build/manifest files and top-level layout before any deep dive.
   2. Trace untrusted input to sinks — injection (SQL/cmd/template), deserialization, path traversal,
      SSRF, auth/authorization gaps, secrets in code.
-  3. Use `rg`/`semgrep` for known dangerous patterns; confirm by reading the surrounding code, not the
+  3. Use `rg` for known dangerous patterns; confirm by reading the surrounding code, not the
      match alone.
   4. Record each finding with the exact file:line and a one-line description as evidence.
   5. Prefer documenting connections (who calls what) as you go so the map survives the session.

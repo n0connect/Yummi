@@ -17,6 +17,13 @@ func TestResolveIPLiteralPassthrough(t *testing.T) {
 	}
 }
 
+func TestResolveCIDRLiteralPassthrough(t *testing.T) {
+	got := New().Resolve(context.Background(), "10.0.0.0/24")
+	if len(got) != 1 || got[0] != "10.0.0.0/24" {
+		t.Fatalf("Resolve(CIDR) = %v, want [10.0.0.0/24]", got)
+	}
+}
+
 func TestResolveEmptyHost(t *testing.T) {
 	if got := New().Resolve(context.Background(), ""); got != nil {
 		t.Fatalf("Resolve(\"\") = %v, want nil", got)

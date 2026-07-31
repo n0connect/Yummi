@@ -167,6 +167,7 @@ func main() {
 	}
 
 	var taskRunner *agent.Runner
+	var curatorWorker *skillcurator.Worker
 	// skillReg is also exposed read-only via the TRACE API, so it lives at this
 	// scope (nil-safe: skill.Registry methods tolerate a nil receiver).
 	var skillReg *skill.Registry
@@ -188,6 +189,17 @@ func main() {
 			if serr != nil {
 				slog.Warn("skills load failed; continuing without skills", "error", serr)
 				skillReg = skill.New(nil)
+			}
+			// Operator-approved generated skills live in a separate writable
+			// directory. The shipped persona remains read-only and auditable.
+			if autoReg, aerr := skill.LoadDirWithOrigin(cfg.AutoSkillDir, "auto"); aerr == nil {
+				for _, approved := range autoReg.All() {
+					if err := skillReg.Upsert(approved); err != nil {
+						slog.Warn("approved skill load failed", "name", approved.Name, "error", err)
+					}
+				}
+			} else if !os.IsNotExist(aerr) {
+				slog.Warn("approved skills load failed", "dir", cfg.AutoSkillDir, "error", aerr)
 			}
 			structuredRetrieval := knowledge.NewStructuredRetrieval(ks)
 			var retrieval knowledge.RetrievalStrategy = structuredRetrieval
@@ -213,9 +225,14 @@ func main() {
 				primaryLLM.Chat, fallbackChat, primaryLLM.Model(), fallbackName, 3, 60*time.Second)
 			var agentLLM agent.LLM = resilientLLM
 
-			// Auto-skill-creation curator: nil-safe (skillcurator.Curator's
-			// ProposeFromTask tolerates a nil store) if curatorStore init failed above.
-			skillCuratorFn := skillcurator.NewCurator(curatorStore, resilientLLM.Chat, skillReg).ProposeFromTask
+			// Auto-skill creation runs through a bounded, shutdown-aware worker;
+			// task completion only performs a non-blocking enqueue.
+			curatorWorker = skillcurator.NewWorker(
+				skillcurator.NewCurator(curatorStore, resilientLLM.Chat, skillReg), 32, 2*time.Minute)
+			curatorWorker.Start(ctx)
+			skillCuratorFn := func(_ context.Context, traj skillcurator.Trajectory) {
+				curatorWorker.Submit(traj)
+			}
 
 			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
 			// execution pipeline. Built with no SubAgents of their own, capping
@@ -272,6 +289,11 @@ func main() {
 					SubAgentTimeout: 20 * time.Minute,
 				},
 			)
+			if resumed, rerr := taskRunner.ResumeRecovered(); rerr != nil {
+				slog.Error("recovered task resume failed", "error", rerr, "resumed", resumed)
+			} else if resumed > 0 {
+				slog.Info("recovered tasks resumed", "count", resumed)
+			}
 		}
 	}
 
@@ -316,6 +338,9 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "error", err)
+	}
+	if curatorWorker != nil {
+		_ = curatorWorker.Wait(shutdownCtx)
 	}
 
 	slog.Info("orchestrator stopped")

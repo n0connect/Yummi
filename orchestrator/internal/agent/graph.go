@@ -173,12 +173,17 @@ type GraphState struct {
 	// parentTaskID is set when this state belongs to a sub-agent run, so its
 	// emitted activity events nest under the orchestrator's handoff span.
 	parentTaskID string
+	// autoFinishTerminalPlan is enabled by Runner-built production states. It
+	// remains explicit on GraphState so low-level node tests can exercise loop
+	// guards without being short-circuited by orchestration-level convergence.
+	autoFinishTerminalPlan bool
 
 	// Mutable per-run state
 	retryCtx        RetryContext
 	memCtx          MemoryContext
 	cmdWindow       []string           // command hashes for stuck detection (last stuckWindowSize)
 	recentCmds      []string           // actual commands for stuck display (last stuckWindowSize)
+	executedCmds    []string           // commands actually dispatched (blocked proposals excluded)
 	lastObs         string             // last observation for prompt injection (tag-wrapped)
 	pendingAct      Action             // action buffered from stepNode for toolNode / approvalNode
 	pendingProposal conductor.Proposal // validated proposal awaiting approval
@@ -228,14 +233,28 @@ func (s *GraphState) validate(proposal conductor.Proposal) conductor.ChatRespons
 
 // saveCheckpoint persists the current graph position to the task store.
 func (s *GraphState) saveCheckpoint(node string) {
+	observations := s.memCtx.Observations
+	if len(observations) > 6 {
+		observations = observations[len(observations)-6:]
+	}
+	boundedObservations := make([]string, len(observations))
+	for i, observation := range observations {
+		boundedObservations[i] = CompressObservation(observation)
+	}
 	_ = s.store.Update(s.taskID, func(t *Task) {
 		t.Checkpoint = Checkpoint{
-			TaskID:      s.taskID,
-			CurrentNode: node,
-			RetryCtx:    s.retryCtx,
-			TokensUsed:  s.memCtx.TokensUsed,
-			Summary:     s.memCtx.Summary,
-			SavedAt:     time.Now().Unix(),
+			TaskID:              s.taskID,
+			CurrentNode:         node,
+			StepIndex:           t.StepsUsed,
+			RetryCtx:            s.retryCtx,
+			TokensUsed:          s.memCtx.TokensUsed,
+			Summary:             s.memCtx.Summary,
+			LastObservation:     CompressObservation(s.lastObs),
+			RecentCommands:      append([]string(nil), s.recentCmds...),
+			ExecutedCommands:    append([]string(nil), s.executedCmds...),
+			MemoryObservations:  boundedObservations,
+			ConsecutiveFailures: s.consecutiveFailures,
+			SavedAt:             time.Now().Unix(),
 		}
 		t.TokensUsed = s.memCtx.TokensUsed
 	})
@@ -359,8 +378,12 @@ func markStepStatus(store *Store, taskID, stepID, command string, status StepSta
 			t.Plan[idx].Command = command
 		}
 		d := detail
-		if len(d) > 200 {
-			d = d[:200] + "…"
+		// 500, not the 120 the prompt renderer trims to — this is the copy
+		// verifyFindingDetail checks a FINISH-time finding's cited evidence
+		// against, so keeping more of it lets a real fact quoted from later
+		// in the output still verify instead of clipping to "unsupported".
+		if len(d) > 500 {
+			d = d[:500] + "…"
 		}
 		if status == StepFailed {
 			t.Plan[idx].Error = d
@@ -484,10 +507,16 @@ func observeResult(s *GraphState, result ToolResult) string {
 	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepDone, obs)
 	s.emit(ActCommandDone, "Command result processed", compressed)
 	if findings := sanitizeFindings(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
+		task, ok := s.store.Get(s.taskID)
+		var records []FindingRecord
+		if ok {
+			records = buildFindingRecords(s.pendingAct.FindingsDetail, s.pendingAct.StepID, result.Content, task.Plan)
+		}
 		_ = s.store.Update(s.taskID, func(t *Task) {
 			t.Findings = append(t.Findings, findings...)
+			t.FindingRecords = append(t.FindingRecords, records...)
 		})
-		if task, ok := s.store.Get(s.taskID); ok {
+		if ok {
 			recordTaskFindings(context.Background(), s.cfg.Knowledge, task.SessionID, s.taskID, findings, s.pendingAct.FindingsDetail)
 		}
 		for _, f := range findings {

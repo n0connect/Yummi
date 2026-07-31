@@ -5,7 +5,11 @@
 
 .tt-card {
   margin: var(--space-sm) var(--space-lg) var(--space-md);
-  background: linear-gradient(180deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
+  background: linear-gradient(
+    180deg,
+    var(--bg-tertiary) 0%,
+    var(--bg-secondary) 100%
+  );
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
@@ -14,20 +18,40 @@
 }
 
 @keyframes ttSlide {
-  from { opacity: 0; transform: translateY(10px) scale(0.99); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* Accent rail keyed to status */
-.tt-card { border-left: 3px solid var(--border); }
-.tt-status-running           { border-left-color: var(--cyan); }
-.tt-status-awaiting_approval { border-left-color: var(--yellow); }
-.tt-status-paused            { border-left-color: var(--orange); }
-.tt-status-completed         { border-left-color: var(--green); }
+.tt-card {
+  border-left: 3px solid var(--border);
+}
+.tt-status-running {
+  border-left-color: var(--cyan);
+}
+.tt-status-awaiting_approval {
+  border-left-color: var(--yellow);
+}
+.tt-status-paused {
+  border-left-color: var(--orange);
+}
+.tt-status-completed {
+  border-left-color: var(--green);
+}
 .tt-status-failed,
 .tt-status-stopped,
-.tt-status-interrupted       { border-left-color: var(--red); }
-.tt-status-planned           { border-left-color: var(--accent); }
+.tt-status-interrupted {
+  border-left-color: var(--red);
+}
+.tt-status-planned {
+  border-left-color: var(--accent);
+}
 
 .tt-loading {
   padding: var(--space-lg);
@@ -75,32 +99,71 @@
   border: 1px solid transparent;
 }
 
-.tt-pill-planned           { color: var(--accent); background: rgba(10,132,255,0.12); border-color: rgba(10,132,255,0.3); }
-.tt-pill-running           { color: var(--cyan);   background: var(--cyan-glow);      border-color: rgba(100,210,255,0.3); }
-.tt-pill-awaiting_approval { color: var(--yellow); background: var(--yellow-bg);      border-color: rgba(255,214,10,0.3); }
-.tt-pill-paused            { color: var(--orange); background: var(--orange-bg);      border-color: rgba(255,159,10,0.3); }
-.tt-pill-completed         { color: var(--green);  background: var(--green-bg);       border-color: rgba(48,209,88,0.3); }
+.tt-pill-planned {
+  color: var(--accent);
+  background: rgba(10, 132, 255, 0.12);
+  border-color: rgba(10, 132, 255, 0.3);
+}
+.tt-pill-running {
+  color: var(--cyan);
+  background: var(--cyan-glow);
+  border-color: rgba(100, 210, 255, 0.3);
+}
+.tt-pill-awaiting_approval {
+  color: var(--yellow);
+  background: var(--yellow-bg);
+  border-color: rgba(255, 214, 10, 0.3);
+}
+.tt-pill-paused {
+  color: var(--orange);
+  background: var(--orange-bg);
+  border-color: rgba(255, 159, 10, 0.3);
+}
+.tt-pill-completed {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: rgba(48, 209, 88, 0.3);
+}
 .tt-pill-failed,
 .tt-pill-stopped,
-.tt-pill-interrupted       { color: var(--red);    background: var(--red-bg);         border-color: rgba(255,69,58,0.3); }
-.tt-pill-planning          { color: var(--text-tertiary); background: var(--bg-elevated); }
+.tt-pill-interrupted {
+  color: var(--red);
+  background: var(--red-bg);
+  border-color: rgba(255, 69, 58, 0.3);
+}
+.tt-pill-planning {
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+}
 
-.tt-pulse { animation: pulse 1.4s ease-in-out infinite; font-size: 8px; }
+.tt-pulse {
+  animation: pulse 1.4s ease-in-out infinite;
+  font-size: 8px;
+}
 
 .tt-x {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-muted);
-  width: 26px; height: 26px;
+  width: 26px;
+  height: 26px;
   border-radius: var(--radius-sm);
   font-size: 12px;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
   transition: all var(--transition-fast);
 }
-.tt-x:hover { color: var(--red); border-color: var(--red); background: var(--red-bg); transform: none; box-shadow: none; }
+.tt-x:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: var(--red-bg);
+  transform: none;
+  box-shadow: none;
+}
 
 /* ─── Progress ────────────────────────────────────────────────────────────── */
 .tt-progress {
@@ -118,7 +181,8 @@
 }
 .tt-progress-label {
   position: absolute;
-  right: 0; top: 8px;
+  right: 0;
+  top: 8px;
   font-size: 10px;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -151,13 +215,18 @@
   width: 1px;
   background: var(--border);
 }
-.tt-step:last-child::before { display: none; }
+.tt-step:last-child::before {
+  display: none;
+}
 
 .tt-step-marker {
   flex-shrink: 0;
-  width: 19px; height: 19px;
+  width: 19px;
+  height: 19px;
   border-radius: var(--radius-full);
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 10px;
   font-weight: 700;
   z-index: 1;
@@ -166,7 +235,9 @@
   border: 1px solid var(--border);
 }
 
-.tt-step-pending .tt-step-marker { color: var(--text-muted); }
+.tt-step-pending .tt-step-marker {
+  color: var(--text-muted);
+}
 .tt-step-running .tt-step-marker {
   color: var(--cyan);
   border-color: var(--cyan);
@@ -196,7 +267,9 @@
   color: var(--text-secondary);
   line-height: 1.45;
 }
-.tt-step-done .tt-step-desc { color: var(--text-tertiary); }
+.tt-step-done .tt-step-desc {
+  color: var(--text-tertiary);
+}
 .tt-step-result {
   font-size: 11px;
   font-family: var(--font-mono);
@@ -229,22 +302,83 @@
   border-radius: var(--radius-md);
 }
 .tt-live-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: var(--space-sm); color: var(--cyan); font-family: var(--font-mono);
-  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-.tt-live-head span:last-child { color: var(--text-muted); font-weight: 500; letter-spacing: 0; text-transform: none; }
-.tt-live-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.tt-live-event { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: var(--space-sm); align-items: start; padding: 6px 0; }
-.tt-live-dot { width: 6px; height: 6px; margin-top: 6px; border-radius: var(--radius-full); background: var(--text-muted); }
-.tt-live-command .tt-live-dot, .tt-live-command_result .tt-live-dot { background: var(--cyan); box-shadow: 0 0 7px var(--cyan-glow); }
-.tt-live-finding .tt-live-dot { background: var(--green); }
-.tt-live-ask .tt-live-dot { background: var(--orange); }
-.tt-live-finish .tt-live-dot { background: var(--green); }
-.tt-live-event > div { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.tt-live-label { color: var(--text-tertiary); font-size: 10px; }
-.tt-live-summary { color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tt-live-event time { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; padding-top: 1px; }
+.tt-live-head span:last-child {
+  color: var(--text-muted);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.tt-live-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tt-live-event {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: var(--space-sm);
+  align-items: start;
+  padding: 6px 0;
+}
+.tt-live-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+  background: var(--text-muted);
+}
+.tt-live-command .tt-live-dot,
+.tt-live-command_result .tt-live-dot {
+  background: var(--cyan);
+  box-shadow: 0 0 7px var(--cyan-glow);
+}
+.tt-live-finding .tt-live-dot {
+  background: var(--green);
+}
+.tt-live-ask .tt-live-dot {
+  background: var(--orange);
+}
+.tt-live-finish .tt-live-dot {
+  background: var(--green);
+}
+.tt-live-event > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tt-live-label {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.tt-live-summary {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-live-event time {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding-top: 1px;
+}
 
 /* ─── Approval gate ───────────────────────────────────────────────────────── */
 .tt-gate {
@@ -263,8 +397,17 @@
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
-.tt-gate-head { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-sm); }
-.tt-gate-title { font-size: var(--text-xs); font-weight: 600; color: var(--text-primary); }
+.tt-gate-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+.tt-gate-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+}
 .tt-gate-cmd {
   display: block;
   font-family: var(--font-mono);
@@ -278,17 +421,37 @@
 }
 
 .tt-risk {
-  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
-  padding: 3px 8px; border-radius: var(--radius-full);
-  background: var(--bg-elevated); color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
 }
-.tt-risk-low      { color: var(--green);  background: var(--green-bg); }
-.tt-risk-medium   { color: var(--yellow); background: var(--yellow-bg); }
-.tt-risk-high     { color: var(--orange); background: var(--orange-bg); }
-.tt-risk-critical { color: var(--red);    background: var(--red-bg); }
+.tt-risk-low {
+  color: var(--green);
+  background: var(--green-bg);
+}
+.tt-risk-medium {
+  color: var(--yellow);
+  background: var(--yellow-bg);
+}
+.tt-risk-high {
+  color: var(--orange);
+  background: var(--orange-bg);
+}
+.tt-risk-critical {
+  color: var(--red);
+  background: var(--red-bg);
+}
 
 /* ─── Paused / summary ────────────────────────────────────────────────────── */
-.tt-paused, .tt-summary { margin: 0 var(--space-lg) var(--space-md); }
+.tt-paused,
+.tt-summary {
+  margin: 0 var(--space-lg) var(--space-md);
+}
 .tt-question {
   font-size: var(--text-xs);
   color: var(--text-secondary);
@@ -306,8 +469,11 @@
 }
 .tt-findings {
   list-style: none;
-  margin: 0; padding: 0;
-  display: flex; flex-direction: column; gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
 }
 .tt-findings li {
   font-size: var(--text-xs);
@@ -316,6 +482,60 @@
   background: var(--bg-base);
   border-left: 2px solid var(--green);
   border-radius: var(--radius-xs);
+}
+/* A finding's verdict is server-computed against real tool output (see
+   FindingRecord) — the badge/border color says how much to trust it, not
+   just that a claim was made. */
+.tt-finding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  border-left-width: 2px;
+  border-left-style: solid;
+}
+.tt-finding-verified {
+  border-left-color: var(--green);
+}
+.tt-finding-unsupported {
+  border-left-color: var(--red);
+}
+.tt-finding-candidate {
+  border-left-color: var(--text-muted);
+}
+.tt-finding-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+}
+.tt-finding-badge-verified {
+  color: var(--green);
+  background: var(--green-bg);
+}
+.tt-finding-badge-unsupported {
+  color: var(--red);
+  background: var(--red-bg);
+}
+.tt-finding-badge-candidate {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+.tt-finding-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tt-finding-text {
+  min-width: 0;
+}
+.tt-finding-reason {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
 }
 .tt-error {
   font-size: var(--text-xs);
@@ -331,8 +551,13 @@
   padding: 0 var(--space-lg) var(--space-md);
   flex-wrap: wrap;
 }
-.tt-gate .tt-actions, .tt-paused .tt-actions { padding: 0; }
-.tt-actions-end { justify-content: flex-end; }
+.tt-gate .tt-actions,
+.tt-paused .tt-actions {
+  padding: 0;
+}
+.tt-actions-end {
+  justify-content: flex-end;
+}
 
 .tt-btn {
   flex: 0 0 auto;
@@ -344,18 +569,44 @@
   cursor: pointer;
   transition: all var(--transition-fast);
 }
-.tt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.tt-btn-primary { background: var(--accent); color: #fff; }
-.tt-btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
-.tt-btn-approve { background: var(--green); color: #fff; }
-.tt-btn-approve:hover:not(:disabled) { background: #3bdf64; }
-.tt-btn-deny { background: transparent; color: var(--red); border-color: rgba(255,69,58,0.4); }
-.tt-btn-deny:hover:not(:disabled) { background: var(--red-bg); }
+.tt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tt-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.tt-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.tt-btn-approve {
+  background: var(--green);
+  color: #fff;
+}
+.tt-btn-approve:hover:not(:disabled) {
+  background: #3bdf64;
+}
+.tt-btn-deny {
+  background: transparent;
+  color: var(--red);
+  border-color: rgba(255, 69, 58, 0.4);
+}
+.tt-btn-deny:hover:not(:disabled) {
+  background: var(--red-bg);
+}
 .tt-btn-ghost {
   background: transparent;
   color: var(--text-secondary);
   border-color: var(--border);
 }
-.tt-btn-ghost:hover:not(:disabled) { color: var(--text-primary); border-color: var(--text-tertiary); background: var(--bg-tertiary); }
+.tt-btn-ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+}
 
-.tt-spinner { animation: pulse 1s ease-in-out infinite; color: var(--accent); }
+.tt-spinner {
+  animation: pulse 1s ease-in-out infinite;
+  color: var(--accent);
+}

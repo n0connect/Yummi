@@ -105,10 +105,8 @@ func (e *Engine) Validator() *Validator {
 // Returns decline immediately when Ollama is not configured.
 func (e *Engine) Chat(ctx context.Context, message string) ChatResponse {
 	text := strings.TrimSpace(message)
-	if text == "" {
-		return e.replyAskClarification(localize(text,
-			"Neyi yapmak istediğini bir cümleyle yazar mısın?",
-			"Could you describe your goal in one sentence?"), 0.2)
+	if decision, ok := BoundaryDecision(text); ok {
+		return e.finalize(decision)
 	}
 
 	if e.llmClient == nil {
@@ -140,10 +138,8 @@ func (e *Engine) Chat(ctx context.Context, message string) ChatResponse {
 // ChatWithHistory is like Chat but maintains per-session conversation context.
 func (e *Engine) ChatWithHistory(ctx context.Context, sessionID, message string) ChatResponse {
 	text := strings.TrimSpace(message)
-	if text == "" {
-		return e.replyAskClarification(localize(text,
-			"Neyi yapmak istediğini bir cümleyle yazar mısın?",
-			"Could you describe your goal in one sentence?"), 0.2)
+	if decision, ok := BoundaryDecision(text); ok {
+		return e.finalize(decision)
 	}
 
 	if e.llmClient == nil || sessionID == "" {

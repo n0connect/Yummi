@@ -2,7 +2,7 @@
 
 ← [Back to the project README](../README.md) for a quick overview and the fastest path to running Yummi.
 
-This directory is the complete, in-depth documentation set. It's organized around one idea: **the agent is the product** — everything else (the gateway, the sandbox, docker-proxy, the UI) exists to let that agent operate safely. Pages are grouped so you can go as deep as you need without wading through everything.
+This directory is the in-depth documentation set for the agent, operator surfaces, and enforcement components. Pages are grouped by behavior and implementation stack so you can start from a workflow and still reach the owning source code.
 
 ## Layout
 
@@ -24,7 +24,7 @@ docs/
     sandbox-execution.md    The one path every command takes to a real shell
 
   modules/                Code organized BY IMPLEMENTATION STACK — where to find things
-    orchestrator.md         Go — the 20 orchestrator packages and the conductor/executor boundary
+    orchestrator.md         Go — orchestrator packages and the conductor/executor boundary
     gateway.md               Rust — the trust-boundary module map and startup sequence
     cli-and-tui.md           Go (root module) — the yummi binary and its terminal UI
     ui.md                    Node/React — the dashboard's directory structure
@@ -45,6 +45,6 @@ docs/
 
 **"I'm integrating against the API directly (a custom client, a script)."** → [API Reference](api-reference.md).
 
-## A note on how this documentation was written
+## Maintenance contract
 
-These pages were written by reading the current source and checking claims against it, rather than carrying forward an earlier design note or a stale roadmap as-is. Where an older internal plan turned out to disagree with what the code actually does today (semantic memory retrieval being described as "planned" when it's implemented; the egress Ask-mode approval round-trip being described as "still open" when it's complete; a "four components" architecture that's actually five), the pages here follow the code, and say so explicitly rather than silently repeating the outdated version. That said, a page like this is a snapshot, not a live query against the repository — a subsequent review of this same documentation found and fixed several of its own errors (a misleading diagram, a wrong dependency order, an inaccurate "config-only" claim about hostname rules, fabricated example test names, and an internally-inconsistent claim about how the content-layer scanner behaves), which is worth knowing before treating anything here as beyond doubt. If you find a page that's drifted from the code as the project evolves, that's a documentation bug worth fixing the same way you'd fix any other bug — not a reason to distrust the rest of the set, but not a reason to skip verifying either.
+Documentation is versioned with the code, but source remains authoritative. When a route, wire type, environment default, security boundary, UI tab, Make target, or supported tool changes, update the owning component README and the relevant page here in the same change. Prefer links to source files and real test names over copied schemas or illustrative commands that can silently drift.

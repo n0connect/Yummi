@@ -29,13 +29,13 @@ pub use nftables::NftablesController;
 #[derive(Debug, Clone)]
 pub struct PacketMeta {
     pub timestamp_ns: i64,
-    pub src_ip:       std::net::IpAddr,
-    pub dst_ip:       std::net::IpAddr,
-    pub src_port:     Option<u16>,
-    pub dst_port:     Option<u16>,
-    pub protocol:     Protocol,
-    pub byte_count:   u64,
-    pub tcp_flags:    Option<u8>,
+    pub src_ip: std::net::IpAddr,
+    pub dst_ip: std::net::IpAddr,
+    pub src_port: Option<u16>,
+    pub dst_port: Option<u16>,
+    pub protocol: Protocol,
+    pub byte_count: u64,
+    pub tcp_flags: Option<u8>,
 }
 
 /// Network protocol identifier.
@@ -50,9 +50,9 @@ pub enum Protocol {
 impl std::fmt::Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Protocol::Tcp      => write!(f, "tcp"),
-            Protocol::Udp      => write!(f, "udp"),
-            Protocol::Icmp     => write!(f, "icmp"),
+            Protocol::Tcp => write!(f, "tcp"),
+            Protocol::Udp => write!(f, "udp"),
+            Protocol::Icmp => write!(f, "icmp"),
             Protocol::Other(n) => write!(f, "proto:{n}"),
         }
     }

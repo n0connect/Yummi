@@ -14,7 +14,10 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "yummi-gateway", about = "Yummi gateway trust boundary (Linux/nftables)")]
+#[command(
+    name = "yummi-gateway",
+    about = "Yummi gateway trust boundary (Linux/nftables)"
+)]
 struct Cli {
     /// Path to config file
     #[arg(short, long, default_value = "/etc/yummi/gateway.yaml")]
@@ -35,7 +38,9 @@ async fn main() {
 
 async fn run() -> Result<()> {
     #[cfg(not(target_os = "linux"))]
-    return Err(anyhow::anyhow!("gateway only runs on Linux (nftables + /proc required)"));
+    return Err(anyhow::anyhow!(
+        "gateway only runs on Linux (nftables + /proc required)"
+    ));
 
     #[cfg(target_os = "linux")]
     run_linux().await
@@ -83,11 +88,11 @@ async fn run_linux() -> Result<()> {
     let controller = std::sync::Arc::new(controller);
     info!("nftables FORWARD rules active (fail-closed)");
 
-    let audit    = AuditLog::open(&cfg.logging.audit_db)?;
-    let policy   = PolicyEngine::with_default_allow(&cfg.scope, cfg.policy.default_allow);
+    let audit = AuditLog::open(&cfg.logging.audit_db)?;
+    let policy = PolicyEngine::with_default_allow(&cfg.scope, cfg.policy.default_allow);
     let observer = Observer::new(policy.clone(), audit.clone());
-    let ipc      = IpcServer::new(&cfg.ipc, policy.clone(), audit.clone())
-        .with_controller(controller.clone());
+    let ipc =
+        IpcServer::new(&cfg.ipc, policy.clone(), audit.clone()).with_controller(controller.clone());
     let watchdog = Watchdog::new(&cfg, audit.clone());
 
     // Background: evict TTL-expired temporary allow rules every 60 seconds.
@@ -101,7 +106,7 @@ async fn run_linux() -> Result<()> {
     });
 
     let observer_handle = tokio::spawn(observer.run());
-    let ipc_handle      = tokio::spawn(ipc.run());
+    let ipc_handle = tokio::spawn(ipc.run());
     let watchdog_handle = tokio::spawn(watchdog.run());
 
     info!("gateway ready — sandbox traffic gated (Level 0 passive observation)");

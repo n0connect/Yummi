@@ -385,6 +385,21 @@ func TestEgressApprovalHoldThenApproveResumes(t *testing.T) {
 	}
 }
 
+func TestEgressApprovalUsesDetailedTarget(t *testing.T) {
+	store := NewStore()
+	store.SetProcessor(func(context.Context, Record) (string, error) {
+		return "", EgressApprovalRequiredError{Target: "8.8.8.8", IPs: []string{"8.8.8.8"}}
+	})
+	rec, err := store.Enqueue("s1", "p1", "nmap 10.0.0.1 8.8.8.8", "assistant_loop")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	held := pollStatus(t, store, rec.ID, StatusAwaitingEgressApproval)
+	if held.EgressTarget != "8.8.8.8" {
+		t.Fatalf("held target = %q, want detailed second target", held.EgressTarget)
+	}
+}
+
 // TestEgressApprovalDenyFailsWithoutUnlock proves denial ends the execution as
 // failed and never invokes the unlock callback (no rule is opened).
 func TestEgressApprovalDenyFailsWithoutUnlock(t *testing.T) {

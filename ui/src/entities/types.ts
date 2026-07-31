@@ -11,7 +11,15 @@ export type ExecutionRecord = {
   id: string
   session_id: string
   proposal_id?: string
-  status: 'queued' | 'running' | 'awaiting_egress_approval' | 'awaiting_threat_approval' | 'completed' | 'failed' | 'canceled' | string
+  status:
+    | 'queued'
+    | 'running'
+    | 'awaiting_egress_approval'
+    | 'awaiting_threat_approval'
+    | 'completed'
+    | 'failed'
+    | 'canceled'
+    | string
   command: string
   mode?: string
   output?: string
@@ -78,7 +86,13 @@ export type TaskStatus =
   | 'interrupted'
   | string
 
-export type PlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped' | string
+export type PlanStepStatus =
+  | 'pending'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'skipped'
+  | string
 
 export type PlanStep = {
   id: string
@@ -86,6 +100,22 @@ export type PlanStep = {
   status: PlanStepStatus
   result?: string
   error?: string
+}
+
+// FindingVerdict/OracleKind mirror the Go types in
+// orchestrator/internal/agent/verdict.go — a verdict is computed server-side
+// by checking the finding's cited evidence against the real recorded output
+// of the plan step it names, never taken on the model's word.
+export type FindingVerdict = 'candidate' | 'verified' | 'unsupported' | string
+export type OracleKind = 'tool_evidence' | string
+
+export type FindingRecord = {
+  title: string
+  verdict: FindingVerdict
+  oracle_kind?: OracleKind
+  evidence?: string
+  step_id?: string
+  reason?: string
 }
 
 export type AgentTask = {
@@ -102,6 +132,11 @@ export type AgentTask = {
   step_budget: number
   summary?: string
   findings?: string[]
+  // finding_records is the structured, verdict-bearing counterpart to
+  // findings — server-computed, never a bare model assertion (see
+  // orchestrator/internal/agent/verdict.go). May be shorter than findings:
+  // only findings the model attached evidence/step_id to produce a record.
+  finding_records?: FindingRecord[]
   question?: string
   last_error?: string
   pending_proposal_id?: string
@@ -114,8 +149,17 @@ export type AgentTask = {
 // ─── TRACE / observability types ─────────────────────────────────────────────
 
 export type ActivityKind =
-  | 'plan' | 'command' | 'command_result' | 'memory_recalled' | 'skill_applied'
-  | 'handoff_started' | 'handoff_completed' | 'finding' | 'context_saved' | 'ask' | 'finish'
+  | 'plan'
+  | 'command'
+  | 'command_result'
+  | 'memory_recalled'
+  | 'skill_applied'
+  | 'handoff_started'
+  | 'handoff_completed'
+  | 'finding'
+  | 'context_saved'
+  | 'ask'
+  | 'finish'
 
 // One legible step in the agent's work (from /ws/events agent.activity +
 // /api/v1/sessions/{id}/activity). parent_task_id nests sub-agent events.

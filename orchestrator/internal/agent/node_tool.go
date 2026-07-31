@@ -44,13 +44,14 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 	if isStuck(s.cmdWindow) {
 		// Surface the loop to the model as an observation and let it choose its
 		// next move normally at the step node (a different command, update_plan,
-		// or finish). The window is reset so the warning is a clean restart and
-		// does not immediately re-fire.
+		// or finish). Keep the current command as the new baseline: clearing the
+		// window entirely would let the exact same command execute again after
+		// every third blocked proposal.
 		obs := Wrap("ABNORMAL_PATTERN", "You are repeating the same commands. Recent: ["+
 			strings.Join(s.recentCmds, ", ")+"]. STOP repeating — choose a DIFFERENT command, "+
 			"update_plan with a new approach, or finish if the goal is already met.")
-		s.cmdWindow = nil
-		s.recentCmds = nil
+		s.cmdWindow = []string{hash}
+		s.recentCmds = []string{p.Command}
 		return s.blockCommand(obs)
 	}
 	// Block re-running any command already seen in the recent window — not just
@@ -98,6 +99,7 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		}
 		return "", fmt.Errorf("exec start: %w", err)
 	}
+	s.executedCmds = append(s.executedCmds, p.Command)
 	result, done := handle.Wait(s.cfg.SoftTimeout)
 	if !done {
 		s.pendingHandle = handle

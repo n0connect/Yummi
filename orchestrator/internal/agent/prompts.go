@@ -57,6 +57,12 @@ type FindingDetail struct {
 	Description string `json:"description,omitempty"`
 	Evidence    string `json:"evidence,omitempty"`
 	Target      string `json:"target,omitempty"`
+	// StepID cites the plan step whose actual tool output supports this
+	// finding — required for the finding to earn a Verified verdict (see
+	// verifyFindingDetail in verdict.go). May be omitted on a RUN_COMMAND's
+	// own findings (defaults to that command's own step); MUST be explicit
+	// on a FINISH's findings, since FINISH isn't tied to one step.
+	StepID string `json:"step_id,omitempty"`
 }
 
 // stripThinkTokens removes <think>...</think> blocks emitted by reasoning
@@ -272,6 +278,11 @@ func BuildStepPrompt(task Task, lastObservation, summary, preamble string) strin
 		if !strings.HasSuffix(lastObservation, "\n") {
 			b.WriteString("\n")
 		}
+	}
+	if planTerminal(task.Plan) && task.StepsUsed > 0 {
+		b.WriteString("\nALL PLAN STEPS ARE TERMINAL. Reply with FINISH now. The summary must directly " +
+			"answer the GOAL using exact values and units from the tool output. Do not make claims about " +
+			"vulnerabilities, processes, users, or network activity unless a shown command actually observed them.\n")
 	}
 
 	// Convergence nudge: when little budget remains, push the model to wrap up
