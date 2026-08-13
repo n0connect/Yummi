@@ -41,6 +41,95 @@ var ErrOutOfScope = errors.New("target not in scope")
 // ErrOutOfScope (a hard block) — fail-closed either way.
 var ErrEgressApprovalRequired = errors.New("egress approval required")
 
+// checkedTarget is a target that has passed gateway scope checking, with its
+// resolved IPs known — no nftables rule opened yet.
+type checkedTarget struct {
+	target string
+	ips    []string
+}
+
+// checkTargetScope asks the gateway's hostname policy and egress-verdict
+// machinery whether target may be reached, without opening any rule yet.
+// Extracted from RunScopedCommand's per-target loop so both the multi-target
+// shell-command path and the single-target MCP path share one gateway
+// decision path.
+func checkTargetScope(ctx context.Context, pc *gateway.Client, target string, pinnedIPs []string) (checkedTarget, error) {
+	if pc == nil {
+		return checkedTarget{}, fmt.Errorf("gateway scope check unavailable: client not configured")
+	}
+
+	// Name-level scope gate, BEFORE resolution: for a hostname target,
+	// consult the gateway's hostname allow/block policy. A "block" verdict
+	// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
+	// resolving or touching the IP-egress flow. "allow"/"neutral" proceed.
+	// IP targets carry no name, so they skip this.
+	if isHostnameTarget(target) {
+		hv, err := pc.CheckHostname(target)
+		if err != nil {
+			slog.Error("checkTargetScope: gateway hostname check error — blocking (fail-closed)",
+				"target", target, "error", err)
+			return checkedTarget{}, fmt.Errorf("gateway hostname check unavailable: %w", err)
+		}
+		if hv == "block" {
+			return checkedTarget{}, fmt.Errorf("GATEWAY_BLOCKED: hostname %q is blocked by policy: %w", target, ErrOutOfScope)
+		}
+	}
+
+	// Resolve a hostname target to IP(s) through Cloudflare (the same
+	// resolver the sandbox uses) so the gateway — which only understands
+	// IPs — can rule on the very address(es) the sandbox will connect to.
+	// An IP literal passes through unchanged; an unresolvable hostname
+	// yields no IPs and falls back to the gateway's mode-based unresolved
+	// verdict (and opens no rule, as before).
+	var ips []string
+	if len(pinnedIPs) > 0 && pinnedIPs[0] != "" {
+		ips = pinnedIPs
+	} else {
+		ips = defaultResolver.Resolve(ctx, target)
+	}
+	checkAddr := target
+	if len(ips) > 0 {
+		checkAddr = ips[0]
+	}
+
+	verdict, err := pc.CheckEgress(checkAddr)
+	if err != nil {
+		slog.Error("checkTargetScope: gateway egress check error — blocking execution (fail-closed)",
+			"target", target, "resolved", checkAddr, "error", err)
+		return checkedTarget{}, fmt.Errorf("gateway scope check unavailable: %w", err)
+	}
+	switch verdict {
+	case "allow":
+		return checkedTarget{target: target, ips: ips}, nil
+	case "block":
+		return checkedTarget{}, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
+	case "needs_approval":
+		return checkedTarget{}, execution.EgressApprovalRequiredError{Target: target, IPs: ips}
+	default:
+		// Unknown/empty verdict: fail closed rather than proceed to exec.
+		slog.Error("checkTargetScope: unknown gateway egress verdict — blocking execution (fail-closed)",
+			"target", target, "verdict", verdict)
+		return checkedTarget{}, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
+	}
+}
+
+// runScopedTarget checks exactly one target's gateway scope, opens its
+// nftables allow rule on success, and then calls execFn. Used by the MCP
+// dispatch path (processMCP), whose structured tool arguments already name a
+// single explicit target — no command-string parsing involved.
+func runScopedTarget(ctx context.Context, pc *gateway.Client, target string, pinnedIPs []string, auditNote string, execFn func(ctx context.Context) (*sandbox.Result, error)) (*sandbox.Result, error) {
+	checked, err := checkTargetScope(ctx, pc, target, pinnedIPs)
+	if err != nil {
+		return nil, err
+	}
+	warning := openAllowRules(pc, checked.target, checked.ips, auditNote)
+	result, err := execFn(ctx)
+	if warning != "" && result != nil {
+		result.Warning = warning
+	}
+	return result, err
+}
+
 // RunScopedCommand is the single call path that asks gateway whether a
 // command's target is in scope, opens the corresponding nftables allow rule
 // if so, and only then runs the command in the sandbox. Every Go code path
@@ -54,92 +143,42 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 	}
 
 	targets := scope.ExtractTargets(command)
-	if len(targets) > 0 {
-		if pc == nil {
-			return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
-		}
-		type checkedTarget struct {
-			target string
-			ips    []string
-		}
-		checked := make([]checkedTarget, 0, len(targets))
-
-		// Check every explicit target before opening any rule. Otherwise a
-		// command could place an allowed host first and an out-of-scope host later.
-		for _, target := range targets {
-			// Name-level scope gate, BEFORE resolution: for a hostname target,
-			// consult the gateway's hostname allow/block policy. A "block" verdict
-			// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
-			// resolving or touching the IP-egress flow. "allow"/"neutral" proceed.
-			// IP targets carry no name, so they skip this.
-			if isHostnameTarget(target) {
-				hv, err := pc.CheckHostname(target)
-				if err != nil {
-					slog.Error("RunScopedCommand: gateway hostname check error — blocking (fail-closed)",
-						"target", target, "error", err)
-					return nil, fmt.Errorf("gateway hostname check unavailable: %w", err)
-				}
-				if hv == "block" {
-					return nil, fmt.Errorf("GATEWAY_BLOCKED: hostname %q is blocked by policy: %w", target, ErrOutOfScope)
-				}
-			}
-
-			// Resolve a hostname target to IP(s) through Cloudflare (the same
-			// resolver the sandbox uses) so the gateway — which only understands
-			// IPs — can rule on the very address(es) the sandbox will connect to.
-			// An IP literal passes through unchanged; an unresolvable hostname
-			// yields no IPs and falls back to the gateway's mode-based unresolved
-			// verdict (and opens no rule, as before).
-			var ips []string
-			if len(targets) == 1 && len(pinnedIPs) > 0 && pinnedIPs[0] != "" {
-				ips = pinnedIPs
-			} else {
-				ips = defaultResolver.Resolve(ctx, target)
-			}
-			checkTarget := target
-			if len(ips) > 0 {
-				checkTarget = ips[0]
-			}
-
-			verdict, err := pc.CheckEgress(checkTarget)
-			if err != nil {
-				slog.Error("RunScopedCommand: gateway egress check error — blocking execution (fail-closed)",
-					"target", target, "resolved", checkTarget, "error", err)
-				return nil, fmt.Errorf("gateway scope check unavailable: %w", err)
-			}
-			switch verdict {
-			case "allow":
-				// proceed to nftables unlock + exec below
-			case "block":
-				return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
-			case "needs_approval":
-				return nil, execution.EgressApprovalRequiredError{Target: target, IPs: ips}
-			default:
-				// Unknown/empty verdict: fail closed rather than proceed to exec.
-				slog.Error("RunScopedCommand: unknown gateway egress verdict — blocking execution (fail-closed)",
-					"target", target, "verdict", verdict)
-				return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
-			}
-			checked = append(checked, checkedTarget{target: target, ips: ips})
-		}
-
-		// Only after all targets pass, open rules for every resolved address.
-		var nftWarnings []string
-		for _, item := range checked {
-			if warning := openAllowRules(pc, item.target, item.ips, command); warning != "" {
-				nftWarnings = append(nftWarnings, warning)
-			}
-		}
-		nftWarning := strings.Join(nftWarnings, "; ")
-
-		result, err := bridge.Exec(ctx, command)
-		if nftWarning != "" && result != nil {
-			result.Warning = nftWarning
-		}
-		return result, err
+	if len(targets) == 0 {
+		return bridge.Exec(ctx, command)
+	}
+	if pc == nil {
+		return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
 	}
 
-	return bridge.Exec(ctx, command)
+	// Check every explicit target before opening any rule. Otherwise a
+	// command could place an allowed host first and an out-of-scope host later.
+	checked := make([]checkedTarget, 0, len(targets))
+	for _, target := range targets {
+		var targetPinned []string
+		if len(targets) == 1 {
+			targetPinned = pinnedIPs
+		}
+		c, err := checkTargetScope(ctx, pc, target, targetPinned)
+		if err != nil {
+			return nil, err
+		}
+		checked = append(checked, c)
+	}
+
+	// Only after all targets pass, open rules for every resolved address.
+	var nftWarnings []string
+	for _, item := range checked {
+		if warning := openAllowRules(pc, item.target, item.ips, command); warning != "" {
+			nftWarnings = append(nftWarnings, warning)
+		}
+	}
+	nftWarning := strings.Join(nftWarnings, "; ")
+
+	result, err := bridge.Exec(ctx, command)
+	if nftWarning != "" && result != nil {
+		result.Warning = nftWarning
+	}
+	return result, err
 }
 
 // Executor connects approved commands to the sandbox container via gateway scope checks.
