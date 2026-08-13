@@ -40,7 +40,7 @@ func TestRunnerLive_RealModelRealContainer(t *testing.T) {
 	// Real sandbox executor: run the command inside the Kali container via docker exec.
 	es := execution.NewStore()
 	es.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
-		out, err := osexec.CommandContext(ctx, "docker", "exec", container, "sh", "-c", rec.Command).CombinedOutput()
+		out, err := osexec.CommandContext(ctx, "docker", "exec", "--user", "1000:1000", container, "/bin/bash", "-lc", rec.Command).CombinedOutput()
 		return string(out), err
 	})
 

@@ -50,9 +50,9 @@ var Registry = []Tag{
 	{"OPERATOR_ANSWER", AgentToLLM, "The operator's reply to your [ASK_OPERATOR] question. Use it to decide your next action.", "operator's message"},
 
 	// ── LLM → Agent (control / action) ──
-	{"RUN_COMMAND", LLMToAgent, "Run a shell command.", `{"command","step_id","rationale","risk_level","findings"?}`},
+	{"RUN_COMMAND", LLMToAgent, "Run a shell command.", `{"command","step_id","rationale","risk_level","findings"?,"findings_detail"?}`},
 	{"UPDATE_PLAN", LLMToAgent, "Revise the plan.", `{"steps":[...],"reason"}`},
-	{"FINISH", LLMToAgent, "Goal achieved. Before writing findings, re-scan every TOOL_RESPONSE above for concrete, specific facts (exact ports/versions/paths/cookies) rather than a generic summary — a specific fact like \"port 3306 open, MySQL 5.5.47\" is a real finding; \"open ports were found\" is not.", `{"summary","findings"}`},
+	{"FINISH", LLMToAgent, "Goal achieved. Before writing findings, re-scan every TOOL_RESPONSE above for concrete, specific facts (exact ports/versions/paths/cookies) rather than a generic summary — a specific fact like \"port 3306 open, MySQL 5.5.47\" is a real finding; \"open ports were found\" is not.", `{"summary","findings"?,"findings_detail"?}`},
 	{"HANDOFF", LLMToAgent, "Delegate a focused subtask to a named specialist sub-agent. To delegate to several specialists AT ONCE (they run concurrently), use \"handoffs\" instead.", `{"role","subgoal"} or {"handoffs":[{"role","subgoal"},...]}`},
 	{"REMEMBER", LLMToAgent, "Persist a structured memory (e.g. a code/connection map) under a key — never forgotten.", `{"key","value"}`},
 	{"ASK_OPERATOR", LLMToAgent, "Blocked; need a human.", `{"question"}`},
@@ -104,6 +104,10 @@ func ProtocolReference() string {
 		}
 	}
 	b.WriteString("\nExample reply:\n[RUN_COMMAND]\n{\"command\":\"nmap -sV 127.0.0.1\",\"step_id\":\"s1\",\"rationale\":\"fingerprint\",\"risk_level\":\"medium\"}\n")
+	b.WriteString("\nFINDING VERIFICATION — \"findings\" is an unverified claim; \"findings_detail\" lets a finding earn a VERIFIED badge instead:\n" +
+		`  [{"title":"...","evidence":"<exact substring copied from the tool output above>","step_id":"<id of the step whose output proves it>"}]` + "\n" +
+		"This is checked against the real recorded output of that step, not taken on your word — quote evidence verbatim, do not paraphrase it, " +
+		"or a true finding will fail the check and show as unverified.\n")
 	return b.String()
 }
 

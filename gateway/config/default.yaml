@@ -8,7 +8,7 @@ scope:
   # Default allowed CIDRs — empty means nothing external is reachable
   # until an operator approves targets via orchestrator's approval flow.
   allow: []
-  # Always-blocked CIDRs (loopback, link-local, private ranges).
+  # Default blocked CIDRs (loopback, link-local, private ranges).
   # These protect against SSRF and scope bleed. IPv4 loopback/link-local and
   # IPv6 loopback/link-local(fe80::/10)/multicast/unspecified are additionally
   # enforced unconditionally by the policy engine's is_always_blocked() floor

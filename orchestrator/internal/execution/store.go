@@ -30,6 +30,11 @@ const (
 	// external access via ResolveEgress. Non-terminal: it resumes (→ queued) on
 	// approval or ends (→ failed) on denial.
 	StatusAwaitingEgressApproval = "awaiting_egress_approval"
+	// StatusAwaitingThreatApproval means an assistant-loop command completed but
+	// its target-controlled output matched the content threat scanner. The output
+	// is retained for the operator, but is not returned to the conductor until
+	// the operator explicitly approves sharing it.
+	StatusAwaitingThreatApproval = "awaiting_threat_approval"
 	// StatusCompleted means the execution flow finished successfully.
 	StatusCompleted = "completed"
 	// StatusFailed means the execution flow failed.
@@ -53,6 +58,9 @@ var (
 	// ErrNotAwaitingEgress indicates ResolveEgress was called on an execution
 	// that is not currently held for egress approval.
 	ErrNotAwaitingEgress = errors.New("execution is not awaiting egress approval")
+	// ErrNotAwaitingThreat indicates ResolveThreatApproval was called on an
+	// execution whose output is not currently held by the content gate.
+	ErrNotAwaitingThreat = errors.New("execution is not awaiting threat approval")
 	// ErrEgressApprovalRequired is the sentinel a ProcessFunc returns to signal
 	// that the command's target needs operator egress approval (gateway Ask
 	// mode). The store reacts by holding the execution in
@@ -93,8 +101,22 @@ type Record struct {
 	SanitizedError  string `json:"sanitized_error,omitempty"`
 	EgressTarget    string `json:"egress_target,omitempty"`
 	PinnedIPs       string `json:"pinned_ips,omitempty"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	// MCPTool/MCPArgs are set only for a record dispatched through the
+	// sandbox-resident MCP server (internal/sandboxmcp) instead of a raw
+	// shell command — empty for every existing shell-command record. Command
+	// still holds a human-readable rendering (sandboxmcp.RenderCommand) so
+	// the UI/audit trail shows a real command line either way.
+	MCPTool   string `json:"mcp_tool,omitempty"`
+	MCPArgs   string `json:"mcp_args,omitempty"` // json-encoded map[string]any
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+	// ElapsedSecs is set only on periodic "still running" heartbeat events
+	// (see process()'s heartbeatInterval) — never persisted, never present on
+	// a terminal record. It exists purely so the UI can show live elapsed
+	// time instead of an unchanging "running" state for however long a real
+	// command (nikto, a full nmap scan, ...) takes, which previously looked
+	// indistinguishable from a hang.
+	ElapsedSecs int64 `json:"elapsed_secs,omitempty"`
 }
 
 // Event is published whenever an execution lifecycle changes.
@@ -110,23 +132,25 @@ type ProcessFunc func(ctx context.Context, rec Record) (output string, err error
 
 // Store keeps execution records with optional SQLite persistence.
 type Store struct {
-	mu           sync.RWMutex
-	items        map[string]Record
-	active       map[string]context.CancelFunc
-	db           *sql.DB // nil = in-memory only
-	processDelay time.Duration
-	subscribers  map[int]chan Event
-	nextSubID    int
-	processFn    ProcessFunc
+	mu                sync.RWMutex
+	items             map[string]Record
+	active            map[string]context.CancelFunc
+	db                *sql.DB // nil = in-memory only
+	processDelay      time.Duration
+	heartbeatInterval time.Duration
+	subscribers       map[int]chan Event
+	nextSubID         int
+	processFn         ProcessFunc
 }
 
 // NewStore creates an in-memory-only execution store (suitable for tests).
 func NewStore() *Store {
 	return &Store{
-		items:        make(map[string]Record),
-		active:       make(map[string]context.CancelFunc),
-		processDelay: defaultProcessDelay,
-		subscribers:  make(map[int]chan Event),
+		items:             make(map[string]Record),
+		active:            make(map[string]context.CancelFunc),
+		processDelay:      defaultProcessDelay,
+		heartbeatInterval: defaultHeartbeatInterval,
+		subscribers:       make(map[int]chan Event),
 	}
 }
 
@@ -134,11 +158,12 @@ func NewStore() *Store {
 // Active (non-terminal) records from previous runs are reloaded into memory on startup.
 func NewStoreWithDB(db *sql.DB) *Store {
 	s := &Store{
-		items:        make(map[string]Record),
-		active:       make(map[string]context.CancelFunc),
-		db:           db,
-		processDelay: defaultProcessDelay,
-		subscribers:  make(map[int]chan Event),
+		items:             make(map[string]Record),
+		active:            make(map[string]context.CancelFunc),
+		db:                db,
+		processDelay:      defaultProcessDelay,
+		heartbeatInterval: defaultHeartbeatInterval,
+		subscribers:       make(map[int]chan Event),
 	}
 	// Best-effort reload — ignore errors (table may not exist yet on first run)
 	_ = s.loadFromDB()
@@ -179,6 +204,60 @@ func (s *Store) Enqueue(sessionID, proposalID, command, mode string) (Record, er
 		Command:    command,
 		Mode:       mode,
 		Status:     StatusQueued,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	s.mu.Lock()
+	s.items[rec.ID] = rec
+	s.mu.Unlock()
+	s.publish(Event{
+		Type:      "execution.queued",
+		Timestamp: rec.UpdatedAt,
+		Record:    rec,
+	})
+	s.dbPersist(rec)
+
+	go s.process(rec.ID)
+	return rec, nil
+}
+
+// EnqueueMCP queues an MCP tool call — the structured-argument sibling of
+// Enqueue used by the sandbox-resident-MCP dispatch path. args is
+// JSON-encoded into Record.MCPArgs so Record stays a flat, DB-persistable
+// struct; displayCommand becomes Record.Command so audit/UI/approval show a
+// real command line exactly as the shell path does.
+func (s *Store) EnqueueMCP(sessionID, proposalID, tool string, args map[string]any, displayCommand, mode string) (Record, error) {
+	if s == nil {
+		return Record{}, ErrStoreNil
+	}
+	if tool == "" {
+		return Record{}, fmt.Errorf("%w: mcp tool name required", ErrCommandRequired)
+	}
+	if displayCommand == "" {
+		displayCommand = tool
+	}
+	if mode == "" {
+		mode = "manual_terminal"
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return Record{}, fmt.Errorf("marshal mcp args: %w", err)
+	}
+
+	now := time.Now().Unix()
+	rec := Record{
+		ID:         uuid.NewString(),
+		SessionID:  sessionID,
+		ProposalID: proposalID,
+		Command:    displayCommand,
+		Mode:       mode,
+		Status:     StatusQueued,
+		MCPTool:    tool,
+		MCPArgs:    string(argsJSON),
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -445,18 +524,20 @@ func (s *Store) process(id string) {
 	s.mu.RUnlock()
 
 	if fn != nil {
-		output, err := fn(ctx, running)
+		output, err := s.runWithHeartbeat(ctx, id, running, fn)
 		if err != nil {
 			// Egress Ask mode: the gateway wants operator approval before the
 			// target may be reached. Hold the execution (fail-closed, no
 			// traffic) instead of failing it — ResolveEgress resumes or ends it.
 			if errors.Is(err, ErrEgressApprovalRequired) {
 				var ips []string
+				target := scope.ExtractTarget(running.Command)
 				var egressErr EgressApprovalRequiredError
 				if errors.As(err, &egressErr) {
+					target = egressErr.Target
 					ips = egressErr.IPs
 				}
-				held, ok := s.holdForEgressApproval(id, scope.ExtractTarget(running.Command), ips)
+				held, ok := s.holdForEgressApproval(id, target, ips)
 				if ok {
 					s.publish(Event{
 						Type:      "execution.awaiting_egress_approval",
@@ -468,10 +549,14 @@ func (s *Store) process(id string) {
 				return
 			}
 			errText := err.Error()
-			failed, ok := s.updateStatusIfIn(id, []string{StatusRunning}, StatusFailed, output, errText)
+			failed, ok := s.finishOrHoldForThreat(id, StatusFailed, output, errText)
 			if ok {
+				eventType := "execution.failed"
+				if failed.Status == StatusAwaitingThreatApproval {
+					eventType = "execution.awaiting_threat_approval"
+				}
 				s.publish(Event{
-					Type:      "execution.failed",
+					Type:      eventType,
 					Timestamp: failed.UpdatedAt,
 					Record:    failed,
 				})
@@ -479,10 +564,14 @@ func (s *Store) process(id string) {
 			}
 			return
 		}
-		completed, ok := s.updateStatusIfIn(id, []string{StatusRunning}, StatusCompleted, output, "")
+		completed, ok := s.finishOrHoldForThreat(id, StatusCompleted, output, "")
 		if ok {
+			eventType := "execution.completed"
+			if completed.Status == StatusAwaitingThreatApproval {
+				eventType = "execution.awaiting_threat_approval"
+			}
 			s.publish(Event{
-				Type:      "execution.completed",
+				Type:      eventType,
 				Timestamp: completed.UpdatedAt,
 				Record:    completed,
 			})
@@ -509,6 +598,119 @@ func (s *Store) process(id string) {
 		Record:    completed,
 	})
 	s.dbPersist(completed)
+}
+
+// defaultHeartbeatInterval controls how often runWithHeartbeat publishes a
+// "still running" progress event while the underlying ProcessFunc call is
+// blocked. A real command (nikto, a full nmap scan, ...) can legitimately
+// take minutes; without this, the UI has nothing to show between
+// "execution.running" and the eventual "execution.completed" and a long,
+// silent wait looks indistinguishable from a hang. Overridable per-Store
+// (like processDelay) so tests don't need to wait multiple seconds.
+const defaultHeartbeatInterval = 3 * time.Second
+
+// runWithHeartbeat runs fn in the background and periodically republishes the
+// execution's "running" event with ElapsedSecs set, until fn returns. It does
+// not change fn's contract (still one blocking call, same signature) — the
+// heartbeat is purely additive observability, not real output streaming.
+func (s *Store) runWithHeartbeat(ctx context.Context, id string, running Record, fn ProcessFunc) (string, error) {
+	type outcome struct {
+		output string
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		output, err := fn(ctx, running)
+		done <- outcome{output, err}
+	}()
+
+	ticker := time.NewTicker(s.heartbeatInterval)
+	defer ticker.Stop()
+	start := time.Now()
+
+	for {
+		select {
+		case res := <-done:
+			return res.output, res.err
+		case <-ticker.C:
+			rec, ok := s.Get(id)
+			if !ok || rec.Status != StatusRunning {
+				continue
+			}
+			rec.ElapsedSecs = int64(time.Since(start).Seconds())
+			s.publish(Event{
+				Type:      "execution.running",
+				Timestamp: time.Now().Unix(),
+				Record:    rec,
+			})
+		}
+	}
+}
+
+// finishOrHoldForThreat records an execution result and pauses the
+// single-command assistant loop when its target-controlled output is flagged.
+// Agent tasks have their own graph-level threat_hold node, so holding them here
+// would deadlock that graph while it waits for a terminal execution result.
+func (s *Store) finishOrHoldForThreat(id, finalStatus, output, errText string) (Record, bool) {
+	rec, ok := s.updateStatusIfIn(id, []string{StatusRunning}, finalStatus, output, errText)
+	if !ok || rec.Mode != "assistant_loop" || rec.SecurityBanner == "" {
+		return rec, ok
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.items[id]
+	if !ok || current.Status != finalStatus {
+		return Record{}, false
+	}
+	current.Status = StatusAwaitingThreatApproval
+	current.UpdatedAt = time.Now().Unix()
+	s.items[id] = current
+	return current, true
+}
+
+// ResolveThreatApproval releases or rejects output held by the content-layer
+// gate. Approval restores the original terminal outcome (completed/failed);
+// rejection cancels only the model-feedback step -- the command has already
+// run and its raw output remains visible to the operator and audit log.
+func (s *Store) ResolveThreatApproval(id string, approved bool) (Record, error) {
+	if s == nil {
+		return Record{}, ErrStoreNil
+	}
+	s.mu.Lock()
+	rec, ok := s.items[id]
+	if !ok {
+		s.mu.Unlock()
+		return Record{}, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
+	}
+	if rec.Status != StatusAwaitingThreatApproval {
+		s.mu.Unlock()
+		return Record{}, fmt.Errorf("%w: %s (%s)", ErrNotAwaitingThreat, id, rec.Status)
+	}
+	if approved {
+		if rec.Error != "" {
+			rec.Status = StatusFailed
+		} else {
+			rec.Status = StatusCompleted
+		}
+	} else {
+		rec.Status = StatusCanceled
+	}
+	rec.UpdatedAt = time.Now().Unix()
+	s.items[id] = rec
+	s.mu.Unlock()
+
+	eventType := "execution.threat_rejected"
+	if approved {
+		if rec.Status == StatusFailed {
+			eventType = "execution.failed"
+		} else {
+			eventType = "execution.completed"
+		}
+	}
+	s.publish(Event{Type: eventType, Timestamp: rec.UpdatedAt, Record: rec})
+	s.dbPersist(rec)
+	return rec, nil
 }
 
 func (s *Store) startRunning(id string) (Record, context.Context, context.CancelFunc, bool) {
@@ -558,18 +760,18 @@ func (s *Store) updateStatusIfIn(id string, allowed []string, status, output, er
 		// can forget to. Detection only (a banner), never blocking or mutating
 		// the raw output: the operator can't intervene mid-command and a
 		// researcher may legitimately be reading attacker write-ups.
-		rec.SecurityBanner = threatscan.Banner(output)
 		rec.SanitizedOutput = threatscan.StripANSI(output)
+		rec.SecurityBanner = threatscan.Banner(rec.SanitizedOutput)
 	}
 	if errText != "" {
 		rec.Error = errText
 		// Failure output (stderr / error body) is equally attacker-influenced.
 		// Only set a banner from the error when the output itself was clean, so
 		// we never clobber a hit found on stdout.
-		if rec.SecurityBanner == "" {
-			rec.SecurityBanner = threatscan.Banner(errText)
-		}
 		rec.SanitizedError = threatscan.StripANSI(errText)
+		if rec.SecurityBanner == "" {
+			rec.SecurityBanner = threatscan.Banner(rec.SanitizedError)
+		}
 	}
 	s.items[id] = rec
 	s.mu.Unlock()
@@ -648,16 +850,18 @@ func (s *Store) dbPersist(rec Record) {
 		return
 	}
 	_, _ = s.db.Exec(`
-		INSERT INTO executions(id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)
+		INSERT INTO executions(id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,mcp_tool,mcp_args,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status,
 			output=excluded.output,
 			error=excluded.error,
 			pinned_ips=excluded.pinned_ips,
+			mcp_tool=excluded.mcp_tool,
+			mcp_args=excluded.mcp_args,
 			updated_at=excluded.updated_at`,
 		rec.ID, rec.SessionID, rec.ProposalID, rec.Command, rec.Mode,
-		rec.Status, rec.Output, rec.Error, rec.PinnedIPs, rec.CreatedAt, rec.UpdatedAt,
+		rec.Status, rec.Output, rec.Error, rec.PinnedIPs, rec.MCPTool, rec.MCPArgs, rec.CreatedAt, rec.UpdatedAt,
 	)
 }
 
@@ -668,7 +872,7 @@ func (s *Store) loadFromDB() error {
 		return nil
 	}
 	rows, err := s.db.Query(`
-		SELECT id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at
+		SELECT id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,mcp_tool,mcp_args,created_at,updated_at
 		FROM executions ORDER BY created_at ASC`)
 	if err != nil {
 		return err
@@ -679,10 +883,10 @@ func (s *Store) loadFromDB() error {
 	defer s.mu.Unlock()
 	for rows.Next() {
 		var rec Record
-		var proposalID, output, errText, pinnedIPs sql.NullString
+		var proposalID, output, errText, pinnedIPs, mcpTool, mcpArgs sql.NullString
 		if err := rows.Scan(
 			&rec.ID, &rec.SessionID, &proposalID, &rec.Command, &rec.Mode,
-			&rec.Status, &output, &errText, &pinnedIPs, &rec.CreatedAt, &rec.UpdatedAt,
+			&rec.Status, &output, &errText, &pinnedIPs, &mcpTool, &mcpArgs, &rec.CreatedAt, &rec.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -690,14 +894,16 @@ func (s *Store) loadFromDB() error {
 		rec.Output = output.String
 		rec.Error = errText.String
 		rec.PinnedIPs = pinnedIPs.String
+		rec.MCPTool = mcpTool.String
+		rec.MCPArgs = mcpArgs.String
 		// SecurityBanner/SanitizedOutput/SanitizedError are derived, not stored —
 		// recompute them on load so a restored record carries the same
 		// content-layer verdict and LLM-safe copy it had live.
 		if rec.Output != "" {
-			rec.SecurityBanner = threatscan.Banner(rec.Output)
 			rec.SanitizedOutput = threatscan.StripANSI(rec.Output)
+			rec.SecurityBanner = threatscan.Banner(rec.SanitizedOutput)
 		} else if rec.Error != "" {
-			rec.SecurityBanner = threatscan.Banner(rec.Error)
+			rec.SecurityBanner = threatscan.Banner(threatscan.StripANSI(rec.Error))
 		}
 		if rec.Error != "" {
 			rec.SanitizedError = threatscan.StripANSI(rec.Error)

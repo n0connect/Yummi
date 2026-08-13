@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -56,6 +57,12 @@ type FindingDetail struct {
 	Description string `json:"description,omitempty"`
 	Evidence    string `json:"evidence,omitempty"`
 	Target      string `json:"target,omitempty"`
+	// StepID cites the plan step whose actual tool output supports this
+	// finding — required for the finding to earn a Verified verdict (see
+	// verifyFindingDetail in verdict.go). May be omitted on a RUN_COMMAND's
+	// own findings (defaults to that command's own step); MUST be explicit
+	// on a FINISH's findings, since FINISH isn't tied to one step.
+	StepID string `json:"step_id,omitempty"`
 }
 
 // stripThinkTokens removes <think>...</think> blocks emitted by reasoning
@@ -76,6 +83,43 @@ func stripThinkTokens(s string) string {
 		s = s[:start] + s[start+end+len("</think>"):]
 	}
 	return s
+}
+
+// internalTagLinePattern matches a standalone protocol-tag line — a weak
+// model echoing its own LLM→agent wire format (e.g. a literal "[FINISH]"
+// line) inside free text it authored. Mirrors
+// conductor.sanitizeVisibleModelText's identical pattern; kept as its own
+// copy here rather than a cross-package import, since agent and conductor
+// are deliberately independent (see CLAUDE.md's conductor/executor
+// separation note) and each protects its own wire-visible text.
+var internalTagLinePattern = regexp.MustCompile(`(?m)^\s*\[(RUN_COMMAND|UPDATE_PLAN|FINISH|HANDOFF|REMEMBER|ASK_OPERATOR|SEND_FULL|CONTINUE|ABORT|STOP_TASK)\]\s*$`)
+
+// sanitizeAgentText is the chokepoint for model-authored free text that
+// becomes wire-visible on Task (Summary/Findings/Question, sent to every
+// client — web, Tauri, AND the TUI — via GET /api/v1/tasks/{id} and every
+// task.status websocket event). Unlike the chat/conductor path, agent-task
+// text has no per-client sanitizer to fall back on — internal/tui renders
+// Task.Summary/Findings/Question completely raw, so this must be the only
+// line of defense, applied once here rather than trusted to be re-implemented
+// per client. Strips <think> reasoning-model noise and any standalone
+// protocol-tag line the model echoed from its own wire format.
+func sanitizeAgentText(s string) string {
+	s = stripThinkTokens(s)
+	s = internalTagLinePattern.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
+// sanitizeFindings applies sanitizeAgentText to every finding string, and
+// drops the now-empty ones the same way filterEmpty does — mirrors the
+// existing empty-string reject used elsewhere in this package (graph.go).
+func sanitizeFindings(findings []string) []string {
+	out := make([]string, 0, len(findings))
+	for _, f := range findings {
+		if clean := sanitizeAgentText(f); clean != "" {
+			out = append(out, clean)
+		}
+	}
+	return out
 }
 
 // extractJSON strips think tokens, markdown fences, and surrounding prose,
@@ -234,6 +278,11 @@ func BuildStepPrompt(task Task, lastObservation, summary, preamble string) strin
 		if !strings.HasSuffix(lastObservation, "\n") {
 			b.WriteString("\n")
 		}
+	}
+	if planTerminal(task.Plan) && task.StepsUsed > 0 {
+		b.WriteString("\nALL PLAN STEPS ARE TERMINAL. Reply with FINISH now. The summary must directly " +
+			"answer the GOAL using exact values and units from the tool output. Do not make claims about " +
+			"vulnerabilities, processes, users, or network activity unless a shown command actually observed them.\n")
 	}
 
 	// Convergence nudge: when little budget remains, push the model to wrap up

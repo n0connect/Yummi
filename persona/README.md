@@ -1,6 +1,8 @@
 # persona — AI Assistant Behavior
 
-YAML and JSON configuration files that define the AI assistant's identity, methodology, safety boundaries, and tool knowledge. The conductor engine (`orchestrator/internal/conductor/`) loads these at startup.
+> Quick local overview. For the full, kept-current reference (the two independent personas, safety boundaries explained in depth, golden tests, why `tier_capabilities/` isn't loaded at runtime), see [docs/persona/persona-and-skills.md](../docs/persona/persona-and-skills.md) and [docs/agent/skills-and-subagents.md](../docs/agent/skills-and-subagents.md).
+
+YAML and JSON configuration files define conductor behavior, the independent agent persona, skills, and sub-agent roles. The conductor, agent, skill registry, and sub-agent loader each read the files they own at startup; no single loader consumes this whole tree.
 
 ## Layout
 
@@ -10,6 +12,9 @@ v0.1/
   methodology.yaml         How it approaches pentest tasks — recon → exploit → report
   safety_boundaries.yaml   Hard stops — what the assistant will never do
   output_schema.json       JSON schema for conductor ChatResponse validation
+  agent.yaml               Agent-task identity and graph-loop instructions
+  skills/                  Declarative playbooks loaded by the skill registry
+  subagents/               Specialist roles available to HANDOFF
   tier_capabilities/       Reference docs for each tier's profile (NOT loaded by Go — see note below)
     lite.yaml / standard.yaml / pro.yaml / expert.yaml
   golden_tests/            Regression fixtures — input → expected intent
@@ -23,11 +28,11 @@ Tiers are selected via `YUMMI_OLLAMA_TIER`. The actual model/context/thinking-mo
 | Tier | Model | Context window |
 |---|---|---|
 | `lite` | qwen3:4b | 8192 |
-| `standard` (default) | qwen3:8b | 16384 |
-| `pro` | qwen3:14b | 16384 |
+| `standard` (registry default) | qwen3:8b | 16384 |
+| `pro` (Compose/install default) | qwen3:14b | 16384 |
 | `expert` | qwen3:32b | 32768 (extended thinking mode) |
 
-Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Setting `YUMMI_OLLAMA_TIER` overrides `YUMMI_OLLAMA_MODEL`.
+Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Without an explicit model, `YUMMI_OLLAMA_TIER` selects the matching preset.
 
 **`tier_capabilities/*.yaml` is currently reference documentation only** — each file describes that tier's intended strengths/limitations for a human reader, but no Go code reads this directory (verified: `grep -rn tier_capabilities orchestrator --include='*.go'` returns nothing). If you change a tier's actual behavior, edit `tier.go`'s `DefaultTierRegistry()` map directly; update the matching `tier_capabilities/<name>.yaml` afterward to keep the description honest, but know that editing the YAML alone changes nothing at runtime.
 
@@ -39,9 +44,9 @@ Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Setting `YUMMI_OLLAMA_TIE
 
 ## Teaching the agent a new tool
 
-There is no tool registry file and no tool allowlist — the validator gates on risk, not on tool identity. The model relies on its own pretrained knowledge of pentest tools; `persona/v0.1/agent.yaml`'s `identity` is explicit about this ("you are given no catalogue and need none"). If a tool needs special handling:
+There is no executable allowlist — the validator gates on risk, not tool identity. Skill YAML does contain informational `tools` metadata used for selection and prompt context, so it must stay aligned with the sandbox image. If a tool needs special handling:
 
-- Niche/unusual tool the model doesn't already know well: add a short usage note to `core_identity.yaml` or `agent.yaml`'s prose (sparingly — these are reasoning documents, not a reference manual).
+- Install it in `sandbox/Dockerfile`; then add it to the relevant `skills/*.yaml` metadata and methodology.
 - A tool family needs a structural risk floor: special-case it in `classifyRisk` (`orchestrator/internal/conductor/validator.go`).
 
 ## Updating safety boundaries
@@ -50,9 +55,9 @@ There is no tool registry file and no tool allowlist — the validator gates on 
 
 ## Golden tests
 
-**Not currently wired to an automated runner** — there is no Go code or script that reads `golden_tests/*.yaml` and asserts against it; verified no consumer exists anywhere in the repo. These are fixture-shaped documents describing intended (input, intent) pairs for a regression suite that hasn't been built yet. Treat them as a spec for that future runner, not as something CI already checks.
+These fixtures are load-bearing regression tests. `internal/conductor.TestPersonaGoldenFixtures` reads every YAML file through `EvaluateGoldenFixtures`; the normal orchestrator `go test ./...` job therefore fails when deterministic boundary policy no longer produces the expected intent. Add a fixture whenever a high-confidence safety or missing-target failure is observed.
 
-`golden_tests/*.yaml` contain expected (input, intent) pairs for regression testing:
+For example, a fixture-shaped intended behavior looks like:
 
 ```yaml
 - input: "scan the target for open ports"
@@ -60,4 +65,4 @@ There is no tool registry file and no tool allowlist — the validator gates on 
   expected_tool: "nmap"
 ```
 
-Run: `cd orchestrator && go test ./internal/conductor -run TestGolden`
+Run them directly with `cd orchestrator && go test ./internal/conductor -run TestPersonaGoldenFixtures`.

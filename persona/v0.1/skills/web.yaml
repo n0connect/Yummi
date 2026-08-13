@@ -17,12 +17,12 @@ tools:
   - whatweb
   - curl
   - gobuster
-  - feroxbuster
+  - ffuf
   - nikto
 knowledge: |
   Assess web targets methodically:
   1. Fingerprint: `whatweb <url>` and `curl -sI <url>` for server, framework, headers.
-  2. Map content: `gobuster dir -u <url> -w <wordlist>` (or feroxbuster) for hidden paths.
+  2. Map content with `gobuster dir -u <url> -w <wordlist>` or `ffuf -u <url>/FUZZ -w <wordlist>`.
   3. Known issues: `nikto -h <url>` for outdated software / misconfig signatures.
   4. Inspect security headers (CSP, HSTS, X-Frame-Options) and cookie flags.
   5. Record each distinct issue as its own structured finding with the evidence (response snippet).

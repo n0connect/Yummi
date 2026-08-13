@@ -1,49 +1,23 @@
 import { NavLink } from 'react-router-dom'
-import { useSystemStatus } from '../system/useSystemStatus'
-import { dotClass } from '../../shared/lib/statusDot'
+import { isDesktopShell } from '../../shared/api/runtime'
+import { t } from '../../shared/i18n/strings'
 
 export function StatusBar(): JSX.Element {
-  const data = useSystemStatus()
-
-  const modules = data?.modules ?? []
-  const getStatus = (name: string) =>
-    modules.find(m => m.name === name)?.status ?? 'checking'
-
   return (
     <div className="status-bar">
       <div className="left">
         <span className="logo">YUMMI</span>
-        <span className="status-separator">│</span>
-        {['sandbox', 'gateway', 'orchestrator', 'conductor'].map(name => {
-          const status = getStatus(name)
-          return (
-            <span key={name} className="status-item" title={`${name}: ${status}`}>
-              <span className={dotClass(status)} />
-              {name}
-            </span>
-          )
-        })}
-        {data && (
-          <>
-            <span className="status-separator">│</span>
-            <span className="status-item" style={{ color: 'var(--text-muted)' }}>
-              {data.overall}
-            </span>
-          </>
-        )}
+        {isDesktopShell && <span className="desktop-badge">DESKTOP</span>}
       </div>
       <div className="right">
-        <span className="status-item status-clock" title="last health check">
-          {data ? new Date(data.checked_at).toLocaleTimeString() : '—'}
-        </span>
         <nav className="nav-seg">
           {[
-            { to: '/', label: 'Agent', end: true },
-            { to: '/terminal', label: 'Bash', end: false },
-            { to: '/trace', label: 'Trace', end: false },
-            { to: '/logs', label: 'Logs', end: false },
-            { to: '/gateway', label: 'Gateway', end: false },
-            { to: '/health', label: 'Health', end: false }
+            { to: '/', label: t('statusBar.nav.agent'), end: true },
+            { to: '/terminal', label: t('statusBar.nav.bash'), end: false },
+            { to: '/trace', label: t('statusBar.nav.trace'), end: false },
+            { to: '/logs', label: t('statusBar.nav.logs'), end: false },
+            { to: '/gateway', label: t('statusBar.nav.gateway'), end: false },
+            { to: '/health', label: t('statusBar.nav.health'), end: false }
           ].map(item => (
             <NavLink
               key={item.to}

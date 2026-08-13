@@ -51,8 +51,12 @@ if ! command -v ollama &>/dev/null; then
   fi
 fi
 
-OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:8b}"
-if ! ollama list 2>/dev/null | grep -q "${OLLAMA_MODEL%%:*}"; then
+OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:14b}"
+# Exact tag match (anchored), not a family-name substring match: a substring
+# match on "qwen3" would treat qwen3:8b as satisfying a request for
+# qwen3:14b (or vice versa), silently skipping the pull of the tag actually
+# needed and leaving the wrong size on disk.
+if ! ollama list 2>/dev/null | grep -q "^${OLLAMA_MODEL}"; then
   echo "Pulling ${OLLAMA_MODEL} (this may take a few minutes)..."
   ollama pull "${OLLAMA_MODEL}"
 else

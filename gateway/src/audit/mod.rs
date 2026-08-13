@@ -14,6 +14,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// Sentinel hash used for the very first row (no previous entry).
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+type AuditChainRow = (i64, i64, String, String, String, String, String, String);
+
 #[derive(Error, Debug)]
 pub enum AuditError {
     #[error("database error: {0}")]
@@ -53,6 +55,9 @@ impl AuditLog {
     }
 
     /// Record a policy decision, computing and storing the SHA256 hash chain.
+    // The arguments intentionally mirror the append-only database columns at
+    // this boundary; packaging them would obscure the audited field order.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_decision(
         &self,
         timestamp_ns: i64,
@@ -84,9 +89,17 @@ impl AuditLog {
                                     protocol, decision, reason, row_hash, prev_hash)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
-                timestamp_ns, session_id, src_ip, dst_ip,
-                src_port, dst_port, protocol, decision, reason,
-                row_hash, prev_hash
+                timestamp_ns,
+                session_id,
+                src_ip,
+                dst_ip,
+                src_port,
+                dst_port,
+                protocol,
+                decision,
+                reason,
+                row_hash,
+                prev_hash
             ],
         )?;
         Ok(())
@@ -95,8 +108,7 @@ impl AuditLog {
     /// Count total decisions (for status reporting).
     pub fn decision_count(&self) -> Result<i64, AuditError> {
         let conn = self.conn.lock().map_err(|_| AuditError::LockPoisoned)?;
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM decisions", [], |row| row.get(0))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM decisions", [], |row| row.get(0))?;
         Ok(count)
     }
 
@@ -109,11 +121,17 @@ impl AuditLog {
              FROM decisions ORDER BY id ASC",
         )?;
 
-        let rows: Vec<(i64, i64, String, String, String, String, String, String)> = stmt
+        let rows: Vec<AuditChainRow> = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-                    row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
                 ))
             })?
             .collect::<Result<_, _>>()?;
@@ -245,8 +263,32 @@ mod tests {
     #[test]
     fn test_record_and_count() {
         let audit = AuditLog::open(":memory:").unwrap();
-        audit.record_decision(1234567890, None, "10.0.0.1", "192.168.1.1", Some(54321), Some(80), "tcp", "allow", "allowed_range").unwrap();
-        audit.record_decision(1234567891, Some("session-1"), "10.0.0.1", "127.0.0.1", Some(54322), Some(443), "tcp", "block", "blocked_range").unwrap();
+        audit
+            .record_decision(
+                1234567890,
+                None,
+                "10.0.0.1",
+                "192.168.1.1",
+                Some(54321),
+                Some(80),
+                "tcp",
+                "allow",
+                "allowed_range",
+            )
+            .unwrap();
+        audit
+            .record_decision(
+                1234567891,
+                Some("session-1"),
+                "10.0.0.1",
+                "127.0.0.1",
+                Some(54322),
+                Some(443),
+                "tcp",
+                "block",
+                "blocked_range",
+            )
+            .unwrap();
         assert_eq!(audit.decision_count().unwrap(), 2);
     }
 
@@ -254,7 +296,11 @@ mod tests {
     fn test_hash_chain_valid() {
         let audit = AuditLog::open(":memory:").unwrap();
         for i in 0..5 {
-            audit.record_decision(i, None, "10.0.0.1", "8.8.8.8", None, None, "tcp", "allow", "test").unwrap();
+            audit
+                .record_decision(
+                    i, None, "10.0.0.1", "8.8.8.8", None, None, "tcp", "allow", "test",
+                )
+                .unwrap();
         }
         let verified = audit.verify_chain().unwrap();
         assert_eq!(verified, 5);
@@ -263,17 +309,29 @@ mod tests {
     #[test]
     fn test_hash_chain_tamper_detected() {
         let audit = AuditLog::open(":memory:").unwrap();
-        audit.record_decision(1, None, "10.0.0.1", "8.8.8.8", None, None, "tcp", "allow", "test").unwrap();
-        audit.record_decision(2, None, "10.0.0.1", "8.8.8.8", None, None, "tcp", "block", "test").unwrap();
+        audit
+            .record_decision(
+                1, None, "10.0.0.1", "8.8.8.8", None, None, "tcp", "allow", "test",
+            )
+            .unwrap();
+        audit
+            .record_decision(
+                2, None, "10.0.0.1", "8.8.8.8", None, None, "tcp", "block", "test",
+            )
+            .unwrap();
 
         // Tamper with the first row's decision field directly
         {
             let conn = audit.conn.lock().unwrap();
-            conn.execute("UPDATE decisions SET decision = 'allow' WHERE id = 2", []).unwrap();
+            conn.execute("UPDATE decisions SET decision = 'allow' WHERE id = 2", [])
+                .unwrap();
         }
 
         // Chain verification must detect the tamper
-        assert!(matches!(audit.verify_chain(), Err(AuditError::ChainBroken(..))));
+        assert!(matches!(
+            audit.verify_chain(),
+            Err(AuditError::ChainBroken(..))
+        ));
     }
 
     #[test]
@@ -311,9 +369,6 @@ mod tests {
             rows[0].timestamp, 1003,
             "expected the second-most-recent row first (oldest-first ordering)"
         );
-        assert_eq!(
-            rows[1].timestamp, 1004,
-            "expected the most recent row last"
-        );
+        assert_eq!(rows[1].timestamp, 1004, "expected the most recent row last");
     }
 }

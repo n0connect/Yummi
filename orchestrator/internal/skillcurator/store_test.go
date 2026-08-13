@@ -3,6 +3,7 @@ package skillcurator
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -180,5 +181,29 @@ func TestResolveConcurrentCallsOnlyOneSucceeds(t *testing.T) {
 		if successes != 1 {
 			t.Fatalf("expected exactly 1 successful resolve out of %d concurrent calls, got %d", n, successes)
 		}
+	}
+}
+
+func TestActivationClaimSurvivesRestartAsRetryablePending(t *testing.T) {
+	db := openTestDB(t)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	ctx := context.Background()
+	if err := store.Put(ctx, samplePending("p1")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, err := store.ClaimActivation(ctx, "p1"); err != nil {
+		t.Fatalf("ClaimActivation: %v", err)
+	}
+
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got, ok, err := reloaded.Get(ctx, "p1")
+	if err != nil || !ok || got.Status != "pending" || !strings.Contains(got.RejectReason, "interrupted") {
+		t.Fatalf("activating row was not recovered safely: got=%+v ok=%v err=%v", got, ok, err)
 	}
 }

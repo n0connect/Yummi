@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ActivityEvent, AgentTask, ExecutionRecord, GatewayRule } from '../../entities/types'
-
-const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+import { websocketURL } from '../../shared/api/runtime'
 
 type WsEvent =
   | { type: 'execution.status'; data: ExecutionRecord }
@@ -46,7 +45,7 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity 
     let delay = baseDelay
 
     const connect = () => {
-      socket = new WebSocket(`${wsScheme}://${window.location.host}/ws/events`)
+      socket = new WebSocket(websocketURL('/ws/events'))
       socket.onopen = () => {
         delay = baseDelay // reset the curve once connected
       }

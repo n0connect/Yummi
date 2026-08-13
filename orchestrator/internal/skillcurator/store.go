@@ -24,7 +24,7 @@ import (
 // PendingSkill is one curator-drafted skill awaiting (or past) operator review.
 type PendingSkill struct {
 	ID               string `json:"id"`
-	Status           string `json:"status"` // pending | approved | rejected
+	Status           string `json:"status"` // pending | activating | approved | rejected
 	Origin           string `json:"origin"` // provenance tag, matches knowledge.PersistentContext.Origin convention
 	TaskID           string `json:"task_id"`
 	SessionID        string `json:"session_id"`
@@ -70,8 +70,75 @@ func NewStore(db *sql.DB) (*Store, error) {
 		if _, err := db.Exec(schema); err != nil {
 			return nil, fmt.Errorf("skillcurator schema: %w", err)
 		}
+		if err := s.loadAll(); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
+}
+
+// ClaimActivation atomically reserves a pending draft for one approval
+// request. It is not yet approved: file persistence and registry activation
+// must both succeed before CompleteActivation commits the final state.
+func (s *Store) ClaimActivation(ctx context.Context, id string) (PendingSkill, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ps, ok := s.rows[id]
+	if !ok {
+		return PendingSkill{}, fmt.Errorf("pending skill %s not found", id)
+	}
+	if ps.Status != "pending" {
+		return PendingSkill{}, fmt.Errorf("pending skill %s cannot activate (status=%s)", id, ps.Status)
+	}
+	if s.db != nil {
+		res, err := s.db.ExecContext(ctx, `UPDATE pending_skills SET status='activating', reject_reason=NULL WHERE id=? AND status='pending'`, id)
+		if err != nil {
+			return PendingSkill{}, fmt.Errorf("claim skill activation: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return PendingSkill{}, fmt.Errorf("pending skill %s was claimed concurrently", id)
+		}
+	}
+	ps.Status = "activating"
+	ps.RejectReason = ""
+	s.rows[id] = ps
+	return ps, nil
+}
+
+// CompleteActivation commits activating->approved, or rolls it back to
+// pending with an operator-visible error when persistence/activation failed.
+func (s *Store) CompleteActivation(ctx context.Context, id string, activationErr error) (PendingSkill, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ps, ok := s.rows[id]
+	if !ok {
+		return PendingSkill{}, fmt.Errorf("pending skill %s not found", id)
+	}
+	if ps.Status != "activating" {
+		return PendingSkill{}, fmt.Errorf("pending skill %s is not activating (status=%s)", id, ps.Status)
+	}
+	if activationErr != nil {
+		ps.Status = "pending"
+		ps.RejectReason = "activation failed: " + activationErr.Error()
+		ps.ResolvedAt = 0
+	} else {
+		ps.Status = "approved"
+		ps.RejectReason = ""
+		ps.ResolvedAt = time.Now().Unix()
+	}
+	if s.db != nil {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE pending_skills SET status=?,reject_reason=?,resolved_at=? WHERE id=? AND status='activating'`,
+			ps.Status, nullStr(ps.RejectReason), nullInt(ps.ResolvedAt), id)
+		if err != nil {
+			return PendingSkill{}, fmt.Errorf("complete skill activation: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return PendingSkill{}, fmt.Errorf("pending skill %s activation state changed concurrently", id)
+		}
+	}
+	s.rows[id] = ps
+	return ps, nil
 }
 
 // Put inserts a pending-skill row. ID and CreatedAt are filled when empty.
@@ -221,6 +288,40 @@ func scanPendingSkillRows(rows *sql.Rows, ps *PendingSkill) error {
 func scanInto(r rowScanner, ps *PendingSkill) error {
 	return r.Scan(&ps.ID, &ps.Status, &ps.Origin, &ps.TaskID, &ps.SessionID, &ps.Name,
 		&ps.DraftYAML, &ps.Trajectory, &ps.ThreatScanResult, &ps.RejectReason, &ps.CreatedAt, &ps.ResolvedAt)
+}
+
+func (s *Store) loadAll() error {
+	rows, err := s.db.Query(`SELECT id,status,origin,task_id,session_id,name,draft_yaml,trajectory,
+		COALESCE(threat_scan_result,''),COALESCE(reject_reason,''),created_at,COALESCE(resolved_at,0)
+		FROM pending_skills`)
+	if err != nil {
+		return fmt.Errorf("load pending skills: %w", err)
+	}
+	var interrupted []PendingSkill
+	for rows.Next() {
+		var ps PendingSkill
+		if err := scanPendingSkillRows(rows, &ps); err != nil {
+			return fmt.Errorf("load pending skill: %w", err)
+		}
+		// A process crash during activation never leaves a false approval.
+		// Return the draft to pending so the operator may retry safely.
+		if ps.Status == "activating" {
+			ps.Status = "pending"
+			ps.RejectReason = "activation interrupted by orchestrator restart"
+			ps.ResolvedAt = 0
+			interrupted = append(interrupted, ps)
+		}
+		s.rows[ps.ID] = ps
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	for _, ps := range interrupted {
+		_, _ = s.db.Exec(`UPDATE pending_skills SET status='pending',reject_reason=?,resolved_at=NULL WHERE id=?`, ps.RejectReason, ps.ID)
+	}
+	return nil
 }
 
 func nullStr(v string) any {

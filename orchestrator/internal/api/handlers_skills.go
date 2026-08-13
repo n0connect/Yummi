@@ -71,42 +71,81 @@ func HandleApprovePendingSkill(store *skillcurator.Store, reg *skill.Registry, s
 			writeError(w, http.StatusConflict, "draft failed re-scan", errors.New(msg))
 			return
 		}
+		s = skill.Normalize(s)
+		if err := skill.Validate(s); err != nil {
+			writeError(w, http.StatusConflict, "draft failed schema validation", err)
+			return
+		}
 
 		var req struct {
 			Reason string `json:"reason"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
-		// Claim the row FIRST (atomic pending->approved transition), then act
-		// on the claim. This ordering matters: if the file write / reg.Add()
-		// ran before Resolve, two concurrent approvals of the same id could
-		// both pass the checks above and both mutate the live registry —
-		// Resolve is what guarantees only the winner proceeds.
-		if _, err := store.Resolve(r.Context(), id, true, req.Reason); err != nil {
-			writeError(w, http.StatusConflict, "resolve failed", err)
+		// Claim pending->activating first. "approved" is committed only after
+		// durable file persistence and live-registry activation both succeed.
+		if _, err := store.ClaimActivation(r.Context(), id); err != nil {
+			writeError(w, http.StatusConflict, "activation claim failed", err)
 			return
 		}
 
+		var activationErr error
 		if skillDir != "" {
-			if err := os.MkdirAll(skillDir, 0o755); err != nil {
-				writeError(w, http.StatusInternalServerError, "write failed", err)
-				return
-			}
 			name := skillFilenameSanitizer.ReplaceAllString(s.Name, "-")
 			if name == "" {
 				name = "skill-" + id
 			}
-			path := filepath.Join(skillDir, name+".yaml")
-			if err := os.WriteFile(path, []byte(ps.DraftYAML), 0o644); err != nil {
-				writeError(w, http.StatusInternalServerError, "write failed", err)
-				return
-			}
+			activationErr = writeSkillAtomically(skillDir, name+".yaml", []byte(ps.DraftYAML))
 		}
-		if reg != nil {
-			reg.Add(s)
+		if activationErr == nil && reg != nil {
+			activationErr = reg.Upsert(s)
+		}
+		if activationErr != nil {
+			_, _ = store.CompleteActivation(r.Context(), id, activationErr)
+			writeError(w, http.StatusInternalServerError, "skill activation failed", activationErr)
+			return
+		}
+		if _, err := store.CompleteActivation(r.Context(), id, nil); err != nil {
+			writeError(w, http.StatusInternalServerError, "activation commit failed", err)
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"resolved": true})
 	}
+}
+
+func writeSkillAtomically(dir, name string, body []byte) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(body); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, name)); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // HandleRejectPendingSkill discards a pending draft. POST

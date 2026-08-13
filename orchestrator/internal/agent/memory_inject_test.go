@@ -93,3 +93,18 @@ func TestBuildMemorySuppressesCurrentTaskCommands(t *testing.T) {
 		t.Fatalf("current-task command must not be recalled into MEMORY:\n%s", mem)
 	}
 }
+
+func TestBuildMemoryRecallsRememberedContextBeforeAnyCommand(t *testing.T) {
+	ks, _ := knowledge.NewStore(nil)
+	ctx := context.Background()
+	if err := ks.RecordContext(ctx, knowledge.PersistentContext{
+		SessionID: "s1", Key: "auth-map", Value: "login calls token.Verify then session.Rotate",
+	}); err != nil {
+		t.Fatalf("RecordContext: %v", err)
+	}
+	s := &GraphState{cfg: Config{Retrieval: knowledge.NewStructuredRetrieval(ks)}}
+	mem := s.buildMemory(ctx, Task{SessionID: "s1", Goal: "trace the login and token flow"})
+	if !strings.Contains(mem, "auth-map") || !strings.Contains(mem, "token.Verify") {
+		t.Fatalf("REMEMBER context was not injected before the first command:\n%s", mem)
+	}
+}

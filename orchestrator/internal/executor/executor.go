@@ -10,12 +10,16 @@ import (
 	"log/slog"
 	"net/netip"
 	"strings"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/n0connect/yummi/orchestrator/internal/dnsresolve"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
+	"github.com/n0connect/yummi/orchestrator/internal/sandboxmcp"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
 
@@ -41,6 +45,95 @@ var ErrOutOfScope = errors.New("target not in scope")
 // ErrOutOfScope (a hard block) — fail-closed either way.
 var ErrEgressApprovalRequired = errors.New("egress approval required")
 
+// checkedTarget is a target that has passed gateway scope checking, with its
+// resolved IPs known — no nftables rule opened yet.
+type checkedTarget struct {
+	target string
+	ips    []string
+}
+
+// checkTargetScope asks the gateway's hostname policy and egress-verdict
+// machinery whether target may be reached, without opening any rule yet.
+// Extracted from RunScopedCommand's per-target loop so both the multi-target
+// shell-command path and the single-target MCP path share one gateway
+// decision path.
+func checkTargetScope(ctx context.Context, pc *gateway.Client, target string, pinnedIPs []string) (checkedTarget, error) {
+	if pc == nil {
+		return checkedTarget{}, fmt.Errorf("gateway scope check unavailable: client not configured")
+	}
+
+	// Name-level scope gate, BEFORE resolution: for a hostname target,
+	// consult the gateway's hostname allow/block policy. A "block" verdict
+	// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
+	// resolving or touching the IP-egress flow. "allow"/"neutral" proceed.
+	// IP targets carry no name, so they skip this.
+	if isHostnameTarget(target) {
+		hv, err := pc.CheckHostname(target)
+		if err != nil {
+			slog.Error("checkTargetScope: gateway hostname check error — blocking (fail-closed)",
+				"target", target, "error", err)
+			return checkedTarget{}, fmt.Errorf("gateway hostname check unavailable: %w", err)
+		}
+		if hv == "block" {
+			return checkedTarget{}, fmt.Errorf("GATEWAY_BLOCKED: hostname %q is blocked by policy: %w", target, ErrOutOfScope)
+		}
+	}
+
+	// Resolve a hostname target to IP(s) through Cloudflare (the same
+	// resolver the sandbox uses) so the gateway — which only understands
+	// IPs — can rule on the very address(es) the sandbox will connect to.
+	// An IP literal passes through unchanged; an unresolvable hostname
+	// yields no IPs and falls back to the gateway's mode-based unresolved
+	// verdict (and opens no rule, as before).
+	var ips []string
+	if len(pinnedIPs) > 0 && pinnedIPs[0] != "" {
+		ips = pinnedIPs
+	} else {
+		ips = defaultResolver.Resolve(ctx, target)
+	}
+	checkAddr := target
+	if len(ips) > 0 {
+		checkAddr = ips[0]
+	}
+
+	verdict, err := pc.CheckEgress(checkAddr)
+	if err != nil {
+		slog.Error("checkTargetScope: gateway egress check error — blocking execution (fail-closed)",
+			"target", target, "resolved", checkAddr, "error", err)
+		return checkedTarget{}, fmt.Errorf("gateway scope check unavailable: %w", err)
+	}
+	switch verdict {
+	case "allow":
+		return checkedTarget{target: target, ips: ips}, nil
+	case "block":
+		return checkedTarget{}, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
+	case "needs_approval":
+		return checkedTarget{}, execution.EgressApprovalRequiredError{Target: target, IPs: ips}
+	default:
+		// Unknown/empty verdict: fail closed rather than proceed to exec.
+		slog.Error("checkTargetScope: unknown gateway egress verdict — blocking execution (fail-closed)",
+			"target", target, "verdict", verdict)
+		return checkedTarget{}, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
+	}
+}
+
+// runScopedTarget checks exactly one target's gateway scope, opens its
+// nftables allow rule on success, and then calls execFn. Used by the MCP
+// dispatch path (processMCP), whose structured tool arguments already name a
+// single explicit target — no command-string parsing involved.
+func runScopedTarget(ctx context.Context, pc *gateway.Client, target string, pinnedIPs []string, auditNote string, execFn func(ctx context.Context) (*sandbox.Result, error)) (*sandbox.Result, error) {
+	checked, err := checkTargetScope(ctx, pc, target, pinnedIPs)
+	if err != nil {
+		return nil, err
+	}
+	warning := openAllowRules(pc, checked.target, checked.ips, auditNote)
+	result, err := execFn(ctx)
+	if warning != "" && result != nil {
+		result.Warning = warning
+	}
+	return result, err
+}
+
 // RunScopedCommand is the single call path that asks gateway whether a
 // command's target is in scope, opens the corresponding nftables allow rule
 // if so, and only then runs the command in the sandbox. Every Go code path
@@ -53,94 +146,71 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 		return nil, fmt.Errorf("sandbox bridge not configured")
 	}
 
-	if target := scope.ExtractTarget(command); target != "" {
-		if pc == nil {
-			return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
-		}
-
-		// Name-level scope gate, BEFORE resolution: for a hostname target,
-		// consult the gateway's hostname allow/block policy. A "block" verdict
-		// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
-		// resolving or touching the IP-egress flow. "allow"/"neutral" proceed.
-		// IP targets carry no name, so they skip this.
-		if isHostnameTarget(target) {
-			hv, err := pc.CheckHostname(target)
-			if err != nil {
-				slog.Error("RunScopedCommand: gateway hostname check error — blocking (fail-closed)",
-					"target", target, "error", err)
-				return nil, fmt.Errorf("gateway hostname check unavailable: %w", err)
-			}
-			if hv == "block" {
-				return nil, fmt.Errorf("GATEWAY_BLOCKED: hostname %q is blocked by policy: %w", target, ErrOutOfScope)
-			}
-		}
-
-		// Resolve a hostname target to IP(s) through Cloudflare (the same
-		// resolver the sandbox uses) so the gateway — which only understands
-		// IPs — can rule on the very address(es) the sandbox will connect to.
-		// An IP literal passes through unchanged; an unresolvable hostname
-		// yields no IPs and falls back to the gateway's mode-based unresolved
-		// verdict (and opens no rule, as before).
-		var ips []string
-		if len(pinnedIPs) > 0 && pinnedIPs[0] != "" {
-			ips = pinnedIPs
-		} else {
-			ips = defaultResolver.Resolve(ctx, target)
-		}
-		checkTarget := target
-		if len(ips) > 0 {
-			checkTarget = ips[0]
-		}
-
-		verdict, err := pc.CheckEgress(checkTarget)
-		if err != nil {
-			slog.Error("RunScopedCommand: gateway egress check error — blocking execution (fail-closed)",
-				"target", target, "resolved", checkTarget, "error", err)
-			return nil, fmt.Errorf("gateway scope check unavailable: %w", err)
-		}
-		switch verdict {
-		case "allow":
-			// proceed to nftables unlock + exec below
-		case "block":
-			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q is not in scope: %w", target, ErrOutOfScope)
-		case "needs_approval":
-			return nil, execution.EgressApprovalRequiredError{Target: target, IPs: ips}
-		default:
-			// Unknown/empty verdict: fail closed rather than proceed to exec.
-			slog.Error("RunScopedCommand: unknown gateway egress verdict — blocking execution (fail-closed)",
-				"target", target, "verdict", verdict)
-			return nil, fmt.Errorf("GATEWAY_BLOCKED: target %q got unknown egress verdict %q: %w", target, verdict, ErrOutOfScope)
-		}
-
-		// Open an allow rule for every resolved IPv4/IPv6 (bounded) so a hostname
-		// that round-robins across a small set stays reachable; a bare IP
-		// target opens just its own /32 or /128.
-		nftWarning := openAllowRules(pc, target, ips, command)
-
-		result, err := bridge.Exec(ctx, command)
-		if nftWarning != "" && result != nil {
-			result.Warning = nftWarning
-		}
-		return result, err
+	targets := scope.ExtractTargets(command)
+	if len(targets) == 0 {
+		return bridge.Exec(ctx, command)
+	}
+	if pc == nil {
+		return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
 	}
 
-	return bridge.Exec(ctx, command)
+	// Check every explicit target before opening any rule. Otherwise a
+	// command could place an allowed host first and an out-of-scope host later.
+	checked := make([]checkedTarget, 0, len(targets))
+	for _, target := range targets {
+		var targetPinned []string
+		if len(targets) == 1 {
+			targetPinned = pinnedIPs
+		}
+		c, err := checkTargetScope(ctx, pc, target, targetPinned)
+		if err != nil {
+			return nil, err
+		}
+		checked = append(checked, c)
+	}
+
+	// Only after all targets pass, open rules for every resolved address.
+	var nftWarnings []string
+	for _, item := range checked {
+		if warning := openAllowRules(pc, item.target, item.ips, command); warning != "" {
+			nftWarnings = append(nftWarnings, warning)
+		}
+	}
+	nftWarning := strings.Join(nftWarnings, "; ")
+
+	result, err := bridge.Exec(ctx, command)
+	if nftWarning != "" && result != nil {
+		result.Warning = nftWarning
+	}
+	return result, err
+}
+
+// sandboxMCPClient is the minimal surface Executor needs from
+// *sandboxmcp.Client — narrowed to an interface so executor_test.go can use a
+// plain struct in place of a real docker-exec-backed client.
+type sandboxMCPClient interface {
+	CallTool(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error)
 }
 
 // Executor connects approved commands to the sandbox container via gateway scope checks.
 type Executor struct {
-	bridge    *sandbox.Bridge
-	gateway   *gateway.Client
-	knowledge *knowledge.Store
+	bridge     *sandbox.Bridge
+	gateway    *gateway.Client
+	knowledge  *knowledge.Store
+	sandboxMCP sandboxMCPClient
 }
 
-// New creates an Executor with the given sandbox bridge, gateway client, and
-// knowledge store (knowledge may be nil to disable procedural capture).
-func New(bridge *sandbox.Bridge, pc *gateway.Client, ks *knowledge.Store) *Executor {
+// New creates an Executor with the given sandbox bridge, gateway client,
+// knowledge store (knowledge may be nil to disable procedural capture), and
+// sandbox-MCP client (mcpClient may be nil — a record with a non-empty
+// MCPTool then fails cleanly instead of panicking, matching this codebase's
+// nil-safe-degradation pattern).
+func New(bridge *sandbox.Bridge, pc *gateway.Client, ks *knowledge.Store, mcpClient sandboxMCPClient) *Executor {
 	return &Executor{
-		bridge:    bridge,
-		gateway:   pc,
-		knowledge: ks,
+		bridge:     bridge,
+		gateway:    pc,
+		knowledge:  ks,
+		sandboxMCP: mcpClient,
 	}
 }
 
@@ -163,6 +233,10 @@ func recordTacticOutcome(ctx context.Context, ks *knowledge.Store, command strin
 // on the execution store via SetProcessor.
 func (e *Executor) ProcessFunc() execution.ProcessFunc {
 	return func(ctx context.Context, rec execution.Record) (string, error) {
+		if rec.MCPTool != "" {
+			return e.processMCP(ctx, rec)
+		}
+
 		slog.Info("executor: running command",
 			"execution_id", rec.ID,
 			"session_id", rec.SessionID,
@@ -221,6 +295,96 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 		)
 
 		return out.String(), nil
+	}
+}
+
+// processMCP handles a record dispatched through the sandbox-resident MCP
+// server. It mirrors the shell path's scope-check-then-exec shape via
+// runScopedTarget, using the record's already-structured target
+// (sandboxmcp.Target) instead of scope.ExtractTargets.
+func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string, error) {
+	if e.sandboxMCP == nil {
+		return "", fmt.Errorf("sandbox MCP client not configured")
+	}
+	var args map[string]any
+	if rec.MCPArgs != "" {
+		if err := json.Unmarshal([]byte(rec.MCPArgs), &args); err != nil {
+			return "", fmt.Errorf("invalid mcp args: %w", err)
+		}
+	}
+	target, ok := sandboxmcp.Target(rec.MCPTool, args)
+	if !ok {
+		return "", fmt.Errorf("mcp tool %q: no target found in arguments", rec.MCPTool)
+	}
+
+	execFn := func(ctx context.Context) (*sandbox.Result, error) {
+		start := time.Now()
+		callResult, err := e.sandboxMCP.CallTool(ctx, rec.MCPTool, args)
+		if err != nil {
+			return nil, fmt.Errorf("mcp call failed: %w", err)
+		}
+		return mcpResultToSandboxResult(rec.Command, callResult, time.Since(start)), nil
+	}
+
+	result, err := runScopedTarget(ctx, e.gateway, target, nil, rec.Command, execFn)
+	if err != nil {
+		var egressErr execution.EgressApprovalRequiredError
+		if errors.As(err, &egressErr) {
+			return "", egressErr
+		}
+		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
+		if result != nil {
+			return result.Stderr, fmt.Errorf("command failed: %w", err)
+		}
+		return "", err
+	}
+
+	var out strings.Builder
+	if result.Stdout != "" {
+		out.WriteString(result.Stdout)
+	}
+	if result.Stderr != "" {
+		if out.Len() > 0 {
+			out.WriteString("\n--- stderr ---\n")
+		}
+		out.WriteString(result.Stderr)
+	}
+	if result.Warning != "" {
+		if out.Len() > 0 {
+			out.WriteString("\n--- warning ---\n")
+		}
+		out.WriteString(result.Warning)
+	}
+	if result.ExitCode != 0 {
+		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
+		return out.String(), fmt.Errorf("exit code %d", result.ExitCode)
+	}
+	recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
+	return out.String(), nil
+}
+
+// mcpResultToSandboxResult adapts an MCP CallToolResult into the same
+// *sandbox.Result shape the shell path returns, so downstream output
+// formatting is identical either way. IsError maps to a synthetic non-zero
+// exit code (1) — an MCP tool call carries a pass/fail flag, not a real
+// process exit code.
+func mcpResultToSandboxResult(command string, result *mcp.CallToolResult, dur time.Duration) *sandbox.Result {
+	var text strings.Builder
+	for _, c := range result.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			if text.Len() > 0 {
+				text.WriteString("\n")
+			}
+			text.WriteString(tc.Text)
+		}
+	}
+	stdout, stderr, exitCode := text.String(), "", 0
+	if result.IsError {
+		stdout, stderr, exitCode = "", text.String(), 1
+	}
+	return &sandbox.Result{
+		Command: command, ExitCode: exitCode,
+		Stdout: stdout, Stderr: stderr, Duration: dur.Milliseconds(),
 	}
 }
 

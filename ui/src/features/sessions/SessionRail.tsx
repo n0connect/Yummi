@@ -1,7 +1,28 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import type { SessionSummary } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
+import { t } from '../../shared/i18n/strings'
 import './SessionRail.css'
+
+function ConversationIcon({ open }: { open: boolean }): JSX.Element {
+  return (
+    <svg
+      className="rail-toggle-icon"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+    >
+      {open ? (
+        <path d="m12 5-5 5 5 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      ) : (
+        <>
+          <rect x="2.75" y="3.25" width="14.5" height="13.5" rx="3" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M7 7.25h6M7 10.25h4M6.25 16.75l-2.5 1v-3.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
+    </svg>
+  )
+}
 
 type Props = {
   open: boolean
@@ -11,6 +32,7 @@ type Props = {
   // list reflects a brand-new conversation and its auto-title without polling.
   refreshKey: number
   onSelect: (sessionID: string) => void
+  onNewChat?: () => void
 }
 
 function shortWhen(ts?: number): string {
@@ -29,10 +51,11 @@ function shortWhen(ts?: number): string {
  * the parent to switch the active conversation (AssistantPanel then rehydrates
  * that session's messages). Mirrors the Claude-style session switcher.
  */
-export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSelect }: Props): JSX.Element {
+export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSelect, onNewChat }: Props): JSX.Element {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [query, setQuery] = useState('')
 
   const load = useCallback(() => {
     const controller = new AbortController()
@@ -65,37 +88,76 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onToggle])
 
+  const filteredSessions = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase('tr-TR')
+    if (!needle) return sessions
+    return sessions.filter(session => session.name.toLocaleLowerCase('tr-TR').includes(needle))
+  }, [query, sessions])
+
   return (
     <>
       <button
         className={`rail-toggle ${open ? 'open' : ''}`}
         onClick={onToggle}
-        title={open ? 'Sohbet listesini kapat' : 'Sohbet geçmişi'}
-        aria-label="Sohbet geçmişi"
+        title={open ? t('sessionRail.toggleOpenTitle') : t('sessionRail.toggleClosedTitle')}
+        aria-label={t('sessionRail.toggleClosedTitle')}
         aria-expanded={open}
       >
-        <span className="rail-toggle-icon" aria-hidden="true">{open ? '‹' : '🕘'}</span>
-        Geçmiş
+        <ConversationIcon open={open} />
+        <span className="rail-toggle-label">{t('sessionRail.toggleLabel')}</span>
       </button>
 
-      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label="Sohbet geçmişi paneli" aria-modal="false">
+      {open && (
+        <button
+          type="button"
+          className="session-rail-backdrop"
+          onClick={onToggle}
+          aria-label={t('sessionRail.backdropClose')}
+          tabIndex={-1}
+        />
+      )}
+      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label={t('sessionRail.panelAriaLabel')} aria-modal="false">
         <div className="rail-header">
-          <span className="rail-title">Sohbetler</span>
+          <div>
+            <span className="rail-eyebrow">{t('sessionRail.eyebrow')}</span>
+            <span className="rail-title">{t('sessionRail.title')}</span>
+          </div>
+          <button className="rail-create" type="button" onClick={onNewChat} title={t('sessionRail.newButtonTitle')}>
+            <span aria-hidden="true">＋</span>
+            {t('sessionRail.newButtonLabel')}
+          </button>
+        </div>
+        <div className="rail-search-wrap">
+          <span aria-hidden="true">⌕</span>
+          <input
+            className="rail-search"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder={t('sessionRail.searchPlaceholder')}
+            aria-label={t('sessionRail.searchPlaceholder')}
+          />
         </div>
         <div className="rail-list">
           {loading && sessions.length === 0 && !error && (
-            <div className="rail-empty">Yükleniyor…</div>
+            <div className="rail-empty">{t('sessionRail.loading')}</div>
           )}
           {error && (
             <div className="rail-empty rail-error">
-              <span>Sohbetler yüklenemedi.</span>
-              <button className="rail-retry" onClick={() => load()}>Tekrar dene</button>
+              <span>{t('sessionRail.loadError')}</span>
+              <button className="rail-retry" onClick={() => load()}>{t('common.retry')}</button>
             </div>
           )}
           {!error && !loading && sessions.length === 0 && (
-            <div className="rail-empty">Henüz kayıtlı sohbet yok.</div>
+            <div className="rail-empty rail-empty-intro">
+              <span className="rail-empty-icon">◌</span>
+              <strong>{t('sessionRail.emptyTitle')}</strong>
+              <span>{t('sessionRail.emptyHint')}</span>
+            </div>
           )}
-          {sessions.map(s => (
+          {!error && !loading && sessions.length > 0 && filteredSessions.length === 0 && (
+            <div className="rail-empty">{t('sessionRail.noSearchResults')}</div>
+          )}
+          {filteredSessions.map(s => (
             <button
               key={s.id}
               className={`rail-item ${s.id === activeSessionID ? 'active' : ''}`}
@@ -103,7 +165,13 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
               title={s.name}
               aria-current={s.id === activeSessionID ? 'true' : undefined}
             >
-              <span className="rail-item-name">{s.name}</span>
+              <span className="rail-item-main">
+                <span className="rail-item-name">{s.name}</span>
+                <span className="rail-item-meta">
+                  <span className={`rail-item-dot ${s.id === activeSessionID ? 'active' : ''}`} />
+                  {s.id === activeSessionID ? t('sessionRail.activeSession') : t('sessionRail.recentActivity')}
+                </span>
+              </span>
               <span className="rail-item-when">{shortWhen(s.updated_at)}</span>
             </button>
           ))}

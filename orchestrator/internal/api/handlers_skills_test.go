@@ -199,6 +199,31 @@ func TestHandleApprovePendingSkillConcurrentApprovesAddOnce(t *testing.T) {
 	}
 }
 
+func TestHandleApprovePendingSkillWriteFailureRollsBackToPending(t *testing.T) {
+	store, _ := skillcurator.NewStore(nil)
+	seedPending(t, store, "p1", "pending", cleanDraftYAML)
+	reg := skill.New(nil)
+	// A regular file cannot be used as a directory, forcing persistence to fail.
+	badDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed bad path: %v", err)
+	}
+	srv := newSkillsTestRouter(store, reg, badDir)
+	req := httptest.NewRequest(http.MethodPost, "/skills/pending/p1/approve", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	got, ok, _ := store.Get(context.Background(), "p1")
+	if !ok || got.Status != "pending" || !strings.Contains(got.RejectReason, "activation failed") {
+		t.Fatalf("write failure left a false approval instead of retryable pending: %+v", got)
+	}
+	if len(reg.Names()) != 0 {
+		t.Fatalf("failed persistence must not activate registry entry: %v", reg.Names())
+	}
+}
+
 func TestHandleRejectPendingSkillHappyPath(t *testing.T) {
 	store, _ := skillcurator.NewStore(nil)
 	seedPending(t, store, "p1", "pending", cleanDraftYAML)

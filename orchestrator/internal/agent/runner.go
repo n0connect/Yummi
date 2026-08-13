@@ -32,6 +32,13 @@ type Execer interface {
 	Run(ctx context.Context, sessionID, command string) (ToolResult, error)
 }
 
+// MCPExecer starts a supervisable MCP tool-call execution — the
+// structured-argument sibling of Execer for the cataloged pentest tools
+// exposed by the sandbox-resident MCP server.
+type MCPExecer interface {
+	RunMCPTool(ctx context.Context, sessionID, tool string, args map[string]any, displayCommand string) (ToolResult, error)
+}
+
 // ExecHandle supervises one running command.
 type ExecHandle interface {
 	// Wait blocks up to soft; returns (result, true) when the command reaches a
@@ -65,6 +72,8 @@ type Config struct {
 	TokenBudget            int           // rough token budget for memory compression (default 6000)
 	SoftTimeout            time.Duration // per-Wait window before consulting the LLM (default 60s)
 	SubAgentTimeout        time.Duration // hard ceiling on one HANDOFF sub-agent run (default 10m)
+	MaxHandoffsPerStep     int           // max targets accepted in one HANDOFF fan-out (default 4)
+	MaxConcurrentSubAgents int           // process-local global specialist concurrency (default 3)
 	MaxConsecutiveFailures int           // back-to-back failures before REPEATED_FAILURE escalation (default 3)
 	ApprovalMode           ApprovalMode  // ask_permission (default) or auto
 	Persona                AgentPersona  // document-driven model persona (loaded from agent.yaml)
@@ -87,6 +96,9 @@ type Config struct {
 	// and sub-agents themselves are built with an empty map, capping handoff
 	// depth at exactly 1 (no recursion).
 	SubAgents map[string]*Runner
+	// Delegations is normally created by NewRunner for a top-level runner. It
+	// may be supplied to share one quota/lifecycle registry across runners.
+	Delegations *DelegationCoordinator
 
 	// SkillCurator, if set, is invoked asynchronously (never blocking the
 	// graph) after a task finishes successfully, to propose a candidate skill
@@ -127,6 +139,15 @@ func NewRunner(store *Store, llm LLM, validator *conductor.Validator, exec Exece
 	}
 	if cfg.SubAgentTimeout <= 0 {
 		cfg.SubAgentTimeout = 10 * time.Minute
+	}
+	if cfg.MaxHandoffsPerStep <= 0 {
+		cfg.MaxHandoffsPerStep = 4
+	}
+	if cfg.MaxConcurrentSubAgents <= 0 {
+		cfg.MaxConcurrentSubAgents = 3
+	}
+	if len(cfg.SubAgents) > 0 && cfg.Delegations == nil {
+		cfg.Delegations = NewDelegationCoordinator(cfg.MaxConcurrentSubAgents)
 	}
 	if cfg.MaxConsecutiveFailures <= 0 {
 		cfg.MaxConsecutiveFailures = 3
@@ -190,6 +211,10 @@ type SubResult struct {
 // caller's Store and Knowledge, so its findings/tactics join the one world
 // model automatically.
 func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string) (SubResult, error) {
+	return r.runSubtask(ctx, sessionID, goal, parentTaskID, nil)
+}
+
+func (r *Runner) runSubtask(ctx context.Context, sessionID, goal, parentTaskID string, created func(string)) (SubResult, error) {
 	// parentTaskID is threaded straight into task creation (persisted on the
 	// Task row itself) rather than mutated on the shared Runner config — the
 	// latter raced under concurrent handoffs from different parent tasks on
@@ -200,11 +225,37 @@ func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID s
 	if err != nil {
 		return SubResult{}, err
 	}
+	if created != nil {
+		created(task.ID)
+	}
 	if err := r.Run(ctx, &task); err != nil {
 		return SubResult{}, err
 	}
 	t, _ := r.store.Get(task.ID)
 	return SubResult{Summary: t.Summary, Findings: t.Findings}, nil
+}
+
+// DelegationRuns exposes the bounded specialist lifecycle history.
+func (r *Runner) DelegationRuns() []DelegationRun {
+	if r == nil {
+		return []DelegationRun{}
+	}
+	r.mu.Lock()
+	coordinator := r.cfg.Delegations
+	r.mu.Unlock()
+	return coordinator.List()
+}
+
+// InterruptDelegation cancels one addressable specialist without stopping its
+// parent or sibling specialists.
+func (r *Runner) InterruptDelegation(id string) error {
+	if r == nil {
+		return fmt.Errorf("agent runner unavailable")
+	}
+	r.mu.Lock()
+	coordinator := r.cfg.Delegations
+	r.mu.Unlock()
+	return coordinator.Interrupt(id)
 }
 
 // Run executes a task synchronously, blocking until completion.
@@ -217,11 +268,18 @@ func (r *Runner) Run(ctx context.Context, task *Task) error {
 	if t.Status != StatusPlanned && t.Status != StatusPaused {
 		return fmt.Errorf("task %s is %s; expected planned or paused", task.ID, t.Status)
 	}
-	if err := r.store.Transition(task.ID, StatusRunning, func(t *Task) { t.Question = "" }); err != nil {
+	if err := r.store.Transition(task.ID, StatusRunning, func(t *Task) {
+		t.Question = ""
+		t.Checkpoint.ResumeAfterRestart = false
+	}); err != nil {
 		return err
 	}
 	s := r.buildState(task.ID)
-	return Execute(ctx, s, nodeStep)
+	err := Execute(ctx, s, nodeStep)
+	if err != nil && ctx.Err() != nil {
+		_ = r.store.Transition(task.ID, StatusStopped, func(t *Task) { t.LastError = ctx.Err().Error() })
+	}
+	return err
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -247,8 +305,10 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 	}
 
 	var skills string
+	var selectedSkills []skill.Skill
 	if r.cfg.Skills != nil {
-		skills = r.cfg.Skills.Render(r.cfg.Skills.Select(goal, nil, 3))
+		selectedSkills = r.cfg.Skills.Select(goal, nil, 3)
+		skills = r.cfg.Skills.Render(selectedSkills)
 	}
 	system, user := BuildPlanPrompt(r.cfg.Persona, skills, goal)
 	raw, err := r.llm.Chat(ctx, system, user)
@@ -268,6 +328,9 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 		_ = r.store.Transition(task.ID, StatusFailed, func(t *Task) { t.LastError = perr.Error() })
 		return Task{}, perr
 	}
+	if limit := selectedPlanStepLimit(selectedSkills); limit > 0 && len(steps) > limit {
+		steps = steps[:limit]
+	}
 	if err := r.store.Transition(task.ID, StatusPlanned, func(t *Task) { t.Plan = steps }); err != nil {
 		return Task{}, err
 	}
@@ -277,6 +340,16 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 		Kind: ActPlan, Summary: fmt.Sprintf("%d steps planned", len(steps)),
 	})
 	return task, nil
+}
+
+func selectedPlanStepLimit(selected []skill.Skill) int {
+	limit := 0
+	for _, selectedSkill := range selected {
+		if selectedSkill.PlanStepLimit > 0 && (limit == 0 || selectedSkill.PlanStepLimit < limit) {
+			limit = selectedSkill.PlanStepLimit
+		}
+	}
+	return limit
 }
 
 // Start launches the step loop for a planned or paused task asynchronously.
@@ -292,7 +365,10 @@ func (r *Runner) Start(taskID string, operatorMessage string) error {
 	if task.Status != StatusPlanned && task.Status != StatusPaused {
 		return fmt.Errorf("task %s is %s; can only start planned or paused tasks", taskID, task.Status)
 	}
-	if err := r.store.Transition(taskID, StatusRunning, func(t *Task) { t.Question = "" }); err != nil {
+	if err := r.store.Transition(taskID, StatusRunning, func(t *Task) {
+		t.Question = ""
+		t.Checkpoint.ResumeAfterRestart = false
+	}); err != nil {
 		return err
 	}
 
@@ -385,6 +461,23 @@ func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 	return nil
 }
 
+// ResumeRecovered starts top-level tasks that Store startup converted to a
+// safe step checkpoint. Interrupted sub-agent tasks are not started
+// independently; their parent reconciles the handoff to avoid duplicates.
+func (r *Runner) ResumeRecovered() (int, error) {
+	if r == nil {
+		return 0, nil
+	}
+	started := 0
+	for _, task := range r.store.Recoverable() {
+		if err := r.Start(task.ID, "The orchestrator restarted. Continue from the durable checkpoint; verify state and do not repeat side effects unless necessary."); err != nil {
+			return started, err
+		}
+		started++
+	}
+	return started, nil
+}
+
 // ── Internal ─────────────────────────────────────────────────────────────────
 
 // buildState constructs GraphState for a task, restoring from checkpoint if one exists.
@@ -394,21 +487,27 @@ func (r *Runner) buildState(taskID string) *GraphState {
 	cfg := r.cfg
 	r.mu.Unlock()
 	s := &GraphState{
-		taskID:       taskID,
-		store:        r.store,
-		llm:          r.llm,
-		validator:    r.validator,
-		exec:         r.exec,
-		gate:         r.gate,
-		cfg:          cfg,
-		parentTaskID: task.ParentTaskID,
-		memCtx:       MemoryContext{TokenBudget: cfg.TokenBudget},
+		taskID:                 taskID,
+		store:                  r.store,
+		llm:                    r.llm,
+		validator:              r.validator,
+		exec:                   r.exec,
+		gate:                   r.gate,
+		cfg:                    cfg,
+		parentTaskID:           task.ParentTaskID,
+		autoFinishTerminalPlan: true,
+		memCtx:                 MemoryContext{TokenBudget: cfg.TokenBudget},
 	}
 	// Restore from checkpoint on crash-recovery resume.
 	if task.Checkpoint.CurrentNode != "" {
 		s.retryCtx = task.Checkpoint.RetryCtx
 		s.memCtx.TokensUsed = task.Checkpoint.TokensUsed
 		s.memCtx.Summary = task.Checkpoint.Summary
+		s.memCtx.Observations = append([]string(nil), task.Checkpoint.MemoryObservations...)
+		s.lastObs = task.Checkpoint.LastObservation
+		s.recentCmds = append([]string(nil), task.Checkpoint.RecentCommands...)
+		s.executedCmds = append([]string(nil), task.Checkpoint.ExecutedCommands...)
+		s.consecutiveFailures = task.Checkpoint.ConsecutiveFailures
 	}
 	return s
 }
@@ -432,7 +531,12 @@ func (r *Runner) loop(ctx context.Context, taskID string, operatorMessage string
 		startNode = task.Checkpoint.CurrentNode
 	}
 	if msg := strings.TrimSpace(operatorMessage); msg != "" {
-		s.lastObs = Wrap("OPERATOR_ANSWER", msg)
+		answer := Wrap("OPERATOR_ANSWER", msg)
+		if s.lastObs != "" {
+			s.lastObs += "\n\n" + answer
+		} else {
+			s.lastObs = answer
+		}
 	}
 
 	if err := Execute(ctx, s, startNode); err != nil {

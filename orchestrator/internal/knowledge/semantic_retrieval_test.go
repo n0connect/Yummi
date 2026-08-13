@@ -142,3 +142,30 @@ func TestSemanticRetrievalRespectsExcludeCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticRetrievalUsesGoalAndRecallsContext(t *testing.T) {
+	s := memStore(t)
+	ctx := context.Background()
+	embedder := &fakeEmbedder{vec: map[string][]float32{
+		"inspect JWT validation":                  {1, 0},
+		"auth-map JWT validation is in verify.go": {1, 0},
+	}}
+	s.SetEmbedder(embedder, "m")
+	if err := s.RecordContext(ctx, PersistentContext{
+		SessionID: "s", Key: "auth-map", Value: "JWT validation is in verify.go",
+	}); err != nil {
+		t.Fatalf("RecordContext: %v", err)
+	}
+
+	sem := NewSemanticRetrieval(s, embedder, "m", NewStructuredRetrieval(s))
+	items, err := sem.Retrieve(ctx, Query{SessionID: "s", Goal: "inspect JWT validation", Limit: 5})
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	for _, item := range items {
+		if item.Kind == "context" && strings.Contains(item.Text, "verify.go") {
+			return
+		}
+	}
+	t.Fatalf("semantic retrieval did not recall goal-relevant context: %+v", items)
+}

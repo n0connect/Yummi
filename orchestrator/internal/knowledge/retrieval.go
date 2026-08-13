@@ -3,11 +3,15 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+	"unicode"
 )
 
 // Query asks for memory relevant to the current step.
 type Query struct {
 	SessionID string   // factual scope (current engagement)
+	Goal      string   // current task goal; drives context/finding relevance
 	Tools     []string // tools relevant to the next step (procedural lookup)
 	Limit     int      // max items per category (default 5)
 	// ExcludeCommands are commands already executed in the CURRENT task. Their
@@ -20,16 +24,15 @@ type Query struct {
 }
 
 // MemoryItem is one retrieved, pre-formatted memory line.
-// Kind is "finding" or "tactic".
+// Kind is "context", "finding", or "tactic".
 type MemoryItem struct {
 	Kind string `json:"kind"`
 	Text string `json:"text"`
 }
 
-// RetrievalStrategy selects relevant memory for a step. StructuredRetrieval is
-// the only implementation today (SQL keyed on session/tool). A future
-// SemanticRetrieval (embeddings) implements this same interface WITHOUT any
-// change to the agent or core.
+// RetrievalStrategy selects relevant memory for a step. StructuredRetrieval
+// performs deterministic session/tool lookup; SemanticRetrieval ranks tactics
+// with local embeddings and degrades to the structured strategy.
 type RetrievalStrategy interface {
 	Retrieve(ctx context.Context, q Query) ([]MemoryItem, error)
 }
@@ -54,7 +57,18 @@ func (r *StructuredRetrieval) Retrieve(_ context.Context, q Query) ([]MemoryItem
 	if limit <= 0 {
 		limit = 5
 	}
-	items := make([]MemoryItem, 0)
+	items := make([]MemoryItem, 0, limit*3)
+
+	// Persistent context is the explicit "remember this" layer. Rank by goal
+	// relevance, falling back to recency, and bound each value before it enters
+	// a prompt. This closes the write-only REMEMBER gap: RecordContext data is
+	// now actually recalled on later turns and after a process restart.
+	for _, pc := range relevantContexts(r.store.ListContexts(q.SessionID), q.Goal, limit) {
+		items = append(items, MemoryItem{
+			Kind: "context",
+			Text: fmt.Sprintf("[%s] %s", pc.Key, boundedMemoryText(pc.Value, 1200)),
+		})
+	}
 
 	// Factual: prior findings for this session.
 	findings := r.store.ListFindings(q.SessionID)
@@ -90,4 +104,66 @@ func (r *StructuredRetrieval) Retrieve(_ context.Context, q Query) ([]MemoryItem
 		}
 	}
 	return items, nil
+}
+
+// relevantContexts ranks session-scoped persistent contexts by lexical overlap
+// with the goal. Recent contexts still remain recallable when the goal is too
+// short or uses different terminology, which is important for explicit
+// REMEMBER entries such as code maps and engagement constraints.
+func relevantContexts(contexts []PersistentContext, goal string, limit int) []PersistentContext {
+	if limit <= 0 {
+		limit = 5
+	}
+	goalTerms := memoryTerms(goal)
+	type scored struct {
+		pc    PersistentContext
+		score int
+	}
+	ranked := make([]scored, 0, len(contexts))
+	for _, pc := range contexts {
+		hay := memoryTerms(pc.Key + " " + pc.Value)
+		score := 0
+		for term := range goalTerms {
+			if _, ok := hay[term]; ok {
+				score++
+			}
+		}
+		ranked = append(ranked, scored{pc: pc, score: score})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].pc.UpdatedAt > ranked[j].pc.UpdatedAt
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	out := make([]PersistentContext, len(ranked))
+	for i := range ranked {
+		out[i] = ranked[i].pc
+	}
+	return out
+}
+
+func memoryTerms(s string) map[string]struct{} {
+	parts := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' && r != '-'
+	})
+	out := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		if len([]rune(part)) >= 3 {
+			out[part] = struct{}{}
+		}
+	}
+	return out
+}
+
+func boundedMemoryText(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }

@@ -151,3 +151,16 @@ func TestStoreExecerIntegration(t *testing.T) {
 	}
 	t.Skip("integration test: run manually with sandbox container running")
 }
+
+func TestStoreMCPExecer_StubCompletion(t *testing.T) {
+	es := execution.NewStore()
+	e := NewStoreMCPExecer(es, 5*time.Second)
+
+	result, err := e.RunMCPTool(context.Background(), "sess-1", "nmap_scan", map[string]any{"target": "10.0.0.5"}, "nmap -sV 10.0.0.5")
+	if err != nil {
+		t.Fatalf("RunMCPTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected non-error result from stub execution")
+	}
+}

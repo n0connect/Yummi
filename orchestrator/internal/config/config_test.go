@@ -2,8 +2,8 @@ package config
 
 import (
 	"os"
-	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -23,8 +23,8 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.OllamaURL != "" {
 		t.Errorf("expected OllamaURL empty by default, got %s", cfg.OllamaURL)
 	}
-	if cfg.OllamaModel == "" {
-		t.Error("expected a default OllamaModel tag")
+	if cfg.OllamaModel != "qwen3:14b" {
+		t.Errorf("expected default OllamaModel qwen3:14b, got %q", cfg.OllamaModel)
 	}
 	if cfg.TLSDir == "" {
 		t.Error("expected a default TLSDir")
@@ -47,6 +47,38 @@ func TestConfigOllamaEmbedModelOverride(t *testing.T) {
 	}
 }
 
+func TestConfigSandboxExecTimeoutDefaultsToZero(t *testing.T) {
+	unset(t, "YUMMI_SANDBOX_EXEC_TIMEOUT")
+
+	cfg := Load()
+
+	// Zero is deliberate here — it's the "unset" signal sandbox.Bridge.SetTimeout
+	// treats as a no-op, leaving the Bridge's own generous default in place.
+	if cfg.SandboxExecTimeout != 0 {
+		t.Errorf("expected SandboxExecTimeout 0 (unset) by default, got %v", cfg.SandboxExecTimeout)
+	}
+}
+
+func TestConfigSandboxExecTimeoutOverride(t *testing.T) {
+	t.Setenv("YUMMI_SANDBOX_EXEC_TIMEOUT", "30m")
+
+	cfg := Load()
+
+	if cfg.SandboxExecTimeout != 30*time.Minute {
+		t.Errorf("expected overridden SandboxExecTimeout 30m, got %v", cfg.SandboxExecTimeout)
+	}
+}
+
+func TestConfigSandboxExecTimeoutInvalidFallsBackToZero(t *testing.T) {
+	t.Setenv("YUMMI_SANDBOX_EXEC_TIMEOUT", "not-a-duration")
+
+	cfg := Load()
+
+	if cfg.SandboxExecTimeout != 0 {
+		t.Errorf("expected invalid YUMMI_SANDBOX_EXEC_TIMEOUT to fall back to 0, got %v", cfg.SandboxExecTimeout)
+	}
+}
+
 func TestConfigGatewayTLSOptIn(t *testing.T) {
 	t.Setenv("YUMMI_GATEWAY_TLS", "true")
 
@@ -57,17 +89,27 @@ func TestConfigGatewayTLSOptIn(t *testing.T) {
 	}
 }
 
-func TestConfigTierOverride(t *testing.T) {
+func TestConfigExplicitModelOverridesTier(t *testing.T) {
 	t.Setenv("YUMMI_OLLAMA_TIER", "pro")
-	t.Setenv("YUMMI_OLLAMA_MODEL", "qwen3:4b") // will be overridden by tier
+	t.Setenv("YUMMI_OLLAMA_MODEL", "custom:13b")
 
 	cfg := Load()
 
-	if !strings.Contains(strings.ToLower(cfg.OllamaModel), "14b") {
-		t.Errorf("expected pro tier to map to qwen3:14b, got %s", cfg.OllamaModel)
+	if cfg.OllamaModel != "custom:13b" {
+		t.Errorf("expected explicit model to win, got %s", cfg.OllamaModel)
 	}
 	if cfg.OllamaTier != "pro" {
 		t.Errorf("expected OllamaTier=pro, got %s", cfg.OllamaTier)
+	}
+}
+
+func TestConfigTierSelectsModelWithoutExplicitOverride(t *testing.T) {
+	t.Setenv("YUMMI_OLLAMA_TIER", "lite")
+	t.Setenv("YUMMI_OLLAMA_MODEL", "")
+
+	cfg := Load()
+	if cfg.OllamaModel != "qwen3:4b" {
+		t.Errorf("expected lite tier model, got %s", cfg.OllamaModel)
 	}
 }
 

@@ -122,8 +122,8 @@ func TestAddIsConcurrencySafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if got := len(reg.Names()); got != 20 {
-		t.Fatalf("expected 20 skills after concurrent Add, got %d", got)
+	if got := len(reg.Names()); got != 1 {
+		t.Fatalf("expected concurrent upserts to keep one named skill, got %d", got)
 	}
 }
 
@@ -181,5 +181,88 @@ knowledge: run a simple recon step`)
 	}
 	if names := reg.Names(); len(names) != 0 {
 		t.Fatalf("threat pattern in Name should have been caught, loaded: %v", names)
+	}
+}
+
+func TestUpsertNormalizesVersionProvenanceAndDigest(t *testing.T) {
+	reg := New(nil)
+	if err := reg.Upsert(Skill{Name: "recon", Triggers: []string{"scan"}, Knowledge: "first"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := reg.Upsert(Skill{Name: "recon", Version: "1.1.0", Triggers: []string{"scan"}, Knowledge: "second"}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	all := reg.All()
+	if len(all) != 1 || all[0].Version != "1.1.0" || all[0].SchemaVersion != 1 || all[0].Digest == "" {
+		t.Fatalf("skill lifecycle metadata/replacement wrong: %+v", all)
+	}
+}
+
+func TestUpsertRejectsInvalidSchema(t *testing.T) {
+	reg := New(nil)
+	if err := reg.Upsert(Skill{Name: "bad name", Version: "latest", Triggers: []string{"x"}}); err == nil {
+		t.Fatal("invalid name/version should be rejected")
+	}
+	if len(reg.Names()) != 0 {
+		t.Fatal("invalid skill reached live registry")
+	}
+}
+
+func TestPlanStepLimitIsValidatedAndAffectsDigest(t *testing.T) {
+	base := Skill{Name: "atomic", Triggers: []string{"x"}, Knowledge: "one step", PlanStepLimit: 1}
+	if err := Validate(base); err != nil {
+		t.Fatalf("valid plan constraint rejected: %v", err)
+	}
+	first := Normalize(base).Digest
+	base.PlanStepLimit = 2
+	if second := Normalize(base).Digest; first == second {
+		t.Fatal("plan constraint must be covered by artifact digest")
+	}
+	base.PlanStepLimit = 21
+	if err := Validate(base); err == nil {
+		t.Fatal("out-of-range plan constraint accepted")
+	}
+}
+
+func TestLoadDirWithOriginPreservesDeclaredProvenanceAndHashesReferences(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "auto.yaml", `name: learned-recon
+version: 1.2.0
+description: reviewed generated tactic
+triggers: [recon]
+knowledge: use a bounded service probe
+references: [task-123]
+provenance:
+  origin: operator
+  source: approval-456
+`)
+	reg, err := LoadDirWithOrigin(dir, "auto")
+	if err != nil {
+		t.Fatalf("LoadDirWithOrigin: %v", err)
+	}
+	loaded := reg.All()
+	if len(loaded) != 1 || loaded[0].Provenance.Origin != "operator" || loaded[0].Provenance.Source != "approval-456" {
+		t.Fatalf("declared provenance was overwritten: %+v", loaded)
+	}
+	originalDigest := loaded[0].Digest
+	changed := loaded[0]
+	changed.References = []string{"task-999"}
+	changed = Normalize(changed)
+	if originalDigest == changed.Digest {
+		t.Fatal("reference change must alter the artifact digest")
+	}
+
+	writeSkill(t, dir, "legacy.yaml", `name: legacy
+triggers: [legacy]
+knowledge: migrated artifact
+`)
+	reg, err = LoadDirWithOrigin(dir, "auto")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	for _, loadedSkill := range reg.All() {
+		if loadedSkill.Name == "legacy" && loadedSkill.Provenance.Origin != "auto" {
+			t.Fatalf("legacy artifact should inherit directory origin: %+v", loadedSkill.Provenance)
+		}
 	}
 }

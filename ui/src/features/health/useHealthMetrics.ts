@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiURL } from '../../shared/api/runtime'
 
 export type MetricSample = {
   ts: number
@@ -26,7 +27,7 @@ export function useHealthMetrics(window: string = '5m'): HealthMetricsResponse |
 
     async function poll() {
       try {
-        const res = await fetch(`/api/v1/system/health-metrics?window=${window}`)
+        const res = await fetch(apiURL(`/api/v1/system/health-metrics?window=${window}`))
         if (res.ok && !cancelled) {
           setData(await res.json())
         }

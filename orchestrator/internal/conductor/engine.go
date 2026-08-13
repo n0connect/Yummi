@@ -105,10 +105,8 @@ func (e *Engine) Validator() *Validator {
 // Returns decline immediately when Ollama is not configured.
 func (e *Engine) Chat(ctx context.Context, message string) ChatResponse {
 	text := strings.TrimSpace(message)
-	if text == "" {
-		return e.replyAskClarification(localize(text,
-			"Neyi yapmak istediğini bir cümleyle yazar mısın?",
-			"Could you describe your goal in one sentence?"), 0.2)
+	if decision, ok := BoundaryDecision(text); ok {
+		return e.finalize(decision)
 	}
 
 	if e.llmClient == nil {
@@ -140,10 +138,8 @@ func (e *Engine) Chat(ctx context.Context, message string) ChatResponse {
 // ChatWithHistory is like Chat but maintains per-session conversation context.
 func (e *Engine) ChatWithHistory(ctx context.Context, sessionID, message string) ChatResponse {
 	text := strings.TrimSpace(message)
-	if text == "" {
-		return e.replyAskClarification(localize(text,
-			"Neyi yapmak istediğini bir cümleyle yazar mısın?",
-			"Could you describe your goal in one sentence?"), 0.2)
+	if decision, ok := BoundaryDecision(text); ok {
+		return e.finalize(decision)
 	}
 
 	if e.llmClient == nil || sessionID == "" {
@@ -289,11 +285,12 @@ func looksActionable(msg string) bool {
 // parseStructuredResponse tries to unmarshal a ChatResponse from raw text.
 func parseStructuredResponse(raw string) (ChatResponse, bool) {
 	var resp ChatResponse
-	if err := json.Unmarshal([]byte(raw), &resp); err == nil && resp.Intent != "" {
+	clean := sanitizeVisibleModelText(raw)
+	if err := json.Unmarshal([]byte(clean), &resp); err == nil && resp.Intent != "" {
 		return resp, true
 	}
 	// Strip markdown code fences if present.
-	trimmed := strings.TrimSpace(raw)
+	trimmed := strings.TrimSpace(clean)
 	if idx := strings.Index(trimmed, "{"); idx > 0 {
 		trimmed = trimmed[idx:]
 	}

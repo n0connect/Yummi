@@ -50,7 +50,7 @@ export function useTraceData(sessionID: string): TraceData {
   // Live: append streamed activity for this session; refetch tactics/context on
   // events that change the world model so those panels stay current.
   const onActivity = useCallback((ev: ActivityEvent) => {
-    if (sessionID && sessionID !== 'default' && ev.session_id !== sessionID) return
+    if (ev.session_id !== (sessionID || 'default')) return
     setActivity(prev => [...prev, ev])
     if (ev.kind === 'finding') {
       fetchJSON<Finding[]>(`/api/v1/sessions/${ev.session_id}/findings`).then(d => setFindings(d ?? [])).catch(() => {})

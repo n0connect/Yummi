@@ -8,6 +8,7 @@
 
 pub mod protocol;
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -28,6 +29,12 @@ const MAX_CONNECTIONS: usize = 32;
 /// IPC server exposing policy queries to orchestrator.
 pub struct IpcServer {
     socket_path: String,
+    /// Unix file mode applied to the bound socket after creation (config
+    /// `ipc.socket_mode`, default 0o600). Defense-in-depth for deployments
+    /// where the socket path is reachable by more than gateway/orchestrator's
+    /// own containers — SO_PEERCRED UID gating gates write ops regardless,
+    /// but a wide-open socket file is still a wider surface than necessary.
+    socket_mode: u32,
     policy: PolicyEngine,
     audit: AuditLog,
     /// UIDs allowed to perform write operations. Empty = allow any local UID.
@@ -45,9 +52,13 @@ impl IpcServer {
         // Default: allow root (0) and current process UID.
         let current_uid = {
             #[cfg(target_os = "linux")]
-            { unsafe { libc_uid() } }
+            {
+                unsafe { libc_uid() }
+            }
             #[cfg(not(target_os = "linux"))]
-            { 0u32 }
+            {
+                0u32
+            }
         };
         let allowed_uids = if current_uid == 0 {
             vec![0u32]
@@ -57,6 +68,7 @@ impl IpcServer {
 
         Self {
             socket_path: cfg.socket_path.clone(),
+            socket_mode: cfg.socket_mode,
             policy,
             audit,
             allowed_uids,
@@ -88,6 +100,19 @@ impl IpcServer {
             }
         };
 
+        // UnixListener::bind creates the socket file with a mode governed by
+        // the process umask, NOT `ipc.socket_mode` — the config field was
+        // parsed and tested but never actually applied to the file, so an
+        // operator setting socket_mode: 0o600 got no enforcement at all. Set
+        // it explicitly now that the file exists.
+        if let Err(e) = std::fs::set_permissions(
+            &self.socket_path,
+            std::fs::Permissions::from_mode(self.socket_mode),
+        ) {
+            error!(path = %self.socket_path, mode = format!("{:o}", self.socket_mode), error = %e,
+                "failed to set IPC socket file permissions — socket may be more widely reachable than configured");
+        }
+
         info!(path = %self.socket_path, max_connections = MAX_CONNECTIONS, "IPC server listening");
 
         let sem = self.semaphore.clone();
@@ -108,7 +133,10 @@ impl IpcServer {
                     let started_at = self.started_at;
                     tokio::spawn(async move {
                         let _permit = permit; // released when handler finishes
-                        if let Err(e) = handle_connection(stream, policy, audit, allowed_uids, ctrl, started_at).await {
+                        if let Err(e) =
+                            handle_connection(stream, policy, audit, allowed_uids, ctrl, started_at)
+                                .await
+                        {
                             warn!(error = %e, "IPC connection error");
                         }
                     });
@@ -151,7 +179,15 @@ async fn handle_connection(
         stream.read_exact(&mut buf).await?;
 
         let request: IpcRequest = serde_json::from_slice(&buf)?;
-        let response = process_request(request, &policy, peer_uid, &allowed_uids, ctrl.as_deref(), &audit, started_at);
+        let response = process_request(
+            request,
+            &policy,
+            peer_uid,
+            &allowed_uids,
+            ctrl.as_deref(),
+            &audit,
+            started_at,
+        );
 
         let resp_bytes = serde_json::to_vec(&response)?;
         let resp_len = (resp_bytes.len() as u32).to_be_bytes();
@@ -211,8 +247,15 @@ fn process_request(
                     .map(|d| d.as_nanos() as i64)
                     .unwrap_or(0);
                 if let Err(e) = audit.record_decision(
-                    now_ns, None, "orchestrator", &ip, None, None, "scope_check",
-                    verdict_str, "scope_check_rejected",
+                    now_ns,
+                    None,
+                    "orchestrator",
+                    &ip,
+                    None,
+                    None,
+                    "scope_check",
+                    verdict_str,
+                    "scope_check_rejected",
                 ) {
                     warn!(error = %e, "failed to record scope-check rejection in audit");
                 }
@@ -296,8 +339,15 @@ fn process_request(
                     .map(|d| d.as_nanos() as i64)
                     .unwrap_or(0);
                 if let Err(e) = audit.record_decision(
-                    now_ns, None, "orchestrator", &host, None, None, "hostname_check",
-                    "block", "hostname_blocked",
+                    now_ns,
+                    None,
+                    "orchestrator",
+                    &host,
+                    None,
+                    None,
+                    "hostname_check",
+                    "block",
+                    "hostname_blocked",
                 ) {
                     warn!(error = %e, "failed to record hostname block in audit");
                 }
@@ -313,11 +363,16 @@ fn process_request(
         }
 
         // ── Write ops — require allowlisted UID ───────────────────────────
-        IpcRequest::AddTemporaryRule { network, ttl_secs, description } => {
+        IpcRequest::AddTemporaryRule {
+            network,
+            ttl_secs,
+            description,
+        } => {
             if !is_write_authorized(peer_uid, allowed_uids) {
                 warn!(peer_uid, "AddTemporaryRule denied: UID not allowlisted");
                 return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations".to_string(),
+                    message: "permission denied: UID not allowlisted for write operations"
+                        .to_string(),
                 };
             }
             if network.len() > 45 {
@@ -340,7 +395,8 @@ fn process_request(
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
                     let desc = description.unwrap_or_else(|| format!("Temporary rule: {network}"));
-                    let (rule_id, expires_at) = policy.add_temporary_allow(net, ttl_secs, desc.clone());
+                    let (rule_id, expires_at) =
+                        policy.add_temporary_allow(net, ttl_secs, desc.clone());
 
                     // Also unlock at the nftables kernel level so sandbox's packets actually reach the target.
                     let mut kernel_warning = None;
@@ -357,11 +413,20 @@ fn process_request(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_nanos() as i64;
-                    if let Err(e) = audit.record_rule_event(now_ns, &network, "rule_added", &format!("[agent] {desc}")) {
+                    if let Err(e) = audit.record_rule_event(
+                        now_ns,
+                        &network,
+                        "rule_added",
+                        &format!("[agent] {desc}"),
+                    ) {
                         warn!(error = %e, "failed to audit agent rule add (rule itself succeeded)");
                     }
 
-                    IpcResponse::RuleAdded { rule_id, expires_at, kernel_warning }
+                    IpcResponse::RuleAdded {
+                        rule_id,
+                        expires_at,
+                        kernel_warning,
+                    }
                 }
                 Err(_) => IpcResponse::Error {
                     message: format!("invalid network CIDR: {network}"),
@@ -372,7 +437,8 @@ fn process_request(
             if !is_write_authorized(peer_uid, allowed_uids) {
                 warn!(peer_uid, "RemoveRule denied: UID not allowlisted");
                 return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations".to_string(),
+                    message: "permission denied: UID not allowlisted for write operations"
+                        .to_string(),
                 };
             }
             if rule_id.len() > 64 {
@@ -385,7 +451,9 @@ fn process_request(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_nanos() as i64;
-                if let Err(e) = audit.record_rule_event(now_ns, &rule_id, "rule_removed", "[removed]") {
+                if let Err(e) =
+                    audit.record_rule_event(now_ns, &rule_id, "rule_removed", "[removed]")
+                {
                     warn!(error = %e, "failed to audit rule removal (removal itself succeeded)");
                 }
                 IpcResponse::RuleRemoved { rule_id }
@@ -397,11 +465,16 @@ fn process_request(
         }
 
         // ── Write op — requires allowlisted UID ───────────────────────────
-        IpcRequest::AddManualRule { network, ttl_secs, reason } => {
+        IpcRequest::AddManualRule {
+            network,
+            ttl_secs,
+            reason,
+        } => {
             if !is_write_authorized(peer_uid, allowed_uids) {
                 warn!(peer_uid, "AddManualRule denied: UID not allowlisted");
                 return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations".to_string(),
+                    message: "permission denied: UID not allowlisted for write operations"
+                        .to_string(),
                 };
             }
             if network.len() > 45 {
@@ -426,7 +499,8 @@ fn process_request(
             }
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
-                    let (rule_id, expires_at) = policy.add_manual_allow(net, ttl_secs, reason.clone());
+                    let (rule_id, expires_at) =
+                        policy.add_manual_allow(net, ttl_secs, reason.clone());
                     let mut kernel_warning = None;
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
@@ -440,10 +514,19 @@ fn process_request(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_nanos() as i64;
-                    if let Err(e) = audit.record_rule_event(now_ns, &network, "rule_added", &format!("[manual] {reason}")) {
+                    if let Err(e) = audit.record_rule_event(
+                        now_ns,
+                        &network,
+                        "rule_added",
+                        &format!("[manual] {reason}"),
+                    ) {
                         warn!(error = %e, "failed to audit manual rule add (rule itself succeeded)");
                     }
-                    IpcResponse::RuleAdded { rule_id, expires_at, kernel_warning }
+                    IpcResponse::RuleAdded {
+                        rule_id,
+                        expires_at,
+                        kernel_warning,
+                    }
                 }
                 Err(_) => IpcResponse::Error {
                     message: format!("invalid network CIDR: {network}"),
@@ -456,7 +539,8 @@ fn process_request(
             if !is_write_authorized(peer_uid, allowed_uids) {
                 warn!(peer_uid, "SetEgressMode denied: UID not allowlisted");
                 return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations".to_string(),
+                    message: "permission denied: UID not allowlisted for write operations"
+                        .to_string(),
                 };
             }
             if mode.len() > 10 {
@@ -487,18 +571,31 @@ fn process_request(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos() as i64;
-            if let Err(e) = audit.record_rule_event(now_ns, "-", "egress_mode_set", &format!("[operator] mode={mode}")) {
+            if let Err(e) = audit.record_rule_event(
+                now_ns,
+                "-",
+                "egress_mode_set",
+                &format!("[operator] mode={mode}"),
+            ) {
                 warn!(error = %e, "failed to audit egress mode change (mode change itself succeeded)");
             }
-            IpcResponse::EgressMode { mode: m.as_str().to_string() }
+            IpcResponse::EgressMode {
+                mode: m.as_str().to_string(),
+            }
         }
 
         IpcRequest::AddHostnameRule { list, pattern } => {
             handle_hostname_edit(policy, audit, peer_uid, allowed_uids, &list, &pattern, true)
         }
-        IpcRequest::RemoveHostnameRule { list, pattern } => {
-            handle_hostname_edit(policy, audit, peer_uid, allowed_uids, &list, &pattern, false)
-        }
+        IpcRequest::RemoveHostnameRule { list, pattern } => handle_hostname_edit(
+            policy,
+            audit,
+            peer_uid,
+            allowed_uids,
+            &list,
+            &pattern,
+            false,
+        ),
     }
 }
 
@@ -549,8 +646,14 @@ fn handle_hostname_edit(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0);
-    let event = if add { "hostname_rule_added" } else { "hostname_rule_removed" };
-    if let Err(e) = audit.record_rule_event(now_ns, pattern, event, &format!("[operator] list={list}")) {
+    let event = if add {
+        "hostname_rule_added"
+    } else {
+        "hostname_rule_removed"
+    };
+    if let Err(e) =
+        audit.record_rule_event(now_ns, pattern, event, &format!("[operator] list={list}"))
+    {
         warn!(error = %e, "failed to audit hostname rule edit (edit itself succeeded)");
     }
 
@@ -595,6 +698,57 @@ mod tests {
         PolicyEngine::new(&cfg)
     }
 
+    // TestSetTimeout-style regression: `ipc.socket_mode` was parsed from YAML
+    // and unit-tested at the config layer, but IpcServer::run() never actually
+    // applied it to the bound socket file — UnixListener::bind leaves the file
+    // at whatever the process umask produces, not the configured mode. An
+    // operator setting socket_mode: 0o600 (the documented default) got no
+    // enforcement at all. This spawns a real IpcServer against a temp path and
+    // asserts the file's actual mode matches what was configured.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_run_applies_configured_socket_mode() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        // Deliberately NOT std::env::temp_dir(): on macOS that resolves to a
+        // long /var/folders/.../T path which, combined with a UUID filename,
+        // exceeds a Unix domain socket's SUN_LEN limit (~104 bytes) — a
+        // test-environment issue unrelated to the gateway code under test.
+        // /tmp itself is short enough on every platform this test runs on.
+        let socket_path = format!("/tmp/yummi-test-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let ipc_cfg = crate::config::IpcConfig {
+            socket_path: socket_path.clone(),
+            socket_mode: 0o600,
+        };
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+        let server = IpcServer::new(&ipc_cfg, policy, audit);
+
+        let handle = tokio::spawn(server.run());
+        // Poll for the socket file to appear rather than a fixed sleep — bind
+        // happens near-instantly, but this avoids a flaky race on a slow CI box.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !std::path::Path::new(&socket_path).exists() {
+            if std::time::Instant::now() > deadline {
+                panic!("socket file never appeared at {socket_path}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let mode = std::fs::metadata(&socket_path)
+            .expect("stat socket file")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "socket file mode must match configured socket_mode, got {mode:o}"
+        );
+
+        handle.abort();
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
     #[test]
     fn test_process_scope_check() {
         let policy = make_policy();
@@ -606,7 +760,9 @@ mod tests {
         policy.set_egress_mode(EgressMode::Ask);
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
-            IpcRequest::CheckScope { ip: "10.0.0.1".to_string() },
+            IpcRequest::CheckScope {
+                ip: "10.0.0.1".to_string(),
+            },
             &policy,
             None,
             &[],
@@ -615,7 +771,9 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::ScopeResult { in_scope, verdict, .. } => {
+            IpcResponse::ScopeResult {
+                in_scope, verdict, ..
+            } => {
                 assert!(in_scope, "allow-listed IP should be in scope in Ask mode");
                 assert_eq!(verdict, "allow");
             }
@@ -640,8 +798,15 @@ mod tests {
 
         let verdict = |host: &str, audit: &AuditLog| -> String {
             match process_request(
-                IpcRequest::CheckHostname { host: host.to_string() },
-                &policy, None, &[], None, audit, std::time::Instant::now(),
+                IpcRequest::CheckHostname {
+                    host: host.to_string(),
+                },
+                &policy,
+                None,
+                &[],
+                None,
+                audit,
+                std::time::Instant::now(),
             ) {
                 IpcResponse::HostnameResult { verdict, .. } => verdict,
                 other => panic!("unexpected response: {other:?}"),
@@ -667,26 +832,51 @@ mod tests {
 
         // Add to the block list at runtime → takes effect immediately.
         let resp = process_request(
-            IpcRequest::AddHostnameRule { list: "block".into(), pattern: "*.tracker.com".into() },
-            &policy, Some(0), &[0], None, &audit, std::time::Instant::now(),
+            IpcRequest::AddHostnameRule {
+                list: "block".into(),
+                pattern: "*.tracker.com".into(),
+            },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::HostnamePolicy { block, .. } => {
-                assert!(block.contains(&"*.tracker.com".to_string()), "added pattern missing: {block:?}");
+                assert!(
+                    block.contains(&"*.tracker.com".to_string()),
+                    "added pattern missing: {block:?}"
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }
-        assert_eq!(policy.check_hostname("a.tracker.com"), crate::policy::hostname::HostnameVerdict::Block);
+        assert_eq!(
+            policy.check_hostname("a.tracker.com"),
+            crate::policy::hostname::HostnameVerdict::Block
+        );
 
         // Remove it → no longer blocked (and since a whitelist is set, it
         // becomes a whitelist-miss → block, but not via the explicit blocklist).
         let resp = process_request(
-            IpcRequest::RemoveHostnameRule { list: "block".into(), pattern: "*.tracker.com".into() },
-            &policy, Some(0), &[0], None, &audit, std::time::Instant::now(),
+            IpcRequest::RemoveHostnameRule {
+                list: "block".into(),
+                pattern: "*.tracker.com".into(),
+            },
+            &policy,
+            Some(0),
+            &[0],
+            None,
+            &audit,
+            std::time::Instant::now(),
         );
         match resp {
             IpcResponse::HostnamePolicy { block, .. } => {
-                assert!(!block.contains(&"*.tracker.com".to_string()), "removed pattern still present");
+                assert!(
+                    !block.contains(&"*.tracker.com".to_string()),
+                    "removed pattern still present"
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -694,7 +884,9 @@ mod tests {
         // Both edits were audited.
         let (rows, verified) = audit.recent_rows(10).expect("rows");
         assert!(verified);
-        assert!(rows.iter().any(|r| r.reason.contains("hostname_rule_added") || r.decision == "hostname_rule_added"));
+        assert!(rows.iter().any(
+            |r| r.reason.contains("hostname_rule_added") || r.decision == "hostname_rule_added"
+        ));
     }
 
     #[test]
@@ -703,10 +895,21 @@ mod tests {
         let audit = AuditLog::open(":memory:").expect("audit log");
         // peer_uid 1000 not in allowlist [0] → denied.
         let resp = process_request(
-            IpcRequest::AddHostnameRule { list: "block".into(), pattern: "*.x.com".into() },
-            &policy, Some(1000), &[0], None, &audit, std::time::Instant::now(),
+            IpcRequest::AddHostnameRule {
+                list: "block".into(),
+                pattern: "*.x.com".into(),
+            },
+            &policy,
+            Some(1000),
+            &[0],
+            None,
+            &audit,
+            std::time::Instant::now(),
         );
-        assert!(matches!(resp, IpcResponse::Error { .. }), "unauthorized edit must be denied");
+        assert!(
+            matches!(resp, IpcResponse::Error { .. }),
+            "unauthorized edit must be denied"
+        );
     }
 
     #[test]
@@ -715,7 +918,12 @@ mod tests {
         let audit = AuditLog::open(":memory:").expect("audit log");
         match process_request(
             IpcRequest::GetHostnamePolicy,
-            &policy, None, &[], None, &audit, std::time::Instant::now(),
+            &policy,
+            None,
+            &[],
+            None,
+            &audit,
+            std::time::Instant::now(),
         ) {
             IpcResponse::HostnamePolicy { allow, block } => {
                 assert_eq!(allow, vec!["*.acme.com".to_string()]);
@@ -729,7 +937,15 @@ mod tests {
     fn test_process_ping() {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
-        let resp = process_request(IpcRequest::Ping, &policy, None, &[], None, &audit, std::time::Instant::now());
+        let resp = process_request(
+            IpcRequest::Ping,
+            &policy,
+            None,
+            &[],
+            None,
+            &audit,
+            std::time::Instant::now(),
+        );
         assert!(matches!(resp, IpcResponse::Pong));
     }
 
@@ -744,22 +960,44 @@ mod tests {
 
         // Out-of-scope target → needs_approval → audited.
         let _ = process_request(
-            IpcRequest::CheckScope { ip: "8.8.8.8".to_string() },
-            &policy, None, &[], None, &audit, std::time::Instant::now(),
+            IpcRequest::CheckScope {
+                ip: "8.8.8.8".to_string(),
+            },
+            &policy,
+            None,
+            &[],
+            None,
+            &audit,
+            std::time::Instant::now(),
         );
         let (rows, verified) = audit.recent_rows(10).expect("rows");
         assert!(verified, "audit chain must verify");
-        assert_eq!(rows.len(), 1, "rejection should produce exactly one audit row");
+        assert_eq!(
+            rows.len(),
+            1,
+            "rejection should produce exactly one audit row"
+        );
         assert_eq!(rows[0].decision, "needs_approval");
         assert_eq!(rows[0].dst_ip, "8.8.8.8");
 
         // In-scope target → allow → NOT audited (still just the one row).
         let _ = process_request(
-            IpcRequest::CheckScope { ip: "10.0.0.1".to_string() },
-            &policy, None, &[], None, &audit, std::time::Instant::now(),
+            IpcRequest::CheckScope {
+                ip: "10.0.0.1".to_string(),
+            },
+            &policy,
+            None,
+            &[],
+            None,
+            &audit,
+            std::time::Instant::now(),
         );
         let (rows, _) = audit.recent_rows(10).expect("rows");
-        assert_eq!(rows.len(), 1, "an allowed scope check must not add an audit row");
+        assert_eq!(
+            rows.len(),
+            1,
+            "an allowed scope check must not add an audit row"
+        );
     }
 
     // Regression: GetStatus used to return a hardcoded uptime_secs: 0
@@ -769,10 +1007,25 @@ mod tests {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
         let started_at = Instant::now() - std::time::Duration::from_secs(42);
-        let resp = process_request(IpcRequest::GetStatus, &policy, None, &[], None, &audit, started_at);
+        let resp = process_request(
+            IpcRequest::GetStatus,
+            &policy,
+            None,
+            &[],
+            None,
+            &audit,
+            started_at,
+        );
         match resp {
-            IpcResponse::Status { uptime_secs, rules_active, .. } => {
-                assert!(uptime_secs >= 42, "expected uptime_secs >= 42, got {uptime_secs}");
+            IpcResponse::Status {
+                uptime_secs,
+                rules_active,
+                ..
+            } => {
+                assert!(
+                    uptime_secs >= 42,
+                    "expected uptime_secs >= 42, got {uptime_secs}"
+                );
                 assert!(rules_active);
             }
             other => panic!("unexpected response: {other:?}"),
@@ -837,12 +1090,22 @@ mod tests {
         let policy = make_policy();
         policy.add_manual_allow("10.0.0.1/32".parse().unwrap(), 600, "test".to_string());
         let audit = AuditLog::open(":memory:").expect("audit log");
-        let resp = process_request(IpcRequest::ListRules, &policy, None, &[0], None, &audit, std::time::Instant::now());
+        let resp = process_request(
+            IpcRequest::ListRules,
+            &policy,
+            None,
+            &[0],
+            None,
+            &audit,
+            std::time::Instant::now(),
+        );
         match resp {
             IpcResponse::RuleList { rules } => {
                 assert_eq!(rules.len(), 2, "expected 1 config rule + 1 manual rule");
                 assert!(
-                    rules.iter().any(|r| r.source == "manual" && r.network == "10.0.0.1/32"),
+                    rules
+                        .iter()
+                        .any(|r| r.source == "manual" && r.network == "10.0.0.1/32"),
                     "manual rule missing from list: {rules:?}"
                 );
             }
@@ -914,7 +1177,10 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::FingerprintConfig { ttl_normalize, mac_randomization } => {
+            IpcResponse::FingerprintConfig {
+                ttl_normalize,
+                mac_randomization,
+            } => {
                 assert_eq!(ttl_normalize, Some(64));
                 assert!(mac_randomization);
             }
@@ -936,7 +1202,10 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::FingerprintConfig { ttl_normalize, mac_randomization } => {
+            IpcResponse::FingerprintConfig {
+                ttl_normalize,
+                mac_randomization,
+            } => {
                 assert_eq!(ttl_normalize, None);
                 assert!(!mac_randomization);
             }
@@ -949,7 +1218,9 @@ mod tests {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
-            IpcRequest::SetEgressMode { mode: "allow".to_string() },
+            IpcRequest::SetEgressMode {
+                mode: "allow".to_string(),
+            },
             &policy,
             Some(9999), // not in allowed_uids
             &[0],
@@ -970,7 +1241,9 @@ mod tests {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
-            IpcRequest::SetEgressMode { mode: "allow".to_string() },
+            IpcRequest::SetEgressMode {
+                mode: "allow".to_string(),
+            },
             &policy,
             Some(0),
             &[0],
@@ -990,7 +1263,9 @@ mod tests {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
-            IpcRequest::SetEgressMode { mode: "wide-open".to_string() },
+            IpcRequest::SetEgressMode {
+                mode: "wide-open".to_string(),
+            },
             &policy,
             Some(0),
             &[0],
@@ -1009,13 +1284,29 @@ mod tests {
     fn test_get_egress_mode_returns_current() {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
-        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit, std::time::Instant::now());
+        let resp = process_request(
+            IpcRequest::GetEgressMode,
+            &policy,
+            None,
+            &[0],
+            None,
+            &audit,
+            std::time::Instant::now(),
+        );
         match resp {
             IpcResponse::EgressMode { mode } => assert_eq!(mode, "block"),
             other => panic!("expected EgressMode, got {other:?}"),
         }
         policy.set_egress_mode(EgressMode::Ask);
-        let resp = process_request(IpcRequest::GetEgressMode, &policy, None, &[0], None, &audit, std::time::Instant::now());
+        let resp = process_request(
+            IpcRequest::GetEgressMode,
+            &policy,
+            None,
+            &[0],
+            None,
+            &audit,
+            std::time::Instant::now(),
+        );
         match resp {
             IpcResponse::EgressMode { mode } => assert_eq!(mode, "ask"),
             other => panic!("expected EgressMode, got {other:?}"),
@@ -1031,7 +1322,9 @@ mod tests {
         let audit = AuditLog::open(":memory:").expect("audit log");
 
         let resp = process_request(
-            IpcRequest::CheckScope { ip: "8.8.8.8".to_string() },
+            IpcRequest::CheckScope {
+                ip: "8.8.8.8".to_string(),
+            },
             &policy,
             None,
             &[0],
@@ -1040,7 +1333,9 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::ScopeResult { verdict, in_scope, .. } => {
+            IpcResponse::ScopeResult {
+                verdict, in_scope, ..
+            } => {
                 assert_eq!(verdict, "block");
                 assert!(!in_scope);
             }
@@ -1048,7 +1343,9 @@ mod tests {
         }
 
         let _ = process_request(
-            IpcRequest::SetEgressMode { mode: "allow".to_string() },
+            IpcRequest::SetEgressMode {
+                mode: "allow".to_string(),
+            },
             &policy,
             Some(0),
             &[0],
@@ -1058,7 +1355,9 @@ mod tests {
         );
 
         let resp = process_request(
-            IpcRequest::CheckScope { ip: "8.8.8.8".to_string() },
+            IpcRequest::CheckScope {
+                ip: "8.8.8.8".to_string(),
+            },
             &policy,
             None,
             &[0],
@@ -1067,7 +1366,9 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::ScopeResult { verdict, in_scope, .. } => {
+            IpcResponse::ScopeResult {
+                verdict, in_scope, ..
+            } => {
                 assert_eq!(verdict, "allow");
                 assert!(in_scope);
             }
@@ -1080,7 +1381,9 @@ mod tests {
         let policy = make_policy();
         let audit = AuditLog::open(":memory:").expect("audit log");
         let _ = process_request(
-            IpcRequest::SetEgressMode { mode: "ask".to_string() },
+            IpcRequest::SetEgressMode {
+                mode: "ask".to_string(),
+            },
             &policy,
             Some(0),
             &[0],

@@ -20,6 +20,15 @@
   color: var(--text-primary);
   margin: 0;
 }
+.health-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
 
 /* Window selector — segmented control to match the top-bar nav */
 .window-selector {
@@ -82,6 +91,32 @@
   margin-top: var(--space-sm);
 }
 
+.module-status-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+.module-status-heading .metric-chart-title { margin-bottom: 3px; }
+.module-status-heading p {
+  margin: 0 0 var(--space-sm);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.health-overall {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+.health-overall-healthy { color: var(--green); border-color: rgba(48, 209, 88, 0.28); background: rgba(48, 209, 88, 0.07); }
+.health-overall-degraded { color: var(--orange); border-color: rgba(255, 159, 10, 0.28); background: rgba(255, 159, 10, 0.07); }
+.health-overall-down { color: var(--red); border-color: rgba(255, 69, 58, 0.28); background: rgba(255, 69, 58, 0.07); }
+
 .module-status-card {
   display: flex;
   align-items: center;
@@ -90,15 +125,33 @@
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
 }
-.module-status-card.meta { background: transparent; }
+.module-status-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
 
 .module-status-name {
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--text-primary);
-  width: 76px;
+  min-width: 92px;
 }
-.module-status-label { font-size: var(--text-xs); color: var(--text-tertiary); }
+.module-status-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.module-status-label {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
 
 .health-empty {
   text-align: center;

@@ -69,12 +69,20 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 		role := strings.TrimSpace(t.Role)
 		subgoal := strings.TrimSpace(t.Subgoal)
 		sub := s.cfg.SubAgents[role]
-		s.emit(ActHandoffIn, role+": "+subgoal, "")
+		s.emit(ActHandoffIn, role+" specialist delegated", "")
 
 		wg.Add(1)
 		go func(i int, role, subgoal string, sub *Runner) {
 			defer wg.Done()
-			res, err := sub.RunSubtask(subCtx, task.SessionID, subgoal, s.taskID)
+			delegationID, childCtx, beginErr := s.cfg.Delegations.Begin(subCtx, s.taskID, role, subgoal)
+			if beginErr != nil {
+				results[i] = handoffResult{role: role, subgoal: subgoal, err: beginErr}
+				return
+			}
+			res, err := sub.runSubtask(childCtx, task.SessionID, subgoal, s.taskID, func(taskID string) {
+				s.cfg.Delegations.BindTask(delegationID, taskID)
+			})
+			s.cfg.Delegations.Finish(delegationID, err)
 			results[i] = handoffResult{role: role, subgoal: subgoal, res: res, err: err}
 		}(i, role, subgoal, sub)
 	}
@@ -92,7 +100,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 				reason = fmt.Sprintf("timed out after %s", s.cfg.SubAgentTimeout)
 			}
 			fmt.Fprintf(&b, "Sub-agent %q failed on subtask %q: %s; handle it yourself or finish\n", r.role, r.subgoal, reason)
-			s.emit(ActHandoffOut, r.role+" → failed: "+reason, "")
+			s.emit(ActHandoffOut, r.role+" specialist could not complete the subtask", reason)
 			continue
 		}
 
@@ -117,7 +125,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 				fmt.Fprintf(&b, "  - %s\n", f)
 			}
 		}
-		s.emit(ActHandoffOut, r.role+" → "+orDefault(summary, "completed"), "")
+		s.emit(ActHandoffOut, r.role+" specialist completed the subtask", summary)
 	}
 	s.lastObs = Wrap("TOOL_RESPONSE", b.String())
 	return edgeOK, nil
