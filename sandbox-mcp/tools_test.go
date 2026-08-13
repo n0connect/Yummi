@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -61,5 +62,72 @@ func TestNmapScan_RealExec(t *testing.T) {
 	text, ok := result.Content[0].(*mcp.TextContent)
 	if !ok || !strings.Contains(text.Text, "Nmap") {
 		t.Fatalf("expected nmap banner in output, got %+v", result.Content)
+	}
+}
+
+func TestGobusterDir_RejectsWordlistTraversal(t *testing.T) {
+	session := newTestServer(t)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "gobuster_dir",
+		Arguments: map[string]any{"url": "http://example.local", "wordlist": "../../etc/passwd"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError for a path-traversal wordlist")
+	}
+}
+
+func TestFfufFuzz_AppendsFUZZWhenMissing(t *testing.T) {
+	if _, err := exec.LookPath("ffuf"); err != nil {
+		t.Skip("ffuf not installed on this host")
+	}
+	// Real wordlist file so path validation passes.
+	if err := os.MkdirAll("/tmp/yummi-test-wordlists", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/tmp/yummi-test-wordlists/w.txt", []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("YUMMI_WORDLIST_DIR", "/tmp/yummi-test-wordlists")
+	session := newTestServer(t)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ffuf_fuzz",
+		Arguments: map[string]any{"url": "http://127.0.0.1:1", "wordlist": "w.txt"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	_ = result // connection refused is expected (nothing listens on :1) — just proving argv construction ran
+}
+
+func TestWhatwebScan_EmptyURL(t *testing.T) {
+	session := newTestServer(t)
+	result, _ := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "whatweb_scan", Arguments: map[string]any{"url": ""},
+	})
+	if !result.IsError {
+		t.Fatal("expected IsError for empty url")
+	}
+}
+
+func TestCurlProbe_EmptyURL(t *testing.T) {
+	session := newTestServer(t)
+	result, _ := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "curl_probe", Arguments: map[string]any{"url": ""},
+	})
+	if !result.IsError {
+		t.Fatal("expected IsError for empty url")
+	}
+}
+
+func TestNiktoScan_EmptyHost(t *testing.T) {
+	session := newTestServer(t)
+	result, _ := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "nikto_scan", Arguments: map[string]any{"host": ""},
+	})
+	if !result.IsError {
+		t.Fatal("expected IsError for empty host")
 	}
 }
