@@ -14,6 +14,12 @@ Three design choices recur throughout this section, and they're worth naming up 
 
 **3. The core is deliberately brain-agnostic.** Nothing in the graph, the protocol, or the memory system assumes a *specific* model's quirks — the design target is "any model good enough to follow the tag protocol," with `qwen3` as today's reference, swappable via `YUMMI_OLLAMA_MODEL`/`YUMMI_OLLAMA_TIER` without touching the agent's own code. Where a weak-model-specific accommodation *does* exist (like `finishNode`'s synthesis fallback for a model that never emits `FINISH` on its own — see [Graph & Nodes](graph-and-nodes.md#finish-node)), it's built as graceful degradation the strongest model also benefits from, not a hack that only makes sense for one tier.
 
+## Two engines behind one interface: graph vs. Eino
+
+The tag protocol above is the right call for small/local models with unreliable structured output — but a larger local model with genuine native tool-calling support (e.g. `qwen3:14b`, confirmed working) doesn't need it. Rather than bolt that onto the graph engine, `orchestrator/internal/agent/task_runner.go` defines a `TaskRunner` interface (`CreateAndPlan`/`Start`/`Stop`/`Approve`/`ApprovalMode`/`Roles`/`DelegationRuns`/... — the full surface `internal/api` needs) that the graph `Runner` and a second implementation, `internal/agent/eino.EinoRunner` (built on [CloudWeGo's Eino ADK](https://github.com/cloudwego/eino)), both satisfy. `cmd/orchestrator/main.go` picks one at startup via `YUMMI_AGENT_BACKEND=graph|eino` (`make conf`, default `graph`) — `internal/api` never knows which is wired in.
+
+The Eino backend reuses the graph engine's own security primitives directly rather than reimplementing them: its `run_command` tool calls the same `Execer`/`Verify`/`threatscan.Banner`/`Gate`/`conductor.Validator` the graph's `toolNode` uses, so the single exec path, risk-gated approval, and content-layer scan all hold identically regardless of which engine is running. What it does **not** yet have: sub-agent `HANDOFF` delegation, the graph's stuck/duplicate/tool-thrash loop-prevention heuristics (aimed at small-model failure modes this backend's target models are less prone to), and checkpoint/crash-recovery — a restart interrupts an in-flight Eino task the same way it would any other unrecovered task. `internal/security/invariants` locks the Eino package to the same "never imports `os/exec`" invariant as the graph engine.
+
 ## The five pieces, and where to read about each
 
 | Piece | What it is | Page |
@@ -23,7 +29,8 @@ Three design choices recur throughout this section, and they're worth naming up 
 | **Memory & the Knowledge Store** | Targets, findings, target-scrubbed tactics, persistent context, and how they're recalled into future prompts | [Memory & Knowledge](memory-and-knowledge.md) |
 | **Skills & sub-agents** | Declarative YAML playbooks, and depth-1 delegation to specialist personas sharing the same Knowledge Store | [Skills & Sub-agents](skills-and-subagents.md) |
 | **Sandbox execution** | The scoped scheduled-command path, plus the distinct operator terminal path | [Sandbox Execution](sandbox-execution.md) |
+| **Quality & evaluation** | Deterministic persona boundaries, server-side finding verdicts, and assertion-bearing live scenarios | [Quality & Evaluation](quality-and-evaluation.md) |
 
-## The one invariant that spans all five
+## The one execution invariant that spans the runtime pieces
 
-Read together, these five pages describe a structural rule: **the agent package never spawns a command itself.** `agent/exec.go` enqueues into `execution.Store`; `executor.ProcessFunc` drains the store, calls `RunScopedCommand`, obtains gateway verdicts, and only then invokes `sandbox.Bridge.Exec`. See [Sandbox Execution](sandbox-execution.md) and [Security Model](../security-model.md) for the exact boundary and its limits.
+Read together, these pages describe a structural rule: **the agent package never spawns a command itself.** `agent/exec.go` enqueues into `execution.Store`; `executor.ProcessFunc` drains the store, calls `RunScopedCommand`, obtains gateway verdicts, and only then invokes `sandbox.Bridge.Exec`. See [Sandbox Execution](sandbox-execution.md) and [Security Model](../security-model.md) for the exact boundary and its limits.
