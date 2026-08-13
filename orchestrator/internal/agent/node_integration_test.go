@@ -188,6 +188,32 @@ func TestGraph_ConsecutiveDuplicate_Blocked(t *testing.T) {
 	}
 }
 
+func TestGraph_RepeatedBlockedDuplicateNeverEscapesResetWindow(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "keep duplicate blocked")
+	es := realShellStore(t)
+	responses := []string{}
+	for range 4 {
+		responses = append(responses, `[RUN_COMMAND]
+{"command":"echo stable","step_id":"s1","risk_level":"low"}`)
+	}
+	responses = append(responses, `[FINISH]
+{"summary":"done"}`)
+	s := newToolState(t, store, task.ID, newFakeOllama(t, responses...), es, fastRetryCfg())
+	if err := Execute(context.Background(), s, nodeStep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	runs := 0
+	for _, record := range es.ListBySession("test-session", 100) {
+		if strings.TrimSpace(record.Command) == "echo stable" {
+			runs++
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("blocked duplicate escaped the abnormal-pattern reset: executions=%d", runs)
+	}
+}
+
 // TestConsult_LongRunning_AbortCancelsCommand: a command past the soft timeout
 // triggers a consult; [ABORT] cancels it and the task proceeds promptly.
 func TestConsult_LongRunning_AbortCancelsCommand(t *testing.T) {

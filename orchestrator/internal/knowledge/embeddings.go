@@ -27,7 +27,7 @@ func (s *Store) SetEmbedder(e Embedder, model string) {
 // is logged and swallowed, never returned to the RecordTactic caller — an
 // embedding gap degrades ranking quality (SemanticRetrieval falls back), it
 // must never fail the agent's procedural-memory write.
-func (s *Store) embedAndSave(ctx context.Context, sourceID, text string) {
+func (s *Store) embedAndSave(ctx context.Context, sourceTable, sourceID, text string) {
 	s.mu.RLock()
 	embedder, model := s.embedder, s.embedModel
 	s.mu.RUnlock()
@@ -39,9 +39,75 @@ func (s *Store) embedAndSave(ctx context.Context, sourceID, text string) {
 		slog.Warn("knowledge: embed-on-write failed (best-effort)", "error", err)
 		return
 	}
-	if err := s.SaveEmbedding(ctx, "procedural_memory", sourceID, model, vec); err != nil {
+	if err := s.SaveEmbedding(ctx, sourceTable, sourceID, model, vec); err != nil {
 		slog.Warn("knowledge: save embedding failed (best-effort)", "error", err)
 	}
+}
+
+// NearestContexts returns session-scoped persistent contexts ordered by
+// embedding similarity. Contexts below the relevance floor are omitted so a
+// goal does not receive unrelated engagement notes merely to fill a quota.
+func (s *Store) NearestContexts(ctx context.Context, model string, queryVec []float32, sessionID string, limit int) ([]PersistentContext, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	type scored struct {
+		pc    PersistentContext
+		score float64
+	}
+	var candidates []scored
+	if s.db != nil {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT p.id,p.session_id,p.key,p.value,COALESCE(p.origin,'agent'),p.created_at,p.updated_at,e.vector
+			 FROM embeddings e JOIN persistent_context p ON p.id=e.source_id
+			 WHERE e.source_table='persistent_context' AND e.model=? AND p.session_id=? LIMIT ?`,
+			model, sessionID, procedureCandidateCap)
+		if err != nil {
+			return nil, fmt.Errorf("nearest contexts: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var pc PersistentContext
+			var blob []byte
+			if err := rows.Scan(&pc.ID, &pc.SessionID, &pc.Key, &pc.Value, &pc.Origin, &pc.CreatedAt, &pc.UpdatedAt, &blob); err != nil {
+				continue
+			}
+			candidates = append(candidates, scored{pc: pc, score: cosineSimilarity(queryVec, decodeVector(blob))})
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("nearest contexts: %w", err)
+		}
+	} else {
+		s.mu.RLock()
+		for _, row := range s.embeddings {
+			if row.SourceTable != "persistent_context" || row.Model != model {
+				continue
+			}
+			pc, ok := s.contexts[row.SourceID]
+			if !ok || pc.SessionID != sessionID {
+				continue
+			}
+			candidates = append(candidates, scored{pc: pc, score: cosineSimilarity(queryVec, row.Vector)})
+		}
+		s.mu.RUnlock()
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].pc.UpdatedAt > candidates[j].pc.UpdatedAt
+	})
+	out := make([]PersistentContext, 0, min(limit, len(candidates)))
+	for _, candidate := range candidates {
+		if candidate.score < 0.35 {
+			continue
+		}
+		out = append(out, candidate.pc)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 const embeddingsSchema = `
@@ -267,12 +333,15 @@ func (s *Store) NearestFindings(ctx context.Context, model string, queryVec []fl
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	out := make([]Finding, len(candidates))
-	for i, c := range candidates {
-		out[i] = c.f
+	out := make([]Finding, 0, min(limit, len(candidates)))
+	for _, candidate := range candidates {
+		if candidate.score < 0.35 {
+			continue
+		}
+		out = append(out, candidate.f)
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, nil
 }

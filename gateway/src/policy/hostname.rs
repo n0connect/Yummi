@@ -160,9 +160,7 @@ impl HostPattern {
     fn matches(&self, host: &str) -> bool {
         match self {
             HostPattern::Exact(name) => host == name,
-            HostPattern::Suffix(suffix) => {
-                host == suffix || host.ends_with(&format!(".{suffix}"))
-            }
+            HostPattern::Suffix(suffix) => host == suffix || host.ends_with(&format!(".{suffix}")),
         }
     }
 
@@ -215,7 +213,7 @@ mod tests {
         let p = HostnamePolicy::new(&[], &["*.facebook.com".to_string()]);
         assert_eq!(p.check("www.facebook.com"), HostnameVerdict::Block);
         assert_eq!(p.check("facebook.com"), HostnameVerdict::Block); // apex covered
-        // No allow-list → anything not blocked is Neutral (defer to IP egress).
+                                                                     // No allow-list → anything not blocked is Neutral (defer to IP egress).
         assert_eq!(p.check("example.com"), HostnameVerdict::Neutral);
     }
 

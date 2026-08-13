@@ -2,6 +2,31 @@ package scope
 
 import "testing"
 
+func TestExtractTargets(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{"several positional targets", "nmap 10.0.0.1 8.8.8.8 example.com", []string{"10.0.0.1", "8.8.8.8", "example.com"}},
+		{"urls and duplicate", "curl https://example.com https://api.example.com/x https://example.com/y", []string{"example.com", "api.example.com"}},
+		{"paths and counters ignored", "nmap -iL /workspace/targets.txt --top-ports 100", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractTargets(tt.command)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ExtractTargets(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("ExtractTargets(%q) = %v, want %v", tt.command, got, tt.want)
+				}
+			}
+		})
+	}
+}
+
 func TestExtractTarget(t *testing.T) {
 	tests := []struct {
 		name    string

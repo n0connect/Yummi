@@ -94,13 +94,19 @@ type PlanStep struct {
 
 // Checkpoint records the graph position after each node transition for crash recovery.
 type Checkpoint struct {
-	TaskID      string       `json:"task_id"`
-	CurrentNode string       `json:"current_node"`
-	StepIndex   int          `json:"step_index"`
-	RetryCtx    RetryContext `json:"retry_ctx"`
-	TokensUsed  int          `json:"tokens_used"`
-	Summary     string       `json:"summary,omitempty"`
-	SavedAt     int64        `json:"saved_at"`
+	TaskID              string       `json:"task_id"`
+	CurrentNode         string       `json:"current_node"`
+	StepIndex           int          `json:"step_index"`
+	RetryCtx            RetryContext `json:"retry_ctx"`
+	TokensUsed          int          `json:"tokens_used"`
+	Summary             string       `json:"summary,omitempty"`
+	LastObservation     string       `json:"last_observation,omitempty"`
+	RecentCommands      []string     `json:"recent_commands,omitempty"`
+	ExecutedCommands    []string     `json:"executed_commands,omitempty"`
+	MemoryObservations  []string     `json:"memory_observations,omitempty"`
+	ConsecutiveFailures int          `json:"consecutive_failures,omitempty"`
+	ResumeAfterRestart  bool         `json:"resume_after_restart,omitempty"`
+	SavedAt             int64        `json:"saved_at"`
 }
 
 // Task is the persistent state of one agentic task.
@@ -121,15 +127,26 @@ type Task struct {
 	StepBudget   int        `json:"step_budget"`
 	Summary      string     `json:"summary,omitempty"`
 	Findings     []string   `json:"findings,omitempty"`
-	Question     string     `json:"question,omitempty"` // set when paused via ask_operator
-	LastError    string     `json:"last_error,omitempty"`
-	TokensUsed   int        `json:"tokens_used,omitempty"`
+	// FindingRecords is the structured, verdict-bearing counterpart to
+	// Findings — see verifyFindingDetail in verdict.go. Additive: only
+	// FindingsDetail entries (title/evidence/step_id) produce a record, so
+	// this may be shorter than Findings. Wire-visible on purpose (title,
+	// evidence, and reason are all already sanitized/server-authored text).
+	FindingRecords []FindingRecord `json:"finding_records,omitempty"`
+	Question       string          `json:"question,omitempty"` // set when paused via ask_operator
+	LastError      string          `json:"last_error,omitempty"`
+	TokensUsed     int             `json:"tokens_used,omitempty"`
 
 	// Checkpoint holds the last saved graph position (crash recovery).
 	Checkpoint Checkpoint `json:"checkpoint,omitempty"`
 
-	// ObservationHistory holds full tool outputs for audit (not persisted — runtime only).
-	ObservationHistory []string `json:"observation_history,omitempty"`
+	// ObservationHistory holds full tool outputs for audit (not persisted —
+	// runtime only). Currently unpopulated by any node, but json:"-" (not
+	// omitempty) deliberately, matching ActivityEvent.Detail's pattern: this
+	// is target-controlled command output, which must never reach a wire
+	// client — it exists for server-side diagnostics, if and when something
+	// starts writing to it, not for UI display.
+	ObservationHistory []string `json:"-"`
 
 	// Pending* describe the command the task is blocked on while
 	// awaiting_approval. They are ephemeral (not persisted) and exist so the

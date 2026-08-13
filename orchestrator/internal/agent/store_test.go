@@ -148,10 +148,13 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 	db := openTestDB(t)
 	s1, _ := NewStore(db)
 	task, _ := s1.Create("sess-1", "goal", 15)
-	_ = s1.Transition(task.ID, StatusPlanned, nil)
+	_ = s1.Transition(task.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{{ID: "s1", Description: "work", Status: StepPending}}
+	})
 	_ = s1.Transition(task.ID, StatusRunning, nil)
 
-	// Second store on the same DB simulates a restart: active task → interrupted.
+	// Second store on the same DB simulates a restart: an active top-level task
+	// becomes a safe, explicitly recoverable paused checkpoint.
 	s2, err := NewStore(db)
 	if err != nil {
 		t.Fatalf("reload store: %v", err)
@@ -160,8 +163,37 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 	if !ok {
 		t.Fatal("task lost after reload")
 	}
-	if got.Status != StatusInterrupted {
-		t.Fatalf("status after restart = %s, want interrupted", got.Status)
+	if got.Status != StatusPaused || !got.Checkpoint.ResumeAfterRestart || got.Checkpoint.CurrentNode != nodeStep {
+		t.Fatalf("task was not recovered safely after restart: %+v", got)
+	}
+}
+
+// TestFindingRecordsPersistAcrossReload guards the same class of bug as
+// TestCreateSubtaskPersistsParentTaskIDAcrossReload below: a new Task field
+// needs its own column plus explicit persist()/loadFromDB() wiring, or it
+// silently survives in memory only and vanishes the moment the orchestrator
+// restarts — which for a verdict/oracle_kind field would quietly turn every
+// past Verified finding back into an unlabeled one after a restart.
+func TestFindingRecordsPersistAcrossReload(t *testing.T) {
+	db := openTestDB(t)
+	s1, _ := NewStore(db)
+	task, _ := s1.Create("sess-1", "goal", 15)
+	_ = s1.Update(task.ID, func(t *Task) {
+		t.FindingRecords = []FindingRecord{
+			{Title: "MySQL exposed", Verdict: VerdictVerified, OracleKind: OracleToolEvidence, Evidence: "3306/tcp open", StepID: "s1"},
+		}
+	})
+
+	s2, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	got, ok := s2.Get(task.ID)
+	if !ok {
+		t.Fatal("task lost after reload")
+	}
+	if len(got.FindingRecords) != 1 || got.FindingRecords[0].Verdict != VerdictVerified {
+		t.Fatalf("finding records did not survive reload, got %+v", got.FindingRecords)
 	}
 }
 
@@ -211,5 +243,41 @@ func TestStorePublishesEvents(t *testing.T) {
 	evt := <-ch
 	if evt.Type != "task.planning" || evt.Task.ID != task.ID {
 		t.Fatalf("unexpected event: %+v", evt)
+	}
+}
+
+func TestStorePersistenceFailureDoesNotCommitMemoryState(t *testing.T) {
+	db := openTestDB(t)
+	s, _ := NewStore(db)
+	task, _ := s.Create("sess", "goal", 5)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := s.Update(task.ID, func(tk *Task) { tk.Summary = "must not commit" }); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	got, _ := s.Get(task.ID)
+	if got.Summary != "" {
+		t.Fatalf("in-memory state diverged from failed persistence: %+v", got)
+	}
+}
+
+func TestRestartStopsChildInsteadOfDoubleResumingIt(t *testing.T) {
+	db := openTestDB(t)
+	s, _ := NewStore(db)
+	parent, _ := s.Create("sess", "parent", 5)
+	child, _ := s.CreateSubtask("sess", "child", 5, parent.ID)
+	_ = s.Transition(child.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{{ID: "s1", Description: "work", Status: StepPending}}
+	})
+	_ = s.Transition(child.ID, StatusRunning, nil)
+
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got, _ := reloaded.Get(child.ID)
+	if got.Status != StatusStopped || got.Checkpoint.ResumeAfterRestart {
+		t.Fatalf("child should be reconciled by parent, not independently resumed: %+v", got)
 	}
 }

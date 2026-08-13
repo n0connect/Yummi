@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
+	"github.com/n0connect/yummi/orchestrator/internal/agent/eino"
 	"github.com/n0connect/yummi/orchestrator/internal/api"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/config"
@@ -25,6 +27,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
+	"github.com/n0connect/yummi/orchestrator/internal/sandboxmcp"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
 	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
@@ -95,10 +98,17 @@ func main() {
 	approvalStore.StartPurger(ctx, 5*time.Minute)
 
 	bridge := sandbox.NewBridge(cfg.SandboxContainer)
+	bridge.SetTimeout(cfg.SandboxExecTimeout) // no-op when unset — Bridge keeps its own generous default
 	gatewayClient := gateway.NewClient(cfg.GatewaySocket)
 	if cfg.GatewayTLS && tlsClientConfig != nil {
 		gatewayClient = gatewayClient.WithTLS(tlsClientConfig)
 	}
+	// Persistent MCP session into the sandbox container — reached via the
+	// same docker-exec invocation shape sandbox.Bridge.Exec uses, just held
+	// open (-i) instead of one-shot-buffered. Feeds the executor's MCP
+	// dispatch path (processMCP) regardless of which agent backend is active;
+	// only the Eino backend currently issues MCP tool calls.
+	sandboxMCPClient := sandboxmcp.NewClient(cfg.SandboxContainer)
 	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel)
 
 	// Semantic retrieval: an optional local embedding model (separate Ollama
@@ -132,7 +142,7 @@ func main() {
 	// output back into the conductor's session history. This closes the
 	// agentic loop: LLM proposes → user approves → command runs → LLM sees
 	// the result on the next turn → LLM proposes the next step.
-	exec := executor.New(bridge, gatewayClient, ks)
+	exec := executor.New(bridge, gatewayClient, ks, sandboxMCPClient)
 	baseProcessor := exec.ProcessFunc()
 	executionStore.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
 		output, err := baseProcessor(ctx, rec)
@@ -165,7 +175,8 @@ func main() {
 		curatorStore = nil
 	}
 
-	var taskRunner *agent.Runner
+	var taskRunner agent.TaskRunner
+	var curatorWorker *skillcurator.Worker
 	// skillReg is also exposed read-only via the TRACE API, so it lives at this
 	// scope (nil-safe: skill.Registry methods tolerate a nil receiver).
 	var skillReg *skill.Registry
@@ -187,6 +198,17 @@ func main() {
 			if serr != nil {
 				slog.Warn("skills load failed; continuing without skills", "error", serr)
 				skillReg = skill.New(nil)
+			}
+			// Operator-approved generated skills live in a separate writable
+			// directory. The shipped persona remains read-only and auditable.
+			if autoReg, aerr := skill.LoadDirWithOrigin(cfg.AutoSkillDir, "auto"); aerr == nil {
+				for _, approved := range autoReg.All() {
+					if err := skillReg.Upsert(approved); err != nil {
+						slog.Warn("approved skill load failed", "name", approved.Name, "error", err)
+					}
+				}
+			} else if !os.IsNotExist(aerr) {
+				slog.Warn("approved skills load failed", "dir", cfg.AutoSkillDir, "error", aerr)
 			}
 			structuredRetrieval := knowledge.NewStructuredRetrieval(ks)
 			var retrieval knowledge.RetrievalStrategy = structuredRetrieval
@@ -212,9 +234,14 @@ func main() {
 				primaryLLM.Chat, fallbackChat, primaryLLM.Model(), fallbackName, 3, 60*time.Second)
 			var agentLLM agent.LLM = resilientLLM
 
-			// Auto-skill-creation curator: nil-safe (skillcurator.Curator's
-			// ProposeFromTask tolerates a nil store) if curatorStore init failed above.
-			skillCuratorFn := skillcurator.NewCurator(curatorStore, resilientLLM.Chat, skillReg).ProposeFromTask
+			// Auto-skill creation runs through a bounded, shutdown-aware worker;
+			// task completion only performs a non-blocking enqueue.
+			curatorWorker = skillcurator.NewWorker(
+				skillcurator.NewCurator(curatorStore, resilientLLM.Chat, skillReg), 32, 2*time.Minute)
+			curatorWorker.Start(ctx)
+			skillCuratorFn := func(_ context.Context, traj skillcurator.Trajectory) {
+				curatorWorker.Submit(traj)
+			}
 
 			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
 			// execution pipeline. Built with no SubAgents of their own, capping
@@ -251,26 +278,58 @@ func main() {
 				slog.Info("sub-agents registered", "roles", len(subAgents))
 			}
 
-			taskRunner = agent.NewRunner(
-				taskStore,
-				agentLLM,
-				assistant.Validator(),
-				agent.NewStoreExecer(executionStore, 10*time.Minute),
-				agent.Config{ // defaults: budget 15, ask_permission mode
-					Persona:      agentPersona,
-					Knowledge:    ks,
-					Retrieval:    retrieval,
-					Skills:       skillReg,
-					SubAgents:    subAgents,
-					SkillCurator: skillCuratorFn,
-					// Room for the sub-agents' own StepBudget:40 above to actually
-					// run to completion — the default 10m ceiling was sized for
-					// StepBudget:15 (matches the top-level loop); a sub-agent with
-					// a larger budget needs proportionally more wall clock or the
-					// timeout, not the step count, becomes the real limiter.
-					SubAgentTimeout: 20 * time.Minute,
-				},
-			)
+			// Agent backend selection: graph (default, tag-protocol state
+			// machine — best for small/local models) or eino (native
+			// tool-calling — best for larger models with reliable
+			// function-calling). Runtime env var read here rather than a
+			// build tag, so operators can switch by restarting the
+			// container, not rebuilding it; make conf's YUMMI_AGENT_BACKEND
+			// question just pre-seeds this for convenience.
+			switch backend := strings.ToLower(os.Getenv("YUMMI_AGENT_BACKEND")); backend {
+			case "eino":
+				taskRunner = eino.NewEinoRunner(
+					taskStore,
+					assistant.Validator(),
+					agent.NewStoreExecer(executionStore, 10*time.Minute),
+					eino.Config{
+						StepBudget:   15,
+						ApprovalMode: agent.ModeAskPermission,
+						ModelBaseURL: strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
+						ModelName:    cfg.OllamaModel,
+						Knowledge:    ks,
+						MCPExec:      agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
+						MCPList:      sandboxMCPClient,
+					},
+				)
+				slog.Info("agent backend: eino", "model", cfg.OllamaModel)
+			default:
+				taskRunner = agent.NewRunner(
+					taskStore,
+					agentLLM,
+					assistant.Validator(),
+					agent.NewStoreExecer(executionStore, 10*time.Minute),
+					agent.Config{ // defaults: budget 15, ask_permission mode
+						Persona:      agentPersona,
+						Knowledge:    ks,
+						Retrieval:    retrieval,
+						Skills:       skillReg,
+						SubAgents:    subAgents,
+						SkillCurator: skillCuratorFn,
+						// Room for the sub-agents' own StepBudget:40 above to actually
+						// run to completion — the default 10m ceiling was sized for
+						// StepBudget:15 (matches the top-level loop); a sub-agent with
+						// a larger budget needs proportionally more wall clock or the
+						// timeout, not the step count, becomes the real limiter.
+						SubAgentTimeout: 20 * time.Minute,
+					},
+				)
+				slog.Info("agent backend: graph")
+			}
+			if resumed, rerr := taskRunner.ResumeRecovered(); rerr != nil {
+				slog.Error("recovered task resume failed", "error", rerr, "resumed", resumed)
+			} else if resumed > 0 {
+				slog.Info("recovered tasks resumed", "count", resumed)
+			}
 		}
 	}
 
@@ -315,6 +374,9 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "error", err)
+	}
+	if curatorWorker != nil {
+		_ = curatorWorker.Wait(shutdownCtx)
 	}
 
 	slog.Info("orchestrator stopped")

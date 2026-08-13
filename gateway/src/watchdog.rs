@@ -16,9 +16,9 @@ use crate::config::GatewayConfig;
 /// On breach: audit log is flushed, heartbeat is removed, process exits.
 pub struct Watchdog {
     heartbeat_path: String,
-    interval:       Duration,
-    max_memory_mb:  u64,
-    audit:          AuditLog,
+    interval: Duration,
+    max_memory_mb: u64,
+    audit: AuditLog,
 }
 
 impl Watchdog {

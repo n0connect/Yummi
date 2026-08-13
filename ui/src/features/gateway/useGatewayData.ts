@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import type { GatewayRule, GatewayAuditRow, GatewayStatus, GatewayEgressMode, GatewayEgressModeResponse } from '../../entities/types'
+import { apiURL } from '../../shared/api/runtime'
 
 const POLL_MS = 5_000
 
@@ -9,7 +10,7 @@ export function useGatewayRules() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/gateway/rules')
+      const res = await fetch(apiURL('/api/v1/gateway/rules'))
       if (res.ok) {
         const data = await res.json()
         setRules(data.rules ?? [])
@@ -35,7 +36,7 @@ export function useGatewayAudit(limit = 50) {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`/api/v1/gateway/audit?limit=${limit}`)
+      const res = await fetch(apiURL(`/api/v1/gateway/audit?limit=${limit}`))
       if (res.ok) {
         const data = await res.json()
         setRows(data.rows ?? [])
@@ -61,7 +62,7 @@ export function useEgressMode() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/gateway/egress-mode')
+      const res = await fetch(apiURL('/api/v1/gateway/egress-mode'))
       if (res.ok) {
         const data: GatewayEgressModeResponse = await res.json()
         if (data.mode) setModeState(data.mode)
@@ -88,7 +89,7 @@ export function useEgressMode() {
 }
 
 export async function setEgressMode(mode: GatewayEgressMode): Promise<void> {
-  const res = await fetch('/api/v1/gateway/egress-mode', {
+  const res = await fetch(apiURL('/api/v1/gateway/egress-mode'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode })
@@ -100,7 +101,7 @@ export async function setEgressMode(mode: GatewayEgressMode): Promise<void> {
 }
 
 export async function addGatewayRule(network: string, ttlSecs: number, reason: string): Promise<void> {
-  const res = await fetch('/api/v1/gateway/rules', {
+  const res = await fetch(apiURL('/api/v1/gateway/rules'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ network, ttl_secs: ttlSecs, reason })
@@ -112,7 +113,7 @@ export async function addGatewayRule(network: string, ttlSecs: number, reason: s
 }
 
 export async function removeGatewayRule(id: string): Promise<void> {
-  const res = await fetch(`/api/v1/gateway/rules/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  const res = await fetch(apiURL(`/api/v1/gateway/rules/${encodeURIComponent(id)}`), { method: 'DELETE' })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`failed to remove rule: ${text}`)
@@ -136,7 +137,7 @@ export function useHostnamePolicy() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/gateway/hostname-policy')
+      const res = await fetch(apiURL('/api/v1/gateway/hostname-policy'))
       if (res.ok) apply(await res.json())
     } catch {
       setStatus('disconnected')
@@ -161,7 +162,7 @@ export function useHostnamePolicy() {
 }
 
 async function editHostnameRule(method: 'POST' | 'DELETE', list: HostnameList, pattern: string) {
-  const res = await fetch('/api/v1/gateway/hostname-policy', {
+  const res = await fetch(apiURL('/api/v1/gateway/hostname-policy'), {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ list, pattern })

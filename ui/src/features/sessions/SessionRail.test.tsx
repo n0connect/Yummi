@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { SessionRail } from './SessionRail'
 
@@ -18,11 +18,14 @@ describe('SessionRail', () => {
     expect(aside?.classList.contains('open')).toBe(false)
   })
 
-  it('applies the open class when open', () => {
+  it('applies the open class when open', async () => {
     const { container } = render(
       <SessionRail open onToggle={() => {}} activeSessionID="default" refreshKey={0} onSelect={() => {}} />,
     )
     expect(container.querySelector('.session-rail')?.classList.contains('open')).toBe(true)
+    // Wait for the real, intentionally unmocked fetch to settle so no state
+    // update escapes the test's act() boundary.
+    await screen.findByText('Sohbetler yüklenemedi.')
   })
 
   it('invokes onToggle when the toggle is clicked', () => {
@@ -30,7 +33,7 @@ describe('SessionRail', () => {
     render(
       <SessionRail open={false} onToggle={() => { toggled++ }} activeSessionID="default" refreshKey={0} onSelect={() => {}} />,
     )
-    screen.getByLabelText('Sohbet geçmişi').click()
+    fireEvent.click(screen.getByLabelText('Sohbet geçmişi'))
     expect(toggled).toBe(1)
   })
 })

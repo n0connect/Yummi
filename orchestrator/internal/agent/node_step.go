@@ -38,6 +38,11 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 			task.StepBudget, CompressObservation(s.lastObs))
 		return edgeBudgetOut, nil
 	}
+	// Give the model one final chance to provide a structured FINISH (and its
+	// evidence-bearing finding details). If it emits anything else, fails, or
+	// formats the control message poorly, the terminal plan is synthesized
+	// deterministically below instead of drifting into more commands.
+	terminalPlan := s.autoFinishTerminalPlan && task.StepsUsed > 0 && planTerminal(task.Plan) && planHasSuccess(task.Plan) && hasSynthesisEvidence(s.memCtx)
 
 	system := StepSystemPrompt(s.cfg.Persona)
 	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary, s.buildPreamble(ctx, task))
@@ -47,6 +52,9 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
+		if terminalPlan {
+			return s.convergeTerminalPlan()
+		}
 		slog.Warn("agent: step LLM error", "task", s.taskID, "error", err)
 		s.retryCtx = RetryContext{Caller: nodeStep, Attempts: s.retryCtx.Attempts}
 		return edgeLLMError, nil
@@ -54,6 +62,9 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 
 	msg, parseErr := ParseControl(raw)
 	if parseErr != nil {
+		if terminalPlan {
+			return s.convergeTerminalPlan()
+		}
 		// Single inline parse-retry with a format hint before escalating to RetryNode.
 		hint := llmParseRetryHint(s.retryCtx.Attempts)
 		raw2, err2 := s.llm.Chat(ctx, system, prompt+hint)
@@ -69,6 +80,9 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 			s.retryCtx = RetryContext{Caller: nodeStep, Attempts: s.retryCtx.Attempts}
 			return edgeLLMError, nil
 		}
+	}
+	if terminalPlan && msg.Tag != "FINISH" && msg.Tag != "STOP_TASK" {
+		return s.convergeTerminalPlan()
 	}
 
 	s.retryCtx = RetryContext{} // reset on successful parse
@@ -116,6 +130,12 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		if len(targets) == 0 {
 			return s.rejectStepAction()
 		}
+		if len(targets) > s.cfg.MaxHandoffsPerStep {
+			s.lastObs = Wrap("TOOL_FAILED", fmt.Sprintf(
+				"HANDOFF requested %d specialists; the per-step safety limit is %d. Split the work or choose the most relevant roles.",
+				len(targets), s.cfg.MaxHandoffsPerStep))
+			return edgeUpdatePlan, nil
+		}
 		for _, t := range targets {
 			if _, ok := s.cfg.SubAgents[strings.TrimSpace(t.Role)]; !ok || strings.TrimSpace(t.Subgoal) == "" {
 				return s.rejectStepAction()
@@ -143,6 +163,46 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		// CONTINUE/ABORT/CHANGE_GOAL are consult-only and invalid at a normal step.
 		return s.rejectStepAction()
 	}
+}
+
+func (s *GraphState) convergeTerminalPlan() (string, error) {
+	s.pendingAct = Action{}
+	s.finishOutcome = outcomeCompleted
+	s.finishMsg = ""
+	return edgeFinish, nil
+}
+
+func hasSynthesisEvidence(memory MemoryContext) bool {
+	if strings.TrimSpace(memory.Summary) != "" {
+		return true
+	}
+	for _, observation := range memory.Observations {
+		if strings.TrimSpace(observation) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func planTerminal(plan []PlanStep) bool {
+	if len(plan) == 0 {
+		return false
+	}
+	for _, step := range plan {
+		if step.Status == StepPending || step.Status == StepRunning {
+			return false
+		}
+	}
+	return true
+}
+
+func planHasSuccess(plan []PlanStep) bool {
+	for _, step := range plan {
+		if step.Status == StepDone {
+			return true
+		}
+	}
+	return false
 }
 
 // rejectStepAction is the shared outcome for a structurally-parsed control
@@ -220,7 +280,7 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 		return ""
 	}
 	items, err := s.cfg.Retrieval.Retrieve(ctx, knowledge.Query{
-		SessionID: task.SessionID, Tools: toolsFromCommands(s.recentCmds), Limit: 5,
+		SessionID: task.SessionID, Goal: task.Goal, Tools: toolsFromCommands(s.recentCmds), Limit: 5,
 		// Suppress recall of commands already run this task: re-injecting them as
 		// "use it, don't rediscover" reinforces weak models into command loops.
 		ExcludeCommands: s.recentCmds,
@@ -235,7 +295,7 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 	}
 	if sig := items[0].Text; sig != s.lastMemorySig {
 		s.lastMemorySig = sig
-		s.emit(ActMemory, items[0].Text, "")
+		s.emit(ActMemory, "Relevant session context applied", "")
 	}
 	return b.String()
 }

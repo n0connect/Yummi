@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { LogEntry, LogLevel } from '../../entities/types'
+import { apiURL } from '../../shared/api/runtime'
 
 const MAX_ENTRIES = 500
 
@@ -18,7 +19,7 @@ export function useLogStream(): StreamedLogEntry[] {
     let cancelled = false
 
     const connect = () => {
-      const es = new EventSource('/api/v1/system/logs')
+      const es = new EventSource(apiURL('/api/v1/system/logs'))
       esRef.current = es
 
       es.onmessage = (ev) => {

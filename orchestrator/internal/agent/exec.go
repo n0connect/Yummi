@@ -116,3 +116,55 @@ func orDefault(s, d string) string {
 	}
 	return s
 }
+
+// StoreMCPExecer runs MCP-backed tool calls through the same execution.Store
+// pipeline StoreExecer uses for shell commands — same audit trail, gateway
+// scope check (via executor.processMCP), and heartbeat, just tagged with the
+// tool name and structured arguments instead of a raw command string.
+type StoreMCPExecer struct {
+	store   *execution.Store
+	hardCap time.Duration
+}
+
+// NewStoreMCPExecer wraps an execution store. hardCap bounds total tool-call
+// time, same default and rationale as NewStoreExecer.
+func NewStoreMCPExecer(store *execution.Store, hardCap time.Duration) *StoreMCPExecer {
+	if hardCap <= 0 {
+		hardCap = 10 * time.Minute
+	}
+	return &StoreMCPExecer{store: store, hardCap: hardCap}
+}
+
+// RunMCPTool enqueues the tool call and blocks for a single bounded wait —
+// the same simple synchronous shape StoreExecer.Run offers for the shell
+// path (no mid-run supervision needed for these bounded pentest-tool calls).
+func (e *StoreMCPExecer) RunMCPTool(ctx context.Context, sessionID, tool string, args map[string]any, displayCommand string) (ToolResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ToolResult{}, err
+	}
+	rec, err := e.store.EnqueueMCP(sessionID, "", tool, args, displayCommand, "agent_task")
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("enqueue mcp: %w", err)
+	}
+	start := time.Now()
+	final, err := e.store.WaitForTerminal(rec.ID, e.hardCap)
+	dur := time.Since(start)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ToolResult{}, ctx.Err()
+		}
+		return ToolResult{}, fmt.Errorf("wait timeout: mcp tool %s did not finish within %s", tool, e.hardCap)
+	}
+	switch final.Status {
+	case execution.StatusCompleted:
+		return ToolResult{Content: final.Output, Duration: dur}, nil
+	case execution.StatusCanceled:
+		return ToolResult{Content: orDefault(final.Output, "command aborted"), IsError: true, Duration: dur}, nil
+	default:
+		return ToolResult{
+			Content:  orDefault(final.Error, "execution failed") + "\n" + final.Output,
+			IsError:  true,
+			Duration: dur,
+		}, nil
+	}
+}

@@ -3,7 +3,7 @@ name = "yummi-gateway"
 version = "0.1.0"
 edition = "2021"
 description = "Yummi gateway trust boundary — traffic observation and policy enforcement"
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "yummi-gateway"

@@ -1,0 +1,25 @@
+schema_version: 1
+version: 1.0.0
+name: software-presence
+description: Determine whether named optional command-line software is installed and report versions or explicit absence.
+triggers:
+  - mysql
+  - postgresql
+  - kurulu mu
+  - installed
+  - version
+tools:
+  - command
+  - printf
+plan_step_limit: 1
+knowledge: |
+  Presence and absence are two successful outcomes of one atomic probe. Use an exit-0 reporting
+  pattern such as `for bin in mysql psql; do if command -v "$bin" >/dev/null; then "$bin"
+  --version; else printf '%s: not installed\n' "$bin"; fi; done`. This records an explicit line
+  for every requested binary and avoids treating an expected "not installed" result as a failed
+  task. Do not split collection and interpretation into separate plan steps.
+references:
+  - persona:software-presence-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/software-presence.yaml

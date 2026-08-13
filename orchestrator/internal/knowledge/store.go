@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,6 +126,7 @@ func (s *Store) RecordFinding(ctx context.Context, f Finding) error {
 	s.mu.Lock()
 	s.findings[f.ID] = f
 	s.mu.Unlock()
+	s.embedAndSave(ctx, "findings", f.ID, strings.TrimSpace(f.Title+" "+f.Description+" "+f.Evidence))
 	return nil
 }
 
@@ -235,6 +237,23 @@ func nullStr(s string) any {
 
 // RecordContext stores or updates a persistent memory element for the session.
 func (s *Store) RecordContext(ctx context.Context, pc PersistentContext) error {
+	pc.SessionID = strings.TrimSpace(pc.SessionID)
+	pc.Key = strings.TrimSpace(pc.Key)
+	pc.Value = strings.TrimSpace(pc.Value)
+	if pc.SessionID == "" || pc.Key == "" || pc.Value == "" {
+		return fmt.Errorf("record context: session_id, key, and value are required")
+	}
+	if len([]rune(pc.Key)) > 200 || len([]rune(pc.Value)) > 65536 {
+		return fmt.Errorf("record context: key or value exceeds limit")
+	}
+	if pc.ID == "" {
+		if existing, ok := s.FindContext(pc.SessionID, pc.Key); ok {
+			pc.ID = existing.ID
+			pc.CreatedAt = existing.CreatedAt
+		} else if len(s.ListContexts(pc.SessionID)) >= 200 {
+			return fmt.Errorf("record context: session memory limit (200) reached")
+		}
+	}
 	if pc.ID == "" {
 		pc.ID = uuid.NewString()
 	}
@@ -262,6 +281,43 @@ func (s *Store) RecordContext(ctx context.Context, pc PersistentContext) error {
 	}
 	s.mu.Lock()
 	s.contexts[pc.ID] = pc
+	s.mu.Unlock()
+	s.embedAndSave(ctx, "persistent_context", pc.ID, strings.TrimSpace(pc.Key+" "+pc.Value))
+	return nil
+}
+
+// DeleteContext implements explicit forgetting for one session/key and removes
+// its semantic index entry. Session scoping prevents one engagement from
+// deleting another engagement's memory.
+func (s *Store) DeleteContext(ctx context.Context, sessionID, key string) error {
+	pc, ok := s.FindContext(sessionID, key)
+	if !ok {
+		return fmt.Errorf("context %q not found in session %s", key, sessionID)
+	}
+	if s.db != nil {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM embeddings WHERE source_table='persistent_context' AND source_id=?`, pc.ID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("delete context embedding: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM persistent_context WHERE id=? AND session_id=?`, pc.ID, sessionID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("delete context: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	delete(s.contexts, pc.ID)
+	for embeddingKey, row := range s.embeddings {
+		if row.SourceTable == "persistent_context" && row.SourceID == pc.ID {
+			delete(s.embeddings, embeddingKey)
+		}
+	}
 	s.mu.Unlock()
 	return nil
 }

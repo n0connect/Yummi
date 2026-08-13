@@ -13,6 +13,7 @@ package dnsresolve
 import (
 	"context"
 	"net"
+	"net/netip"
 	"time"
 )
 
@@ -55,6 +56,9 @@ func (rs *Resolver) Resolve(ctx context.Context, host string) []string {
 	// Already an IP literal — pass through unchanged.
 	if ip := net.ParseIP(host); ip != nil {
 		return []string{host}
+	}
+	if prefix, err := netip.ParsePrefix(host); err == nil {
+		return []string{prefix.String()}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)

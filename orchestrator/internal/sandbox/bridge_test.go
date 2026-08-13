@@ -18,18 +18,42 @@ func TestNewBridge(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
-	short := "hello"
-	if truncate(short, 10) != short {
-		t.Fatal("short string should not be truncated")
+// TestSetTimeout proves the zero-guard: real pentest tooling needs the
+// timeout raised well past the default, but a config parse failure landing
+// on the zero value must never silently turn every command instant-fail.
+func TestSetTimeout(t *testing.T) {
+	b := NewBridge("test-container")
+	if b.timeout != defaultTimeout {
+		t.Fatalf("expected default timeout %v, got %v", defaultTimeout, b.timeout)
+	}
+	b.SetTimeout(30 * time.Minute)
+	if b.timeout != 30*time.Minute {
+		t.Fatalf("expected overridden timeout 30m, got %v", b.timeout)
+	}
+	b.SetTimeout(0)
+	if b.timeout != 30*time.Minute {
+		t.Fatalf("SetTimeout(0) must be a no-op, got %v", b.timeout)
+	}
+	b.SetTimeout(-5 * time.Second)
+	if b.timeout != 30*time.Minute {
+		t.Fatalf("SetTimeout(negative) must be a no-op, got %v", b.timeout)
+	}
+}
+
+func TestCappedBuffer(t *testing.T) {
+	b := newCappedBuffer(50)
+	if n, err := b.Write([]byte("hello")); err != nil || n != 5 {
+		t.Fatalf("first write = (%d, %v), want (5, nil)", n, err)
 	}
 	long := strings.Repeat("x", 100)
-	result := truncate(long, 50)
-	if len(result) <= 50 {
-		t.Fatal("truncated result should include suffix")
+	if n, err := b.Write([]byte(long)); err != nil || n != len(long) {
+		t.Fatalf("overflow write = (%d, %v), want (%d, nil)", n, err, len(long))
 	}
-	if !strings.Contains(result, "[truncated]") {
-		t.Fatal("truncated result should contain marker")
+	if b.buf.Len() != 50 {
+		t.Fatalf("retained %d bytes, want hard cap 50", b.buf.Len())
+	}
+	if !strings.HasSuffix(b.String(), truncationMark) {
+		t.Fatalf("result should end with truncation marker: %q", b.String())
 	}
 }
 

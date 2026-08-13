@@ -1,0 +1,25 @@
+schema_version: 1
+version: 1.0.0
+name: largest-files
+description: Find and rank the largest regular files below an explicit local path.
+triggers:
+  - largest files
+  - largest 3 files
+  - en büyük 3 dosya
+  - büyük 3 dosya
+  - /var
+tools:
+  - find
+  - sort
+  - head
+plan_step_limit: 1
+knowledge: |
+  This capability is one atomic evidence step: collect regular-file sizes and rank them in the
+  same pipeline. Use `find <path> -type f -printf '%s\t%p\n' 2>/dev/null | sort -nr | head -3`.
+  Preserve the three size/path lines as the answer. Do not use `du <path>/*`, which ranks
+  directories, and do not add a second analysis/sort plan step after the pipeline already ranked.
+references:
+  - persona:largest-files-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/largest-files.yaml

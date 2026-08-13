@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,45 @@ func TestStructuredRetrievalReturnsFactsAndTactics(t *testing.T) {
 	}
 	if !sawFinding || !sawTactic {
 		t.Fatalf("missing memory items: finding=%v tactic=%v items=%+v", sawFinding, sawTactic, items)
+	}
+}
+
+func TestStructuredRetrievalRecallsPersistentContext(t *testing.T) {
+	for _, db := range []*sql.DB{nil, openTestDB(t)} {
+		s, err := NewStore(db)
+		if err != nil {
+			t.Fatalf("NewStore: %v", err)
+		}
+		ctx := context.Background()
+		if err := s.RecordContext(ctx, PersistentContext{
+			SessionID: "s", Key: "auth-module", Value: "JWT verification lives in internal/auth/verify.go",
+		}); err != nil {
+			t.Fatalf("RecordContext: %v", err)
+		}
+		if err := s.RecordContext(ctx, PersistentContext{
+			SessionID: "other", Key: "secret", Value: "must never cross session boundaries",
+		}); err != nil {
+			t.Fatalf("RecordContext other: %v", err)
+		}
+
+		items, err := NewStructuredRetrieval(s).Retrieve(ctx, Query{
+			SessionID: "s", Goal: "review authentication and JWT verification", Limit: 5,
+		})
+		if err != nil {
+			t.Fatalf("Retrieve: %v", err)
+		}
+		var recalled bool
+		for _, item := range items {
+			if item.Kind == "context" && strings.Contains(item.Text, "verify.go") {
+				recalled = true
+			}
+			if strings.Contains(item.Text, "cross session") {
+				t.Fatalf("context leaked across sessions: %+v", items)
+			}
+		}
+		if !recalled {
+			t.Fatalf("persistent context was written but not recalled: %+v", items)
+		}
 	}
 }
 

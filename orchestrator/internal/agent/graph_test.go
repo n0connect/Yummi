@@ -133,6 +133,55 @@ func TestGraphBudgetExhaustion(t *testing.T) {
 	}
 }
 
+func TestStepNodeConvergesWhenPlanIsTerminalWithoutCallingLLM(t *testing.T) {
+	store, err := NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	task, err := store.Create("terminal-plan", "report hostname", 5)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{{ID: "s1", Description: "hostname", Status: StepDone, Result: "sandbox"}}
+		tk.StepsUsed = 1
+	}); err != nil {
+		t.Fatalf("planned: %v", err)
+	}
+	if err := store.Transition(task.ID, StatusRunning, nil); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	s := &GraphState{taskID: task.ID, store: store, cfg: fastRetryCfg(), autoFinishTerminalPlan: true, memCtx: MemoryContext{TokenBudget: 6000, Observations: []string{"sandbox"}}}
+	s.llm = newFakeOllama(t, "not a control message")
+	edge, err := stepNode(context.Background(), s)
+	if err != nil || edge != edgeFinish || s.finishOutcome != outcomeCompleted {
+		t.Fatalf("terminal plan did not converge: edge=%q outcome=%q err=%v", edge, s.finishOutcome, err)
+	}
+}
+
+func TestStepNodeDoesNotConvergeAnAllFailedPlan(t *testing.T) {
+	store, err := NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	task, _ := store.Create("failed-plan", "recover hostname", 5)
+	_ = store.Transition(task.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{{ID: "s1", Description: "hostnamectl", Status: StepFailed, Error: "systemd unavailable"}}
+		tk.StepsUsed = 1
+	})
+	_ = store.Transition(task.ID, StatusRunning, nil)
+	s := &GraphState{
+		taskID: task.ID, store: store, cfg: fastRetryCfg(), autoFinishTerminalPlan: true,
+		memCtx: MemoryContext{TokenBudget: 6000, Observations: []string{"systemd unavailable"}},
+		llm: newFakeOllama(t, `[RUN_COMMAND]
+{"command":"hostname","step_id":"s1","risk_level":"low"}`),
+	}
+	edge, err := stepNode(context.Background(), s)
+	if err != nil || edge != edgeRunCommand {
+		t.Fatalf("all-failed plan should be allowed to recover: edge=%q err=%v", edge, err)
+	}
+}
+
 // TestGraphImmediateFinish: LLM returns finish action on the first call.
 // Tests the happy path: step → finish → StatusCompleted.
 func TestGraphImmediateFinish(t *testing.T) {
@@ -354,6 +403,42 @@ func TestObserveResultRecordsCommandOnPlanStep(t *testing.T) {
 	got, _ := store.Get(task.ID)
 	if planStep(got.Plan, "s1").Command != "nmap -sV 172.20.0.6" {
 		t.Fatalf("expected step to record the command, got %+v", planStep(got.Plan, "s1"))
+	}
+}
+
+// TestObserveResultVerifiesFindingAgainstLiveOutput proves observeResult
+// checks a RUN_COMMAND's own findings against the untruncated result.Content
+// of the command that just ran — the fast path in verifyFindingDetail —
+// rather than waiting until the (500-char-capped) persisted PlanStep.Result
+// exists.
+func TestObserveResultVerifiesFindingAgainstLiveOutput(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "scan a host")
+
+	s := &GraphState{
+		taskID:         task.ID,
+		store:          store,
+		gate:           NewGate(),
+		cfg:            fastRetryCfg(),
+		pendingCommand: "nmap -sV 172.20.0.6",
+		pendingAct: Action{
+			StepID: "s1",
+			FindingsDetail: []FindingDetail{
+				{Title: "MySQL exposed", Evidence: "3306/tcp open mysql 5.5.47"}, // no step_id — defaults to s1
+			},
+		},
+	}
+	observeResult(s, ToolResult{Content: "PORT   STATE SERVICE\n3306/tcp open mysql 5.5.47\nNmap done."})
+
+	got, _ := store.Get(task.ID)
+	if len(got.FindingRecords) != 1 {
+		t.Fatalf("expected 1 finding record, got %d: %+v", len(got.FindingRecords), got.FindingRecords)
+	}
+	if got.FindingRecords[0].Verdict != VerdictVerified {
+		t.Fatalf("expected verified (defaulted step_id + live content match), got %+v", got.FindingRecords[0])
+	}
+	if got.FindingRecords[0].StepID != "s1" {
+		t.Fatalf("expected the empty step_id to default to the current step, got %q", got.FindingRecords[0].StepID)
 	}
 }
 

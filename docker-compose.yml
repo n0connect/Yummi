@@ -1,3 +1,14 @@
+# Docker's json-file log driver is unbounded by default — fine for a short-lived
+# dev container, not for a daemon meant to run indefinitely. Every service here
+# is long-running (restart: unless-stopped), so an unbounded log is a real
+# disk-exhaustion vector over time regardless of which one; cap all of them the
+# same way rather than guessing which is most at risk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
 
   # ── gateway — trust boundary ───────────────────────────────────────────────────
@@ -29,6 +40,7 @@ services:
         ipv4_address: 172.20.0.2
       yummi_external:
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "test", "-S", "/run/yummi/gateway.sock"]
       interval: 10s
@@ -75,6 +87,7 @@ services:
       yummi_internal:
         ipv4_address: 172.20.0.10
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       gateway:
         condition: service_healthy
@@ -105,15 +118,23 @@ services:
       YUMMI_GATEWAY_SOCKET: "/run/yummi/gateway.sock"
       YUMMI_SANDBOX_CONTAINER: "yummi-sandbox"
       YUMMI_PERSONA_DIR: "/persona/v0.1"
+      YUMMI_AUTO_SKILL_DIR: "/var/lib/yummi/orchestrator/skills"
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
-      YUMMI_OLLAMA_MODEL: "qwen3:14b"
-      YUMMI_OLLAMA_TIER: "pro"
+      YUMMI_OLLAMA_MODEL: "${YUMMI_OLLAMA_MODEL:-}"
+      YUMMI_OLLAMA_TIER: "${YUMMI_OLLAMA_TIER:-pro}"
+      YUMMI_AGENT_BACKEND: "${YUMMI_AGENT_BACKEND:-graph}"
       DOCKER_HOST: "tcp://docker-proxy:2375"
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
       # the orchestrator no longer reads any scope env vars.
     ports:
       - "127.0.0.1:9080:9080"
+    # host-gateway resolves host.docker.internal on native Linux Docker Engine
+    # (Docker Desktop on macOS/Windows already provides this mapping natively;
+    # this entry is a harmless no-op there). Without it, YUMMI_OLLAMA_URL above
+    # fails to resolve on Linux hosts and the conductor can never reach Ollama.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - gateway_ipc:/run/yummi:ro
       - orchestrator_data:/var/lib/yummi/orchestrator:rw
@@ -123,6 +144,7 @@ services:
         ipv4_address: 172.20.0.3
       yummi_external:
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       gateway:
         condition: service_healthy
@@ -177,6 +199,7 @@ services:
       yummi_internal:
         ipv4_address: 172.20.0.5
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "2375"]
       interval: 10s
@@ -190,6 +213,8 @@ services:
     build:
       context: ./ui
       dockerfile: Dockerfile
+      args:
+        VITE_YUMMI_LANG: ${VITE_YUMMI_LANG:-en}
     image: yummi/ui:local
     ports:
       - "127.0.0.1:3000:80"
@@ -198,6 +223,7 @@ services:
         ipv4_address: 172.20.0.4
       yummi_external:
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       orchestrator:
         condition: service_healthy

@@ -45,15 +45,28 @@ func validTarget(tok string) string {
 	return ""
 }
 
-// ExtractTarget returns the first IP or hostname a command appears to target,
-// or "" when none can be identified.
+// ExtractTargets returns every distinct IP or hostname a command appears to
+// target, in argument order. An empty slice means none can be identified.
 //
 // The scan walks the command's tokens, skipping the tool name (first token),
 // flags, and filesystem paths, so that wordlist paths like
 // "/usr/share/wordlists/common.txt" are never returned as targets. For URL
 // arguments the host is taken from the parsed URL; for "--flag=value" forms the
 // value is inspected. Each candidate is validated with targetPattern.
-func ExtractTarget(command string) string {
+func ExtractTargets(command string) []string {
+	var targets []string
+	seen := make(map[string]struct{})
+	add := func(target string) {
+		if target == "" {
+			return
+		}
+		if _, ok := seen[target]; ok {
+			return
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
+	}
+
 	for i, tok := range strings.Fields(command) {
 		if i == 0 {
 			continue // tool name / binary path
@@ -84,16 +97,23 @@ func ExtractTarget(command string) string {
 		// and IPv6 literals like [::1], which url.Hostname unwraps).
 		if strings.Contains(tok, "://") {
 			if u, err := url.Parse(tok); err == nil {
-				if host := validTarget(u.Hostname()); host != "" {
-					return host
-				}
+				add(validTarget(u.Hostname()))
 			}
 			continue
 		}
 
-		if host := validTarget(tok); host != "" {
-			return host
-		}
+		add(validTarget(tok))
 	}
-	return ""
+	return targets
+}
+
+// ExtractTarget preserves the original single-target API for callers that
+// only need a representative target. Enforcement paths must use
+// ExtractTargets so later arguments cannot bypass scope checks.
+func ExtractTarget(command string) string {
+	targets := ExtractTargets(command)
+	if len(targets) == 0 {
+		return ""
+	}
+	return targets[0]
 }

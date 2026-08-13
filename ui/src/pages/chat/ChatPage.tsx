@@ -14,6 +14,7 @@ export function ChatPage(): JSX.Element {
     () => sessionStorage.getItem(STORAGE_SID) ?? 'default',
   )
   const [railOpen, setRailOpen] = useState(false)
+  const [newChatRequest, setNewChatRequest] = useState(0)
   // Bumped whenever a session is created/renamed so the rail refetches its list.
   const [refreshKey, setRefreshKey] = useState(0)
 
@@ -36,12 +37,14 @@ export function ChatPage(): JSX.Element {
         activeSessionID={sessionID}
         refreshKey={refreshKey}
         onSelect={selectSession}
+        onNewChat={() => setNewChatRequest(request => request + 1)}
       />
       <div className="chat-column">
         <AssistantPanel
           sessionID={sessionID}
           onSessionChange={setSessionID}
           onSessionsChanged={bumpSessions}
+          newChatRequest={newChatRequest}
         />
       </div>
     </div>

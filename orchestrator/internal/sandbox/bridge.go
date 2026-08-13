@@ -12,9 +12,54 @@ import (
 
 const (
 	defaultContainer = "yummi-sandbox"
-	defaultTimeout   = 120 * time.Second
-	maxOutputBytes   = 1 << 20 // 1 MiB
+	// defaultTimeout bounds a single command's wall-clock time. Real pentest
+	// tooling routinely exceeds a couple of minutes — a thorough nikto run or
+	// an nmap -A sweep across several hosts commonly takes 5-20+ minutes — so
+	// this is set generously rather than aggressively; SetTimeout overrides it
+	// per-Bridge (wired to YUMMI_SANDBOX_EXEC_TIMEOUT in cmd/orchestrator) for
+	// operators who need it shorter (fast dev iteration) or longer still.
+	defaultTimeout = 10 * time.Minute
+	maxOutputBytes = 1 << 20 // 1 MiB
+	truncationMark = "\n... [truncated]"
 )
+
+// cappedBuffer accepts the complete writer contract while retaining at most
+// limit bytes. This bounds memory during execution instead of first buffering
+// an unbounded stream and truncating it after the process exits.
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newCappedBuffer(limit int) *cappedBuffer {
+	if limit < 0 {
+		limit = 0
+	}
+	b := &cappedBuffer{limit: limit}
+	b.buf.Grow(min(limit, 4096))
+	return b
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		keep := min(remaining, n)
+		_, _ = b.buf.Write(p[:keep])
+	}
+	if n > remaining {
+		b.truncated = true
+	}
+	return n, nil
+}
+
+func (b *cappedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + truncationMark
+	}
+	return b.buf.String()
+}
 
 // Bridge provides command execution inside the sandbox Docker container.
 type Bridge struct {
@@ -69,11 +114,10 @@ func (b *Bridge) Exec(ctx context.Context, command string) (*Result, error) {
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 
-	var stdout, stderr bytes.Buffer
-	stdout.Grow(4096)
-	stderr.Grow(1024)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCappedBuffer(maxOutputBytes)
+	stderr := newCappedBuffer(maxOutputBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	start := time.Now()
 	err := cmd.Run()
@@ -105,8 +149,8 @@ func (b *Bridge) Exec(ctx context.Context, command string) (*Result, error) {
 	return &Result{
 		Command:  command,
 		ExitCode: exitCode,
-		Stdout:   truncate(stdout.String(), maxOutputBytes),
-		Stderr:   truncate(stderr.String(), maxOutputBytes),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
 		Duration: elapsed,
 	}, nil
 }
@@ -128,9 +172,13 @@ func (b *Bridge) ContainerName() string {
 	return b.container
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
+// SetTimeout overrides the per-command execution timeout (default
+// defaultTimeout). A zero or negative value is ignored, leaving the current
+// timeout in place — callers pass an unvalidated config duration, and silently
+// keeping a sane default beats a config typo turning into a zero-timeout
+// (every command failing instantly).
+func (b *Bridge) SetTimeout(d time.Duration) {
+	if d > 0 {
+		b.timeout = d
 	}
-	return s[:max] + "\n... [truncated]"
 }

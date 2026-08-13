@@ -28,13 +28,11 @@ pub struct GatewayConfig {
 }
 
 /// Policy engine settings.
-#[derive(Debug, Clone, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct PolicyConfig {
     #[serde(default)]
     pub default_allow: bool,
 }
-
 
 /// Network controller settings.
 ///
@@ -74,11 +72,11 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            table_name:    default_table_name(),
+            table_name: default_table_name(),
             forward_chain: default_forward_chain(),
-            nat_chain:     default_nat_chain(),
-            interface:     String::new(),
-            sandbox_ip:    String::new(),
+            nat_chain: default_nat_chain(),
+            interface: String::new(),
+            sandbox_ip: String::new(),
             ttl_normalize: None,
             mac_randomization: false,
         }
@@ -206,7 +204,10 @@ impl GatewayConfig {
                 audit_db: ":memory:".to_string(),
             },
             ipc: IpcConfig {
-                socket_path: std::env::temp_dir().join("yummi-gateway-test.sock").to_string_lossy().to_string(),
+                socket_path: std::env::temp_dir()
+                    .join("yummi-gateway-test.sock")
+                    .to_string_lossy()
+                    .to_string(),
                 socket_mode: 0o600,
             },
             watchdog: WatchdogConfig::default(),

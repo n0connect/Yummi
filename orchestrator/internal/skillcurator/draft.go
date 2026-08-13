@@ -42,6 +42,7 @@ Respond with ONLY a JSON object, no prose, matching exactly:
 // error (without calling chat) for an empty trajectory — there is nothing to
 // generalize from.
 func DraftSkill(ctx context.Context, chat ChatFunc, traj Trajectory) (skill.Skill, error) {
+	traj = SanitizeTrajectory(traj)
 	if traj.empty() {
 		return skill.Skill{}, fmt.Errorf("draft skill: empty trajectory, nothing to learn from")
 	}
@@ -77,6 +78,11 @@ func DraftSkill(ctx context.Context, chat ChatFunc, traj Trajectory) (skill.Skil
 	}
 	if strings.TrimSpace(s.Name) == "" {
 		return skill.Skill{}, fmt.Errorf("draft skill: LLM response missing a name")
+	}
+	s.Provenance = skill.Provenance{Origin: "auto", Source: "task:" + traj.TaskID}
+	s = skill.Normalize(s)
+	if err := skill.ValidateSchema(s); err != nil {
+		return skill.Skill{}, fmt.Errorf("draft skill: validation: %w", err)
 	}
 	return s, nil
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
 
 // waitForStatus polls the store until the task reaches want or a terminal state.
@@ -35,6 +36,43 @@ func waitForStatus(t *testing.T, store *Store, id string, want TaskStatus, timeo
 	tk, _ := store.Get(id)
 	t.Fatalf("timeout waiting for %s; current=%s lastError=%q", want, tk.Status, tk.LastError)
 	return Task{}
+}
+
+func TestResumeRecoveredCompletesFromDurableCheckpoint(t *testing.T) {
+	db := openTestDB(t)
+	before, _ := NewStore(db)
+	task, _ := before.Create("recover-session", "finish recovered work", 10)
+	_ = before.Transition(task.ID, StatusPlanned, func(tk *Task) {
+		tk.Plan = []PlanStep{{ID: "s1", Description: "verify state", Status: StepPending}}
+	})
+	_ = before.Update(task.ID, func(tk *Task) {
+		tk.Checkpoint = Checkpoint{
+			TaskID: task.ID, CurrentNode: nodeTool, LastObservation: Wrap("TOOL_RESPONSE", "prior evidence"),
+			RecentCommands: []string{"nmap -sV 127.0.0.1"}, Summary: "prior summary",
+		}
+	})
+	_ = before.Transition(task.ID, StatusRunning, nil)
+
+	after, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	recovered, _ := after.Get(task.ID)
+	if recovered.Status != StatusPaused || !recovered.Checkpoint.ResumeAfterRestart {
+		t.Fatalf("task not marked recoverable: %+v", recovered)
+	}
+
+	model := newFakeOllama(t, `[FINISH]
+{"summary":"recovered and completed"}`)
+	runner := NewRunner(after, model, nil, nil, fastRetryCfg())
+	count, err := runner.ResumeRecovered()
+	if err != nil || count != 1 {
+		t.Fatalf("ResumeRecovered count=%d err=%v", count, err)
+	}
+	final := waitForStatus(t, after, task.ID, StatusCompleted, 5*time.Second)
+	if final.Summary != "recovered and completed" || final.Checkpoint.ResumeAfterRestart {
+		t.Fatalf("recovered task did not complete cleanly: %+v", final)
+	}
 }
 
 // TestSetApprovalModePropagatesToSubAgents proves the operator-facing mode
@@ -77,6 +115,17 @@ func TestSetApprovalModePropagatesToSubAgents(t *testing.T) {
 	}
 	if web.ApprovalMode() != ModeAskPermission || recon.ApprovalMode() != ModeAskPermission {
 		t.Fatalf("expected sub-agents back to ask_permission, got web=%s recon=%s", web.ApprovalMode(), recon.ApprovalMode())
+	}
+}
+
+func TestSelectedPlanStepLimitUsesStrictestReviewedCapability(t *testing.T) {
+	selected := []skill.Skill{
+		{Name: "general", PlanStepLimit: 0},
+		{Name: "bounded", PlanStepLimit: 3},
+		{Name: "atomic", PlanStepLimit: 1},
+	}
+	if got := selectedPlanStepLimit(selected); got != 1 {
+		t.Fatalf("selectedPlanStepLimit=%d, want 1", got)
 	}
 }
 
@@ -145,7 +194,7 @@ func TestRunnerE2E_PlanThenMultiStepFinish(t *testing.T) {
 	}
 
 	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
-	if got.Summary != "recon complete" {
+	if !strings.Contains(got.Summary, "recon complete") || !strings.Contains(got.Summary, "EVIDENCE DIGEST") {
 		t.Fatalf("summary mismatch: %q", got.Summary)
 	}
 	if planStep(got.Plan, "s1").Status != StepDone || planStep(got.Plan, "s2").Status != StepDone {
@@ -197,7 +246,7 @@ func TestRunnerE2E_ApprovalGate(t *testing.T) {
 	}
 
 	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
-	if got.Summary != "scan approved and done" {
+	if !strings.Contains(got.Summary, "scan approved and done") || !strings.Contains(got.Summary, "EVIDENCE DIGEST") {
 		t.Fatalf("summary mismatch: %q", got.Summary)
 	}
 }
