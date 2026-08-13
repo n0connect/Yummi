@@ -111,10 +111,10 @@ endef
 # ── Phony declarations ────────────────────────────────────────────────────────
 .PHONY: help conf \
 	build start start-tui stop clean force-restart close \
-	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway \
+	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
 	test test-agent-live test-agent-eval lint vuln doctor install dev dev-ui dev-orchestrator \
 	app desktop desktop-dev _check-desktop-deps _desktop-deps \
-	_test-cli _test-orchestrator _test-gateway _test-ui \
+	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp \
 	docker-build docker-orchestrator docker-ui \
 	_ollama-ensure
 
@@ -222,7 +222,7 @@ conf:
 	printf "$(DIM)Every 'make build'/'make start'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
 
 ## build   Build native binaries and UI (CLI + orchestrator + gateway + UI).
-build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway
+build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp
 	@$(call log_section,Build Complete)
 	@$(call log_pass,yummi,$(BIN_DIR)/$(BINARY))
 	@$(call log_pass,yummi-orchestrator,$(BIN_DIR)/$(ORCHESTRATOR_BINARY))
@@ -314,7 +314,7 @@ close:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ## test    Run all test suites (CLI + orchestrator + gateway + UI)
-test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui
+test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp
 	@$(call log_section,All Tests Passed)
 	@$(call log_pass,test,All suites completed successfully.)
 
@@ -399,6 +399,11 @@ _build-gateway:
 	@set -o pipefail; cd $(GATEWAY_DIR) && cargo build --release 2>&1 | sed 's/^/  /' || { $(call log_error,gateway,Cargo build failed.); exit 1; }
 	@$(call log_pass,gateway,Built successfully.)
 
+_build-sandbox-mcp: | $(BIN_DIR)
+	@$(call log_info,sandbox-mcp,Building yummi-sandbox-mcp...)
+	@cd sandbox-mcp && go build -trimpath -o ../$(BIN_DIR)/yummi-sandbox-mcp . || { $(call log_error,sandbox-mcp,Build failed.); exit 1; }
+	@$(call log_pass,sandbox-mcp,Built successfully.)
+
 _test-cli:
 	@$(call log_info,test,Running CLI and internal packages tests...)
 	@set -o pipefail; go test ./cmd/... ./internal/... 2>&1 | sed 's/^/  /' || { $(call log_error,test,CLI tests failed.); exit 1; }
@@ -413,6 +418,11 @@ _test-gateway:
 	@$(call log_info,test,Running gateway Rust tests...)
 	@set -o pipefail; cd $(GATEWAY_DIR) && cargo test 2>&1 | sed 's/^/  /' || { $(call log_error,test,Gateway tests failed.); exit 1; }
 	@$(call log_pass,test,Gateway tests passed.)
+
+_test-sandbox-mcp:
+	@$(call log_info,test,Running sandbox-mcp module tests...)
+	@set -o pipefail; cd sandbox-mcp && go test ./... 2>&1 | sed 's/^/  /' || { $(call log_error,test,sandbox-mcp tests failed.); exit 1; }
+	@$(call log_pass,test,sandbox-mcp tests passed.)
 
 _test-ui:
 	@$(call log_info,UI,Installing dependencies for tests...)
