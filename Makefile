@@ -49,6 +49,23 @@ ifeq ($(YUMMI_NETWORK_MODE),insecure-bridge)
 COMPOSE_FILES += -f docker-compose.override.insecure-bridge.yml
 endif
 
+# YUMMI_LANG: en (default) or tr — the UI's build-time display language.
+# There is no runtime switch (see ui/src/shared/i18n/strings.ts): changing
+# this requires `make conf` + a rebuild. Propagated to every UI build path as
+# VITE_YUMMI_LANG — the native path (_build-ui, desktop, dev-ui) via this
+# exported env var, the Docker path (yummi-ui image) via docker-compose.yml's
+# build arg, which reads the same YUMMI_LANG from the environment/.yummi.conf.
+YUMMI_LANG ?= en
+export VITE_YUMMI_LANG := $(YUMMI_LANG)
+
+# YUMMI_AGENT_BACKEND: graph (default) or eino — which agentic engine the
+# orchestrator uses. graph is the tag-protocol state machine (best for
+# small/local models); eino is native-tool-calling (best for larger models
+# with reliable function-calling). Runtime env var, read by main.go — unlike
+# YUMMI_LANG this does not need a UI rebuild, just exported before `make start`.
+YUMMI_AGENT_BACKEND ?= graph
+export YUMMI_AGENT_BACKEND
+
 VERSION    ?= v0.1.0
 GIT_SHA    := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -154,10 +171,10 @@ endif
 #  USER COMMANDS  (the ones you run every day)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## conf    Pick your container engine setup once (interactive); persists
-##         CONTAINER_ENGINE / YUMMI_NETWORK_MODE to .yummi.conf so `make
-##         build`/`make start` never need those flags again. Re-run anytime
-##         to change your choice.
+## conf    Pick your container engine setup and UI language once (interactive);
+##         persists CONTAINER_ENGINE / YUMMI_NETWORK_MODE / YUMMI_LANG to
+##         .yummi.conf so `make build`/`make start` never need those flags
+##         again. Re-run anytime to change your choice.
 conf:
 	@$(call log_section,Yummi Configuration)
 	@printf "$(BOLD)How are you running containers on this machine?$(RESET)\n\n"; \
@@ -177,9 +194,31 @@ conf:
 	if [ "$$mode" = "insecure-bridge" ]; then \
 		$(MAKE) _check-network-mode CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=insecure-bridge || exit 1; \
 	fi; \
+	printf "\n$(BOLD)UI display language?$(RESET) $(DIM)(build-time only — changing it later needs 'make conf' + a rebuild)$(RESET)\n\n"; \
+	printf "  $(CYAN)1)$(RESET) English\n"; \
+	printf "  $(CYAN)2)$(RESET) Türkçe\n\n"; \
+	printf "$(BOLD)Choice [1-2]: $(RESET)"; \
+	read langchoice; \
+	case "$$langchoice" in \
+		1) lang=en ;; \
+		2) lang=tr ;; \
+		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$langchoice"; exit 1 ;; \
+	esac; \
+	printf "\n$(BOLD)Agent backend?$(RESET) $(DIM)(which model you'll run — can be changed later without a rebuild)$(RESET)\n\n"; \
+	printf "  $(CYAN)1)$(RESET) Graph $(DIM)— small/local models (default)$(RESET)\n"; \
+	printf "  $(CYAN)2)$(RESET) Eino $(DIM)— larger models with reliable native tool-calling$(RESET)\n\n"; \
+	printf "$(BOLD)Choice [1-2]: $(RESET)"; \
+	read backendchoice; \
+	case "$$backendchoice" in \
+		1) backend=graph ;; \
+		2) backend=eino ;; \
+		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
+	esac; \
 	printf "CONTAINER_ENGINE=%s\n" "$$engine" > .yummi.conf; \
 	printf "YUMMI_NETWORK_MODE=%s\n" "$$mode" >> .yummi.conf; \
-	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf — CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=$$mode$(RESET)\n"; \
+	printf "YUMMI_LANG=%s\n" "$$lang" >> .yummi.conf; \
+	printf "YUMMI_AGENT_BACKEND=%s\n" "$$backend" >> .yummi.conf; \
+	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf — CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=$$mode YUMMI_LANG=$$lang YUMMI_AGENT_BACKEND=$$backend$(RESET)\n"; \
 	printf "$(DIM)Every 'make build'/'make start'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
 
 ## build   Build native binaries and UI (CLI + orchestrator + gateway + UI).
@@ -506,6 +545,8 @@ help:
 	@printf "  $(CYAN)CONTAINER_ENGINE=docker|podman$(RESET)  $(DIM)default docker — e.g. make start CONTAINER_ENGINE=podman$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_NETWORK_MODE=secure|insecure-bridge$(RESET)  $(DIM)default secure — insecure-bridge drops yummi_internal's\n"
 	@printf "    isolation as an engine-bug workaround, and requires typing a confirmation. Prefer OrbStack instead.$(RESET)\n"
+	@printf "  $(CYAN)YUMMI_LANG=en|tr$(RESET)  $(DIM)default en — build-time UI language, baked into the UI at build time (no runtime switch)$(RESET)\n"
+	@printf "  $(CYAN)YUMMI_AGENT_BACKEND=graph|eino$(RESET)  $(DIM)default graph — which agentic engine to run (no rebuild needed to change)$(RESET)\n"
 	@printf "  $(CYAN)NO_DESKTOP=1$(RESET)  $(DIM)default unset — skip launching the desktop console from 'make start' (headless/CI/server)$(RESET)\n"
 	@printf "\n$(BOLD)  Developer commands$(RESET)\n"
 	@printf "  $(CYAN)make test$(RESET)        Run all test suites\n"
