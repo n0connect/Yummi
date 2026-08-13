@@ -184,4 +184,5 @@ func registerTools(server *mcp.Server) {
 		Name:        "nikto_scan",
 		Description: "Scan a web host with nikto for known issues.",
 	}, niktoHandler)
+	registerExtendedTools(server)
 }
