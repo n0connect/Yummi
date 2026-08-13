@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
+	"github.com/n0connect/yummi/orchestrator/internal/agent/eino"
 	"github.com/n0connect/yummi/orchestrator/internal/api"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/config"
@@ -269,26 +271,51 @@ func main() {
 				slog.Info("sub-agents registered", "roles", len(subAgents))
 			}
 
-			taskRunner = agent.NewRunner(
-				taskStore,
-				agentLLM,
-				assistant.Validator(),
-				agent.NewStoreExecer(executionStore, 10*time.Minute),
-				agent.Config{ // defaults: budget 15, ask_permission mode
-					Persona:      agentPersona,
-					Knowledge:    ks,
-					Retrieval:    retrieval,
-					Skills:       skillReg,
-					SubAgents:    subAgents,
-					SkillCurator: skillCuratorFn,
-					// Room for the sub-agents' own StepBudget:40 above to actually
-					// run to completion — the default 10m ceiling was sized for
-					// StepBudget:15 (matches the top-level loop); a sub-agent with
-					// a larger budget needs proportionally more wall clock or the
-					// timeout, not the step count, becomes the real limiter.
-					SubAgentTimeout: 20 * time.Minute,
-				},
-			)
+			// Agent backend selection: graph (default, tag-protocol state
+			// machine — best for small/local models) or eino (native
+			// tool-calling — best for larger models with reliable
+			// function-calling). Runtime env var read here rather than a
+			// build tag, so operators can switch by restarting the
+			// container, not rebuilding it; make conf's YUMMI_AGENT_BACKEND
+			// question just pre-seeds this for convenience.
+			switch backend := strings.ToLower(os.Getenv("YUMMI_AGENT_BACKEND")); backend {
+			case "eino":
+				taskRunner = eino.NewEinoRunner(
+					taskStore,
+					assistant.Validator(),
+					agent.NewStoreExecer(executionStore, 10*time.Minute),
+					eino.Config{
+						StepBudget:   15,
+						ApprovalMode: agent.ModeAskPermission,
+						ModelBaseURL: strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
+						ModelName:    cfg.OllamaModel,
+						Knowledge:    ks,
+					},
+				)
+				slog.Info("agent backend: eino", "model", cfg.OllamaModel)
+			default:
+				taskRunner = agent.NewRunner(
+					taskStore,
+					agentLLM,
+					assistant.Validator(),
+					agent.NewStoreExecer(executionStore, 10*time.Minute),
+					agent.Config{ // defaults: budget 15, ask_permission mode
+						Persona:      agentPersona,
+						Knowledge:    ks,
+						Retrieval:    retrieval,
+						Skills:       skillReg,
+						SubAgents:    subAgents,
+						SkillCurator: skillCuratorFn,
+						// Room for the sub-agents' own StepBudget:40 above to actually
+						// run to completion — the default 10m ceiling was sized for
+						// StepBudget:15 (matches the top-level loop); a sub-agent with
+						// a larger budget needs proportionally more wall clock or the
+						// timeout, not the step count, becomes the real limiter.
+						SubAgentTimeout: 20 * time.Minute,
+					},
+				)
+				slog.Info("agent backend: graph")
+			}
 			if resumed, rerr := taskRunner.ResumeRecovered(); rerr != nil {
 				slog.Error("recovered task resume failed", "error", rerr, "resumed", resumed)
 			} else if resumed > 0 {
