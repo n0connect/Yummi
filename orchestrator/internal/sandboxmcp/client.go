@@ -81,6 +81,35 @@ func (c *Client) CallTool(ctx context.Context, tool string, args map[string]any)
 	return session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 }
 
+// ListTools returns every tool the sandbox-resident server has registered —
+// the discovery half of the search-then-dispatch pattern (CallTool is the
+// dispatch half). The catalog is small enough that pagination is never
+// exercised in practice, but the underlying protocol supports it via
+// ListToolsResult.NextCursor if that changes.
+func (c *Client) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
+	session, err := c.ensureSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
+	if err == nil {
+		return result.Tools, nil
+	}
+
+	c.mu.Lock()
+	c.session = nil
+	c.mu.Unlock()
+	session, err = c.ensureSession(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sandboxmcp: reconnect failed: %w", err)
+	}
+	result, err = session.ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		return nil, err
+	}
+	return result.Tools, nil
+}
+
 // Close terminates the persistent session, if any.
 func (c *Client) Close() error {
 	c.mu.Lock()

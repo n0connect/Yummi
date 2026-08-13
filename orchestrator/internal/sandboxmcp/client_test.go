@@ -59,3 +59,34 @@ func TestClient_CallTool_ReconnectsAfterSessionDeath(t *testing.T) {
 		t.Fatalf("got %q, want pong", text.Text)
 	}
 }
+
+func TestClient_ListTools_ReturnsCatalog(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "ping", Description: "replies pong"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil, nil
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "echoes input"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{}, nil, nil
+	})
+
+	c := newClient(func(ctx context.Context) mcp.Transport {
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		go func() { _, _ = server.Connect(ctx, serverTransport, nil) }()
+		return clientTransport
+	})
+
+	tools, err := c.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("got %d tools, want 2: %+v", len(tools), tools)
+	}
+	names := map[string]string{}
+	for _, tool := range tools {
+		names[tool.Name] = tool.Description
+	}
+	if names["ping"] != "replies pong" || names["echo"] != "echoes input" {
+		t.Fatalf("unexpected tool set: %+v", names)
+	}
+}
