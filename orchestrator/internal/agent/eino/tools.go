@@ -207,7 +207,7 @@ var askOperatorInfo = &schema.ToolInfo{
 
 type askOperatorTool struct{}
 
-func newAskOperatorTool() *askOperatorTool                              { return &askOperatorTool{} }
+func newAskOperatorTool() *askOperatorTool                               { return &askOperatorTool{} }
 func (askOperatorTool) Info(_ context.Context) (*schema.ToolInfo, error) { return askOperatorInfo, nil }
 func (askOperatorTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var args askOperatorArgs
