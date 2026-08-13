@@ -166,7 +166,7 @@ func main() {
 		curatorStore = nil
 	}
 
-	var taskRunner *agent.Runner
+	var taskRunner agent.TaskRunner
 	var curatorWorker *skillcurator.Worker
 	// skillReg is also exposed read-only via the TRACE API, so it lives at this
 	// scope (nil-safe: skill.Registry methods tolerate a nil receiver).

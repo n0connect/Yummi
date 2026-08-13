@@ -102,7 +102,7 @@ func HandleListSkills(reg *skill.Registry) http.HandlerFunc {
 }
 
 // HandleListRoles returns the available sub-agent roles. GET /api/v1/agent/roles
-func HandleListRoles(runner *agent.Runner) http.HandlerFunc {
+func HandleListRoles(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil {
 			writeJSON(w, http.StatusOK, []string{})

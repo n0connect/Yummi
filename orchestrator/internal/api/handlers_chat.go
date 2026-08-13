@@ -48,7 +48,7 @@ func applyStartTask(ctx context.Context, resp conductor.ChatResponse, sessionID 
 	return resp
 }
 
-func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore, sm *session.Manager, taskRunner *agent.Runner, taskStore *agent.Store) http.HandlerFunc {
+func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore, sm *session.Manager, taskRunner agent.TaskRunner, taskStore *agent.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Message   string `json:"message"`

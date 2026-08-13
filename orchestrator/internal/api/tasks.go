@@ -13,7 +13,7 @@ import (
 
 // HandleCreateTask creates an agent task and synchronously generates its plan.
 // POST /api/v1/tasks  {"session_id":"...","goal":"..."}
-func HandleCreateTask(runner *agent.Runner) http.HandlerFunc {
+func HandleCreateTask(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil {
 			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
@@ -81,7 +81,7 @@ func HandleListTasks(store *agent.Store) http.HandlerFunc {
 // resuming a task paused via [ASK_OPERATOR] — without it, the model would
 // resume with nothing to go on. A missing/empty/malformed body is fine (plain
 // resume, or the initial Start of a freshly planned task).
-func HandleStartTask(runner *agent.Runner) http.HandlerFunc {
+func HandleStartTask(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if !isValidSessionID(id) {
@@ -105,7 +105,7 @@ func HandleStartTask(runner *agent.Runner) http.HandlerFunc {
 }
 
 // HandleStopTask stops the loop. POST /api/v1/tasks/{id}/stop
-func HandleStopTask(runner *agent.Runner) http.HandlerFunc {
+func HandleStopTask(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if !isValidSessionID(id) {
@@ -122,7 +122,7 @@ func HandleStopTask(runner *agent.Runner) http.HandlerFunc {
 
 // HandleListDelegations returns active and recent specialist runs.
 // GET /api/v1/agent/delegations
-func HandleListDelegations(runner *agent.Runner) http.HandlerFunc {
+func HandleListDelegations(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		if runner == nil {
 			writeJSON(w, http.StatusOK, []agent.DelegationRun{})
@@ -134,7 +134,7 @@ func HandleListDelegations(runner *agent.Runner) http.HandlerFunc {
 
 // HandleInterruptDelegation cancels one specialist while leaving its parent
 // and siblings running. POST /api/v1/agent/delegations/{id}/interrupt
-func HandleInterruptDelegation(runner *agent.Runner) http.HandlerFunc {
+func HandleInterruptDelegation(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil {
 			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
@@ -155,7 +155,7 @@ func HandleInterruptDelegation(runner *agent.Runner) http.HandlerFunc {
 
 // HandleGetApprovalMode returns the agent's current approval mode.
 // GET /api/v1/agent/mode
-func HandleGetApprovalMode(runner *agent.Runner) http.HandlerFunc {
+func HandleGetApprovalMode(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil {
 			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
@@ -167,7 +167,7 @@ func HandleGetApprovalMode(runner *agent.Runner) http.HandlerFunc {
 
 // HandleSetApprovalMode switches the agent between ask_permission and auto.
 // POST /api/v1/agent/mode  {"mode":"auto"|"ask_permission"}
-func HandleSetApprovalMode(runner *agent.Runner) http.HandlerFunc {
+func HandleSetApprovalMode(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil {
 			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
@@ -194,7 +194,7 @@ func HandleSetApprovalMode(runner *agent.Runner) http.HandlerFunc {
 
 // HandleApproveTask resolves the pending risk-gate verdict.
 // POST /api/v1/tasks/{id}/approve {"proposal_id":"...","approved":true,"reason":""}
-func HandleApproveTask(runner *agent.Runner, store *agent.Store) http.HandlerFunc {
+func HandleApproveTask(runner agent.TaskRunner, store *agent.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		taskID := chi.URLParam(r, "id")
 		if !isValidSessionID(taskID) {
