@@ -27,6 +27,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
+	"github.com/n0connect/yummi/orchestrator/internal/sandboxmcp"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
 	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
@@ -102,6 +103,12 @@ func main() {
 	if cfg.GatewayTLS && tlsClientConfig != nil {
 		gatewayClient = gatewayClient.WithTLS(tlsClientConfig)
 	}
+	// Persistent MCP session into the sandbox container — reached via the
+	// same docker-exec invocation shape sandbox.Bridge.Exec uses, just held
+	// open (-i) instead of one-shot-buffered. Feeds the executor's MCP
+	// dispatch path (processMCP) regardless of which agent backend is active;
+	// only the Eino backend currently issues MCP tool calls.
+	sandboxMCPClient := sandboxmcp.NewClient(cfg.SandboxContainer)
 	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel)
 
 	// Semantic retrieval: an optional local embedding model (separate Ollama
@@ -135,7 +142,7 @@ func main() {
 	// output back into the conductor's session history. This closes the
 	// agentic loop: LLM proposes → user approves → command runs → LLM sees
 	// the result on the next turn → LLM proposes the next step.
-	exec := executor.New(bridge, gatewayClient, ks, nil) // Task 12 wires the real sandboxmcp.Client here
+	exec := executor.New(bridge, gatewayClient, ks, sandboxMCPClient)
 	baseProcessor := exec.ProcessFunc()
 	executionStore.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
 		output, err := baseProcessor(ctx, rec)
@@ -290,6 +297,7 @@ func main() {
 						ModelBaseURL: strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
 						ModelName:    cfg.OllamaModel,
 						Knowledge:    ks,
+						MCPExec:      agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
 					},
 				)
 				slog.Info("agent backend: eino", "model", cfg.OllamaModel)
