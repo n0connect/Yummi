@@ -320,6 +320,40 @@ func TestProcessFunc_MCPRecord_DispatchesToSandboxMCP(t *testing.T) {
 	}
 }
 
+// TestProcessFunc_MCPRecord_SurfacesStderrOnFailure caught a real bug during
+// live E2E verification: a failing MCP tool call's diagnostic text (mapped
+// into sandbox.Result.Stderr by mcpResultToSandboxResult) was silently
+// dropped because the output-combining code appended Stdout and Warning but
+// never Stderr — unlike the shell path's identical combining logic just
+// above it, which does. The model saw an empty failure reason and blindly
+// retried instead of adjusting.
+func TestProcessFunc_MCPRecord_SurfacesStderrOnFailure(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "allow"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+
+	fakeMCP := &fakeSandboxMCPClient{
+		result: &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Failed to resolve host"}}},
+	}
+	e := New(sandbox.NewBridge("unused"), pc, nil, fakeMCP)
+
+	rec := execution.Record{
+		ID: "rec-1", SessionID: "sess-1", Command: "nmap -sV 10.0.0.9",
+		MCPTool: "nmap_scan", MCPArgs: `{"target":"10.0.0.9"}`,
+	}
+	output, err := e.ProcessFunc()(context.Background(), rec)
+	if err == nil {
+		t.Fatal("expected an error for a non-zero exit MCP result")
+	}
+	if !strings.Contains(output, "Failed to resolve host") {
+		t.Fatalf("output = %q, want it to contain the MCP failure text (Stderr)", output)
+	}
+}
+
 // fakeSandboxMCPClient is a real, self-contained test double for the
 // sandboxMCPClient interface — not a mock of Yummi's own sandboxmcp.Client,
 // which is exercised for real in internal/sandboxmcp's own test suite via

@@ -343,6 +343,12 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 	if result.Stdout != "" {
 		out.WriteString(result.Stdout)
 	}
+	if result.Stderr != "" {
+		if out.Len() > 0 {
+			out.WriteString("\n--- stderr ---\n")
+		}
+		out.WriteString(result.Stderr)
+	}
 	if result.Warning != "" {
 		if out.Len() > 0 {
 			out.WriteString("\n--- warning ---\n")
