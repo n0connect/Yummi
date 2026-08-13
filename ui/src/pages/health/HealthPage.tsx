@@ -3,6 +3,7 @@ import { useHealthMetrics } from '../../features/health/useHealthMetrics'
 import { useSystemStatus } from '../../features/system/useSystemStatus'
 import { MetricChart } from './components/MetricChart'
 import { ModuleStatusPanel } from './components/ModuleStatusPanel'
+import { t } from '../../shared/i18n/strings'
 import './HealthPage.css'
 
 const WINDOWS = ['5m', '15m', '1h'] as const
@@ -19,8 +20,8 @@ export function HealthPage() {
     <div className="health-page">
       <div className="health-header">
         <div>
-          <span className="health-eyebrow">RUNTIME</span>
-          <h2 className="health-title">Sistem sağlığı</h2>
+          <span className="health-eyebrow">{t('health.eyebrow')}</span>
+          <h2 className="health-title">{t('health.title')}</h2>
         </div>
         <div className="window-selector">
           {WINDOWS.map(w => (
@@ -39,7 +40,7 @@ export function HealthPage() {
         <MetricChart
           samples={samples}
           dataKey="heap_mb"
-          label="Go belleği (MB)"
+          label={t('health.heapLabel')}
           color="var(--accent)"
           unit=" MB"
           formatValue={(v) => `${v.toFixed(1)} MB`}
@@ -47,15 +48,15 @@ export function HealthPage() {
         <MetricChart
           samples={samples}
           dataKey="ollama_lat_ms"
-          label="Ollama gecikmesi"
+          label={t('health.ollamaLatencyLabel')}
           color="var(--orange)"
           unit=" ms"
-          formatValue={(v) => v < 0 ? 'offline' : `${v} ms`}
+          formatValue={(v) => v < 0 ? t('health.offline') : `${v} ms`}
         />
         <MetricChart
           samples={samples}
           dataKey="goroutines"
-          label="Goroutine sayısı"
+          label={t('health.goroutineLabel')}
           color="var(--green)"
           formatValue={(v) => String(Math.round(v))}
         />
@@ -63,7 +64,7 @@ export function HealthPage() {
       </div>
 
       {samples.length === 0 && (
-        <div className="health-empty">Metrikler toplanıyor…</div>
+        <div className="health-empty">{t('health.metricsCollecting')}</div>
       )}
     </div>
   )

@@ -13,6 +13,11 @@ import { ContextBar, type ApprovalMode } from './ContextBar'
 import { TaskTracker } from '../tasks/TaskTracker'
 import { RuntimeConnectionNotice } from '../desktop/RuntimeConnectionNotice'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
+import { t, LANG } from '../../shared/i18n/strings'
+
+// Locale for number/date formatting, derived from the build-time UI language
+// (distinct from `t()`'s string dictionary — Intl needs a real BCP-47 tag).
+const NUMBER_LOCALE = LANG === 'en' ? 'en-US' : 'tr-TR'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,7 +63,7 @@ const STORAGE_MSGS = 'yummi:chat:messages:default'
 const STORAGE_MODE = 'yummi:agent:approvalMode'
 const WELCOME: Omit<Message, 'id' | 'timestamp'> = {
   role: 'system',
-  content: 'Hazırım. Hedefini ya da görevini bir cümleyle yaz.'
+  content: t('assistant.welcome')
 }
 
 let _id = 0
@@ -146,6 +151,7 @@ function TaskCardMessage({
   onClose,
   onApprove,
   onStop,
+  onResume,
   subTask,
   onApproveSub
 }: {
@@ -154,6 +160,7 @@ function TaskCardMessage({
   onClose: () => void
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
+  onResume: (message: string) => void
   subTask?: AgentTask | null
   onApproveSub?: (proposalID: string, approved: boolean) => void
 }): JSX.Element {
@@ -164,6 +171,7 @@ function TaskCardMessage({
         onClose={onClose}
         onApprove={onApprove}
         onStop={onStop}
+        onResume={onResume}
         subTask={subTask}
         onApproveSub={onApproveSub}
         activities={activities}
@@ -173,9 +181,9 @@ function TaskCardMessage({
 }
 
 const STARTER_PROMPTS = [
-  'Bir hedef için güvenli keşif planı hazırla',
-  'Hedef kapsamını ve öncelikleri değerlendirmeme yardım et',
-  'Mevcut güvenlik durumunu özetle ve sonraki adımları öner'
+  t('assistant.starterPrompt.0'),
+  t('assistant.starterPrompt.1'),
+  t('assistant.starterPrompt.2')
 ]
 
 function EmptyWorkspace({
@@ -188,13 +196,12 @@ function EmptyWorkspace({
       <div className="chat-empty-mark" aria-hidden="true">
         Y
       </div>
-      <span className="chat-empty-eyebrow">OPERATÖR ÇALIŞMA ALANI</span>
-      <h1>Net bir hedefle başlayın.</h1>
+      <span className="chat-empty-eyebrow">{t('assistant.emptyEyebrow')}</span>
+      <h1>{t('assistant.emptyTitle')}</h1>
       <p>
-        Hedefinizi, kapsamı veya yapmak istediğiniz işi yazın. Yummi önce planı
-        netleştirir; hiçbir komut operatör onayı olmadan çalışmaz.
+        {t('assistant.emptyBody')}
       </p>
-      <div className="chat-starters" aria-label="Başlangıç önerileri">
+      <div className="chat-starters" aria-label={t('assistant.startersAriaLabel')}>
         {STARTER_PROMPTS.map((prompt) => (
           <button
             key={prompt}
@@ -214,8 +221,9 @@ function EmptyWorkspace({
 // formatElapsed renders a heartbeat's elapsed_secs as "Ns" or "MdkSs" — long
 // enough that a plain seconds counter would stop being readable at a glance.
 function formatElapsed(secs: number): string {
-  if (secs < 60) return `${secs}sn`
-  return `${Math.floor(secs / 60)}dk ${secs % 60}sn`
+  const s = t('assistant.secondsShort')
+  if (secs < 60) return `${secs}${s}`
+  return `${Math.floor(secs / 60)}${t('assistant.minutesShort')} ${secs % 60}${s}`
 }
 
 // Very large tool output (a full nikto/nmap -A report can run into the
@@ -234,9 +242,9 @@ function formatOutputForDisplay(text: string): {
   if (text.length <= MAX_DISPLAY_CHARS)
     return { display: text, truncated: false, lineCount }
   const edge = MAX_DISPLAY_CHARS / 2
-  const omitted = (text.length - MAX_DISPLAY_CHARS).toLocaleString('tr-TR')
+  const omitted = (text.length - MAX_DISPLAY_CHARS).toLocaleString(NUMBER_LOCALE)
   return {
-    display: `${text.slice(0, edge)}\n\n… ${omitted} karakter daha (çok büyük çıktı — başı ve sonu gösteriliyor) …\n\n${text.slice(-edge)}`,
+    display: `${text.slice(0, edge)}${t('assistant.truncatedNoticeBefore')}${omitted}${t('assistant.truncatedNoticeAfter')}${text.slice(-edge)}`,
     truncated: true,
     lineCount
   }
@@ -258,17 +266,17 @@ function ExecutionMessage({
     [visibleOutput]
   )
   const statusLabel: Record<string, string> = {
-    queued: 'Sırada',
-    running: 'Çalışıyor',
-    awaiting_egress_approval: 'Ağ onayı bekliyor',
-    awaiting_threat_approval: 'İçerik incelemesi bekliyor',
-    completed: 'Tamamlandı',
-    failed: 'Başarısız',
-    canceled: 'İptal edildi'
+    queued: t('assistant.execStatus.queued'),
+    running: t('assistant.execStatus.running'),
+    awaiting_egress_approval: t('assistant.execStatus.awaiting_egress_approval'),
+    awaiting_threat_approval: t('assistant.execStatus.awaiting_threat_approval'),
+    completed: t('assistant.execStatus.completed'),
+    failed: t('assistant.execStatus.failed'),
+    canceled: t('assistant.execStatus.canceled')
   }
   const completedLabel =
     status === 'completed' && visibleOutput
-      ? 'Tamamlandı · çıktı hazır'
+      ? t('assistant.completedWithOutput')
       : (statusLabel[status] ?? status)
   return (
     <details
@@ -304,10 +312,10 @@ function ExecutionMessage({
             </span>
             <span>
               {status === 'queued'
-                ? 'Komut yürütme sırasına alındı.'
+                ? t('assistant.queuedLive')
                 : execution.elapsed_secs
-                  ? `Komut çalışıyor · ${formatElapsed(execution.elapsed_secs)} geçti — çıktı gelir gelmez burada gösterilecek.`
-                  : 'Komut çalışıyor; çıktı gelir gelmez burada gösterilecek.'}
+                  ? `${t('assistant.runningWithElapsedBefore')}${formatElapsed(execution.elapsed_secs)}${t('assistant.runningWithElapsedAfter')}`
+                  : t('assistant.runningNoElapsed')}
             </span>
           </div>
         )}
@@ -319,10 +327,10 @@ function ExecutionMessage({
         {!isActive && visibleOutput && (
           <div className="execution-output-wrap">
             <div className="execution-output-meta">
-              <span>{outputView.lineCount.toLocaleString('tr-TR')} satır</span>
+              <span>{outputView.lineCount.toLocaleString(NUMBER_LOCALE)} {t('assistant.lineCountSuffix')}</span>
               {outputView.truncated && (
                 <span className="execution-output-truncated">
-                  kısaltıldı — çok büyük çıktı
+                  {t('assistant.truncatedBadge')}
                 </span>
               )}
             </div>
@@ -353,9 +361,9 @@ function TextMessage({
       className={`msg msg-${role}`}
       title={new Date(timestamp).toLocaleTimeString()}
     >
-      {role === 'user' && <span className="msg-prefix">[USER] ❯</span>}
-      {role === 'assistant' && <span className="msg-prefix">[YUMMI] ❯</span>}
-      {role === 'system' && <span className="msg-prefix">[SYSTEM] ❯</span>}
+      {role === 'user' && <span className="msg-prefix">{t('assistant.userPrefix')}</span>}
+      {role === 'assistant' && <span className="msg-prefix">{t('assistant.assistantPrefix')}</span>}
+      {role === 'system' && <span className="msg-prefix">{t('assistant.systemPrefix')}</span>}
       <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>
         {visibleContent}
       </span>
@@ -624,7 +632,7 @@ export function AssistantPanel({
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Yeni Sohbet' })
+        body: JSON.stringify({ name: t('assistant.newSessionDefaultName') })
       })
       needsTitleRef.current = true
       onSessionChange(s.id)
@@ -668,8 +676,7 @@ export function AssistantPanel({
       if (autoFeedbackCountRef.current > 3) {
         appendMessage({
           role: 'system',
-          content:
-            'Otomatik deneme limiti aşıldı. Farklı bir komut denemek için yazın.'
+          content: t('assistant.autoLimitExceeded')
         })
         return
       }
@@ -693,13 +700,13 @@ export function AssistantPanel({
         const detail = error || output || 'exit code 1'
         feedback =
           guard +
-          `[KOMUT BAŞARISIZ] \`${record.command}\`\n\nHata çıktısı:\n\`\`\`\n${detail}\n\`\`\`\n\n` +
-          `Komut başarısız oldu. FARKLI bir komut seç — aynı komutu tekrar deneme.`
+          `${t('assistant.commandFailedTag')} \`${record.command}\`\n\n${t('assistant.errorOutputLabel')}\n\`\`\`\n${detail}\n\`\`\`\n\n` +
+          t('assistant.commandFailedInstruction')
       } else {
         feedback =
           guard +
-          `[KOMUT TAMAMLANDI] \`${record.command}\`\n\nÇıktı:\n\`\`\`\n${output || '(çıktı yok)'}\n\`\`\`\n\n` +
-          `Bu sonucu analiz et ve kullanıcının sorusunu yanıtla.`
+          `${t('assistant.commandDoneTag')} \`${record.command}\`\n\n${t('assistant.outputLabel')}\n\`\`\`\n${output || t('assistant.noOutput')}\n\`\`\`\n\n` +
+          t('assistant.analyzeInstruction')
       }
 
       const sid = sessionID
@@ -804,11 +811,11 @@ export function AssistantPanel({
         if (task.findings && task.findings.length > 0) {
           lines.push('')
           task.findings.forEach((f) =>
-            lines.push(`• ${sanitizeOperatorText(f, 'Bulgu kaydedildi.')}`)
+            lines.push(`• ${sanitizeOperatorText(f, t('taskTracker.defaultFindingRecorded'))}`)
           )
         }
         if (task.last_error && task.status !== 'completed') {
-          lines.push('Görev tamamlanamadı. Teknik ayrıntılar Logs ekranında.')
+          lines.push(t('assistant.taskFailedNote'))
         }
         if (lines.length > 0) {
           appendMessage({ role: 'assistant', content: lines.join('\n') })
@@ -820,7 +827,7 @@ export function AssistantPanel({
       if (task.status === 'paused' && task.question) {
         appendMessage({
           role: 'system',
-          content: `Operatör sorusu: ${sanitizeOperatorText(task.question, 'Devam etmek için operatör girdisi gerekiyor.')}`
+          content: `${t('assistant.operatorQuestionPrefix')}${sanitizeOperatorText(task.question, t('assistant.defaultOperatorQuestion'))}`
         })
       }
     },
@@ -847,13 +854,32 @@ export function AssistantPanel({
     if (!activeTask) return
     try {
       await fetchJSON(`/api/v1/tasks/${activeTask.id}/stop`, { method: 'POST' })
-      appendMessage({ role: 'system', content: 'Görev durduruldu.' })
+      appendMessage({ role: 'system', content: t('assistant.taskStopped') })
       setActiveTask(null)
       setSubTask(null)
     } catch {
-      appendMessage({ role: 'system', content: 'Görev durdurulamadı.' })
+      appendMessage({ role: 'system', content: t('assistant.taskStopFailed') })
     }
   }, [activeTask, appendMessage])
+
+  // Resumes a task paused at the ask_operator node. `message` carries the
+  // operator's answer (may be empty — the backend treats that as a plain
+  // resume with no new guidance). The resulting task state arrives over the
+  // normal WS task-update stream via onTask, same as any other loop step.
+  const resumeTask = useCallback(
+    async (taskID: string, message: string) => {
+      try {
+        await fetchJSON(`/api/v1/tasks/${taskID}/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message })
+        })
+      } catch {
+        appendMessage({ role: 'system', content: t('assistant.taskResumeFailed') })
+      }
+    },
+    [appendMessage]
+  )
 
   const approveTaskGate = useCallback(
     async (taskID: string, proposalID: string, approved: boolean) => {
@@ -864,11 +890,11 @@ export function AssistantPanel({
           body: JSON.stringify({
             proposal_id: proposalID,
             approved,
-            reason: approved ? '' : 'operator reddetti'
+            reason: approved ? '' : t('assistant.operatorRejectedReason')
           })
         })
       } catch {
-        appendMessage({ role: 'system', content: 'Onay gönderilemedi.' })
+        appendMessage({ role: 'system', content: t('assistant.approvalSendFailed') })
       }
     },
     [appendMessage]
@@ -888,13 +914,13 @@ export function AssistantPanel({
         appendMessage({
           role: 'system',
           content: approved
-            ? `Dış ağ erişimi onaylandı: ${rec.egress_target ?? rec.command}`
-            : `Dış ağ erişimi reddedildi: ${rec.egress_target ?? rec.command}`
+            ? `${t('assistant.egressApprovedBefore')}${rec.egress_target ?? rec.command}`
+            : `${t('assistant.egressDeniedBefore')}${rec.egress_target ?? rec.command}`
         })
       } catch {
         appendMessage({
           role: 'system',
-          content: 'Egress kararı gönderilemedi.'
+          content: t('assistant.egressDecisionFailed')
         })
         setEgressHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec]) // restore
       }
@@ -916,13 +942,13 @@ export function AssistantPanel({
         appendMessage({
           role: 'system',
           content: approved
-            ? 'Şüpheli çıktı operatör tarafından inceleme için ajana iletilmek üzere onaylandı.'
-            : 'Şüpheli çıktı operatör tarafından ajana iletilmeden tutuldu.'
+            ? t('assistant.threatApproved')
+            : t('assistant.threatDenied')
         })
       } catch {
         appendMessage({
           role: 'system',
-          content: 'Tehdit taraması kararı gönderilemedi.'
+          content: t('assistant.threatDecisionFailed')
         })
         setThreatHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec])
       }
@@ -944,7 +970,7 @@ export function AssistantPanel({
       } catch {
         setApprovalModeState(previous)
         saveApprovalMode(previous)
-        appendMessage({ role: 'system', content: 'Mod değiştirilemedi.' })
+        appendMessage({ role: 'system', content: t('assistant.modeChangeFailed') })
       }
     },
     [approvalMode, appendMessage]
@@ -995,7 +1021,7 @@ export function AssistantPanel({
       if (res.session_id && res.session_id !== sid)
         onSessionChange(res.session_id)
 
-      const reply = res.data?.message ?? res.reply ?? 'Cevap alınamadı'
+      const reply = res.data?.message ?? res.reply ?? t('assistant.noReplyReceived')
       appendMessage({ role: 'assistant', content: reply })
 
       const taskID = res.data?.task_id
@@ -1017,7 +1043,7 @@ export function AssistantPanel({
           if (sessionIDRef.current === sid)
             appendMessage({
               role: 'system',
-              content: 'Görev durumu alınamadı.'
+              content: t('assistant.taskStatusFetchFailed')
             })
         }
       } else {
@@ -1028,7 +1054,7 @@ export function AssistantPanel({
       if (sessionIDRef.current === sid)
         appendMessage({
           role: 'system',
-          content: 'Bağlantı hatası. Orchestrator çalışıyor mu?'
+          content: t('assistant.connectionError')
         })
     } finally {
       if (sessionIDRef.current === sid) {
@@ -1059,10 +1085,10 @@ export function AssistantPanel({
         // that no longer belongs to `sid`.
         if (sessionIDRef.current !== sid) return
         setProposals((prev) => prev.filter((x) => x.id !== p.id))
-        appendMessage({ role: 'system', content: `Çalıştırıldı: ${p.command}` })
+        appendMessage({ role: 'system', content: `${t('assistant.commandExecutedBefore')}${p.command}` })
       } catch {
         if (sessionIDRef.current === sid)
-          appendMessage({ role: 'system', content: 'Komut onaylanamadı' })
+          appendMessage({ role: 'system', content: t('assistant.commandApprovalFailed') })
       } finally {
         if (sessionIDRef.current === sid) {
           setIsLoading(false)
@@ -1086,10 +1112,10 @@ export function AssistantPanel({
     navigator.clipboard
       .writeText(cmd)
       .then(() =>
-        appendMessage({ role: 'system', content: 'Panoya kopyalandı' })
+        appendMessage({ role: 'system', content: t('assistant.copiedToClipboard') })
       )
       .catch(() =>
-        appendMessage({ role: 'system', content: 'Panoya kopyalanamadı' })
+        appendMessage({ role: 'system', content: t('assistant.copyFailed') })
       )
   }
 
@@ -1168,20 +1194,20 @@ export function AssistantPanel({
   return (
     <section className="panel panel-left">
       <div className="panel-header">
-        <span className="panel-header-title">Agent</span>
+        <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
         {taskRunning && (
           <span className="running-indicator">
-            <span className="loading-dot pulse">●</span> Görev çalışıyor
+            <span className="loading-dot pulse">●</span> {t('assistant.taskRunningIndicator')}
           </span>
         )}
         {!taskRunning && isLoading && (
           <span className="running-indicator">
-            <span className="loading-dot pulse">●</span> Yanıt hazırlanıyor
+            <span className="loading-dot pulse">●</span> {t('assistant.replyPreparingIndicator')}
           </span>
         )}
         <span className="panel-header-actions">
           <button className="small-button" onClick={() => void newChat()}>
-            Yeni Sohbet
+            {t('assistant.newChatButton')}
           </button>
         </span>
       </div>
@@ -1190,17 +1216,17 @@ export function AssistantPanel({
         <RuntimeConnectionNotice />
         {historyError && (
           <div className="history-error-banner">
-            <span>Sohbet geçmişi yüklenemedi.</span>
+            <span>{t('assistant.historyErrorMsg')}</span>
             <button
               className="small-button"
               onClick={() => loadHistory(sessionID)}
             >
-              Tekrar dene
+              {t('common.retry')}
             </button>
           </div>
         )}
         {historyLoading && !historyError && (
-          <div className="history-loading-banner">Geçmiş yükleniyor…</div>
+          <div className="history-loading-banner">{t('assistant.historyLoading')}</div>
         )}
         {/* Message thread */}
         <div className="chat-messages">
@@ -1231,6 +1257,7 @@ export function AssistantPanel({
                       approveTaskGate(msg.taskID!, pid, approved)
                     }
                     onStop={stopActiveTask}
+                    onResume={(message) => resumeTask(msg.taskID!, message)}
                     subTask={subTask}
                     onApproveSub={(pid, approved) =>
                       subTask && approveTaskGate(subTask.id, pid, approved)
@@ -1266,12 +1293,12 @@ export function AssistantPanel({
             {egressHolds.map((rec) => (
               <div key={rec.id} className="egress-card">
                 <div className="egress-main">
-                  <span className="egress-title">⚠ Dış ağ erişimi onayı</span>
+                  <span className="egress-title">{t('assistant.egressApprovalTitle')}</span>
                   <code className="egress-target">
                     {rec.egress_target || rec.command}
                   </code>
                   <span className="egress-hint">
-                    Gateway bu hedefe çıkış için operatör onayı bekliyor.
+                    {t('assistant.egressHint')}
                   </span>
                 </div>
                 <div className="egress-actions">
@@ -1279,14 +1306,14 @@ export function AssistantPanel({
                     className="btn-approve"
                     onClick={() => void resolveEgress(rec, true)}
                   >
-                    İzin ver
+                    {t('assistant.allow')}
                   </button>
                   <button
                     className="btn-reject"
                     onClick={() => void resolveEgress(rec, false)}
-                    title="Reddet"
+                    title={t('common.reject')}
                   >
-                    Reddet
+                    {t('assistant.deny')}
                   </button>
                 </div>
               </div>
@@ -1301,16 +1328,15 @@ export function AssistantPanel({
               <div key={rec.id} className="threat-card">
                 <div className="threat-main">
                   <span className="threat-title">
-                    ⚠ Şüpheli komut çıktısı — model bağlamı durduruldu
+                    {t('assistant.threatCardTitle')}
                   </span>
                   <code className="threat-command">{rec.command}</code>
                   <span className="threat-hint">
                     {rec.security_banner ||
-                      'Çıktı, içerik güvenlik taramasına takıldı.'}
+                      t('assistant.threatDefaultHint')}
                   </span>
                   <span className="threat-operator-note">
-                    Bu içerik yalnızca operatör incelemesi için gösterilir;
-                    karar verilmeden ajana iletilmez.
+                    {t('assistant.threatOperatorNote')}
                   </span>
                   {(rec.output || rec.error) && (
                     <pre className="threat-output">
@@ -1323,14 +1349,14 @@ export function AssistantPanel({
                     className="btn-approve"
                     onClick={() => void resolveThreat(rec, true)}
                   >
-                    İncelemesi için ajana ilet
+                    {t('assistant.forwardToAgent')}
                   </button>
                   <button
                     className="btn-threat-reject"
                     onClick={() => void resolveThreat(rec, false)}
-                    title="Model bağlamından uzak tut"
+                    title={t('assistant.keepFromAgent')}
                   >
-                    Ajanadan uzak tut
+                    {t('assistant.keepFromAgent')}
                   </button>
                 </div>
               </div>
@@ -1343,10 +1369,10 @@ export function AssistantPanel({
           <div className="proposals-bar">
             <div className="proposals-header">
               <span className="proposals-title">
-                {proposals.length} komut hazır
+                {proposals.length}{t('assistant.proposalsReadyAfter')}
               </span>
               <span className="proposals-hint">
-                ↑↓ Gezin · Enter Çalıştır · Esc Kapat · ⌘C Kopyala
+                {t('assistant.proposalsHint')}
               </span>
             </div>
             <div className="proposals-list">
@@ -1383,7 +1409,7 @@ export function AssistantPanel({
                       }}
                       disabled={isLoading}
                     >
-                      Çalıştır
+                      {t('assistant.run')}
                     </button>
                     <button
                       className="btn-reject"
@@ -1391,7 +1417,7 @@ export function AssistantPanel({
                         e.stopPropagation()
                         rejectProposal(p)
                       }}
-                      title="Reddet"
+                      title={t('common.reject')}
                     >
                       ✕
                     </button>
@@ -1401,7 +1427,7 @@ export function AssistantPanel({
                         e.stopPropagation()
                         if (p.command) copyCommand(p.command)
                       }}
-                      title="Kopyala"
+                      title={t('common.copy')}
                     >
                       ⎘
                     </button>
@@ -1421,12 +1447,12 @@ export function AssistantPanel({
             onKeyDown={handleKeyDown}
             placeholder={
               taskRunning
-                ? 'Görev çalışıyor — durdur veya izle...'
+                ? t('assistant.inputPlaceholderTaskRunning')
                 : isLoading
-                  ? 'İşleniyor...'
+                  ? t('assistant.inputPlaceholderProcessing')
                   : proposals.length > 0
-                    ? 'Enter ile seçili komutu çalıştır...'
-                    : 'Hedefini veya görevini yaz...'
+                    ? t('assistant.inputPlaceholderProposalReady')
+                    : t('assistant.inputPlaceholderDefault')
             }
             disabled={isLoading}
           />
@@ -1434,9 +1460,9 @@ export function AssistantPanel({
             <button
               className="btn-stop"
               onClick={() => void stopActiveTask()}
-              title="Görevi durdur"
+              title={t('assistant.stopTaskTitle')}
             >
-              ◼ Durdur
+              {t('taskTracker.stop')}
             </button>
           ) : (
             <button
@@ -1447,7 +1473,7 @@ export function AssistantPanel({
               }
               disabled={isLoading || (!input.trim() && proposals.length === 0)}
             >
-              {proposals.length > 0 ? 'Çalıştır' : 'Gönder'}
+              {proposals.length > 0 ? t('assistant.run') : t('assistant.send')}
             </button>
           )}
         </div>

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import { t } from '../../shared/i18n/strings'
 
 // Mirrors orchestrator/internal/agent.ApprovalMode — exactly two modes.
 export type ApprovalMode = 'ask_permission' | 'auto'
 
 const MODE_LABEL: Record<ApprovalMode, string> = {
-  ask_permission: 'onay iste',
-  auto: 'otomatik',
+  ask_permission: t('contextBar.mode.ask_permission'),
+  auto: t('contextBar.mode.auto'),
 }
 
 // A deliberately approximate visual budget. Model/backend identity belongs in
@@ -54,7 +55,7 @@ export function ContextBar({
     <div className="ctx-bar">
       <div className="ctx-bar-left">
         <span className="ctx-chip ctx-chip-mode" ref={modeRef}>
-          <span className="ctx-label">izin</span>
+          <span className="ctx-label">{t('contextBar.permissionLabel')}</span>
           <button
             type="button"
             className="ctx-mode-trigger"
@@ -84,14 +85,14 @@ export function ContextBar({
         </span>
         <span className="ctx-dot">·</span>
         <span className="ctx-chip">
-          <span className="ctx-label">mesaj</span>
+          <span className="ctx-label">{t('contextBar.messageLabel')}</span>
           <span className="ctx-value ctx-mono">{messageCount}</span>
         </span>
       </div>
 
       <div className="ctx-bar-right">
         <span className="ctx-chip">
-          <span className="ctx-label">bağlam</span>
+          <span className="ctx-label">{t('contextBar.contextLabel')}</span>
           <span className="ctx-value ctx-mono">
             ~{estimatedTokens >= 1000
               ? `${(estimatedTokens / 1000).toFixed(1)}k`
@@ -99,7 +100,7 @@ export function ContextBar({
             } / {(ctxWindow / 1024).toFixed(0)}k
           </span>
         </span>
-        <div className="ctx-track" title={`Bağlamın yaklaşık %${fillPct.toFixed(0)} kadarı kullanılıyor`}>
+        <div className="ctx-track" title={`${t('contextBar.usageTitleBefore')}${fillPct.toFixed(0)}${t('contextBar.usageTitleAfter')}`}>
           <div
             className="ctx-fill"
             style={{ width: `${fillPct}%`, background: fillColor }}

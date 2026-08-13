@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiURL, isDesktopShell } from '../../shared/api/runtime'
+import { t } from '../../shared/i18n/strings'
 
 type ConnectionState = 'checking' | 'offline' | 'connected'
 
@@ -32,10 +33,10 @@ export function RuntimeConnectionNotice(): JSX.Element | null {
     <aside className="runtime-notice" role="alert" aria-live="polite">
       <span className={`dot ${state === 'checking' ? 'dot-warn pulse' : 'dot-err'}`} />
       <div className="runtime-notice-copy">
-        <strong>{state === 'checking' ? 'Yerel çalışma zamanı denetleniyor…' : 'Yummi runtime bağlı değil'}</strong>
-        {state === 'offline' && <span>Önce terminalden <code>make start</code> çalıştırın; desktop uygulaması otomatik bağlanacaktır.</span>}
+        <strong>{state === 'checking' ? t('runtimeNotice.checking') : t('runtimeNotice.disconnected')}</strong>
+        {state === 'offline' && <span>{t('runtimeNotice.hintBefore')}<code>make start</code>{t('runtimeNotice.hintAfter')}</span>}
       </div>
-      {state === 'offline' && <button className="runtime-retry" onClick={() => void check()}>Yeniden dene</button>}
+      {state === 'offline' && <button className="runtime-retry" onClick={() => void check()}>{t('runtimeNotice.retry')}</button>}
     </aside>
   )
 }

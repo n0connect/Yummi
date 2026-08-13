@@ -3,19 +3,20 @@ import type { ActivityEvent, ActivityKind } from '../../entities/types'
 import { presentActivity } from '../../shared/lib/activityPresentation'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
 import { usePendingSkills } from '../../features/skills/usePendingSkills'
+import { t } from '../../shared/i18n/strings'
 
 const KIND_META: Record<ActivityKind, [string, string]> = {
-  plan:              ['◇', 'plan'],
-  command:           ['›', 'komut'],
-  command_result:    ['✓', 'sonuç'],
-  memory_recalled:   ['○', 'hatırlandı'],
-  skill_applied:     ['◆', 'skill'],
-  handoff_started:   ['↗', 'devredildi'],
-  handoff_completed: ['↙', 'döndü'],
-  finding:           ['!', 'bulgu'],
-  context_saved:     ['·', 'bellek'],
-  ask:               ['?', 'soru'],
-  finish:            ['■', 'bitti'],
+  plan:              ['◇', t('trace.kind.plan')],
+  command:           ['›', t('trace.kind.command')],
+  command_result:    ['✓', t('trace.kind.command_result')],
+  memory_recalled:   ['○', t('trace.kind.memory_recalled')],
+  skill_applied:     ['◆', t('trace.kind.skill_applied')],
+  handoff_started:   ['↗', t('trace.kind.handoff_started')],
+  handoff_completed: ['↙', t('trace.kind.handoff_completed')],
+  finding:           ['!', t('trace.kind.finding')],
+  context_saved:     ['·', t('trace.kind.context_saved')],
+  ask:               ['?', t('trace.kind.ask')],
+  finish:            ['■', t('trace.kind.finish')],
 }
 
 // Both severity and outcome are typed `<literal> | string` (entities/types.ts)
@@ -63,7 +64,7 @@ function Section({ title, count, children }: { title: string; count: number; chi
         <span className="trace-section-title">{title}</span>
         <span className="trace-section-count">{count}</span>
       </div>
-      {count === 0 ? <div className="trace-empty">— henüz yok —</div> : children}
+      {count === 0 ? <div className="trace-empty">{t('trace.emptyDash')}</div> : children}
     </div>
   )
 }
@@ -94,21 +95,21 @@ export function TracePage(): JSX.Element {
   return (
     <main className="trace-page">
       <div className="trace-header">
-        <span className="trace-page-title">TRACE</span>
-        <span className="trace-page-sub">operatöre açık görev kayıtları ve bulgular</span>
-        <button className="small-button" onClick={refresh}>Yenile</button>
+        <span className="trace-page-title">{t('trace.title')}</span>
+        <span className="trace-page-sub">{t('trace.subtitle')}</span>
+        <button className="small-button" onClick={refresh}>{t('trace.refresh')}</button>
       </div>
 
       <div className="trace-grid">
         {/* Live trace */}
-        <Section title="Aktivite" count={activity.length}>
+        <Section title={t('trace.sectionActivity')} count={activity.length}>
           <div className="trace-list">
             {activity.map(ev => <ActivityRow key={ev.id} ev={ev} />)}
           </div>
         </Section>
 
         {/* Findings */}
-        <Section title="Bulgular" count={findings.length}>
+        <Section title={t('trace.sectionFindings')} count={findings.length}>
           {findings.map(f => (
             <div key={f.id} className={severityClass(f.severity)}>
               <span className="trace-sev">{f.severity}</span>
@@ -120,7 +121,7 @@ export function TracePage(): JSX.Element {
         </Section>
 
         {/* Procedural memory */}
-        <Section title="Öğrenilmiş taktikler" count={tactics.length}>
+        <Section title={t('trace.sectionTactics')} count={tactics.length}>
           {tactics.map(t => (
             <div key={t.id} className="trace-tactic">
               <code className="trace-cmd">{t.command_pattern}</code>
@@ -131,7 +132,7 @@ export function TracePage(): JSX.Element {
         </Section>
 
         {/* Persistent context / code maps */}
-        <Section title="Kalıcı bellek (haritalar)" count={context.length}>
+        <Section title={t('trace.sectionContext')} count={context.length}>
           {context.map(c => (
             <details key={c.id} className="trace-context">
               <summary>{c.key}</summary>
@@ -141,7 +142,7 @@ export function TracePage(): JSX.Element {
         </Section>
 
         {/* Skills */}
-        <Section title="Çalışma yöntemleri" count={skills.length}>
+        <Section title={t('trace.sectionSkills')} count={skills.length}>
           {skills.map(s => (
             <div key={s.name} className="trace-skill">
               <span className="trace-skill-name">{s.name}</span>
@@ -153,19 +154,19 @@ export function TracePage(): JSX.Element {
         {/* Auto-skill-creation: curator-drafted skills awaiting operator review.
             Never auto-loaded — approve() writes to disk + hot-adds to the live
             registry, reject() just marks the row. */}
-        <Section title="Bekleyen yöntem taslakları" count={pendingSkills.length}>
+        <Section title={t('trace.sectionPendingSkills')} count={pendingSkills.length}>
           {skillError && <div className="trace-skill-error">{skillError}</div>}
           {pendingSkills.map(p => (
             <div key={p.id} className="trace-skill trace-pending-skill">
               <div className="trace-pending-skill-head">
                 <span className="trace-skill-name">{p.name}</span>
                 <div className="trace-pending-skill-actions">
-                  <button className="small-button" onClick={() => handleApproveSkill(p.id)}>Onayla</button>
-                  <button className="small-button" onClick={() => handleRejectSkill(p.id)}>Reddet</button>
+                  <button className="small-button" onClick={() => handleApproveSkill(p.id)}>{t('trace.approve')}</button>
+                  <button className="small-button" onClick={() => handleRejectSkill(p.id)}>{t('common.reject')}</button>
                 </div>
               </div>
               <details>
-                <summary>taslak YAML</summary>
+                <summary>{t('trace.draftYamlSummary')}</summary>
                 <pre className="trace-context-val">{p.draft_yaml}</pre>
               </details>
             </div>
@@ -173,7 +174,7 @@ export function TracePage(): JSX.Element {
         </Section>
 
         {/* Sub-agent roles */}
-        <Section title="Uzman görev rolleri" count={roles.length}>
+        <Section title={t('trace.sectionRoles')} count={roles.length}>
           <div className="trace-roles">
             {roles.map(r => <span key={r} className="trace-role">{r}</span>)}
           </div>

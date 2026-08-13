@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
 import './app.css'
 import { StatusBar } from '../features/statusbar/StatusBar'
 import { ChatPage } from '../pages/chat/ChatPage'
+import { t } from '../shared/i18n/strings'
 
 const TerminalPage = lazy(() => import('../pages/terminal/TerminalPage').then(module => ({ default: module.TerminalPage })))
 const TracePage = lazy(() => import('../pages/trace/TracePage').then(module => ({ default: module.TracePage })))
@@ -14,7 +15,7 @@ function Layout() {
   return (
     <>
       <StatusBar />
-      <Suspense fallback={<div className="route-loading">Ekran hazırlanıyor…</div>}>
+      <Suspense fallback={<div className="route-loading">{t('app.routeLoading')}</div>}>
         <Outlet />
       </Suspense>
     </>

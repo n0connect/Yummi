@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import type { LogLevel } from '../../entities/types'
 import { useLogStream, filterEntries } from './useLogStream'
 import { LogLine } from '../../shared/components/LogLine'
+import { t } from '../../shared/i18n/strings'
 
 type Filter = LogLevel | 'ALL'
 const FILTERS: Filter[] = ['ALL', 'DEBUG', 'INFO', 'WARN', 'ERROR']
@@ -33,9 +34,9 @@ export function DebugLogPanel(): JSX.Element {
   return (
     <>
       <div className="panel-header">
-        <span className="panel-header-title">Debug Log</span>
+        <span className="panel-header-title">{t('debugLog.title')}</span>
         <span className="panel-header-actions log-count">
-          {visible.length}/{entries.length} lines
+          {visible.length}/{entries.length} {t('debugLog.linesSuffix')}
         </span>
       </div>
       <div className="log-filter-bar">
@@ -50,7 +51,7 @@ export function DebugLogPanel(): JSX.Element {
         ))}
         <input
           type="text"
-          placeholder="Filter..."
+          placeholder={t('debugLog.filterPlaceholder')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="log-search-input"
@@ -59,7 +60,7 @@ export function DebugLogPanel(): JSX.Element {
       <div className="log-list" ref={listRef} onScroll={onScroll}>
         {visible.length === 0 ? (
           <div className="log-empty">
-            {entries.length === 0 ? 'No log entries yet...' : 'No matching entries'}
+            {entries.length === 0 ? t('debugLog.noEntries') : t('debugLog.noMatches')}
           </div>
         ) : (
           visible.map(e => <LogLine key={e._id} entry={e} />)

@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { isDesktopShell } from '../../shared/api/runtime'
+import { t } from '../../shared/i18n/strings'
 
 export function StatusBar(): JSX.Element {
   return (
@@ -11,12 +12,12 @@ export function StatusBar(): JSX.Element {
       <div className="right">
         <nav className="nav-seg">
           {[
-            { to: '/', label: 'Agent', end: true },
-            { to: '/terminal', label: 'Bash', end: false },
-            { to: '/trace', label: 'Trace', end: false },
-            { to: '/logs', label: 'Logs', end: false },
-            { to: '/gateway', label: 'Gateway', end: false },
-            { to: '/health', label: 'Health', end: false }
+            { to: '/', label: t('statusBar.nav.agent'), end: true },
+            { to: '/terminal', label: t('statusBar.nav.bash'), end: false },
+            { to: '/trace', label: t('statusBar.nav.trace'), end: false },
+            { to: '/logs', label: t('statusBar.nav.logs'), end: false },
+            { to: '/gateway', label: t('statusBar.nav.gateway'), end: false },
+            { to: '/health', label: t('statusBar.nav.health'), end: false }
           ].map(item => (
             <NavLink
               key={item.to}

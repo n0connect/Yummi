@@ -543,6 +543,25 @@
   margin-top: var(--space-sm);
   word-break: break-word;
 }
+.tt-resume {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.tt-resume-input {
+  width: 100%;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+.tt-resume-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
 /* ─── Actions ─────────────────────────────────────────────────────────────── */
 .tt-actions {

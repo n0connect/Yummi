@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import type { SessionSummary } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
+import { t } from '../../shared/i18n/strings'
 import './SessionRail.css'
 
 function ConversationIcon({ open }: { open: boolean }): JSX.Element {
@@ -98,12 +99,12 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
       <button
         className={`rail-toggle ${open ? 'open' : ''}`}
         onClick={onToggle}
-        title={open ? 'Sohbet listesini kapat' : 'Sohbet geçmişi'}
-        aria-label="Sohbet geçmişi"
+        title={open ? t('sessionRail.toggleOpenTitle') : t('sessionRail.toggleClosedTitle')}
+        aria-label={t('sessionRail.toggleClosedTitle')}
         aria-expanded={open}
       >
         <ConversationIcon open={open} />
-        <span className="rail-toggle-label">Sohbetler</span>
+        <span className="rail-toggle-label">{t('sessionRail.toggleLabel')}</span>
       </button>
 
       {open && (
@@ -111,19 +112,19 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
           type="button"
           className="session-rail-backdrop"
           onClick={onToggle}
-          aria-label="Sohbet geçmişini kapat"
+          aria-label={t('sessionRail.backdropClose')}
           tabIndex={-1}
         />
       )}
-      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label="Sohbet geçmişi paneli" aria-modal="false">
+      <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label={t('sessionRail.panelAriaLabel')} aria-modal="false">
         <div className="rail-header">
           <div>
-            <span className="rail-eyebrow">ÇALIŞMA ALANI</span>
-            <span className="rail-title">Geçmiş sohbetler</span>
+            <span className="rail-eyebrow">{t('sessionRail.eyebrow')}</span>
+            <span className="rail-title">{t('sessionRail.title')}</span>
           </div>
-          <button className="rail-create" type="button" onClick={onNewChat} title="Yeni sohbet başlat">
+          <button className="rail-create" type="button" onClick={onNewChat} title={t('sessionRail.newButtonTitle')}>
             <span aria-hidden="true">＋</span>
-            Yeni
+            {t('sessionRail.newButtonLabel')}
           </button>
         </div>
         <div className="rail-search-wrap">
@@ -132,29 +133,29 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
             className="rail-search"
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="Sohbetlerde ara"
-            aria-label="Sohbetlerde ara"
+            placeholder={t('sessionRail.searchPlaceholder')}
+            aria-label={t('sessionRail.searchPlaceholder')}
           />
         </div>
         <div className="rail-list">
           {loading && sessions.length === 0 && !error && (
-            <div className="rail-empty">Yükleniyor…</div>
+            <div className="rail-empty">{t('sessionRail.loading')}</div>
           )}
           {error && (
             <div className="rail-empty rail-error">
-              <span>Sohbetler yüklenemedi.</span>
-              <button className="rail-retry" onClick={() => load()}>Tekrar dene</button>
+              <span>{t('sessionRail.loadError')}</span>
+              <button className="rail-retry" onClick={() => load()}>{t('common.retry')}</button>
             </div>
           )}
           {!error && !loading && sessions.length === 0 && (
             <div className="rail-empty rail-empty-intro">
               <span className="rail-empty-icon">◌</span>
-              <strong>Henüz kayıtlı sohbet yok.</strong>
-              <span>Yeni bir hedef yazarak ilk çalışma kaydını oluşturun.</span>
+              <strong>{t('sessionRail.emptyTitle')}</strong>
+              <span>{t('sessionRail.emptyHint')}</span>
             </div>
           )}
           {!error && !loading && sessions.length > 0 && filteredSessions.length === 0 && (
-            <div className="rail-empty">Bu aramayla eşleşen sohbet bulunamadı.</div>
+            <div className="rail-empty">{t('sessionRail.noSearchResults')}</div>
           )}
           {filteredSessions.map(s => (
             <button
@@ -168,7 +169,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
                 <span className="rail-item-name">{s.name}</span>
                 <span className="rail-item-meta">
                   <span className={`rail-item-dot ${s.id === activeSessionID ? 'active' : ''}`} />
-                  {s.id === activeSessionID ? 'Açık oturum' : 'Son etkinlik'}
+                  {s.id === activeSessionID ? t('sessionRail.activeSession') : t('sessionRail.recentActivity')}
                 </span>
               </span>
               <span className="rail-item-when">{shortWhen(s.updated_at)}</span>

@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react'
 import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, type HostnameList } from '../../features/gateway/useGatewayData'
 import type { GatewayEgressMode } from '../../entities/types'
 import { apiURL } from '../../shared/api/runtime'
+import { t } from '../../shared/i18n/strings'
 import './GatewayPage.css'
 
 const EGRESS_MODES: { mode: GatewayEgressMode; label: string; hint: string }[] = [
-  { mode: 'block', label: 'Tümü Engellensin', hint: 'Sandbox dış ağa erişemez (fail-closed).' },
-  { mode: 'allow', label: 'Tümüne İzin Ver', hint: 'Sandbox dış ağa serbestçe erişebilir.' },
-  { mode: 'ask', label: 'Her Erişimde Sor', hint: 'Her dış erişim için operatör onayı istenir.' }
+  { mode: 'block', label: t('gateway.egress.block.label'), hint: t('gateway.egress.block.hint') },
+  { mode: 'allow', label: t('gateway.egress.allow.label'), hint: t('gateway.egress.allow.hint') },
+  { mode: 'ask', label: t('gateway.egress.ask.label'), hint: t('gateway.egress.ask.hint') }
 ]
 
 export function GatewayPage(): JSX.Element {
@@ -96,10 +97,10 @@ export function GatewayPage(): JSX.Element {
         <div className="gateway-card gateway-unreachable">
           <span className="gateway-unreachable-mark" aria-hidden="true">⌁</span>
           <div>
-            <h2>Gateway bağlantısı kurulamadı</h2>
-            <p>Yummi runtime çalıştığında ağ politikaları ve denetim kayıtları burada otomatik görünecek.</p>
+            <h2>{t('gateway.unreachableTitle')}</h2>
+            <p>{t('gateway.unreachableBody')}</p>
           </div>
-          <button className="small-button" onClick={() => void refreshRules()}>Yeniden dene</button>
+          <button className="small-button" onClick={() => void refreshRules()}>{t('common.retry')}</button>
         </div>
       </div>
     )
@@ -108,13 +109,13 @@ export function GatewayPage(): JSX.Element {
   return (
     <div className="gateway-page">
       <div className="gateway-header">
-        <h2 className="gateway-title">Gateway</h2>
+        <h2 className="gateway-title">{t('gateway.title')}</h2>
         <span className={`gateway-status-badge ${status}`}>{status}</span>
       </div>
 
       <div className="gateway-card gateway-egress-card">
-        <h3>Egress Mode</h3>
-        <div className="gateway-egress-selector" role="group" aria-label="Egress mode">
+        <h3>{t('gateway.egressModeTitle')}</h3>
+        <div className="gateway-egress-selector" role="group" aria-label={t('gateway.egressModeGroupAriaLabel')}>
           {EGRESS_MODES.map(({ mode, label }) => (
             <button
               key={mode}
@@ -134,61 +135,60 @@ export function GatewayPage(): JSX.Element {
           </p>
         ) : (
           <p className="gateway-egress-status">
-            {egressStatus === 'not_configured' ? 'Gateway yapılandırılmamış.' : 'Gateway erişilemez.'}
+            {egressStatus === 'not_configured' ? t('gateway.notConfigured') : t('gateway.unreachableShort')}
           </p>
         )}
         {egressError && <div className="gateway-form-error">{egressError}</div>}
       </div>
 
       <div className="gateway-card">
-        <h3>Hostname Policy</h3>
+        <h3>{t('gateway.hostnamePolicyTitle')}</h3>
         <p className="gateway-egress-hint">
-          İsim bazlı kapsam. <code>*.google.com</code> apex + tüm subdomainleri kapsar. Engel kuralı her şeyi yener;
-          izin listesi doluysa whitelist gibi davranır. Buradan eklenenler geçicidir (yeniden başlatınca config dosyasından yüklenir).
+          {t('gateway.hostnamePolicyDesc')}
         </p>
         <div className="gateway-hostname-lists">
           <div className="gateway-hostname-col">
-            <span className="gateway-hostname-label gateway-hostname-allow">İzinli (allow)</span>
-            {hostnamePolicy.allow.length === 0 && <span className="gateway-empty">— boş —</span>}
+            <span className="gateway-hostname-label gateway-hostname-allow">{t('gateway.allowListLabel')} (allow)</span>
+            {hostnamePolicy.allow.length === 0 && <span className="gateway-empty">{t('gateway.emptyDash')}</span>}
             {hostnamePolicy.allow.map(p => (
               <div key={`allow-${p}`} className="gateway-hostname-item">
                 <code>{p}</code>
-                <button onClick={() => handleRemoveHostname('allow', p)} title="Kaldır">✕</button>
+                <button onClick={() => handleRemoveHostname('allow', p)} title={t('common.remove')}>✕</button>
               </div>
             ))}
           </div>
           <div className="gateway-hostname-col">
-            <span className="gateway-hostname-label gateway-hostname-block">Engelli (block)</span>
-            {hostnamePolicy.block.length === 0 && <span className="gateway-empty">— boş —</span>}
+            <span className="gateway-hostname-label gateway-hostname-block">{t('gateway.blockListLabel')} (block)</span>
+            {hostnamePolicy.block.length === 0 && <span className="gateway-empty">{t('gateway.emptyDash')}</span>}
             {hostnamePolicy.block.map(p => (
               <div key={`block-${p}`} className="gateway-hostname-item">
                 <code>{p}</code>
-                <button onClick={() => handleRemoveHostname('block', p)} title="Kaldır">✕</button>
+                <button onClick={() => handleRemoveHostname('block', p)} title={t('common.remove')}>✕</button>
               </div>
             ))}
           </div>
         </div>
         <div className="gateway-add-form">
           <select value={hnList} onChange={e => setHnList(e.target.value as HostnameList)}>
-            <option value="block">Engelle</option>
-            <option value="allow">İzin ver</option>
+            <option value="block">{t('gateway.selectBlock')}</option>
+            <option value="allow">{t('gateway.selectAllow')}</option>
           </select>
           <input
-            placeholder="*.example.com veya example.com"
+            placeholder={t('gateway.hostnamePlaceholder')}
             value={hnPattern}
             onChange={e => setHnPattern(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') void handleAddHostname() }}
           />
-          <button disabled={hnPattern.trim() === ''} onClick={() => void handleAddHostname()}>Ekle</button>
+          <button disabled={hnPattern.trim() === ''} onClick={() => void handleAddHostname()}>{t('common.add')}</button>
         </div>
         {hnError && <div className="gateway-form-error">{hnError}</div>}
       </div>
 
       <div className="gateway-card">
-        <h3>Active Rules</h3>
+        <h3>{t('gateway.activeRulesTitle')}</h3>
         <table className="gateway-rules-table">
           <thead>
-            <tr><th>Network</th><th>Action</th><th>Source</th><th>Reason</th><th>Expires</th><th></th></tr>
+            <tr><th>{t('gateway.table.network')}</th><th>{t('gateway.table.action')}</th><th>{t('gateway.table.source')}</th><th>{t('gateway.table.reason')}</th><th>{t('gateway.table.expires')}</th><th></th></tr>
           </thead>
           <tbody>
             {rules.map(rule => (
@@ -197,8 +197,8 @@ export function GatewayPage(): JSX.Element {
                 <td>{rule.action}</td>
                 <td><span className={`source-badge ${rule.source}`}>{rule.source}</span></td>
                 <td>{rule.description}</td>
-                <td>{rule.expires_at ? new Date(rule.expires_at * 1000).toLocaleTimeString() : 'permanent'}</td>
-                <td><button onClick={() => handleRemove(rule.id)}>Remove</button></td>
+                <td>{rule.expires_at ? new Date(rule.expires_at * 1000).toLocaleTimeString() : t('gateway.permanent')}</td>
+                <td><button onClick={() => handleRemove(rule.id)}>{t('common.remove')}</button></td>
               </tr>
             ))}
           </tbody>
@@ -206,33 +206,33 @@ export function GatewayPage(): JSX.Element {
       </div>
 
       <div className="gateway-card">
-        <h3>Fingerprint Masking</h3>
+        <h3>{t('gateway.fingerprintTitle')}</h3>
         {fingerprint ? (
           <ul className="gateway-fingerprint-list">
-            <li>TTL normalization: {fingerprint.ttl_normalize ?? 'off'}</li>
-            <li>MAC randomization: {fingerprint.mac_randomization ? 'on' : 'off'}</li>
+            <li>{t('gateway.ttlNormalization')}: {fingerprint.ttl_normalize ?? t('gateway.off')}</li>
+            <li>{t('gateway.macRandomization')}: {fingerprint.mac_randomization ? t('gateway.on') : t('gateway.off')}</li>
           </ul>
         ) : (
-          <span className="gateway-empty">unavailable</span>
+          <span className="gateway-empty">{t('gateway.unavailable')}</span>
         )}
       </div>
 
       <div className="gateway-card">
-        <h3>Add Manual Rule</h3>
+        <h3>{t('gateway.addManualRuleTitle')}</h3>
         <div className="gateway-add-form">
-          <input placeholder="CIDR (e.g. 10.0.0.5/32)" value={network} onChange={e => setNetwork(e.target.value)} />
-          <input placeholder="TTL seconds" value={ttl} onChange={e => setTtl(e.target.value)} type="number" min="1" />
-          <input placeholder="Reason (required)" value={reason} onChange={e => setReason(e.target.value)} />
-          <button disabled={!canSubmit} onClick={handleAddRule}>Add Rule</button>
+          <input placeholder={t('gateway.cidrPlaceholder')} value={network} onChange={e => setNetwork(e.target.value)} />
+          <input placeholder={t('gateway.ttlPlaceholder')} value={ttl} onChange={e => setTtl(e.target.value)} type="number" min="1" />
+          <input placeholder={t('gateway.reasonPlaceholder')} value={reason} onChange={e => setReason(e.target.value)} />
+          <button disabled={!canSubmit} onClick={handleAddRule}>{t('gateway.addRuleButton')}</button>
         </div>
         {formError && <div className="gateway-form-error">{formError}</div>}
       </div>
 
       <div className="gateway-card">
-        <h3>Audit Log <span className={`chain-badge ${chainVerified ? 'verified' : 'broken'}`}>{chainVerified ? '✓ verified' : '✗ broken'}</span></h3>
+        <h3>{t('gateway.auditLogTitle')} <span className={`chain-badge ${chainVerified ? 'verified' : 'broken'}`}>{chainVerified ? t('gateway.verified') : t('gateway.broken')}</span></h3>
         <table className="gateway-audit-table">
           <thead>
-            <tr><th>Time</th><th>Decision</th><th>Target</th><th>Reason</th></tr>
+            <tr><th>{t('gateway.table.time')}</th><th>{t('gateway.table.decision')}</th><th>{t('gateway.table.target')}</th><th>{t('gateway.table.reason')}</th></tr>
           </thead>
           <tbody>
             {rows.map(row => (

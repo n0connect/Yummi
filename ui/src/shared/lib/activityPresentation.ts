@@ -1,4 +1,5 @@
 import type { ActivityEvent, ActivityKind } from '../../entities/types'
+import { t } from '../i18n/strings'
 
 type PresentedActivity = {
   label: string
@@ -6,31 +7,31 @@ type PresentedActivity = {
 }
 
 const LABEL: Record<ActivityKind, string> = {
-  plan: 'Plan',
-  command: 'Komut',
-  command_result: 'Komut sonucu',
-  memory_recalled: 'Oturum bağlamı',
-  skill_applied: 'Çalışma yöntemi',
-  handoff_started: 'Alt görev',
-  handoff_completed: 'Alt görev',
-  finding: 'Bulgu',
-  context_saved: 'Oturum bağlamı',
-  ask: 'Operatör girdisi',
-  finish: 'Görev',
+  plan: t('activity.label.plan'),
+  command: t('activity.label.command'),
+  command_result: t('activity.label.command_result'),
+  memory_recalled: t('activity.label.memory_recalled'),
+  skill_applied: t('activity.label.skill_applied'),
+  handoff_started: t('activity.label.handoff_started'),
+  handoff_completed: t('activity.label.handoff_completed'),
+  finding: t('activity.label.finding'),
+  context_saved: t('activity.label.context_saved'),
+  ask: t('activity.label.ask'),
+  finish: t('activity.label.finish'),
 }
 
 const SAFE_SUMMARY: Record<ActivityKind, string> = {
-  plan: 'Görev planı güncellendi.',
-  command: 'Onaylanan komut yürütülüyor.',
-  command_result: 'Komut sonucu işlendi.',
-  memory_recalled: 'İlgili oturum bağlamı kullanıldı.',
-  skill_applied: 'Uygun çalışma yöntemi uygulandı.',
-  handoff_started: 'Uzmanlaşmış bir alt görev başlatıldı.',
-  handoff_completed: 'Alt görev sonucu ana çalışmaya aktarıldı.',
-  finding: 'Yeni bir bulgu kaydedildi.',
-  context_saved: 'Oturum bağlamı güncellendi.',
-  ask: 'Devam etmek için operatör girdisi gerekiyor.',
-  finish: 'Görev tamamlandı.',
+  plan: t('activity.summary.plan'),
+  command: t('activity.summary.command'),
+  command_result: t('activity.summary.command_result'),
+  memory_recalled: t('activity.summary.memory_recalled'),
+  skill_applied: t('activity.summary.skill_applied'),
+  handoff_started: t('activity.summary.handoff_started'),
+  handoff_completed: t('activity.summary.handoff_completed'),
+  finding: t('activity.summary.finding'),
+  context_saved: t('activity.summary.context_saved'),
+  ask: t('activity.summary.ask'),
+  finish: t('activity.summary.finish'),
 }
 
 function concise(value: string, fallback: string): string {
@@ -46,11 +47,11 @@ function concise(value: string, fallback: string): string {
  * This also protects clients rendering activity persisted by older servers.
  */
 export function presentActivity(event: ActivityEvent): PresentedActivity {
-  const fallback = SAFE_SUMMARY[event.kind] ?? 'Çalışma durumu güncellendi.'
+  const fallback = SAFE_SUMMARY[event.kind] ?? t('activity.summary.default')
   const mayUseSummary = event.kind === 'finding' || event.kind === 'ask' || event.kind === 'finish'
 
   return {
-    label: LABEL[event.kind] ?? 'Aktivite',
+    label: LABEL[event.kind] ?? t('activity.label.default'),
     summary: mayUseSummary ? concise(event.summary, fallback) : fallback,
   }
 }
