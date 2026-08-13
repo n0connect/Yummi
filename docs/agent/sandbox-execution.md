@@ -10,6 +10,7 @@ This page traces the single **scheduled command** path used by agent tasks, appr
 - [The chain, function by function](#the-chain)
 - [What the agent itself is and isn't allowed to touch](#agent-boundary)
 - [The other agent-reachable exec path: the terminal](#terminal-path)
+- [MCP-backed pentest tools (Eino backend only)](#mcp)
 - [Paths that exist but are not agent-controllable](#non-agent-paths)
 - [What actually happens inside the container](#inside-container)
 
@@ -47,6 +48,36 @@ Looking at this chain end to end, notice what the agent package genuinely has no
 ## The other sandbox exec path: the operator terminal <a id="terminal-path"></a>
 
 The [Bash tab](../usage-guide.md#tab-bash)'s interactive terminal (`api/terminal.go`, backing `/ws/terminal`) is the **one other** path that reaches the sandbox. It is `docker exec` under the hood, but unlike `RunScopedCommand` it does not parse each shell line, call `CheckHostname`, or pre-open target rules. Its network packets still traverse gateway's nftables policy. Consequently, hostname-only rules cannot govern terminal commands or opaque targets loaded from files; use the agent/direct-exec path plus `block`/`ask` when that distinction matters.
+
+## MCP-backed pentest tools (Eino backend only) <a id="mcp"></a>
+
+Six cataloged pentest programs — `nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto` — are also reachable through a **second, deliberate** exec pattern: a real MCP server (`sandbox-mcp/`, a standalone Go module built from the [official `modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk), depending on nothing in `orchestrator/`) compiled into the Kali image and reached via a **persistent** `docker exec -i` session — held open, rather than `sandbox.Bridge.Exec`'s one-shot-buffered model. `internal/sandboxmcp.Client` (`orchestrator/internal/sandboxmcp/client.go`) is the orchestrator-side half: it spawns exactly `docker exec -i --user 1000:1000 <container> /usr/local/bin/yummi-sandbox-mcp` and nothing else — locked by `TestSandboxMCPOnlyExecsDocker` in `internal/security/invariants`, the same AST-walking discipline that guards `sandbox.Bridge.Exec`.
+
+This exists specifically for the [Eino backend](overview.md#two-engines) — the tag-protocol graph engine still routes every command through `run_command`/`RunScopedCommand` above, unchanged. Eino gets six additional tools (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`) with real per-tool JSON schemas instead of one free-text `command` string, so the model picks structured arguments (`target`, `ports`, `service_detection`, ...) rather than inventing flags from its own pretrained knowledge.
+
+Inside the sandbox-resident server, each tool handler execs the real binary **directly with an argv slice** — `exec.Command("nmap", "-sV", target)`, never `bash -lc`. This is strictly safer than the shell-command path for these six tools: no metacharacter injection surface at all, by construction.
+
+The same security machinery still applies, reused rather than duplicated:
+
+```
+Eino pentestTool.InvokableRun
+  → conductor.Validator.ValidateChatResponse (risk classification, unchanged)
+  → agent.Gate (ask_permission mode: blocks on operator approval, same StatusAwaitingApproval dance as run_command)
+  → agent.MCPExecer.RunMCPTool → execution.Store.EnqueueMCP(sessionID, tool, args, displayCommand)
+      → executor.ProcessFunc sees Record.MCPTool != "" → processMCP
+          1. sandboxmcp.Target(tool, args) — the target comes straight from the structured
+             argument (e.g. args["target"]), no scope.ExtractTargets string-parsing needed
+          2. runScopedTarget(ctx, gatewayClient, target, ...) — the SAME checkTargetScope
+             hostname-policy/egress-verdict/rule-opening logic RunScopedCommand's per-target
+             loop uses, extracted into a shared helper so there is one gateway decision path,
+             not two
+          3. sandboxmcp.Client.CallTool(ctx, tool, args) — the actual MCP call, persistent session
+          4. mcpResultToSandboxResult — adapts the MCP CallToolResult into the same *sandbox.Result
+             shape the shell path returns, so output formatting/threatscan/Verify downstream are
+             byte-for-byte the same code either way
+```
+
+`execution.Record` carries this uniformly: `MCPTool`/`MCPArgs` are two additional optional columns (empty for every shell-command record), while `Command` still holds a human-readable rendering (`sandboxmcp.RenderCommand`, e.g. `"nmap -sV -sC 10.0.0.5 -p 1-1000"`) for the UI, the approval prompt, and the audit trail — an MCP-backed execution looks identical to an operator approving a shell command, right down to the TRACE tab.
 
 ## Paths that exist but are not agent-controllable <a id="non-agent-paths"></a>
 
