@@ -32,6 +32,13 @@ type Execer interface {
 	Run(ctx context.Context, sessionID, command string) (ToolResult, error)
 }
 
+// MCPExecer starts a supervisable MCP tool-call execution — the
+// structured-argument sibling of Execer for the cataloged pentest tools
+// exposed by the sandbox-resident MCP server.
+type MCPExecer interface {
+	RunMCPTool(ctx context.Context, sessionID, tool string, args map[string]any, displayCommand string) (ToolResult, error)
+}
+
 // ExecHandle supervises one running command.
 type ExecHandle interface {
 	// Wait blocks up to soft; returns (result, true) when the command reaches a
