@@ -29,6 +29,11 @@ type Config struct {
 	// MCP server. nil disables those tools (main.go always wires a real one
 	// today; kept optional so tests can omit it).
 	MCPExec agent.MCPExecer
+	// MCPList backs search_pentest_tools' discovery of the full sandbox-mcp
+	// catalog (including tools beyond the six individually-typed ones). nil
+	// disables search_pentest_tools/run_pentest_tool; main.go wires the same
+	// *sandboxmcp.Client used for MCPExec's underlying calls here too.
+	MCPList mcpLister
 }
 
 // EinoRunner drives agentic tasks via Eino's ADK instead of the graph state
@@ -107,6 +112,9 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		for _, spec := range pentestToolSpecs {
 			tools = append(tools, newPentestTool(spec, pentestDeps))
 		}
+		if r.cfg.MCPList != nil {
+			tools = append(tools, newSearchPentestToolsTool(r.cfg.MCPList), newRunPentestTool(pentestDeps))
+		}
 	}
 
 	einoAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
@@ -162,14 +170,23 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 }
 
 func (r *EinoRunner) instruction(goal string) string {
-	return "You are Yummi, an autonomous penetration-testing operator assistant. " +
+	instr := "You are Yummi, an autonomous penetration-testing operator assistant. " +
 		"Your current goal: " + goal + "\n\n" +
 		"For nmap, whatweb, curl, gobuster, ffuf, or nikto, prefer the dedicated tool " +
 		"(nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan) over run_command — " +
-		"it gives you a real schema instead of a free-text string. Use run_command for everything else. " +
-		"Use remember to persist durable facts. Use update_plan if your approach changes. Call finish with " +
+		"it gives you a real schema instead of a free-text string. "
+	if r.cfg.MCPList != nil {
+		instr += "For any other sandbox pentest tool (amass, hydra, sqlmap, wpscan, and more), call " +
+			"search_pentest_tools first to see what's available and its exact argument schema, then call " +
+			"run_pentest_tool with the tool name and matching args. Use run_command only for things that aren't " +
+			"pentest tools at all (git, find, awk, ...). "
+	} else {
+		instr += "Use run_command for everything else. "
+	}
+	instr += "Use remember to persist durable facts. Use update_plan if your approach changes. Call finish with " +
 		"a concrete, factual summary once the goal is achieved — cite exact ports/versions/paths from tool " +
 		"output, never vague claims. Call ask_operator only when genuinely blocked."
+	return instr
 }
 
 // ── agent.TaskRunner ─────────────────────────────────────────────────────

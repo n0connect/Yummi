@@ -298,6 +298,7 @@ func main() {
 						ModelName:    cfg.OllamaModel,
 						Knowledge:    ks,
 						MCPExec:      agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
+						MCPList:      sandboxMCPClient,
 					},
 				)
 				slog.Info("agent backend: eino", "model", cfg.OllamaModel)
