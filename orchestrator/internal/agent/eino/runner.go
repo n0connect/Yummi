@@ -25,6 +25,10 @@ type Config struct {
 	ModelBaseURL string // e.g. "http://localhost:11434/v1"
 	ModelName    string // e.g. "qwen3:14b"
 	Knowledge    *knowledge.Store
+	// MCPExec runs the six cataloged pentest tools via the sandbox-resident
+	// MCP server. nil disables those tools (main.go always wires a real one
+	// today; kept optional so tests can omit it).
+	MCPExec agent.MCPExecer
 }
 
 // EinoRunner drives agentic tasks via Eino's ADK instead of the graph state
@@ -95,6 +99,15 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		newFinishTool(),
 		newUpdatePlanTool(r.store, task.ID),
 	}
+	if r.cfg.MCPExec != nil {
+		pentestDeps := pentestToolDeps{
+			taskID: task.ID, sessionID: t.SessionID, store: r.store, mcpExec: r.cfg.MCPExec,
+			gate: r.gate, validator: r.validator, approvalMode: func() agent.ApprovalMode { return r.cfg.ApprovalMode },
+		}
+		for _, spec := range pentestToolSpecs {
+			tools = append(tools, newPentestTool(spec, pentestDeps))
+		}
+	}
 
 	einoAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "yummi",
@@ -151,10 +164,12 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 func (r *EinoRunner) instruction(goal string) string {
 	return "You are Yummi, an autonomous penetration-testing operator assistant. " +
 		"Your current goal: " + goal + "\n\n" +
-		"Use run_command to execute commands in the audited sandbox. Use remember to persist durable " +
-		"facts. Use update_plan if your approach changes. Call finish with a concrete, factual summary " +
-		"once the goal is achieved — cite exact ports/versions/paths from tool output, never vague claims. " +
-		"Call ask_operator only when genuinely blocked."
+		"For nmap, whatweb, curl, gobuster, ffuf, or nikto, prefer the dedicated tool " +
+		"(nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan) over run_command — " +
+		"it gives you a real schema instead of a free-text string. Use run_command for everything else. " +
+		"Use remember to persist durable facts. Use update_plan if your approach changes. Call finish with " +
+		"a concrete, factual summary once the goal is achieved — cite exact ports/versions/paths from tool " +
+		"output, never vague claims. Call ask_operator only when genuinely blocked."
 }
 
 // ── agent.TaskRunner ─────────────────────────────────────────────────────
