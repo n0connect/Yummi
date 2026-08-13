@@ -429,7 +429,7 @@ _test-ui:
 	@if [ -f "$(UI_DIR)/package-lock.json" ]; then cd $(UI_DIR) && npm ci --silent || { $(call log_error,UI,npm ci failed.); exit 1; }; \
 	 else cd $(UI_DIR) && npm install --silent || { $(call log_error,UI,npm install failed.); exit 1; }; fi
 	@$(call log_info,test,Running UI vitest...)
-	@set -o pipefail; cd $(UI_DIR) && npm test 2>&1 | sed 's/^/  /' || { $(call log_error,test,UI tests failed.); exit 1; }
+	@set -o pipefail; cd $(UI_DIR) && unset VITE_YUMMI_LANG && npm test 2>&1 | sed 's/^/  /' || { $(call log_error,test,UI tests failed.); exit 1; }
 	@$(call log_pass,test,UI tests passed.)
 
 # ── Ollama lifecycle (internal) ───────────────────────────────────────────────
