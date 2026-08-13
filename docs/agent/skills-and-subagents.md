@@ -2,7 +2,7 @@
 
 # Skills & Sub-agents
 
-Two related but distinct mechanisms make the agent "smarter" without touching its core reasoning loop: **skills** (declarative, trigger-matched knowledge injected into the prompt) and **sub-agents** (bounded delegation to a differently-specialized persona). Both are loaded from plain YAML under `persona/v0.1/`, and both are explicitly designed so that adding one never requires a code change.
+Two related but distinct mechanisms make the agent "smarter" without touching its core reasoning loop: **skills** (declarative, trigger-matched knowledge injected into the prompt) and **sub-agents** (bounded delegation to a differently-specialized persona). Built-in definitions are plain YAML under `persona/v0.1/`; operator-approved generated skills are loaded from the separate writable `YUMMI_AUTO_SKILL_DIR`. Both paths are data-driven, so adding a hand-authored skill or role does not require a code change.
 
 ## Table of contents
 

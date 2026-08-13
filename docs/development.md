@@ -114,7 +114,7 @@ These compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchest
 
 ## Agent quality gates
 
-`go test ./...` includes two model-independent quality contracts: `TestPersonaGoldenFixtures` reads every checked-in `persona/v0.1/golden_tests/*.yaml`, and `EvaluateTaskQuality` rejects cosmetic completion, repeated *executions* (blocked proposals are tracked separately), failed plans, empty summaries, missing evidence digests, unsupported finding claims, wrong command families, and scenario-specific failure markers. The live suite loads the same skill registry and runs as the same UID `1000:1000` as the production sandbox bridge. For real-model regression testing against the sandbox, run:
+`go test ./...` includes two model-independent quality contracts: `TestPersonaGoldenFixtures` reads every checked-in `persona/v0.1/golden_tests/*.yaml`, and offline tests exercise `EvaluateTaskQuality`. The evaluator rejects cosmetic completion, repeated *executions* (blocked proposals are tracked separately), failed plans, empty summaries, missing evidence digests, unsupported finding claims, wrong command families, and scenario-specific failure markers. The live suite loads the same skill registry and runs as the same UID `1000:1000` as the production sandbox bridge. The full metric contract and scenario list live in [Agent Quality & Evaluation](agent/quality-and-evaluation.md). For real-model regression testing against the sandbox, run:
 
 ```bash
 make test-agent-eval LIVE_TEST_MODEL=qwen3:14b

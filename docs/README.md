@@ -21,6 +21,7 @@ docs/
     tag-protocol.md         The closed agent↔LLM vocabulary and robust parsing
     memory-and-knowledge.md Targets/findings/tactics/context, structured + semantic retrieval
     skills-and-subagents.md Declarative playbooks, depth-1 concurrent delegation, auto-skill-drafting
+    quality-and-evaluation.md Golden boundary fixtures, objective task metrics, live quality gate
     sandbox-execution.md    The one path every command takes to a real shell
 
   modules/                Code organized BY IMPLEMENTATION STACK — where to find things

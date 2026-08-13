@@ -70,6 +70,8 @@ Backs the [Trace tab](usage-guide.md#tab-trace). Most endpoints are read-only; e
 | `POST` | `/agent/delegations/{id}/interrupt` | Interrupt one specialist without stopping its parent/siblings |
 | `GET` | `/sessions/{sessionID}/audit` | Session-level audit trail (distinct from gateway's own network audit log below) |
 
+Delegation records are addressable lifecycle objects, not just log lines. A record exposes the parent task, role, subgoal, child task ID when planning succeeded, and one of `running`, `completed`, `failed`, or `interrupted`. The interrupt endpoint is idempotence-aware and only cancels the selected child; the parent's graph and sibling specialists continue.
+
 ## Chat <a id="chat"></a>
 
 | Method | Path | Purpose |

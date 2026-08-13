@@ -30,6 +30,11 @@ orchestrator/test_agent
 orchestrator/test_engine
 orchestrator/test_loop
 
+# sandbox-mcp built in place (plain `go build ./...` from within sandbox-mcp/
+# names its output after the module directory — use `make _build-sandbox-mcp`
+# to get ./bin/yummi-sandbox-mcp instead).
+sandbox-mcp/sandbox-mcp
+
 # Stray build/run debug traces and generated harness reports.
 build_debug.txt
 build_output.txt

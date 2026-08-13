@@ -27,13 +27,14 @@ internal/
     node_tool.go           Validate · gate · execute; duplicate / stuck / tool-thrash detection
     node_consult.go        Mid-command consult ([CONTINUE]/[ABORT])
     node_lifecycle.go      retry · approval · summarize · finish · ask nodes
-    node_handoff.go        Delegate a subtask to a specialist sub-agent (depth-1)
+    node_handoff.go        Delegate one or more subtasks concurrently (depth-1)
     node_remember.go       Persist a structured memory ([REMEMBER]); threat-scanned
     protocol.go            Closed agent↔LLM tag vocabulary (Registry) + parser
     prompts.go             Prompt templates · observation compression
     store.go · task.go     SQLite task store + pub/sub · Task struct & status
     gate.go                Blocking operator-approval channel
     activity.go            Typed TRACE ActivityEvents
+    evaluation.go · verdict.go  Objective quality metrics · server-side finding verdicts
   knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
     store.go               targets · findings · procedural_memory · persistent_context
     procedural.go          target-scrubbed tactic recording (the learning loop)
@@ -48,6 +49,7 @@ internal/
     validator.go           RISK CLASSIFICATION ONLY (no scope decisions, no tool allowlist)
     approval.go            In-memory proposal store with TTL
     tier.go · persona.go   Ollama tier presets · persona YAML loader
+    golden.go · policy.go   Deterministic persona boundary fixtures and policy
   scope/                 Single source of truth for ExtractTargets(command) (leaf)
   execution/ executor/   Execution lifecycle store · processor (scope check → sandbox)
   llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
@@ -82,7 +84,7 @@ internal/
 
 **Chat → single command** — `conductor.ChatWithHistory()` returns `suggest_command` proposals → `POST /chat/approve` → `execution.Store.Enqueue()` → `executor` (`scope.ExtractTargets` → hostname policy + DNS → gateway egress verdict for every target → temporary rules only after every target is allowed → `sandbox.Bridge.Exec`) → `execution.status` events.
 
-**Approval gates** (operator sign-off): in `ask_permission`, an agent task's `gate.Request()` blocks its loop goroutine until `/tasks/{id}/approve` resolves it. Single-command chat proposals use the separate `conductor.ApprovalStore`, whose 20-minute TTL purges abandoned proposals. In `auto`, the UI resolves arriving proposals without waiting for a click.
+**Approval gates** (operator sign-off): in `ask_permission`, an agent task's `gate.Request()` blocks its loop goroutine until `/tasks/{id}/approve` resolves it; in `auto`, the agent-task command gate is bypassed. Single-command chat proposals remain on the separate conductor risk/approval path (`/chat/approve`) and use an in-memory store whose 20-minute TTL purges abandoned proposals. These are intentionally separate controls.
 
 ## Configuration
 
@@ -105,7 +107,7 @@ internal/
 
 ## Testing
 
-Normal `go test ./...` runs the checked-in persona golden fixtures and offline task-quality assertions. `make test-agent-eval` runs the real model + production-equivalent sandbox user and skill registry. It fails on incomplete tasks, empty or ungrounded reports, missing evidence digests, excessive failed steps, repeated executions, unverified findings, or scenario-specific wrong command families; it is an evaluation gate, not a transcript-only demo.
+Normal `go test ./...` runs the checked-in persona golden fixtures and offline task-quality assertions. `make test-agent-eval` runs the real model + production-equivalent sandbox user and skill registry. It fails on incomplete tasks, empty or ungrounded reports, missing evidence digests, excessive failed steps, repeated executions, unverified findings, or scenario-specific wrong command families; it is an evaluation gate, not a transcript-only demo. See [Agent quality & evaluation](../docs/agent/quality-and-evaluation.md) for the metric contract and scenario filter.
 
 ```bash
 cd orchestrator && go test ./...                 # all packages
@@ -121,4 +123,5 @@ Tests use real stores/engines with in-memory SQLite where practical. External bo
 - **Add an API endpoint** — handler in the matching domain file (`handlers_session.go` / `handlers_execution.go` / `handlers_system.go` / `handlers_chat.go`), register in `routes.go`, add a test.
 - **Teach the agent a new tool** — there is no executable allowlist. Install it in `sandbox/Dockerfile`, keep the relevant skill's informational `tools` list and methodology aligned, and special-case `classifyRisk` only if the tool family needs a structural risk floor.
 - **Add a skill / sub-agent role** — drop a YAML file in `persona/v0.1/skills/` or `persona/v0.1/subagents/`; no code change.
+- **Add a quality contract** — add or update a checked-in golden fixture under `persona/v0.1/golden_tests/` for deterministic boundary behavior, or extend the live scenario table in `internal/agent/runner_eval_test.go` with explicit thresholds and command-family expectations.
 - **Swap the agent LLM** — implement `agent.LLM`'s `Chat(ctx, system, user)` method. The conductor has its own engine/client path, so replacing every model call requires updating both integration points.

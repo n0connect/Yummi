@@ -2,7 +2,7 @@
 
 # Persona
 
-`persona/v0.1/` contains the editable identity, methodology, safety, skill, and role documents loaded at orchestrator startup. Runtime protocol instructions and prompt assembly still live in Go; persona files are the behavioral configuration layer, not the entire prompt. This page covers everything **except** skills and sub-agent definitions, which have their own deep-dive at [Skills & Sub-agents](../agent/skills-and-subagents.md).
+`persona/v0.1/` contains the editable identity, methodology, safety, skill, role, and golden-boundary documents loaded at orchestrator startup. Runtime protocol instructions and prompt assembly still live in Go; persona files are the behavioral configuration layer, not the entire prompt. Operator-approved generated skills are persisted separately under `YUMMI_AUTO_SKILL_DIR` and merged into the live registry. This page covers everything **except** skills and sub-agent definitions, which have their own deep-dive at [Skills & Sub-agents](../agent/skills-and-subagents.md).
 
 ## Table of contents
 

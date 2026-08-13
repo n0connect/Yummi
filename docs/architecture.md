@@ -152,8 +152,13 @@ The richer path — the operator gives a goal, and the agent plans and executes 
 2. agent.Runner.CreateAndPlan()   — one LLM call produces a numbered plan
 3. agent.Runner.Start()  →  r.loop()  →  graph.Execute(state, nodeStep)
 4. The graph state machine walks nodes via a routing table (node → edge → next node)
-   until it reaches a terminal node: finish or ask.
-5. WS /ws/events fires task.status events throughout; the completion summary is
+   until it reaches a terminal node: finish or ask. A single step can request up to
+   four depth-1 `HANDOFF`s, bounded by a shared process-local concurrency quota
+   (default 3 running specialists at once, regardless of how many are requested);
+   child tasks share the parent's Knowledge Store and return sanitized summaries.
+5. `finish` emits a server-recorded evidence digest and persists per-finding
+   verdicts alongside the legacy flat findings list.
+6. WS /ws/events fires task.status events throughout; the completion summary is
    returned to chat once the task reaches a terminal node.
 ```
 
