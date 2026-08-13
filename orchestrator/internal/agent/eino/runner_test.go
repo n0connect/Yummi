@@ -54,10 +54,8 @@ func TestEinoRunner_Run_CallsFinishAndCompletesTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAndPlan: %v", err)
 	}
-	// CreateAndPlan for this backend does not call the planning LLM — force
-	// the status Run() requires.
-	if err := store.Transition(task.ID, agent.StatusPlanned, nil); err != nil {
-		t.Fatalf("Transition to planned: %v", err)
+	if task.Status != agent.StatusPlanned {
+		t.Fatalf("status after CreateAndPlan = %s, want planned", task.Status)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

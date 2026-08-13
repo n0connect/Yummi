@@ -24,6 +24,7 @@ import (
 type runCommandDeps struct {
 	taskID       string
 	sessionID    string
+	store        *agent.Store
 	exec         agent.Execer
 	gate         *agent.Gate
 	validator    *conductor.Validator
@@ -86,7 +87,24 @@ func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 	// none do.
 	if rc.deps.approvalMode() == agent.ModeAskPermission {
 		verdictCh := rc.deps.gate.Request(rc.deps.taskID, p.ID, p.Command, p.RiskLevel)
+		// Surface the pending gate on the Task itself — mirrors
+		// graph.go's approvalNode. Without this, GET /api/v1/tasks/{id}
+		// (and therefore the UI/TUI) has no way to discover that the task
+		// is silently blocked on operator approval: the gate blocks
+		// correctly either way (fail-closed), but invisibly.
+		if rc.deps.store != nil {
+			_ = rc.deps.store.Transition(rc.deps.taskID, agent.StatusAwaitingApproval, func(t *agent.Task) {
+				t.PendingProposalID = p.ID
+				t.PendingCommand = p.Command
+				t.PendingRisk = p.RiskLevel
+			})
+		}
 		v := <-verdictCh
+		if rc.deps.store != nil {
+			_ = rc.deps.store.Transition(rc.deps.taskID, agent.StatusRunning, func(t *agent.Task) {
+				t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
+			})
+		}
 		if !v.Approved {
 			reason := v.Reason
 			if reason == "" {

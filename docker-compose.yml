@@ -122,6 +122,7 @@ services:
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
       YUMMI_OLLAMA_MODEL: "${YUMMI_OLLAMA_MODEL:-}"
       YUMMI_OLLAMA_TIER: "${YUMMI_OLLAMA_TIER:-pro}"
+      YUMMI_AGENT_BACKEND: "${YUMMI_AGENT_BACKEND:-graph}"
       DOCKER_HOST: "tcp://docker-proxy:2375"
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
@@ -212,6 +213,8 @@ services:
     build:
       context: ./ui
       dockerfile: Dockerfile
+      args:
+        VITE_YUMMI_LANG: ${VITE_YUMMI_LANG:-en}
     image: yummi/ui:local
     ports:
       - "127.0.0.1:3000:80"

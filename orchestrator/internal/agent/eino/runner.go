@@ -85,7 +85,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	}
 
 	rcDeps := runCommandDeps{
-		taskID: task.ID, sessionID: t.SessionID, exec: r.exec, gate: r.gate,
+		taskID: task.ID, sessionID: t.SessionID, store: r.store, exec: r.exec, gate: r.gate,
 		validator: r.validator, approvalMode: func() agent.ApprovalMode { return r.cfg.ApprovalMode },
 	}
 	tools := []tool.BaseTool{
@@ -159,8 +159,21 @@ func (r *EinoRunner) instruction(goal string) string {
 
 // ── agent.TaskRunner ─────────────────────────────────────────────────────
 
+// CreateAndPlan creates the task and immediately marks it planned: unlike
+// the graph engine, this backend has no separate up-front planning LLM
+// call — the ChatModelAgent plans and acts in one native tool-calling loop
+// once Run() starts. StatusPlanning → StatusPlanned is a valid transition
+// (see agent.validNext), so the task is immediately startable.
 func (r *EinoRunner) CreateAndPlan(ctx context.Context, sessionID, goal string) (agent.Task, error) {
-	return r.store.CreateSubtask(sessionID, goal, r.cfg.StepBudget, "")
+	task, err := r.store.CreateSubtask(sessionID, goal, r.cfg.StepBudget, "")
+	if err != nil {
+		return agent.Task{}, err
+	}
+	if err := r.store.Transition(task.ID, agent.StatusPlanned, nil); err != nil {
+		return agent.Task{}, err
+	}
+	task, _ = r.store.Get(task.ID)
+	return task, nil
 }
 
 func (r *EinoRunner) Start(taskID string, _ string) error {
