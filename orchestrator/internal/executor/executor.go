@@ -10,12 +10,16 @@ import (
 	"log/slog"
 	"net/netip"
 	"strings"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/n0connect/yummi/orchestrator/internal/dnsresolve"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
+	"github.com/n0connect/yummi/orchestrator/internal/sandboxmcp"
 	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
 
@@ -181,20 +185,32 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 	return result, err
 }
 
-// Executor connects approved commands to the sandbox container via gateway scope checks.
-type Executor struct {
-	bridge    *sandbox.Bridge
-	gateway   *gateway.Client
-	knowledge *knowledge.Store
+// sandboxMCPClient is the minimal surface Executor needs from
+// *sandboxmcp.Client — narrowed to an interface so executor_test.go can use a
+// plain struct in place of a real docker-exec-backed client.
+type sandboxMCPClient interface {
+	CallTool(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error)
 }
 
-// New creates an Executor with the given sandbox bridge, gateway client, and
-// knowledge store (knowledge may be nil to disable procedural capture).
-func New(bridge *sandbox.Bridge, pc *gateway.Client, ks *knowledge.Store) *Executor {
+// Executor connects approved commands to the sandbox container via gateway scope checks.
+type Executor struct {
+	bridge     *sandbox.Bridge
+	gateway    *gateway.Client
+	knowledge  *knowledge.Store
+	sandboxMCP sandboxMCPClient
+}
+
+// New creates an Executor with the given sandbox bridge, gateway client,
+// knowledge store (knowledge may be nil to disable procedural capture), and
+// sandbox-MCP client (mcpClient may be nil — a record with a non-empty
+// MCPTool then fails cleanly instead of panicking, matching this codebase's
+// nil-safe-degradation pattern).
+func New(bridge *sandbox.Bridge, pc *gateway.Client, ks *knowledge.Store, mcpClient sandboxMCPClient) *Executor {
 	return &Executor{
-		bridge:    bridge,
-		gateway:   pc,
-		knowledge: ks,
+		bridge:     bridge,
+		gateway:    pc,
+		knowledge:  ks,
+		sandboxMCP: mcpClient,
 	}
 }
 
@@ -217,6 +233,10 @@ func recordTacticOutcome(ctx context.Context, ks *knowledge.Store, command strin
 // on the execution store via SetProcessor.
 func (e *Executor) ProcessFunc() execution.ProcessFunc {
 	return func(ctx context.Context, rec execution.Record) (string, error) {
+		if rec.MCPTool != "" {
+			return e.processMCP(ctx, rec)
+		}
+
 		slog.Info("executor: running command",
 			"execution_id", rec.ID,
 			"session_id", rec.SessionID,
@@ -275,6 +295,90 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 		)
 
 		return out.String(), nil
+	}
+}
+
+// processMCP handles a record dispatched through the sandbox-resident MCP
+// server. It mirrors the shell path's scope-check-then-exec shape via
+// runScopedTarget, using the record's already-structured target
+// (sandboxmcp.Target) instead of scope.ExtractTargets.
+func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string, error) {
+	if e.sandboxMCP == nil {
+		return "", fmt.Errorf("sandbox MCP client not configured")
+	}
+	var args map[string]any
+	if rec.MCPArgs != "" {
+		if err := json.Unmarshal([]byte(rec.MCPArgs), &args); err != nil {
+			return "", fmt.Errorf("invalid mcp args: %w", err)
+		}
+	}
+	target, ok := sandboxmcp.Target(rec.MCPTool, args)
+	if !ok {
+		return "", fmt.Errorf("mcp tool %q: no target found in arguments", rec.MCPTool)
+	}
+
+	execFn := func(ctx context.Context) (*sandbox.Result, error) {
+		start := time.Now()
+		callResult, err := e.sandboxMCP.CallTool(ctx, rec.MCPTool, args)
+		if err != nil {
+			return nil, fmt.Errorf("mcp call failed: %w", err)
+		}
+		return mcpResultToSandboxResult(rec.Command, callResult, time.Since(start)), nil
+	}
+
+	result, err := runScopedTarget(ctx, e.gateway, target, nil, rec.Command, execFn)
+	if err != nil {
+		var egressErr execution.EgressApprovalRequiredError
+		if errors.As(err, &egressErr) {
+			return "", egressErr
+		}
+		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
+		if result != nil {
+			return result.Stderr, fmt.Errorf("command failed: %w", err)
+		}
+		return "", err
+	}
+
+	var out strings.Builder
+	if result.Stdout != "" {
+		out.WriteString(result.Stdout)
+	}
+	if result.Warning != "" {
+		if out.Len() > 0 {
+			out.WriteString("\n--- warning ---\n")
+		}
+		out.WriteString(result.Warning)
+	}
+	if result.ExitCode != 0 {
+		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
+		return out.String(), fmt.Errorf("exit code %d", result.ExitCode)
+	}
+	recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
+	return out.String(), nil
+}
+
+// mcpResultToSandboxResult adapts an MCP CallToolResult into the same
+// *sandbox.Result shape the shell path returns, so downstream output
+// formatting is identical either way. IsError maps to a synthetic non-zero
+// exit code (1) — an MCP tool call carries a pass/fail flag, not a real
+// process exit code.
+func mcpResultToSandboxResult(command string, result *mcp.CallToolResult, dur time.Duration) *sandbox.Result {
+	var text strings.Builder
+	for _, c := range result.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			if text.Len() > 0 {
+				text.WriteString("\n")
+			}
+			text.WriteString(tc.Text)
+		}
+	}
+	stdout, stderr, exitCode := text.String(), "", 0
+	if result.IsError {
+		stdout, stderr, exitCode = "", text.String(), 1
+	}
+	return &sandbox.Result{
+		Command: command, ExitCode: exitCode,
+		Stdout: stdout, Stderr: stderr, Duration: dur.Milliseconds(),
 	}
 }
 

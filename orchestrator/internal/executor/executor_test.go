@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
@@ -215,7 +217,7 @@ func TestRunScopedCommandRejectsNilBridge(t *testing.T) {
 }
 
 func TestNewExecutor(t *testing.T) {
-	e := New(nil, nil, nil)
+	e := New(nil, nil, nil, nil)
 	if e == nil {
 		t.Fatal("expected non-nil executor")
 	}
@@ -274,7 +276,7 @@ func TestResolvedNetworks(t *testing.T) {
 }
 
 func TestProcessBlocksTargetedCommandWhenGatewayUnavailable(t *testing.T) {
-	e := New(sandbox.NewBridge("unused-container"), nil, nil)
+	e := New(sandbox.NewBridge("unused-container"), nil, nil, nil)
 	_, err := e.ProcessFunc()(context.Background(), execution.Record{
 		ID:        "exec-1",
 		SessionID: "s1",
@@ -286,4 +288,53 @@ func TestProcessBlocksTargetedCommandWhenGatewayUnavailable(t *testing.T) {
 	if !strings.Contains(err.Error(), "gateway scope check unavailable") {
 		t.Fatalf("expected gateway unavailable error, got %v", err)
 	}
+}
+
+func TestProcessFunc_MCPRecord_DispatchesToSandboxMCP(t *testing.T) {
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "allow"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+
+	fakeMCP := &fakeSandboxMCPClient{
+		result: &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Nmap done: 1 host up"}}},
+	}
+	e := New(sandbox.NewBridge("unused"), pc, nil, fakeMCP)
+
+	rec := execution.Record{
+		ID: "rec-1", SessionID: "sess-1", Command: "nmap -sV 127.0.0.1",
+		MCPTool: "nmap_scan", MCPArgs: `{"target":"127.0.0.1"}`,
+	}
+	output, err := e.ProcessFunc()(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("ProcessFunc: %v", err)
+	}
+	if !strings.Contains(output, "Nmap done") {
+		t.Fatalf("output = %q, want it to contain the MCP result text", output)
+	}
+	if fakeMCP.calledTool != "nmap_scan" {
+		t.Fatalf("sandboxMCP.CallTool called with tool = %q, want nmap_scan", fakeMCP.calledTool)
+	}
+}
+
+// fakeSandboxMCPClient is a real, self-contained test double for the
+// sandboxMCPClient interface — not a mock of Yummi's own sandboxmcp.Client,
+// which is exercised for real in internal/sandboxmcp's own test suite via
+// the SDK's in-memory transport. This satisfies the project's no-mocks
+// convention: no framework, no behavior assertions baked into a mock — just
+// a plain struct recording what it was called with.
+type fakeSandboxMCPClient struct {
+	calledTool string
+	calledArgs map[string]any
+	result     *mcp.CallToolResult
+	err        error
+}
+
+func (f *fakeSandboxMCPClient) CallTool(_ context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	f.calledTool = tool
+	f.calledArgs = args
+	return f.result, f.err
 }

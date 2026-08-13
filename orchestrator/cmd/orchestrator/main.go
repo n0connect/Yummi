@@ -135,7 +135,7 @@ func main() {
 	// output back into the conductor's session history. This closes the
 	// agentic loop: LLM proposes → user approves → command runs → LLM sees
 	// the result on the next turn → LLM proposes the next step.
-	exec := executor.New(bridge, gatewayClient, ks)
+	exec := executor.New(bridge, gatewayClient, ks, nil) // Task 12 wires the real sandboxmcp.Client here
 	baseProcessor := exec.ProcessFunc()
 	executionStore.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
 		output, err := baseProcessor(ctx, rec)
