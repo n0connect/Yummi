@@ -164,6 +164,30 @@ func TestAgentNeverImportsOSExec(t *testing.T) {
 	}
 }
 
+// TestEinoBackendNeverImportsOSExec asserts the Eino agentic backend never
+// shells out itself, mirroring TestAgentNeverImportsOSExec for the graph
+// engine — every tool (tools.go) reaches a shell exclusively through the
+// same agent.Execer interface the graph engine uses, which is itself
+// audited by TestExecImportAllowlist above. This is already covered by
+// TestAgentNeverImportsOSExec's "internal/agent/" prefix walk (eino/ is a
+// subdirectory), but is asserted explicitly and by name so the invariant is
+// self-documenting rather than relying on the reader noticing the walk is
+// broader than its name suggests.
+func TestEinoBackendNeverImportsOSExec(t *testing.T) {
+	root := moduleRoot(t)
+	for _, f := range goFiles(t, root, false) {
+		rel := relSlash(root, f)
+		if !strings.HasPrefix(rel, "internal/agent/eino/") {
+			continue
+		}
+		for _, imp := range importsOf(t, f) {
+			if imp == "os/exec" {
+				t.Errorf("internal/agent/eino must not import os/exec (%s): tools reach a shell only through agent.Execer.", rel)
+			}
+		}
+	}
+}
+
 // TestNoTelemetryEndpoints backs the privacy-first claim: no analytics/telemetry
 // phone-home endpoint may appear anywhere in source (incl. tests). (openclaude's
 // verify-no-phone-home, as a source-level guard.)
