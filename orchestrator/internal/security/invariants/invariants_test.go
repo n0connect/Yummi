@@ -8,6 +8,7 @@
 package invariants
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -97,9 +98,10 @@ func relSlash(root, path string) string {
 func TestExecImportAllowlist(t *testing.T) {
 	root := moduleRoot(t)
 	allow := map[string]bool{
-		"internal/sandbox/bridge.go": true, // the one production shell path (docker exec)
-		"internal/api/terminal.go":   true, // operator interactive terminal (also docker exec)
-		"internal/mcp/client.go":     true, // dormant; spawns an MCP server on the host (not imported by prod — see TestMCPRemainsDormant)
+		"internal/sandbox/bridge.go":    true, // the one production shell path (docker exec)
+		"internal/api/terminal.go":      true, // operator interactive terminal (also docker exec)
+		"internal/mcp/client.go":        true, // dormant; spawns an MCP server on the host (not imported by prod — see TestMCPRemainsDormant)
+		"internal/sandboxmcp/client.go": true, // persistent docker exec -i into the sandbox-resident MCP server — see TestSandboxMCPOnlyExecsDocker below, which locks its exec calls to literal "docker" only
 	}
 	seen := map[string]bool{}
 	for _, f := range goFiles(t, root, false) {
@@ -217,5 +219,64 @@ func TestNoTelemetryEndpoints(t *testing.T) {
 				t.Errorf("telemetry/analytics endpoint %q found in %s — Yummi is privacy-first (no phone-home).", bad, rel)
 			}
 		}
+	}
+}
+
+// TestSandboxMCPOnlyExecsDocker locks internal/sandboxmcp to a narrow
+// exception in the single-exec-path invariant: it may run `docker exec -i`
+// to reach the sandbox-resident MCP server, but every call site's first
+// argument must be the literal string "docker" — it must never be able to
+// run an operator/agent/model-controlled binary on the host.
+func TestSandboxMCPOnlyExecsDocker(t *testing.T) {
+	fset := token.NewFileSet()
+	dir := filepath.Join(moduleRoot(t), "internal", "sandboxmcp")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		file, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name != "Command" && sel.Sel.Name != "CommandContext" {
+				return true
+			}
+			// Command(name, ...) vs CommandContext(ctx, name, ...): the binary
+			// name is the first arg after any leading context.Context arg.
+			argIdx := 0
+			if sel.Sel.Name == "CommandContext" {
+				argIdx = 1
+			}
+			if len(call.Args) <= argIdx {
+				return true
+			}
+			lit, ok := call.Args[argIdx].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				t.Errorf("%s: exec.%s's binary argument must be a literal, got a non-literal expression", path, sel.Sel.Name)
+				return true
+			}
+			if lit.Value != `"docker"` {
+				t.Errorf("%s: exec.%s must run literal \"docker\", got %s", path, sel.Sel.Name, lit.Value)
+			}
+			return true
+		})
 	}
 }
