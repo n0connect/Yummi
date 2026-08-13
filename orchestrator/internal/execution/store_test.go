@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/n0connect/yummi/orchestrator/internal/session"
 )
 
 func TestEnqueueLifecycle(t *testing.T) {
@@ -566,5 +568,77 @@ func TestHeartbeatPublishesElapsedSecsWhileRunning(t *testing.T) {
 	}
 	if runningEvents[len(runningEvents)-1] == 0 {
 		t.Fatalf("expected the last heartbeat before a %v command completed to report a nonzero elapsed_secs, got %v", blockFor, runningEvents)
+	}
+}
+
+func TestEnqueueMCP_ReachesProcessorAndCompletes(t *testing.T) {
+	es := NewStore()
+	var gotTool string
+	var gotArgs string
+	es.SetProcessor(func(ctx context.Context, rec Record) (string, error) {
+		gotTool = rec.MCPTool
+		gotArgs = rec.MCPArgs
+		return "ok", nil
+	})
+
+	rec, err := es.EnqueueMCP("sess-1", "", "nmap_scan", map[string]any{"target": "10.0.0.5"}, "nmap -sV 10.0.0.5", "agent_task")
+	if err != nil {
+		t.Fatalf("EnqueueMCP: %v", err)
+	}
+	if rec.Command != "nmap -sV 10.0.0.5" {
+		t.Fatalf("Command = %q, want the display command", rec.Command)
+	}
+
+	final, err := es.WaitForTerminal(rec.ID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForTerminal: %v", err)
+	}
+	if final.Status != StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+	if gotTool != "nmap_scan" {
+		t.Fatalf("processor saw MCPTool = %q, want nmap_scan", gotTool)
+	}
+	if gotArgs != `{"target":"10.0.0.5"}` {
+		t.Fatalf("processor saw MCPArgs = %q", gotArgs)
+	}
+}
+
+func TestEnqueueMCP_EmptyToolRejected(t *testing.T) {
+	es := NewStore()
+	if _, err := es.EnqueueMCP("sess-1", "", "", nil, "x", ""); err == nil {
+		t.Fatal("expected an error for an empty tool name")
+	}
+}
+
+func TestEnqueueMCP_SurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	db, err := session.OpenDB(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	es := NewStoreWithDB(db)
+	es.SetProcessor(func(ctx context.Context, rec Record) (string, error) { return "ok", nil })
+	rec, err := es.EnqueueMCP("sess-1", "", "nmap_scan", map[string]any{"target": "10.0.0.5"}, "nmap -sV 10.0.0.5", "agent_task")
+	if err != nil {
+		t.Fatalf("EnqueueMCP: %v", err)
+	}
+	if _, err := es.WaitForTerminal(rec.ID, 2*time.Second); err != nil {
+		t.Fatalf("WaitForTerminal: %v", err)
+	}
+	_ = db.Close()
+
+	db2, err := session.OpenDB(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("reopen OpenDB: %v", err)
+	}
+	defer func() { _ = db2.Close() }()
+	es2 := NewStoreWithDB(db2)
+	reloaded, ok := es2.Get(rec.ID)
+	if !ok {
+		t.Fatal("record not found after restart")
+	}
+	if reloaded.MCPTool != "nmap_scan" || reloaded.MCPArgs != `{"target":"10.0.0.5"}` {
+		t.Fatalf("MCPTool/MCPArgs lost across restart: %+v", reloaded)
 	}
 }

@@ -101,8 +101,15 @@ type Record struct {
 	SanitizedError  string `json:"sanitized_error,omitempty"`
 	EgressTarget    string `json:"egress_target,omitempty"`
 	PinnedIPs       string `json:"pinned_ips,omitempty"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	// MCPTool/MCPArgs are set only for a record dispatched through the
+	// sandbox-resident MCP server (internal/sandboxmcp) instead of a raw
+	// shell command — empty for every existing shell-command record. Command
+	// still holds a human-readable rendering (sandboxmcp.RenderCommand) so
+	// the UI/audit trail shows a real command line either way.
+	MCPTool   string `json:"mcp_tool,omitempty"`
+	MCPArgs   string `json:"mcp_args,omitempty"` // json-encoded map[string]any
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 	// ElapsedSecs is set only on periodic "still running" heartbeat events
 	// (see process()'s heartbeatInterval) — never persisted, never present on
 	// a terminal record. It exists purely so the UI can show live elapsed
@@ -197,6 +204,60 @@ func (s *Store) Enqueue(sessionID, proposalID, command, mode string) (Record, er
 		Command:    command,
 		Mode:       mode,
 		Status:     StatusQueued,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	s.mu.Lock()
+	s.items[rec.ID] = rec
+	s.mu.Unlock()
+	s.publish(Event{
+		Type:      "execution.queued",
+		Timestamp: rec.UpdatedAt,
+		Record:    rec,
+	})
+	s.dbPersist(rec)
+
+	go s.process(rec.ID)
+	return rec, nil
+}
+
+// EnqueueMCP queues an MCP tool call — the structured-argument sibling of
+// Enqueue used by the sandbox-resident-MCP dispatch path. args is
+// JSON-encoded into Record.MCPArgs so Record stays a flat, DB-persistable
+// struct; displayCommand becomes Record.Command so audit/UI/approval show a
+// real command line exactly as the shell path does.
+func (s *Store) EnqueueMCP(sessionID, proposalID, tool string, args map[string]any, displayCommand, mode string) (Record, error) {
+	if s == nil {
+		return Record{}, ErrStoreNil
+	}
+	if tool == "" {
+		return Record{}, fmt.Errorf("%w: mcp tool name required", ErrCommandRequired)
+	}
+	if displayCommand == "" {
+		displayCommand = tool
+	}
+	if mode == "" {
+		mode = "manual_terminal"
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return Record{}, fmt.Errorf("marshal mcp args: %w", err)
+	}
+
+	now := time.Now().Unix()
+	rec := Record{
+		ID:         uuid.NewString(),
+		SessionID:  sessionID,
+		ProposalID: proposalID,
+		Command:    displayCommand,
+		Mode:       mode,
+		Status:     StatusQueued,
+		MCPTool:    tool,
+		MCPArgs:    string(argsJSON),
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -789,16 +850,18 @@ func (s *Store) dbPersist(rec Record) {
 		return
 	}
 	_, _ = s.db.Exec(`
-		INSERT INTO executions(id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)
+		INSERT INTO executions(id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,mcp_tool,mcp_args,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status,
 			output=excluded.output,
 			error=excluded.error,
 			pinned_ips=excluded.pinned_ips,
+			mcp_tool=excluded.mcp_tool,
+			mcp_args=excluded.mcp_args,
 			updated_at=excluded.updated_at`,
 		rec.ID, rec.SessionID, rec.ProposalID, rec.Command, rec.Mode,
-		rec.Status, rec.Output, rec.Error, rec.PinnedIPs, rec.CreatedAt, rec.UpdatedAt,
+		rec.Status, rec.Output, rec.Error, rec.PinnedIPs, rec.MCPTool, rec.MCPArgs, rec.CreatedAt, rec.UpdatedAt,
 	)
 }
 
@@ -809,7 +872,7 @@ func (s *Store) loadFromDB() error {
 		return nil
 	}
 	rows, err := s.db.Query(`
-		SELECT id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,created_at,updated_at
+		SELECT id,session_id,proposal_id,command,mode,status,output,error,pinned_ips,mcp_tool,mcp_args,created_at,updated_at
 		FROM executions ORDER BY created_at ASC`)
 	if err != nil {
 		return err
@@ -820,10 +883,10 @@ func (s *Store) loadFromDB() error {
 	defer s.mu.Unlock()
 	for rows.Next() {
 		var rec Record
-		var proposalID, output, errText, pinnedIPs sql.NullString
+		var proposalID, output, errText, pinnedIPs, mcpTool, mcpArgs sql.NullString
 		if err := rows.Scan(
 			&rec.ID, &rec.SessionID, &proposalID, &rec.Command, &rec.Mode,
-			&rec.Status, &output, &errText, &pinnedIPs, &rec.CreatedAt, &rec.UpdatedAt,
+			&rec.Status, &output, &errText, &pinnedIPs, &mcpTool, &mcpArgs, &rec.CreatedAt, &rec.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -831,6 +894,8 @@ func (s *Store) loadFromDB() error {
 		rec.Output = output.String
 		rec.Error = errText.String
 		rec.PinnedIPs = pinnedIPs.String
+		rec.MCPTool = mcpTool.String
+		rec.MCPArgs = mcpArgs.String
 		// SecurityBanner/SanitizedOutput/SanitizedError are derived, not stored —
 		// recompute them on load so a restored record carries the same
 		// content-layer verdict and LLM-safe copy it had live.

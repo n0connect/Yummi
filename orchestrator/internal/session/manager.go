@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS executions (
     output TEXT,
     error TEXT,
     pinned_ips TEXT,
+    mcp_tool TEXT,
+    mcp_args TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -103,6 +105,9 @@ func OpenDB(path string) (*sql.DB, error) {
 
 	// Migrate databases whose executions table predates the pinned_ips column.
 	_, _ = db.Exec(`ALTER TABLE executions ADD COLUMN pinned_ips TEXT`)
+	// Migrate databases whose executions table predates the MCP-tool-call columns.
+	_, _ = db.Exec(`ALTER TABLE executions ADD COLUMN mcp_tool TEXT`)
+	_, _ = db.Exec(`ALTER TABLE executions ADD COLUMN mcp_args TEXT`)
 
 	// Limit connections for SQLite
 	db.SetMaxOpenConns(1)
