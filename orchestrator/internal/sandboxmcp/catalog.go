@@ -33,6 +33,7 @@ var catalog = map[string]ToolSpec{
 	"hydra_bruteforce":  {TargetField: "target", Render: renderHydra},
 	"medusa_bruteforce": {TargetField: "target", Render: renderMedusa},
 	"dirb_scan":         {TargetField: "url", Render: renderDirb},
+	"snmpwalk_enum":     {TargetField: "target", Render: renderSnmpwalk},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -204,6 +205,19 @@ func renderDirb(a map[string]any) string {
 	s := "dirb " + url
 	if wl, _ := a["wordlist"].(string); wl != "" {
 		s += " " + wl
+	}
+	return s
+}
+
+func renderSnmpwalk(a map[string]any) string {
+	target, _ := a["target"].(string)
+	community, _ := a["community"].(string)
+	if community == "" {
+		community = "public"
+	}
+	s := fmt.Sprintf("snmpwalk -v2c -c %s %s", community, target)
+	if oid, _ := a["oid"].(string); oid != "" {
+		s += " " + oid
 	}
 	return s
 }

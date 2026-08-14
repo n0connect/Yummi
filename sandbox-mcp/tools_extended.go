@@ -219,6 +219,28 @@ func medusaHandler(ctx context.Context, _ *mcp.CallToolRequest, args medusaArgs)
 	return runCaptured(ctx, "medusa", argv...)
 }
 
+type snmpwalkArgs struct {
+	Target    string `json:"target" jsonschema:"the target host to enumerate via SNMP"`
+	Community string `json:"community,omitempty" jsonschema:"SNMP community string (default: public)"`
+	OID       string `json:"oid,omitempty" jsonschema:"optional OID subtree to walk (default: walks the whole MIB-II tree)"`
+}
+
+func snmpwalkHandler(ctx context.Context, _ *mcp.CallToolRequest, args snmpwalkArgs) (*mcp.CallToolResult, any, error) {
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return errResult("target is required")
+	}
+	community := args.Community
+	if community == "" {
+		community = "public"
+	}
+	argv := []string{"-v2c", "-c", community, target}
+	if oid := strings.TrimSpace(args.OID); oid != "" {
+		argv = append(argv, oid)
+	}
+	return runCaptured(ctx, "snmpwalk", argv...)
+}
+
 type dirbArgs struct {
 	URL      string `json:"url" jsonschema:"the target URL to enumerate"`
 	Wordlist string `json:"wordlist,omitempty" jsonschema:"wordlist filename under /wordlists (default: dirb's own common.txt if omitted)"`
@@ -295,4 +317,8 @@ func registerExtendedTools(server *mcp.Server) {
 		Name:        "dirb_scan",
 		Description: "Enumerate web content with dirb.",
 	}, dirbHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "snmpwalk_enum",
+		Description: "Enumerate SNMP MIB data on a target with snmpwalk once a community string is known — pair with onesixtyone_scan, which finds the community string first.",
+	}, snmpwalkHandler)
 }
