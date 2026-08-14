@@ -206,12 +206,18 @@ type SubResult struct {
 }
 
 // RunSubtask creates, plans, and synchronously runs a focused subtask on this
-// runner, returning the resulting task's summary and findings. The handoff node
-// uses it to delegate to a specialized sub-agent. The sub-agent shares the
-// caller's Store and Knowledge, so its findings/tactics join the one world
-// model automatically.
-func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string) (SubResult, error) {
-	return r.runSubtask(ctx, sessionID, goal, parentTaskID, nil)
+// runner, returning the resulting task's summary and findings. created (if
+// non-nil) is called with the new task's ID as soon as planning creates it —
+// used to bind a DelegationCoordinator entry to its real child task before
+// the run completes. Both graph.go's handoffNode and the Eino backend's
+// handoff tool delegate through this: sub-agents are always graph Runners
+// regardless of which backend drives the top-level task (only the graph
+// engine implements the recursion cap that makes delegation depth-1-safe),
+// so Eino delegates by calling straight into the same specialist Runner
+// node_handoff.go itself uses. The sub-agent shares the caller's Store and
+// Knowledge, so its findings/tactics join the one world model automatically.
+func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string, created func(string)) (SubResult, error) {
+	return r.runSubtask(ctx, sessionID, goal, parentTaskID, created)
 }
 
 func (r *Runner) runSubtask(ctx context.Context, sessionID, goal, parentTaskID string, created func(string)) (SubResult, error) {

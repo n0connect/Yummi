@@ -26,8 +26,11 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 	r := chi.NewRouter()
 
 	// Middleware
+	// Note: chi's middleware.RealIP is deliberately not used — it's deprecated
+	// as of chi v5.3.0 (GHSA-3fxj-6jh8-hvhx et al., IP spoofing via blind trust
+	// of client-supplied XFF/X-Real-IP/True-Client-IP headers) and nothing in
+	// this codebase ever reads the RemoteAddr it would rewrite.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(LoggingMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(TimeoutUnlessWebSocket(cfg.RequestTimeout()))

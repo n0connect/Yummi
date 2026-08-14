@@ -67,6 +67,12 @@ func TestExtendedCatalog_TargetAndRender(t *testing.T) {
 			map[string]any{"target": "10.0.0.5", "module": "ssh", "user_list": "users.txt", "pass_list": "rockyou.txt"},
 			"10.0.0.5", "medusa -h 10.0.0.5 -U users.txt -P rockyou.txt -M ssh",
 		},
+		{"snmpwalk_enum", map[string]any{"target": "10.0.0.5"}, "10.0.0.5", "snmpwalk -v2c -c public 10.0.0.5"},
+		{
+			"snmpwalk_enum",
+			map[string]any{"target": "10.0.0.5", "community": "private", "oid": "1.3.6.1.2.1.1"},
+			"10.0.0.5", "snmpwalk -v2c -c private 10.0.0.5 1.3.6.1.2.1.1",
+		},
 	}
 	for _, c := range cases {
 		gotTarget, ok := Target(c.tool, c.args)
