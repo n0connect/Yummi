@@ -299,6 +299,15 @@ func main() {
 						Knowledge:    ks,
 						MCPExec:      agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
 						MCPList:      sandboxMCPClient,
+						Retrieval:    retrieval,
+						Skills:       skillReg,
+						SubAgents:    subAgents,
+						SkillCurator: skillCuratorFn,
+						// Matches the graph backend's own SubAgentTimeout bump
+						// (see its comment below): sub-agents get a higher
+						// StepBudget than the top-level loop's default 15, so
+						// they need proportionally more wall clock too.
+						SubAgentTimeout: 20 * time.Minute,
 					},
 				)
 				slog.Info("agent backend: eino", "model", cfg.OllamaModel)

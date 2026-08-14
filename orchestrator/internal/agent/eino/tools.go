@@ -29,6 +29,9 @@ type runCommandDeps struct {
 	gate         *agent.Gate
 	validator    *conductor.Validator
 	approvalMode func() agent.ApprovalMode
+	// trace collects this task's tool outcomes for the optional SkillCurator
+	// hook; nil disables collection (e.g. in tests that don't need it).
+	trace *runTrace
 }
 
 type runCommandArgs struct {
@@ -59,13 +62,16 @@ func (rc *runCommandTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 	return runCommandInfo, nil
 }
 
-func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (result string, err error) {
 	var args runCommandArgs
-	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
-		return fmt.Sprintf("invalid tool call arguments: %v", err), nil
+	if uerr := json.Unmarshal([]byte(argumentsInJSON), &args); uerr != nil {
+		return fmt.Sprintf("invalid tool call arguments: %v", uerr), nil
 	}
 	if strings.TrimSpace(args.Command) == "" {
 		return "command cannot be empty", nil
+	}
+	if rc.deps.trace != nil {
+		defer func() { rc.deps.trace.record(args.Command, result) }()
 	}
 
 	proposal := conductor.Proposal{
@@ -114,24 +120,24 @@ func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		}
 	}
 
-	result, err := rc.deps.exec.Run(ctx, rc.deps.sessionID, p.Command)
-	if err != nil {
-		return "", fmt.Errorf("eino run_command: exec: %w", err)
+	execResult, execErr := rc.deps.exec.Run(ctx, rc.deps.sessionID, p.Command)
+	if execErr != nil {
+		return "", fmt.Errorf("eino run_command: exec: %w", execErr)
 	}
-	result.Content = threatscan.StripANSI(result.Content)
-	outcome, reason := agent.Verify(result)
+	execResult.Content = threatscan.StripANSI(execResult.Content)
+	outcome, reason := agent.Verify(execResult)
 	switch outcome {
 	case agent.OutcomeBlocked:
 		return "COMMAND_BLOCKED: " + reason, nil
 	case agent.OutcomeFailure:
-		return fmt.Sprintf("TOOL_FAILED: %s\nreason: %s\n%s", p.Command, reason, result.Content), nil
+		return fmt.Sprintf("TOOL_FAILED: %s\nreason: %s\n%s", p.Command, reason, execResult.Content), nil
 	}
-	if banner := threatscan.Banner(result.Content); banner != "" {
+	if banner := threatscan.Banner(execResult.Content); banner != "" {
 		// Content-layer fail-closed, mirroring graph.go's observeResult: flag
 		// the banner alongside the output rather than silently trusting it.
-		return banner + "\n\n" + result.Content, nil
+		return banner + "\n\n" + execResult.Content, nil
 	}
-	return result.Content, nil
+	return execResult.Content, nil
 }
 
 // validate mirrors graph.go's GraphState.validate — a nil validator allows
@@ -223,14 +229,19 @@ var askOperatorInfo = &schema.ToolInfo{
 	}),
 }
 
-type askOperatorTool struct{}
+type askOperatorTool struct{ capture *askCapture }
 
-func newAskOperatorTool() *askOperatorTool                               { return &askOperatorTool{} }
+func newAskOperatorTool(capture *askCapture) *askOperatorTool {
+	return &askOperatorTool{capture: capture}
+}
 func (askOperatorTool) Info(_ context.Context) (*schema.ToolInfo, error) { return askOperatorInfo, nil }
-func (askOperatorTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+func (at askOperatorTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var args askOperatorArgs
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil || strings.TrimSpace(args.Question) == "" {
 		return "ask_operator needs a non-empty question", nil
+	}
+	if at.capture != nil {
+		at.capture.set(args.Question)
 	}
 	return "waiting for operator input", nil
 }
@@ -249,14 +260,17 @@ var finishInfo = &schema.ToolInfo{
 	}),
 }
 
-type finishTool struct{}
+type finishTool struct{ capture *finishCapture }
 
-func newFinishTool() *finishTool                                    { return &finishTool{} }
+func newFinishTool(capture *finishCapture) *finishTool              { return &finishTool{capture: capture} }
 func (finishTool) Info(_ context.Context) (*schema.ToolInfo, error) { return finishInfo, nil }
-func (finishTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+func (ft finishTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var args finishArgs
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
 		return fmt.Sprintf("invalid tool call arguments: %v", err), nil
+	}
+	if ft.capture != nil {
+		ft.capture.set(args.Summary, args.Findings)
 	}
 	return "task finished", nil
 }
