@@ -404,15 +404,6 @@ Start with { and end with }. Nothing else.`
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func (e *Engine) replyAskClarification(message string, confidence float64) ChatResponse {
-	return e.finalize(ChatResponse{
-		Intent:     "ask_clarification",
-		Message:    message,
-		Confidence: confidence,
-		References: []string{"persona:core_identity"},
-	})
-}
-
 func (e *Engine) finalize(resp ChatResponse) ChatResponse {
 	if e == nil || e.validator == nil {
 		return resp
