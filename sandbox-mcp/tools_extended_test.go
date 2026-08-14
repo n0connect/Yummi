@@ -24,6 +24,7 @@ func TestExtendedTools_EmptyRequiredFieldsRejected(t *testing.T) {
 		{"nuclei_scan", map[string]any{"target": ""}},
 		{"sqlmap_scan", map[string]any{"url": ""}},
 		{"dirb_scan", map[string]any{"url": ""}},
+		{"snmpwalk_enum", map[string]any{"target": ""}},
 		{"hydra_bruteforce", map[string]any{"target": "", "service": "", "pass_list": "x"}},
 		{"medusa_bruteforce", map[string]any{"target": "", "module": "", "pass_list": "x"}},
 	}
