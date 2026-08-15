@@ -46,11 +46,9 @@ The [`docs/`](docs/) directory is the full, in-depth reference — start at **[d
 
 *The AI proposes, the gateway disposes.* Agent and direct-exec commands converge on one scoped execution path. The interactive terminal is a separate human-driven path: it bypasses orchestrator's target parser, but its packets still cross the gateway's kernel policy.
 
-```
-User / Operator  →  Orchestrator (Go)  →  Gateway (Rust, IPC)  →  Sandbox (Kali Docker)
-  Web UI / TUI       agent + conductor      fail-closed nftables     tool execution only
-                      knowledge + API        policy · audit · egress
-```
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="Yummi's trust-boundary flow: the orchestrator execs approved commands directly into the sandbox and separately asks the gateway to open network scope over IPC; the gateway's fail-closed nftables rules are the only path from sandbox to the external network, dropping everything by default." width="720">
+</p>
 
 Five components in total, not four — a `docker-proxy` sits between the orchestrator and the Docker socket so the orchestrator can `docker exec` into the sandbox without ever holding root-equivalent access to the whole Docker daemon. **[Full architecture →](docs/architecture.md)**
 
