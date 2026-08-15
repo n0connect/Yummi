@@ -569,3 +569,19 @@ func TestDelegationBlockOnlyWithSubAgents(t *testing.T) {
 		t.Fatal("a sub-agent (no SubAgents) must not see the delegation option")
 	}
 }
+
+// A configured routing hint renders next to its role; a role with no hint
+// (or an empty one) falls back to a bare name instead of a dangling colon.
+func TestDelegationBlockRendersHints(t *testing.T) {
+	s := &GraphState{cfg: Config{
+		SubAgents:     map[string]*Runner{"web": {}, "recon": {}},
+		SubAgentHints: map[string]string{"web": "probe HTTP(S) targets", "recon": ""},
+	}}
+	block := s.buildDelegation()
+	if !strings.Contains(block, "web: probe HTTP(S) targets") {
+		t.Fatalf("delegation block missing rendered hint for web: %q", block)
+	}
+	if !strings.Contains(block, "recon\n") {
+		t.Fatalf("role with empty hint should render as a bare name: %q", block)
+	}
+}

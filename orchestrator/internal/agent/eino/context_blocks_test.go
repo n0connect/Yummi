@@ -69,15 +69,27 @@ func TestBuildSkillsBlock_SelectsAndRendersMatchingSkill(t *testing.T) {
 }
 
 func TestBuildDelegationBlock_EmptyWithNoSubAgents(t *testing.T) {
-	if got := buildDelegationBlock(nil); got != "" {
+	if got := buildDelegationBlock(nil, nil); got != "" {
 		t.Fatalf("no sub-agents should yield empty block, got %q", got)
 	}
 }
 
 func TestBuildDelegationBlock_ListsRoles(t *testing.T) {
 	subAgents := map[string]*agent.Runner{"web": {}, "recon": {}}
-	block := buildDelegationBlock(subAgents)
+	block := buildDelegationBlock(subAgents, nil)
 	if !strings.Contains(block, "web") || !strings.Contains(block, "recon") {
 		t.Fatalf("block missing configured roles: %q", block)
+	}
+}
+
+func TestBuildDelegationBlock_RendersHints(t *testing.T) {
+	subAgents := map[string]*agent.Runner{"web": {}, "recon": {}}
+	hints := map[string]string{"web": "probe HTTP(S) targets", "recon": ""}
+	block := buildDelegationBlock(subAgents, hints)
+	if !strings.Contains(block, "web: probe HTTP(S) targets") {
+		t.Fatalf("block missing rendered hint for web: %q", block)
+	}
+	if !strings.Contains(block, "recon\n") {
+		t.Fatalf("role with empty hint should render as a bare name: %q", block)
 	}
 }

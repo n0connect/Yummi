@@ -265,11 +265,20 @@ func (s *GraphState) buildDelegation() string {
 		roles = append(roles, r)
 	}
 	sort.Strings(roles)
-	return "DELEGATION: hand a focused subtask to a specialist with " +
-		`[HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}` +
-		". To delegate to SEVERAL specialists AT ONCE — they run concurrently, not one after another — use " +
-		`[HANDOFF] {"handoffs":[{"role":"<role>","subgoal":"<...>"},{"role":"<role>","subgoal":"<...>"}]}` +
-		". Available roles: " + strings.Join(roles, ", ") + ".\n"
+	var b strings.Builder
+	b.WriteString("DELEGATION: hand a focused subtask to a specialist with ")
+	b.WriteString(`[HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}`)
+	b.WriteString(". To delegate to SEVERAL specialists AT ONCE — they run concurrently, not one after another — use ")
+	b.WriteString(`[HANDOFF] {"handoffs":[{"role":"<role>","subgoal":"<...>"},{"role":"<role>","subgoal":"<...>"}]}`)
+	b.WriteString(". Available roles:\n")
+	for _, r := range roles {
+		if hint := strings.TrimSpace(s.cfg.SubAgentHints[r]); hint != "" {
+			fmt.Fprintf(&b, "  - %s: %s\n", r, hint)
+		} else {
+			fmt.Fprintf(&b, "  - %s\n", r)
+		}
+	}
+	return b.String()
 }
 
 // buildMemory queries the retrieval strategy for facts/tactics relevant to the

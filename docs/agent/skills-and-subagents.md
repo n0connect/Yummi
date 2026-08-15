@@ -80,10 +80,15 @@ Skills use schema version `1` and receive a semantic version (legacy files defau
 
 A `SubAgentDef` (`persona/v0.1/subagents/*.yaml`) is a full alternate persona — `role`, `identity`, `principles`, `planning` prose, plus a `skills` list scoping which skills that role can see. At wiring time each becomes its own `agent.Runner` — **the same graph state machine** described in [Graph & Nodes](graph-and-nodes.md), just specialized by a different persona and skill subset, sharing the parent's `Store` and `Knowledge` — not a different, simpler mechanism bolted on for delegation.
 
+The current roster (`persona/v0.1/subagents/`): `recon`, `web`, `osint`, `exploiter`, `source-analysis`, `reverser` — network/service enumeration, HTTP(S) assessment, passive domain/subdomain OSINT, confirming an already-identified weakness (injection/credentials), source-code review, and binary reverse engineering, respectively. Adding a new specialist is purely declarative: a new YAML file under this directory, no Go code change.
+
 `persona/v0.1/subagents/recon.yaml`, verbatim:
 
 ```yaml
 role: recon
+routing_hint: >-
+  Enumerate hosts, ports, and running services on a target before anything
+  else touches it — the usual first handoff on a new target.
 identity: |
   You are a reconnaissance specialist sub-agent inside an isolated Kali sandbox.
   You enumerate hosts and services thoroughly and report structured findings.
@@ -98,9 +103,23 @@ planning: |
   versions for the handed subtask. Keep it to a few concrete steps.
 skills:
   - recon
+  - smb-enum
+  - snmp-enum
 ```
 
 The identity prose's last line — *"you do exactly the focused subtask handed to you, then finish — you do not expand scope or start exploitation"* — is the behavioral contract that makes delegation safe to use at all: a recon sub-agent is explicitly told not to wander into exploitation even if it notices something exploitable mid-task, keeping the blast radius of a single hand-off narrow and predictable.
+
+`routing_hint` is the one field written from the *delegator's* point of view rather than the specialist's own: `identity`/`principles`/`planning` shape how the sub-agent behaves once a task is already running, but `routing_hint` is what the top-level agent (or the model driving the Eino backend's `handoff` tool) actually reads *before* deciding whom to hand work to. Both `buildDelegation()` (graph, `node_step.go`) and `buildDelegationBlock()` (Eino, `eino/context_blocks.go`) render each configured role's hint next to its name in the DELEGATION prompt block:
+
+```
+DELEGATION: hand a focused subtask to a specialist with [HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}. ...
+Available roles:
+  - recon: Enumerate hosts, ports, and running services on a target before anything else touches it — the usual first handoff on a new target.
+  - web: Fingerprint, map, and probe a specific HTTP(S) target (known web port/URL) for content, headers, and known-issue signatures.
+  ...
+```
+
+A role with no hint (or an empty one) still appears, just as a bare name — `routing_hint` is optional and purely presentational, it never gates whether a role is delegable.
 
 ## Concurrent hand-off — the fan-out <a id="concurrent-handoff"></a>
 
