@@ -1,0 +1,29 @@
+schema_version: 1
+version: 1.0.0
+name: vuln-scanning
+description: Template-based vulnerability scanning against a target with nuclei.
+triggers:
+  - nuclei
+  - vulnerability scan
+  - vuln scan
+  - cve scan
+  - template scan
+tools:
+  - nuclei
+knowledge: |
+  nuclei matches known CVE/misconfiguration templates against a target — fast breadth,
+  shallow depth:
+  1. Run it after basic fingerprinting (whatweb/curl), not instead of it — knowing the stack
+     first makes nuclei's hits easier to interpret and prioritize.
+  2. Treat every nuclei hit as a candidate, not a confirmed finding — template matches can be
+     version-string false positives. Where feasible, cross-check a hit against the actual
+     fingerprinted version before reporting it as confirmed.
+  3. Record the template ID and severity nuclei reports alongside your own confirmation status
+     (confirmed / candidate — unconfirmed).
+  4. Good complement to targeted tools (sqlmap, wpscan) rather than a replacement — nuclei
+     finds what's in its template set, not everything.
+references:
+  - persona:vuln-scanning-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/vuln-scanning.yaml

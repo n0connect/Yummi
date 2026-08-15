@@ -51,8 +51,10 @@ func buildSkillsBlock(skills *skill.Registry, goal string) (block string, names 
 
 // buildDelegationBlock lists the sub-agent roles the handoff tool can reach,
 // mirroring node_step.go's buildDelegation. Empty when no sub-agents are
-// configured (delegation simply doesn't show up as an option).
-func buildDelegationBlock(subAgents map[string]*agent.Runner) string {
+// configured (delegation simply doesn't show up as an option). hints maps a
+// role name to its short routing-hint sentence (agent.Config.SubAgentHints);
+// a role with no hint (or a nil map) still renders as a bare name.
+func buildDelegationBlock(subAgents map[string]*agent.Runner, hints map[string]string) string {
 	if len(subAgents) == 0 {
 		return ""
 	}
@@ -61,7 +63,16 @@ func buildDelegationBlock(subAgents map[string]*agent.Runner) string {
 		roles = append(roles, r)
 	}
 	sort.Strings(roles)
-	return "DELEGATION: call the handoff tool to hand a focused subtask to a specialist. Available roles: " +
-		strings.Join(roles, ", ") + ". Call handoff more than once in a turn to delegate to several specialists at once " +
-		"— they run concurrently, not one after another.\n"
+	var b strings.Builder
+	b.WriteString("DELEGATION: call the handoff tool to hand a focused subtask to a specialist. Call handoff more " +
+		"than once in a turn to delegate to several specialists at once — they run concurrently, not one after " +
+		"another. Available roles:\n")
+	for _, r := range roles {
+		if hint := strings.TrimSpace(hints[r]); hint != "" {
+			fmt.Fprintf(&b, "  - %s: %s\n", r, hint)
+		} else {
+			fmt.Fprintf(&b, "  - %s\n", r)
+		}
+	}
+	return b.String()
 }

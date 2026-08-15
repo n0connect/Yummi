@@ -56,6 +56,10 @@ type Config struct {
 	// delegation. Sub-agents are always graph Runners regardless of this
 	// backend — see (*agent.Runner).RunSubtask's doc comment.
 	SubAgents map[string]*agent.Runner
+	// SubAgentHints maps a role name (same keys as SubAgents) to a short
+	// routing-hint sentence, mirroring agent.Config.SubAgentHints — rendered
+	// into the handoff tool's description alongside each role name.
+	SubAgentHints map[string]string
 	// Delegations bounds sub-agent concurrency and tracks addressable runs.
 	// Required (together with a non-empty SubAgents) for the handoff tool to
 	// be registered at all.
@@ -203,7 +207,8 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	if len(r.cfg.SubAgents) > 0 && r.cfg.Delegations != nil {
 		tools = append(tools, newHandoffTool(handoffDeps{
 			taskID: task.ID, sessionID: t.SessionID, store: r.store,
-			subAgents: r.cfg.SubAgents, delegations: r.cfg.Delegations, timeout: r.cfg.SubAgentTimeout,
+			subAgents: r.cfg.SubAgents, hints: r.cfg.SubAgentHints,
+			delegations: r.cfg.Delegations, timeout: r.cfg.SubAgentTimeout,
 		}))
 	}
 
