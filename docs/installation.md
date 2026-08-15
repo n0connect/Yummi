@@ -16,6 +16,7 @@ This page is written for two different readers at once: someone installing Yummi
 - [macOS](#macos)
 - [Windows](#windows)
 - [Ollama setup and choosing a model tier](#ollama-setup)
+  - [Bringing your own model](#custom-model)
 - [Running the full stack (Docker Compose)](#full-stack)
 - [Building native binaries](#native-binaries)
 - [Verifying your install](#verifying)
@@ -345,6 +346,27 @@ launchctl setenv OLLAMA_MAX_LOADED_MODELS 1 && killall Ollama && open -a Ollama
 sudo systemctl restart ollama
 ```
 Without this, pulling/using a second model (e.g. the embedding model alongside your chat model) can load both into VRAM simultaneously and contend for the same GPU memory the chat model needs.
+
+### Bringing your own model <a id="custom-model"></a>
+
+The four tiers above are presets for convenience, not a whitelist — **`YUMMI_OLLAMA_MODEL` accepts any Ollama model tag you have pulled (or will pull).** If your hardware can run something bigger or different than `qwen3` — a large open-weight MoE model like Kimi K2 or DeepSeek-V3, a Llama 3.1 405B quant, a fine-tune, whatever `ollama pull <tag>` accepts — point Yummi at it directly:
+
+```bash
+ollama pull <your-model-tag>       # check the exact tag at https://ollama.com/library
+YUMMI_OLLAMA_MODEL=<your-model-tag> make start
+```
+
+Or interactively: `make conf` → model choice → **Custom** → type the exact tag. This persists to `.yummi.conf` like every other `make conf` choice, so you don't need to set the env var by hand again.
+
+**Two things worth knowing before you do this:**
+
+1. **Context window.** A model tag that isn't one of the four named tiers is treated as a **custom tag wrapped under the Pro profile** (`orchestrator/internal/conductor/tier.go`'s `TierRegistry.Resolve`) — 16,384 tokens of context, thinking mode off — regardless of how much context the model itself actually supports. If you're running something with real long-context headroom and want Yummi to use more of it, set:
+   ```bash
+   YUMMI_OLLAMA_NUM_CTX=131072 YUMMI_OLLAMA_MODEL=<your-model-tag> make start
+   ```
+   (or the equivalent prompt in `make conf`'s custom-model step). `YUMMI_OLLAMA_THINKING=true` similarly opts a custom model into thinking-mode request options if it supports one. This only affects the **graph backend** — see the next point.
+
+2. **Backend choice matters more for a custom model than for the qwen3 tiers.** The **Eino backend** (`YUMMI_AGENT_BACKEND=eino`, or `make conf`'s backend question) doesn't wrap the model in any tier profile at all — no context cap, no thinking-mode toggle from Yummi's side — it just talks to whatever `YUMMI_OLLAMA_MODEL` names via Ollama's OpenAI-compatible endpoint, so a big model's own context window (set via its Modelfile's `PARAMETER num_ctx`, or Ollama's own `OLLAMA_CONTEXT_LENGTH` env var) applies unmodified. Eino was specifically built for larger models with **native, reliable tool-calling** (see [Agent Overview § Two engines](agent/overview.md#two-engines)) — if the model you're bringing supports function-calling well, Eino is very likely the better fit over the graph engine's tag-protocol design, which targets smaller/weaker models that can't be trusted with structured tool-calling output.
 
 ---
 
