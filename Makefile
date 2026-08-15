@@ -15,18 +15,26 @@ DESKTOP_DIR      := desktop
 DESKTOP_TARGET_DIR := $(DESKTOP_DIR)/src-tauri/target
 DESKTOP_APP      := $(DESKTOP_TARGET_DIR)/release/bundle/macos/Yummi.app
 
+# ── Local configuration (written by `make conf`; gitignored, per-machine) ────
+# Run `make conf` once to pick your container engine setup interactively; it
+# persists CONTAINER_ENGINE / YUMMI_NETWORK_MODE / YUMMI_OLLAMA_MODEL / etc.
+# here so you never have to pass them on the command line again. Command-line
+# overrides (e.g. `make start CONTAINER_ENGINE=podman`) still win over this
+# file. The `-` prefix means "don't complain if the file doesn't exist yet".
+# MUST come before OLLAMA_MODEL below (or anything else reading
+# YUMMI_OLLAMA_MODEL/YUMMI_OLLAMA_TIER via `:=`, which expands immediately at
+# the point it's written) — otherwise a value `make conf` just saved here
+# would be invisible to that immediate expansion, silently ignored on the
+# very next `make start`.
+-include .yummi.conf
+
 OLLAMA_MODEL    ?= $(if $(YUMMI_OLLAMA_MODEL),$(YUMMI_OLLAMA_MODEL),$(if $(filter lite,$(YUMMI_OLLAMA_TIER)),qwen3:4b,$(if $(filter standard,$(YUMMI_OLLAMA_TIER)),qwen3:8b,$(if $(filter expert,$(YUMMI_OLLAMA_TIER)),qwen3:32b,qwen3:14b))))
 LIVE_TEST_MODEL ?= qwen3:8b
 OLLAMA_URL      := http://localhost:11434
 export YUMMI_OLLAMA_MODEL := $(OLLAMA_MODEL)
-
-# ── Local configuration (written by `make conf`; gitignored, per-machine) ────
-# Run `make conf` once to pick your container engine setup interactively; it
-# persists CONTAINER_ENGINE / YUMMI_NETWORK_MODE here so you never have to
-# pass them on the command line again. Command-line overrides (e.g.
-# `make start CONTAINER_ENGINE=podman`) still win over this file. The `-`
-# prefix means "don't complain if the file doesn't exist yet".
--include .yummi.conf
+export YUMMI_OLLAMA_NUM_CTX
+export YUMMI_OLLAMA_THINKING
+export YUMMI_DATA_RETENTION_DAYS
 
 # ── Container engine selection ────────────────────────────────────────────────
 # CONTAINER_ENGINE: docker (default) or podman. Both speak the same `compose`
@@ -214,11 +222,35 @@ conf:
 		2) backend=eino ;; \
 		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
 	esac; \
+	printf "\n$(BOLD)Which model?$(RESET) $(DIM)(sets the Ollama model tag — change any time by re-running 'make conf', no rebuild needed)$(RESET)\n\n"; \
+	printf "  $(CYAN)1)$(RESET) Lite      $(DIM)— qwen3:4b, minimal RAM footprint$(RESET)\n"; \
+	printf "  $(CYAN)2)$(RESET) Standard  $(DIM)— qwen3:8b, balanced quality/latency$(RESET)\n"; \
+	printf "  $(CYAN)3)$(RESET) Pro       $(DIM)— qwen3:14b, recommended default$(RESET)\n"; \
+	printf "  $(CYAN)4)$(RESET) Expert    $(DIM)— qwen3:32b, workstation-grade hardware$(RESET)\n"; \
+	printf "  $(CYAN)5)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
+	printf "$(BOLD)Choice [1-5]: $(RESET)"; \
+	read modelchoice; \
+	numctx=""; \
+	case "$$modelchoice" in \
+		1) model=qwen3:4b ;; \
+		2) model=qwen3:8b ;; \
+		3) model=qwen3:14b ;; \
+		4) model=qwen3:32b ;; \
+		5) printf "\n$(BOLD)Exact Ollama model tag$(RESET) $(DIM)(e.g. kimi-k2:latest, deepseek-r1:671b — must already be pulled, or 'make start' will pull it)$(RESET): "; \
+		   read model; \
+		   if [ -z "$$model" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model tag cannot be empty.$(RESET)\n"; exit 1; fi; \
+		   printf "\n$(BOLD)Context window override in tokens?$(RESET) $(DIM)(optional — a custom model otherwise gets a fixed 16K context; a larger model with more headroom may want more, e.g. 131072. Press Enter to skip.)$(RESET)\n"; \
+		   printf "Context tokens [blank = 16K default]: "; \
+		   read numctx ;; \
+		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-5.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
+	esac; \
 	printf "CONTAINER_ENGINE=%s\n" "$$engine" > .yummi.conf; \
 	printf "YUMMI_NETWORK_MODE=%s\n" "$$mode" >> .yummi.conf; \
 	printf "YUMMI_LANG=%s\n" "$$lang" >> .yummi.conf; \
 	printf "YUMMI_AGENT_BACKEND=%s\n" "$$backend" >> .yummi.conf; \
-	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf — CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=$$mode YUMMI_LANG=$$lang YUMMI_AGENT_BACKEND=$$backend$(RESET)\n"; \
+	printf "YUMMI_OLLAMA_MODEL=%s\n" "$$model" >> .yummi.conf; \
+	if [ -n "$$numctx" ]; then printf "YUMMI_OLLAMA_NUM_CTX=%s\n" "$$numctx" >> .yummi.conf; fi; \
+	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf — CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=$$mode YUMMI_LANG=$$lang YUMMI_AGENT_BACKEND=$$backend YUMMI_OLLAMA_MODEL=$$model$(RESET)\n"; \
 	printf "$(DIM)Every 'make build'/'make start'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
 
 ## build   Build native binaries and UI (CLI + orchestrator + gateway + UI).
