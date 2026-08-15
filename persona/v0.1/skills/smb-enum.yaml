@@ -1,0 +1,29 @@
+schema_version: 1
+version: 1.0.0
+name: smb-enum
+description: SMB/Windows/Samba host enumeration with enum4linux.
+triggers:
+  - smb
+  - samba
+  - windows enum
+  - netbios
+  - enum4linux
+  - shares
+  - null session
+tools:
+  - enum4linux
+knowledge: |
+  SMB enumeration recovers a lot from an unauthenticated ("null") session where it's allowed:
+  1. `enum4linux -a <target>` for the full sweep — OS info, users, groups, shares, password
+     policy — a good single first command.
+  2. Shares and users are the highest-value findings: an accessible share may contain
+     sensitive files, and a valid username list feeds a later credential-attack subtask.
+  3. Record the OS/domain info too — it's low-cost evidence that helps later targeting
+     decisions (SMB signing status, domain vs workgroup, patch level hints).
+  4. A refused null session is itself a finding (the target isn't misconfigured this way) —
+     report it plainly rather than treating it as a failure.
+references:
+  - persona:smb-enum-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/smb-enum.yaml

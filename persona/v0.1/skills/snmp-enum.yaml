@@ -1,0 +1,30 @@
+schema_version: 1
+version: 1.0.0
+name: snmp-enum
+description: SNMP community-string discovery and MIB enumeration.
+triggers:
+  - snmp
+  - onesixtyone
+  - snmpwalk
+  - community string
+  - mib
+tools:
+  - onesixtyone
+  - snmpwalk
+knowledge: |
+  SNMP recon is a two-step pair, in this order:
+  1. `onesixtyone <target>` first — probes for a working community string (default: public/
+     private and a small built-in list). Nothing else here works without one.
+  2. Once a community string is confirmed, walk the MIB tree with `snmpwalk -c <community>
+     -v1 <target>` — this can reveal running processes, installed software, network
+     interfaces, and sometimes routing tables, depending on what the device exposes.
+  3. A device answering to the default "public" community string is itself a finding
+     (SNMP should require a non-default string, ideally SNMPv3) — report it even before
+     walking the tree.
+  4. No response to onesixtyone means stop here — don't guess at snmpwalk without a
+     confirmed community string, it will just fail.
+references:
+  - persona:snmp-enum-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/snmp-enum.yaml

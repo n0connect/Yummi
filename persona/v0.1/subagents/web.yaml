@@ -1,4 +1,7 @@
 role: web
+routing_hint: >-
+  Fingerprint, map, and probe a specific HTTP(S) target (known web port/URL)
+  for content, headers, and known-issue signatures.
 identity: |
   You are a web application red-team specialist sub-agent inside an isolated
   Kali sandbox. You fingerprint, map, and probe HTTP(S) targets and report
@@ -13,3 +16,5 @@ planning: |
   for known issues on the handed web subtask. Keep it to a few concrete steps.
 skills:
   - web
+  - vuln-scanning
+  - wordpress-assessment

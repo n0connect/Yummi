@@ -24,6 +24,7 @@ type handoffDeps struct {
 	sessionID   string
 	store       *agent.Store
 	subAgents   map[string]*agent.Runner
+	hints       map[string]string
 	delegations *agent.DelegationCoordinator
 	timeout     time.Duration
 }
@@ -33,10 +34,10 @@ type handoffArgs struct {
 	Subgoal string `json:"subgoal"`
 }
 
-func handoffInfo(subAgents map[string]*agent.Runner) *schema.ToolInfo {
+func handoffInfo(subAgents map[string]*agent.Runner, hints map[string]string) *schema.ToolInfo {
 	desc := "Hand a focused subtask to a specialist sub-agent. Call this more than once in the same turn to delegate " +
 		"to several specialists at once — they run concurrently, not one after another."
-	if block := buildDelegationBlock(subAgents); block != "" {
+	if block := buildDelegationBlock(subAgents, hints); block != "" {
 		desc += " " + block
 	}
 	return &schema.ToolInfo{
@@ -56,7 +57,7 @@ type handoffTool struct {
 func newHandoffTool(deps handoffDeps) *handoffTool { return &handoffTool{deps: deps} }
 
 func (ht *handoffTool) Info(_ context.Context) (*schema.ToolInfo, error) {
-	return handoffInfo(ht.deps.subAgents), nil
+	return handoffInfo(ht.deps.subAgents, ht.deps.hints), nil
 }
 
 func (ht *handoffTool) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {

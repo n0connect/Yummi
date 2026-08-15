@@ -20,6 +20,14 @@ type SubAgentDef struct {
 	Principles string   `yaml:"principles"`
 	Planning   string   `yaml:"planning"`
 	Skills     []string `yaml:"skills"`
+	// RoutingHint is a short, one-sentence description of when the top-level
+	// agent should hand a subtask to this role. Shown to the model alongside
+	// the role name in the DELEGATION prompt block (unlike Identity/Principles/
+	// Planning, which shape the sub-agent's own behavior once it's running) —
+	// so this is written from the delegator's point of view, not the
+	// specialist's. Optional: a role without one still appears in the
+	// delegation list, just as a bare name.
+	RoutingHint string `yaml:"routing_hint"`
 }
 
 // Persona returns the model-facing persona for this sub-agent role.
