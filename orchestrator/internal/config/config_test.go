@@ -124,6 +124,65 @@ func TestConfigTierUnknownKeepsModel(t *testing.T) {
 	}
 }
 
+func TestConfigOllamaNumCtxOverride(t *testing.T) {
+	t.Setenv("YUMMI_OLLAMA_NUM_CTX", "131072")
+	cfg := Load()
+	if cfg.OllamaNumCtx != 131072 {
+		t.Errorf("expected OllamaNumCtx=131072, got %d", cfg.OllamaNumCtx)
+	}
+}
+
+func TestConfigOllamaNumCtxUnsetIsZero(t *testing.T) {
+	unset(t, "YUMMI_OLLAMA_NUM_CTX")
+	cfg := Load()
+	if cfg.OllamaNumCtx != 0 {
+		t.Errorf("expected OllamaNumCtx=0 when unset, got %d", cfg.OllamaNumCtx)
+	}
+}
+
+func TestConfigOllamaNumCtxInvalidFallsBackToZero(t *testing.T) {
+	t.Setenv("YUMMI_OLLAMA_NUM_CTX", "not-a-number")
+	cfg := Load()
+	if cfg.OllamaNumCtx != 0 {
+		t.Errorf("expected OllamaNumCtx=0 for invalid input, got %d", cfg.OllamaNumCtx)
+	}
+}
+
+func TestConfigOllamaThinkingTriState(t *testing.T) {
+	unset(t, "YUMMI_OLLAMA_THINKING")
+	if cfg := Load(); cfg.OllamaThinking != nil {
+		t.Errorf("expected nil OllamaThinking when unset, got %v", *cfg.OllamaThinking)
+	}
+
+	t.Setenv("YUMMI_OLLAMA_THINKING", "true")
+	cfg := Load()
+	if cfg.OllamaThinking == nil || !*cfg.OllamaThinking {
+		t.Errorf("expected OllamaThinking=true, got %v", cfg.OllamaThinking)
+	}
+
+	t.Setenv("YUMMI_OLLAMA_THINKING", "false")
+	cfg = Load()
+	if cfg.OllamaThinking == nil || *cfg.OllamaThinking {
+		t.Errorf("expected OllamaThinking=false (explicitly, not nil), got %v", cfg.OllamaThinking)
+	}
+}
+
+func TestConfigDataRetentionDisabledByDefault(t *testing.T) {
+	unset(t, "YUMMI_DATA_RETENTION_DAYS")
+	cfg := Load()
+	if cfg.DataRetentionDays != 0 {
+		t.Errorf("expected DataRetentionDays=0 (disabled) by default, got %d", cfg.DataRetentionDays)
+	}
+}
+
+func TestConfigDataRetentionDaysOverride(t *testing.T) {
+	t.Setenv("YUMMI_DATA_RETENTION_DAYS", "30")
+	cfg := Load()
+	if cfg.DataRetentionDays != 30 {
+		t.Errorf("expected DataRetentionDays=30, got %d", cfg.DataRetentionDays)
+	}
+}
+
 func TestConfigPortParseFallback(t *testing.T) {
 	t.Setenv("YUMMI_ORCHESTRATOR_PORT", "not-a-number")
 	cfg := Load()
