@@ -36,6 +36,19 @@ jobs:
       - run: go test ./...
         working-directory: orchestrator
 
+  go-sandbox-mcp:
+    name: Go (sandbox-mcp module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sandbox-mcp/go.mod
+      - run: go build ./...
+        working-directory: sandbox-mcp
+      - run: go test ./...
+        working-directory: sandbox-mcp
+
   go-lint:
     name: golangci-lint
     runs-on: ubuntu-latest
@@ -43,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: sandbox-mcp/go.mod # highest of the three modules' requirements; satisfies the other two via GOTOOLCHAIN=auto
       - name: Lint root module
         uses: golangci/golangci-lint-action@v9
         with:
@@ -53,6 +66,25 @@ jobs:
         with:
           version: latest
           working-directory: orchestrator
+      - name: Lint sandbox-mcp module
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: sandbox-mcp
+
+  go-vuln:
+    name: Go vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sandbox-mcp/go.mod # highest of the three modules' requirements; satisfies the other two via GOTOOLCHAIN=auto
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        working-directory: orchestrator
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        working-directory: sandbox-mcp
 
   gateway:
     name: Rust (gateway)
@@ -60,11 +92,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gateway
       - run: cargo test
         working-directory: gateway
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: gateway
+
+  gateway-audit:
+    name: Rust vulnerability scan (cargo-audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # audit-check opens an issue per new advisory when run on a schedule; harmless on push
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: gateway
 
   ui:
     name: UI (React)
