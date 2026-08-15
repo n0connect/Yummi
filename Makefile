@@ -375,15 +375,19 @@ lint: _check-deps
 	@golangci-lint run || { $(call log_error,lint,Root module lint failed.); exit 1; }
 	@$(call log_info,golangci-lint,Running on orchestrator module...)
 	@cd orchestrator && golangci-lint run || { $(call log_error,lint,Orchestrator lint failed.); exit 1; }
+	@$(call log_info,golangci-lint,Running on sandbox-mcp module...)
+	@cd sandbox-mcp && golangci-lint run || { $(call log_error,lint,sandbox-mcp module lint failed.); exit 1; }
 	@$(call log_pass,lint,No issues found.)
 
-## vuln    Supply-chain vulnerability scan (govulncheck, both Go modules)
+## vuln    Supply-chain vulnerability scan (govulncheck, all three Go modules)
 vuln: _check-deps
 	@$(call log_section,Vulnerability Scan)
 	@$(call log_info,govulncheck,Scanning root module...)
 	@go run golang.org/x/vuln/cmd/govulncheck@latest ./... || { $(call log_error,vuln,Root module has known vulnerabilities.); exit 1; }
 	@$(call log_info,govulncheck,Scanning orchestrator module...)
 	@cd orchestrator && go run golang.org/x/vuln/cmd/govulncheck@latest ./... || { $(call log_error,vuln,Orchestrator module has known vulnerabilities.); exit 1; }
+	@$(call log_info,govulncheck,Scanning sandbox-mcp module...)
+	@cd sandbox-mcp && go run golang.org/x/vuln/cmd/govulncheck@latest ./... || { $(call log_error,vuln,sandbox-mcp module has known vulnerabilities.); exit 1; }
 	@$(call log_pass,vuln,No known vulnerabilities found.)
 
 ## doctor  Run local environment diagnostics
