@@ -26,6 +26,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/health"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
+	"github.com/n0connect/yummi/orchestrator/internal/retention"
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 	"github.com/n0connect/yummi/orchestrator/internal/sandboxmcp"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
@@ -83,7 +84,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	assistant, err := conductor.NewEngine(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel)
+	assistant, err := conductor.NewEngineWithOverrides(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel, conductor.TierOverrides{
+		NumCtx:   cfg.OllamaNumCtx,
+		Thinking: cfg.OllamaThinking,
+	})
 	if err != nil {
 		slog.Warn("assistant persona load failed; running without conductor", "error", err, "persona_dir", cfg.PersonaDir)
 	}
@@ -96,6 +100,11 @@ func main() {
 
 	// Background purge of expired approval proposals every 5 minutes.
 	approvalStore.StartPurger(ctx, 5*time.Minute)
+	// Background data-retention pruning — disabled unless the operator opts
+	// in via YUMMI_DATA_RETENTION_DAYS (see internal/retention's package
+	// doc for exactly what is and is never pruned). A 6h check interval is
+	// plenty of resolution for a day-granularity retention window.
+	retention.StartPurger(ctx, db, cfg.DataRetentionDays, 6*time.Hour)
 
 	bridge := sandbox.NewBridge(cfg.SandboxContainer)
 	bridge.SetTimeout(cfg.SandboxExecTimeout) // no-op when unset — Bridge keeps its own generous default
