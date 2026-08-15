@@ -2,7 +2,7 @@
 # sandbox-mcp/go.mod pins go 1.26.5 (the MCP SDK's own floor is 1.25.0; go mod
 # tidy resolved the transitive minimum up to 1.26.5) — independent of
 # orchestrator/go.mod's go 1.22, since this is a deliberately separate module.
-FROM golang:1.26.5-bookworm AS mcpbuilder
+FROM golang:1.26.6-bookworm AS mcpbuilder
 WORKDIR /build
 COPY sandbox-mcp/go.mod sandbox-mcp/go.sum ./
 RUN go mod download
