@@ -43,7 +43,7 @@ Yummi has two genuinely different "run modes," and picking the wrong one for wha
 | Tool | Why | Minimum version note |
 |---|---|---|
 | **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) | Runs all 5 services | Any recent Docker Desktop (macOS/Windows) or Docker Engine (Linux) |
-| **Go** | Builds the CLI/TUI and (locally) the orchestrator | **≥ 1.24** — see the [version-skew warning](#go-version-skew) below |
+| **Go** | Builds the CLI/TUI and (locally) the orchestrator | **≥ 1.25** — see the [version note](#go-version-skew) below |
 | **Rust** (via `rustup`, not your distro's package) | Builds the gateway locally (`make _build-gateway`) | stable channel, edition 2021 (`gateway/Cargo.toml`) |
 | **Node.js + npm** | Builds the React UI | Node 20 or 22 LTS — see the [Node version warning](#node-version) below |
 | **A C compiler** (`cc`/`gcc`/`clang`) | **Not checked by `make _check-deps` — this is the #1 first-build failure.** See [cgo requirement](#cgo-requirement) below | Any recent version |
@@ -82,19 +82,16 @@ sudo apt-get update && sudo apt-get install -y build-essential
 sudo dnf groupinstall -y "Development Tools"
 ```
 
-The Docker path (`make start`, `make docker-build`) doesn't hit this — `orchestrator/Dockerfile`'s build stage runs inside `golang:1.22-bookworm`, which already has a full C toolchain. This requirement is **only** for building the orchestrator natively on your host.
+The Docker path (`make start`, `make docker-build`) doesn't hit this — `orchestrator/Dockerfile`'s build stage runs inside `golang:1.25-bookworm`, which already has a full C toolchain. This requirement is **only** for building the orchestrator natively on your host.
 
-### ⚠️ Go version skew between the two modules <a id="go-version-skew"></a>
+### ⚠️ Minimum Go version <a id="go-version-skew"></a>
 
-This repository has **two separate Go modules with two different stated Go versions**:
+The root `go.mod` (the `yummi` CLI/TUI) and `orchestrator/go.mod` both currently require `go 1.25.0` — one Go toolchain on your machine satisfies both. (The third Go module, `sandbox-mcp/`, pins a higher `go 1.26.5` via its MCP SDK dependency, but it's compiled inside its own Docker build stage and isn't part of a normal host build — only relevant if you use `make _build-sandbox-mcp` for local dev.)
 
-- Root `go.mod` (the `yummi` CLI/TUI): `go 1.24.2`
-- `orchestrator/go.mod`: `go 1.22`
-
-Your machine has one Go toolchain, and it has to satisfy the *stricter* of the two — **install Go 1.24 or newer**, even if you only intend to build the orchestrator. If you have exactly Go 1.22 or 1.23 installed, `orchestrator/` will build fine on its own, but `go build ./cmd/yummi` (or `make _build-cli` / `make build`) will fail with a message like:
+If your installed Go is older than what a module requires, `go build`/`make build` fails with a message like:
 
 ```
-go: go.mod requires go >= 1.24.2 (running go 1.22.x; GOTOOLCHAIN=local)
+go: go.mod requires go >= 1.25.0 (running go 1.24.x; GOTOOLCHAIN=local)
 ```
 
 Check what you have and upgrade if needed:
@@ -219,8 +216,8 @@ sudo usermod -aG docker "$USER"
 # skipping this step is the #1 reason `docker compose` fails with a permissions
 # error immediately after a fresh Docker install.
 
-# 3. Go ≥ 1.24 — check your distro's package first, or use the official tarball:
-go version   # if this prints < 1.24, see https://go.dev/dl/
+# 3. Go ≥ 1.25 — check your distro's package first, or use the official tarball:
+go version   # if this prints < 1.25, see https://go.dev/dl/
 
 # 4. Rust, via rustup (NOT your distro's `rustc` package — it's commonly older)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
