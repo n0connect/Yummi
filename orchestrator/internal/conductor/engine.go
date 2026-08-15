@@ -28,9 +28,34 @@ type Engine struct {
 // maxHistoryPerSession caps stored turns to bound memory usage.
 const maxHistoryPerSession = 20
 
+// TierOverrides lets an operator override the numeric knobs a resolved tier
+// profile would otherwise apply. Most useful for a custom model tag (see
+// TierRegistry.Resolve) that isn't one of the four named tiers: it's wrapped
+// under Pro's fixed 16K-context/no-thinking profile by default, which
+// under-serves a large-context model (e.g. an operator with the hardware for
+// a big MoE model wanting its full context window instead of being capped at
+// Pro's). Zero/nil fields mean "use the resolved tier's own value" — this is
+// additive, never a replacement for the tier system. Deliberately excludes
+// MaxTokens: TierConfig.MaxTokens isn't wired into any actual request
+// parameter anywhere in internal/llm today (a pre-existing gap, not
+// introduced here) — adding an override for a knob that does nothing would
+// be misleading.
+type TierOverrides struct {
+	NumCtx   int   // 0 = tier default
+	Thinking *bool // nil = tier default
+}
+
 // NewEngine constructs an engine from persona files and optional Ollama settings.
 // When ollamaURL is empty, the engine declines all requests with a clear message.
 func NewEngine(personaDir, ollamaURL, ollamaModel string) (*Engine, error) {
+	return NewEngineWithOverrides(personaDir, ollamaURL, ollamaModel, TierOverrides{})
+}
+
+// NewEngineWithOverrides is NewEngine plus explicit tier-knob overrides —
+// see TierOverrides. NewEngine is a thin wrapper over this with zero
+// overrides, kept so every existing caller (main.go, dev harnesses, tests)
+// is unaffected.
+func NewEngineWithOverrides(personaDir, ollamaURL, ollamaModel string, overrides TierOverrides) (*Engine, error) {
 	persona, err := LoadPersona(resolvePersonaDir(personaDir))
 	if err != nil {
 		slog.Warn("persona load failed; continuing with empty persona",
@@ -39,6 +64,12 @@ func NewEngine(personaDir, ollamaURL, ollamaModel string) (*Engine, error) {
 	}
 
 	tier := DefaultTierRegistry().Resolve(ollamaModel)
+	if overrides.NumCtx > 0 {
+		tier.NumCtx = overrides.NumCtx
+	}
+	if overrides.Thinking != nil {
+		tier.Thinking = *overrides.Thinking
+	}
 
 	var client *llm.Client
 	if ollamaURL != "" {
