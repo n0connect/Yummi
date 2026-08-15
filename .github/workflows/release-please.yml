@@ -21,6 +21,15 @@ jobs:
         id: release
         with:
           release-type: simple
+          # Without this, release-please-action targets the repo's
+          # GitHub-configured default branch (currently yummi-dev here),
+          # regardless of which branch this workflow's own `on: push`
+          # trigger fired for — confirmed the hard way: the first real run
+          # opened a PR against yummi-dev even though this workflow only
+          # triggers on pushes to main. main is where merged, shippable
+          # work lands (see CLAUDE.md's merge workflow); that's what
+          # releases should be cut from.
+          target-branch: main
 
   # Gated on an ACTUAL release, not just this workflow having run — the
   # singular `release_created` output (not the plural `releases_created`,
