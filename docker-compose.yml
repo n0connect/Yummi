@@ -11,6 +11,15 @@ x-logging: &default-logging
 
 services:
 
+  # Resource ceilings below are deliberately generous, not tight — the goal is
+  # "one runaway container can't starve the host or the other services," not
+  # squeezing every service to its typical footprint. sandbox in particular
+  # runs real, sometimes memory/CPU-hungry pentest tools (large wordlists,
+  # heavy nmap scans, sqlmap) chosen by the agent/operator, so it gets the most
+  # headroom; docker-proxy is a thin socket filter and gets the least.
+  # `docker compose up` (Compose V2, non-swarm) honors `deploy.resources.limits`
+  # without swarm mode — no extra flags needed.
+
   # ── gateway — trust boundary ───────────────────────────────────────────────────
   # Dedicated container that installs fail-closed nftables FORWARD rules on the
   # Docker bridge. All of sandbox's outbound traffic is routed through gateway. sandbox stays
@@ -41,6 +50,14 @@ services:
       yummi_external:
     restart: unless-stopped
     logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
+          pids: 128
+        reservations:
+          memory: 32m
     healthcheck:
       test: ["CMD", "test", "-S", "/run/yummi/gateway.sock"]
       interval: 10s
@@ -88,9 +105,18 @@ services:
         ipv4_address: 172.20.0.10
     restart: unless-stopped
     logging: *default-logging
-    depends_on:
-      gateway:
-        condition: service_healthy
+    # Generous relative to the others — this container runs the actual
+    # pentest tools an operator/agent chooses (nmap against wide ranges,
+    # sqlmap, hydra, large wordlist fuzzing). pids is fork-bomb /
+    # runaway-brute-force insurance, not a normal-use ceiling.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+          pids: 512
+        reservations:
+          memory: 256m
     healthcheck:
       test: ["CMD-SHELL", "nmap --version > /dev/null 2>&1"]
       interval: 30s
@@ -122,7 +148,18 @@ services:
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
       YUMMI_OLLAMA_MODEL: "${YUMMI_OLLAMA_MODEL:-}"
       YUMMI_OLLAMA_TIER: "${YUMMI_OLLAMA_TIER:-pro}"
+      # Overrides for a custom YUMMI_OLLAMA_MODEL tag that isn't one of the
+      # four named tiers — see conductor.TierOverrides. Both blank by default
+      # (no override; a custom model still gets Pro's fixed 16K context/
+      # no-thinking profile unless set here).
+      YUMMI_OLLAMA_NUM_CTX: "${YUMMI_OLLAMA_NUM_CTX:-}"
+      YUMMI_OLLAMA_THINKING: "${YUMMI_OLLAMA_THINKING:-}"
       YUMMI_AGENT_BACKEND: "${YUMMI_AGENT_BACKEND:-graph}"
+      # Background pruning of old chat_messages/agent_activity/executions
+      # rows — disabled (0) by default, see internal/retention's package doc
+      # for exactly what is and is never pruned. Opt in with a day count,
+      # e.g. YUMMI_DATA_RETENTION_DAYS=90.
+      YUMMI_DATA_RETENTION_DAYS: "${YUMMI_DATA_RETENTION_DAYS:-0}"
       DOCKER_HOST: "tcp://docker-proxy:2375"
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
@@ -145,6 +182,14 @@ services:
       yummi_external:
     restart: unless-stopped
     logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
+          pids: 256
+        reservations:
+          memory: 128m
     depends_on:
       gateway:
         condition: service_healthy
@@ -200,6 +245,14 @@ services:
         ipv4_address: 172.20.0.5
     restart: unless-stopped
     logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64m
+          pids: 64
+        reservations:
+          memory: 16m
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "2375"]
       interval: 10s
@@ -224,6 +277,14 @@ services:
       yummi_external:
     restart: unless-stopped
     logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+          pids: 64
+        reservations:
+          memory: 32m
     depends_on:
       orchestrator:
         condition: service_healthy
