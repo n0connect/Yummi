@@ -1,0 +1,38 @@
+schema_version: 1
+version: 1.0.0
+name: osint-enum
+description: Passive/active subdomain, DNS, and email OSINT enumeration for a domain.
+triggers:
+  - subdomain
+  - subdomains
+  - osint
+  - dns enum
+  - dns
+  - email harvest
+  - domain enum
+  - amass
+  - subfinder
+  - theharvester
+  - dnsenum
+tools:
+  - amass
+  - subfinder
+  - theharvester
+  - dnsenum
+knowledge: |
+  Enumerate the attack surface of a domain before touching individual hosts:
+  1. Start passive: `subfinder -d <domain> -silent` and `amass enum -d <domain> -passive` for
+     fast, low-noise subdomain discovery — these don't touch the target directly.
+  2. `theHarvester -d <domain> -b all` for emails/hosts/subdomains from public sources (search
+     engines, certificate transparency, etc.) — also passive.
+  3. `dnsenum <domain>` for DNS record enumeration (NS/MX/TXT, zone transfer attempts) — this
+     does query the target's own DNS infrastructure directly, treat as light-active.
+  4. Cross-reference results across tools — a subdomain found by one tool and confirmed live
+     by another is stronger evidence than either alone.
+  5. Record every discovered subdomain/host as a structured finding; this feeds recon/web
+     sub-agents' later targeting.
+references:
+  - persona:osint-enum-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/osint-enum.yaml

@@ -256,11 +256,13 @@ func main() {
 			// execution pipeline. Built with no SubAgents of their own, capping
 			// handoff depth at 1 (no recursion).
 			subAgents := map[string]*agent.Runner{}
+			subAgentHints := map[string]string{}
 			subDefs, derr := agent.LoadSubAgentDefs(filepath.Join(cfg.PersonaDir, "subagents"))
 			if derr != nil {
 				slog.Warn("sub-agent defs load failed; continuing without delegation", "error", derr)
 			}
 			for _, d := range subDefs {
+				subAgentHints[d.Role] = d.RoutingHint
 				subAgents[d.Role] = agent.NewRunner(
 					taskStore,
 					agentLLM,
@@ -301,17 +303,18 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					eino.Config{
-						StepBudget:   15,
-						ApprovalMode: agent.ModeAskPermission,
-						ModelBaseURL: strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
-						ModelName:    cfg.OllamaModel,
-						Knowledge:    ks,
-						MCPExec:      agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
-						MCPList:      sandboxMCPClient,
-						Retrieval:    retrieval,
-						Skills:       skillReg,
-						SubAgents:    subAgents,
-						SkillCurator: skillCuratorFn,
+						StepBudget:    15,
+						ApprovalMode:  agent.ModeAskPermission,
+						ModelBaseURL:  strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
+						ModelName:     cfg.OllamaModel,
+						Knowledge:     ks,
+						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
+						MCPList:       sandboxMCPClient,
+						Retrieval:     retrieval,
+						Skills:        skillReg,
+						SubAgents:     subAgents,
+						SubAgentHints: subAgentHints,
+						SkillCurator:  skillCuratorFn,
 						// Matches the graph backend's own SubAgentTimeout bump
 						// (see its comment below): sub-agents get a higher
 						// StepBudget than the top-level loop's default 15, so
@@ -327,12 +330,13 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					agent.Config{ // defaults: budget 15, ask_permission mode
-						Persona:      agentPersona,
-						Knowledge:    ks,
-						Retrieval:    retrieval,
-						Skills:       skillReg,
-						SubAgents:    subAgents,
-						SkillCurator: skillCuratorFn,
+						Persona:       agentPersona,
+						Knowledge:     ks,
+						Retrieval:     retrieval,
+						Skills:        skillReg,
+						SubAgents:     subAgents,
+						SubAgentHints: subAgentHints,
+						SkillCurator:  skillCuratorFn,
 						// Room for the sub-agents' own StepBudget:40 above to actually
 						// run to completion — the default 10m ceiling was sized for
 						// StepBudget:15 (matches the top-level loop); a sub-agent with

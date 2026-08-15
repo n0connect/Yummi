@@ -96,6 +96,13 @@ type Config struct {
 	// and sub-agents themselves are built with an empty map, capping handoff
 	// depth at exactly 1 (no recursion).
 	SubAgents map[string]*Runner
+	// SubAgentHints maps a role name (same keys as SubAgents) to the short,
+	// one-sentence SubAgentDef.RoutingHint describing when to hand work to
+	// that role. Purely presentational: rendered into the DELEGATION prompt
+	// block alongside each role name so the model can pick a target without
+	// guessing from the bare name. A role missing from this map (or an empty
+	// hint) just renders as a bare name, same as before this field existed.
+	SubAgentHints map[string]string
 	// Delegations is normally created by NewRunner for a top-level runner. It
 	// may be supplied to share one quota/lifecycle registry across runners.
 	Delegations *DelegationCoordinator

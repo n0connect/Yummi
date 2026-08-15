@@ -1,0 +1,28 @@
+schema_version: 1
+version: 1.0.0
+name: sql-injection
+description: Test a URL/parameter for SQL injection with sqlmap.
+triggers:
+  - sql injection
+  - sqli
+  - sqlmap
+  - injection
+  - database
+tools:
+  - sqlmap
+knowledge: |
+  sqlmap is powerful but slow and loud if used broadly — scope it tightly:
+  1. Target a SPECIFIC URL with a SPECIFIC parameter already showing signs of dynamic
+     behavior (a query string, a form field) — never point it at a whole site.
+  2. Always run in `--batch` (non-interactive) mode inside the sandbox; there is no
+     terminal for it to prompt on.
+  3. A confirmed injection point is the finding — record the exact parameter and injection
+     type (boolean/time/error-based/UNION). Don't proceed to `--dump`/data extraction unless
+     the subtask explicitly calls for demonstrating impact, since that touches real data.
+  4. If sqlmap finds nothing on a suspected parameter, that's still a valid, reportable
+     negative result — don't escalate to riskier tampering techniques without explicit direction.
+references:
+  - persona:sql-injection-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/sql-injection.yaml

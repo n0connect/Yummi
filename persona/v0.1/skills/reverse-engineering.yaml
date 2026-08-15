@@ -1,0 +1,37 @@
+schema_version: 1
+version: 1.0.0
+name: reverse-engineering
+description: Static and dynamic analysis of compiled binaries to understand behavior and find vulnerabilities.
+triggers:
+  - reverse engineer
+  - reversing
+  - binary
+  - disassemble
+  - decompile
+  - strings
+  - objdump
+  - gdb
+  - malware
+tools:
+  - file
+  - strings
+  - objdump
+knowledge: |
+  Static analysis before dynamic — understand a binary without running it first:
+  1. `file <binary>` to identify format/architecture, then `strings <binary>` for quick
+     signal (URLs, error messages, hardcoded credentials, library hints).
+  2. `objdump -d <binary>` (or `-T`/`-x` for symbols/headers) to inspect disassembly and
+     imports — imported functions (network, crypto, exec) hint at behavior before you read
+     a single instruction in detail.
+  3. Document the execution flow and any interesting function as you go with [REMEMBER] —
+     a binary's structure is exactly the kind of thing worth persisting across turns.
+  4. Dynamic analysis (actually running the binary) is higher-risk and higher-signal — only
+     do it when static analysis doesn't answer the subtask, and never on a target/binary
+     outside the sandbox's isolation.
+  5. Record concrete findings: a hardcoded secret, a suspicious network call, an unsafe
+     function (strcpy/system/exec-family) — with the exact string/address, not a vague summary.
+references:
+  - persona:reverse-engineering-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/reverse-engineering.yaml
