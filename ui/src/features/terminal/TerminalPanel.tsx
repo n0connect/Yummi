@@ -129,6 +129,9 @@ export function TerminalPanel(): JSX.Element {
           <span
             className={`dot ${connected ? 'dot-ok' : 'dot-err'}`}
             title={connected ? t('terminalPanel.connected') : t('terminalPanel.disconnected')}
+            role="status"
+            aria-live="polite"
+            aria-label={connected ? t('terminalPanel.connected') : t('terminalPanel.disconnected')}
           />
           {t('terminalPanel.title')}
         </span>
