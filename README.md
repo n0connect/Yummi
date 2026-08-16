@@ -37,7 +37,7 @@ The [`docs/`](docs/) directory is the full, in-depth reference — start at **[d
 - **[Architecture](docs/architecture.md)** — The 5 components, network topology, core data flows
 - **[Security Model](docs/security-model.md)** — Fail-closed network layer, content-layer threat scanning, audit chain
 - **[Installation](docs/installation.md)** — OS/architecture-specific setup (Linux/macOS/Windows, x86_64/ARM64), common first-run errors
-- **[Usage Guide](docs/usage-guide.md)** — The 6 UI tabs, approval flows, CLI & TUI
+- **[Usage Guide](docs/usage-guide.md)** — The 6 UI tabs, approval flows, CLI
 - **[Agent internals](docs/agent/overview.md)** — The graph state machine, memory, skills, sub-agents
 - **[API Reference](docs/api-reference.md)** — Every REST route and WebSocket event
 - **[Development](docs/development.md)** — Fast build loops, running a single test, the two-Go-modules trap
@@ -62,19 +62,14 @@ Five components in total, not four — a `docker-proxy` sits between the orchest
 
 ```bash
 make install   # prepare Yummi directories/deps, build sandbox, install/pull Ollama models
-make start     # start the full stack and open the native Tauri console directly
+make start     # start the full stack — UI at http://localhost:3000
 ```
 
-For headless/server use, run **`make start NO_DESKTOP=1`** and open
-**http://localhost:3000** instead. First run pulls the default model
+Yummi is managed entirely from that web UI. First run pulls the default model
 (`qwen3:14b` for the full stack, ~9 GB) — see
 **[Installation →](docs/installation.md)** for OS/architecture-specific setup
 (Linux/macOS/Windows, x86_64/ARM64), the exact hardware sizing per model tier,
 and the specific first-run errors people actually hit.
-
-```bash
-make start-tui   # services (headless), then the terminal UI instead of the desktop console
-```
 
 ## Development
 
@@ -84,7 +79,7 @@ make test    # all suites: CLI + orchestrator + gateway (cargo) + UI (vitest)
 make lint    # golangci-lint, root and orchestrator modules
 ```
 
-See **[docs/development.md](docs/development.md)** for fast per-component build loops, running a single test, and a real gotcha worth knowing up front: this repo is **two separate Go modules** (root CLI/TUI vs. `orchestrator/`) — `go test ./...` from the repo root silently skips every orchestrator test.
+See **[docs/development.md](docs/development.md)** for fast per-component build loops, running a single test, and a real gotcha worth knowing up front: this repo is **two separate Go modules** (root CLI vs. `orchestrator/`) — `go test ./...` from the repo root silently skips every orchestrator test.
 
 Tests favor real stores and engines. Scripted substitutes are used at external or nondeterministic boundaries such as the LLM and test HTTP servers; live suites cover the real model and sandbox when explicitly enabled.
 

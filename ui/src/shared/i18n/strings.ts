@@ -1,7 +1,7 @@
 // Build-time UI language dictionary. There is no runtime switch: the active
 // language is baked in by Vite at build time from VITE_YUMMI_LANG (set from
-// `make conf`'s YUMMI_LANG, see .yummi.conf / Makefile), matching the desktop
-// app being a single-language artifact per build. `tr` is typed as
+// `make conf`'s YUMMI_LANG, see .yummi.conf / Makefile) — a single-language
+// artifact per build. `tr` is typed as
 // `Record<keyof typeof en, string>` so a translation missing a key that `en`
 // has (or vice versa) is a compile error, not a silent runtime fallback.
 const en = {
@@ -39,13 +39,6 @@ const en = {
   'sessionRail.noSearchResults': 'No conversations match this search.',
   'sessionRail.activeSession': 'Active session',
   'sessionRail.recentActivity': 'Recent activity',
-
-  // ── RuntimeConnectionNotice ─────────────────────────────────────────────
-  'runtimeNotice.checking': 'Checking local runtime…',
-  'runtimeNotice.disconnected': 'Yummi runtime not connected',
-  'runtimeNotice.hintBefore': 'First run ',
-  'runtimeNotice.hintAfter': ' from a terminal; the desktop app will connect automatically.',
-  'runtimeNotice.retry': 'Retry',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
   'debugLog.title': 'Debug Log',
@@ -357,13 +350,6 @@ const tr = {
   'sessionRail.noSearchResults': 'Bu aramayla eşleşen sohbet bulunamadı.',
   'sessionRail.activeSession': 'Açık oturum',
   'sessionRail.recentActivity': 'Son etkinlik',
-
-  // ── RuntimeConnectionNotice ─────────────────────────────────────────────
-  'runtimeNotice.checking': 'Yerel çalışma zamanı denetleniyor…',
-  'runtimeNotice.disconnected': 'Yummi runtime bağlı değil',
-  'runtimeNotice.hintBefore': 'Önce terminalden ',
-  'runtimeNotice.hintAfter': ' çalıştırın; desktop uygulaması otomatik bağlanacaktır.',
-  'runtimeNotice.retry': 'Yeniden dene',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
   'debugLog.title': 'Debug Log',

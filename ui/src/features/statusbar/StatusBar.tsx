@@ -1,5 +1,4 @@
 import { NavLink } from 'react-router-dom'
-import { isDesktopShell } from '../../shared/api/runtime'
 import { t } from '../../shared/i18n/strings'
 
 export function StatusBar(): JSX.Element {
@@ -7,7 +6,6 @@ export function StatusBar(): JSX.Element {
     <div className="status-bar">
       <div className="left">
         <span className="logo">YUMMI</span>
-        {isDesktopShell && <span className="desktop-badge">DESKTOP</span>}
       </div>
       <div className="right">
         <nav className="nav-seg">

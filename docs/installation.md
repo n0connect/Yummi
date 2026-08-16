@@ -35,7 +35,7 @@ Yummi has two genuinely different "run modes," and picking the wrong one for wha
 | Network enforcement? | **Yes**, real nftables in the gateway container | N/A — gateway isn't running |
 | What it's for | Actually using Yummi as a pentest tool | Iterating on orchestrator's Go code with fast rebuilds, or exploring the API without touching Docker |
 
-**If you just want to use Yummi, skip straight to [Running the full stack](#full-stack)** after satisfying the requirements below — you do not need to separately build any binaries by hand; `make start` builds the Docker images itself. Building native binaries ([below](#native-binaries)) is only necessary if you're developing the CLI/TUI, or want a `yummi` binary outside Docker.
+**If you just want to use Yummi, skip straight to [Running the full stack](#full-stack)** after satisfying the requirements below — you do not need to separately build any binaries by hand; `make start` builds the Docker images itself. Building native binaries ([below](#native-binaries)) is only necessary if you're developing the CLI, or want a `yummi` binary outside Docker.
 
 ---
 
@@ -44,7 +44,7 @@ Yummi has two genuinely different "run modes," and picking the wrong one for wha
 | Tool | Why | Minimum version note |
 |---|---|---|
 | **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) | Runs all 5 services | Any recent Docker Desktop (macOS/Windows) or Docker Engine (Linux) |
-| **Go** | Builds the CLI/TUI and (locally) the orchestrator | **≥ 1.25** — see the [version note](#go-version-skew) below |
+| **Go** | Builds the CLI and (locally) the orchestrator | **≥ 1.25** — see the [version note](#go-version-skew) below |
 | **Rust** (via `rustup`, not your distro's package) | Builds the gateway locally (`make _build-gateway`) | stable channel, edition 2021 (`gateway/Cargo.toml`) |
 | **Node.js + npm** | Builds the React UI | Node 20 or 22 LTS — see the [Node version warning](#node-version) below |
 | **A C compiler** (`cc`/`gcc`/`clang`) | **Not checked by `make _check-deps` — this is the #1 first-build failure.** See [cgo requirement](#cgo-requirement) below | Any recent version |
@@ -87,7 +87,7 @@ The Docker path (`make start`, `make docker-build`) doesn't hit this — `orches
 
 ### ⚠️ Minimum Go version <a id="go-version-skew"></a>
 
-The root `go.mod` (the `yummi` CLI/TUI) and `orchestrator/go.mod` both currently require `go 1.25.0` — one Go toolchain on your machine satisfies both. (The third Go module, `sandbox-mcp/`, pins a higher `go 1.26.5` via its MCP SDK dependency, but it's compiled inside its own Docker build stage and isn't part of a normal host build — only relevant if you use `make _build-sandbox-mcp` for local dev.)
+The root `go.mod` (the `yummi` CLI) and `orchestrator/go.mod` both currently require `go 1.25.0` — one Go toolchain on your machine satisfies both. (The third Go module, `sandbox-mcp/`, pins a higher `go 1.26.5` via its MCP SDK dependency, but it's compiled inside its own Docker build stage and isn't part of a normal host build — only relevant if you use `make _build-sandbox-mcp` for local dev.)
 
 If your installed Go is older than what a module requires, `go build`/`make build` fails with a message like:
 
@@ -121,10 +121,10 @@ Read this table before choosing a machine to run Yummi on — one row is a hard 
 |---|---|---|---|
 | **Linux x86_64** | ✅ Full support, real nftables enforcement | ✅ | The reference platform — gateway's `network/nftables.rs` runs against a real Linux kernel directly |
 | **Linux ARM64** (incl. Raspberry Pi 4/5, AWS Graviton) | ✅ Expected to work — every base image (`kalilinux/kali-rolling`, `golang`, `rust`, `node`, `nginx`, `tecnativa/docker-socket-proxy`, `debian:bookworm-slim`) publishes official `arm64` manifests | ✅ | Not independently load-tested on ARM64 hardware as part of this documentation pass — if you hit an ARM64-specific issue, it is almost certainly one specific `apt` package inside `sandbox/Dockerfile` lacking an arm64 build in Kali's repos, not gateway or orchestrator |
-| **macOS (Apple Silicon, arm64)** | ✅ Confirmed via OrbStack (recommended). ⚠️ Docker Desktop and Podman caveats are documented below | ✅ CLI/TUI + orchestrator; gateway is Linux-only at runtime | Container engines provide a Linux VM, but working forwarding and Docker-socket behavior depend on the engine; do not infer support only from successful image builds |
-| **macOS (Intel, x86_64)** | ⚠️ Requires a Linux container engine; the same engine-specific caveats apply and this path is not independently validated here | ✅ CLI/TUI + orchestrator; gateway is Linux-only at runtime | Host architecture changes image selection, not the gateway's Linux requirement |
-| **Windows 10/11 with WSL2** | ✅ Full support via Docker Desktop's WSL2 backend | Partial — the CLI/TUI cross-compiles fine (`GOOS=windows go build` — see the `*.exe` handling already in `.gitignore`); the orchestrator has not been validated running bare on Windows, and gateway is architecturally out of scope outside a Linux kernel | Docker Desktop for Windows uses a WSL2-based Linux VM by default, which — like the macOS case — is a real Linux kernel, so the same nftables enforcement path applies |
-| **Windows without WSL2 / native only** | ❌ Not supported | Partial (CLI/TUI only) | No Linux kernel means no nftables anywhere in the stack — don't attempt the full stack here |
+| **macOS (Apple Silicon, arm64)** | ✅ Confirmed via OrbStack (recommended). ⚠️ Docker Desktop and Podman caveats are documented below | ✅ CLI + orchestrator; gateway is Linux-only at runtime | Container engines provide a Linux VM, but working forwarding and Docker-socket behavior depend on the engine; do not infer support only from successful image builds |
+| **macOS (Intel, x86_64)** | ⚠️ Requires a Linux container engine; the same engine-specific caveats apply and this path is not independently validated here | ✅ CLI + orchestrator; gateway is Linux-only at runtime | Host architecture changes image selection, not the gateway's Linux requirement |
+| **Windows 10/11 with WSL2** | ✅ Full support via Docker Desktop's WSL2 backend | Partial — the CLI cross-compiles fine (`GOOS=windows go build` — see the `*.exe` handling already in `.gitignore`); the orchestrator has not been validated running bare on Windows, and gateway is architecturally out of scope outside a Linux kernel | Docker Desktop for Windows uses a WSL2-based Linux VM by default, which — like the macOS case — is a real Linux kernel, so the same nftables enforcement path applies |
+| **Windows without WSL2 / native only** | ❌ Not supported | Partial (CLI only) | No Linux kernel means no nftables anywhere in the stack — don't attempt the full stack here |
 | **Bare Linux host, gateway binary run directly (no Docker)** | ⚠️ Unsupported topology | ✅ compiles/runs | It may change nftables in the host namespace, but Compose's sandbox routing topology is absent unless you reproduce it yourself |
 
 ### ⚠️ The one combination that silently doesn't enforce anything
@@ -298,11 +298,11 @@ wsl --install
 
 Everything after step 3 is identical to the [Linux](#linux) section — from inside a WSL2 shell, you *are* on a real Linux kernel with a real Docker daemon (shared with Docker Desktop), so the same commands apply unchanged.
 
-If you only need the `yummi` CLI/TUI (no gateway, no sandbox, no real pentest execution) on native Windows without WSL2, `go build` cross-compiles cleanly:
+If you only need the `yummi` CLI (no gateway, no sandbox, no real pentest execution) on native Windows without WSL2, `go build` cross-compiles cleanly:
 ```bash
 GOOS=windows GOARCH=amd64 go build -o yummi.exe ./cmd/yummi
 ```
-This produces a `.exe` (already accounted for in `.gitignore`) that can launch and drive the TUI against an orchestrator running elsewhere, but it cannot run the full stack itself.
+This produces a `.exe` (already accounted for in `.gitignore`) that can open the web UI against an orchestrator running elsewhere, but it cannot run the full stack itself.
 
 ---
 
@@ -377,17 +377,14 @@ Or interactively: `make conf` → model choice → **Custom** → type the exact
 make start
 ```
 
-This one command: runs the dependency check, ensures Ollama is running and the model is pulled, **rebuilds every Docker image from current source** (never silently reuses a stale image), brings the stack up in dependency order (each service's `depends_on: condition: service_healthy` enforces this): `gateway` and `docker-proxy` start immediately in parallel (neither depends on anything); `sandbox` waits for `gateway` to report healthy; `orchestrator` waits for **all three** of `gateway`, `sandbox`, and `docker-proxy` to be healthy before it starts; `ui` waits for `orchestrator` — **then launches the native Tauri console directly.** No separate step, no browser tab to open by hand; this is the one command for the normal local workflow. First run takes longer — it's building 4 images from scratch (`docker-proxy` is a pre-built image, pulled rather than built), including a full Kali package install for sandbox.
+This one command: runs the dependency check, ensures Ollama is running and the model is pulled, **rebuilds every Docker image from current source** (never silently reuses a stale image), brings the stack up in dependency order (each service's `depends_on: condition: service_healthy` enforces this): `gateway` and `docker-proxy` start immediately in parallel (neither depends on anything); `sandbox` waits for `gateway` to report healthy; `orchestrator` waits for **all three** of `gateway`, `sandbox`, and `docker-proxy` to be healthy before it starts; `ui` waits for `orchestrator`. This is the one command for the normal local workflow. First run takes longer — it's building 4 images from scratch (`docker-proxy` is a pre-built image, pulled rather than built), including a full Kali package install for sandbox.
 
 ```bash
 make app                  # alias for 'start' — kept for anyone with the old habit memorized
-make start NO_DESKTOP=1   # headless: services only, no desktop window (CI/server/remote box)
-make start-tui            # services (headless) + the terminal UI instead of the desktop console
 ```
 
 Once it's up:
-- Desktop console: opens automatically from `make start` — reattach anytime without restarting the stack via **`make desktop-dev`**
-- Web UI (still available for headless/remote use): **http://localhost:3000**
+- Web UI: **http://localhost:3000** — this is the only operator surface; `./bin/yummi` (no flags) just opens this same URL in an app-style browser window for convenience
 - Orchestrator API: **http://127.0.0.1:9080** (bound to localhost only — not reachable from other machines on your network by design)
 
 ```bash
@@ -399,7 +396,7 @@ make close    # stop everything AND stop Ollama, to free RAM/VRAM when you're do
 
 ## Building native binaries <a id="native-binaries"></a>
 
-Only needed if you're developing the CLI/TUI or orchestrator outside Docker, or want a standalone `yummi` binary:
+Only needed if you're developing the CLI or orchestrator outside Docker, or want a standalone `yummi` binary:
 
 ```bash
 make build
@@ -408,7 +405,7 @@ Builds, in order: `_build-cli` (→ `./bin/yummi`), `_build-ui` (→ `ui/dist`),
 
 Or individually, for a faster feedback loop while you're only touching one piece:
 ```bash
-make _build-cli           # just the CLI/TUI binary
+make _build-cli           # just the CLI binary
 make _build-orchestrator  # just the orchestrator (needs the cgo toolchain — see above)
 make _build-gateway       # just the gateway (needs rustup's cargo, not a distro rustc)
 make _build-ui            # just the UI (npm ci + vite build)

@@ -44,7 +44,7 @@ func isLocalhostOrigin(origin string) bool {
 func isValidWebSocketOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		return true // non-browser client (CLI/TUI) — no Origin to forge
+		return true // non-browser client (curl, scripts, tests) — no Origin to forge
 	}
 	if isLocalhostOrigin(origin) {
 		return true

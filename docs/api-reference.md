@@ -25,7 +25,7 @@ The full REST + WebSocket surface orchestrator exposes, as wired in `orchestrato
 - Every route lives under `/api/v1`, except the two WebSocket upgrade endpoints (`/ws/terminal`, `/ws/events`) and the plain health check (`/healthz`).
 - Errors follow **RFC 7807** problem-detail JSON (`Content-Type: application/problem+json`) — expect `{"type":"about:blank","title":"...","status":<code>,"detail":"..."}`, not a bespoke error format per endpoint. `type` is always the literal string `"about:blank"` today — no per-error-kind URIs are defined yet, so don't write client code that branches on it.
 - `{id}` / `{sessionID}` path segments are validated (`isValidSessionID`) before touching any store — a malformed ID is a `400`, not a store lookup that happens to fail.
-- Browser CORS and WebSocket origins are restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`). WebSocket clients without an `Origin` header, such as the CLI/TUI, are accepted.
+- Browser CORS and WebSocket origins are restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`). WebSocket clients without an `Origin` header, such as non-browser scripts or `curl`, are accepted (a real browser always sends one).
 
 ---
 
