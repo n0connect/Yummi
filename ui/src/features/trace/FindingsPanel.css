@@ -1,0 +1,207 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINDINGS PANEL — severity-aware, filterable view of a session's structured
+   findings (knowledge.Finding). Reuses the global design tokens from app.css;
+   defines no new tokens of its own.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Findings gets more real estate than the other TRACE grid cells (filter
+   toolbar + a potentially long list) — span the full grid width instead of
+   sharing a single auto-fit column. */
+.trace-section-findings { grid-column: 1 / -1; }
+
+.findings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.findings-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.findings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.findings-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.findings-chip:hover { border-color: var(--border-strong); color: var(--text-secondary); }
+
+.findings-chip-count {
+  font-size: 9px;
+  opacity: 0.75;
+  min-width: 12px;
+  text-align: center;
+}
+
+.findings-chip.active.findings-chip-critical { color: var(--red);    background: var(--red-bg);    border-color: rgba(255,69,58,0.35); }
+.findings-chip.active.findings-chip-high     { color: var(--orange); background: var(--orange-bg); border-color: rgba(255,159,10,0.35); }
+.findings-chip.active.findings-chip-medium   { color: var(--yellow); background: var(--yellow-bg); border-color: rgba(255,214,10,0.35); }
+.findings-chip.active.findings-chip-low      { color: var(--green);  background: var(--green-bg);  border-color: rgba(48,209,88,0.35); }
+.findings-chip.active.findings-chip-info     { color: var(--info, var(--cyan)); background: var(--cyan-glow, rgba(56,189,248,0.12)); border-color: rgba(56,189,248,0.35); }
+
+.findings-selects {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.findings-select-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.findings-select-label select {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.findings-clear {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.findings-clear:hover { color: var(--text-secondary); }
+
+.findings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.findings-row {
+  border-left: 2px solid var(--text-muted);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  background: rgba(255,255,255,0.015);
+  padding: 8px 10px;
+}
+.findings-row-critical { border-left-color: var(--red); }
+.findings-row-high     { border-left-color: var(--orange); }
+.findings-row-medium   { border-left-color: var(--yellow); }
+.findings-row-low      { border-left-color: var(--green); }
+.findings-row-info     { border-left-color: var(--info, var(--cyan)); }
+
+.findings-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.findings-sev-badge {
+  flex: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.findings-sev-badge-critical { color: var(--red);    background: var(--red-bg); }
+.findings-sev-badge-high     { color: var(--orange); background: var(--orange-bg); }
+.findings-sev-badge-medium   { color: var(--yellow); background: var(--yellow-bg); }
+.findings-sev-badge-low      { color: var(--green);  background: var(--green-bg); }
+.findings-sev-badge-info     { color: var(--info, var(--cyan)); background: var(--cyan-glow, rgba(56,189,248,0.12)); }
+
+.findings-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.findings-when {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+}
+
+.findings-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 3px;
+}
+.findings-meta-item {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.findings-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+}
+
+.findings-evidence { margin-top: 6px; }
+.findings-evidence summary {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.findings-evidence-body {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  background: rgba(0,0,0,0.2);
+  padding: 8px;
+  border-radius: 6px;
+  margin-top: 6px;
+  overflow-x: auto;
+  max-height: 260px;
+  overflow-y: auto;
+}

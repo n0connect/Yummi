@@ -286,10 +286,124 @@ func (c *Client) GetFingerprintConfig() (*FingerprintConfig, error) {
 	}, nil
 }
 
+// idempotentRequestTypes are gateway IPC calls that only read state — safe to
+// retry after ANY transient transport failure (dial, write, or read), since a
+// duplicate read has no side effect. Every other request type mutates
+// gateway's policy/rule/mode state and is retried far more conservatively —
+// see send()'s dispatched check below.
+var idempotentRequestTypes = map[string]bool{
+	"check_scope":            true,
+	"check_hostname":         true,
+	"get_status":             true,
+	"ping":                   true,
+	"get_hostname_policy":    true,
+	"list_rules":             true,
+	"get_audit_log":          true,
+	"get_fingerprint_config": true,
+	"get_egress_mode":        true,
+}
+
+const (
+	// maxSendAttempts bounds the total number of attempts (first try plus
+	// retries) a single logical send() makes.
+	maxSendAttempts = 3
+	// retryBaseDelay is the backoff unit between attempts, scaled linearly by
+	// attempt number (40ms, 80ms, ...). gateway is a co-located daemon reached
+	// over a Unix domain socket, not a remote service — a transient failure
+	// here (mid-restart, a momentarily full accept backlog) resolves in
+	// milliseconds, so there's no reason for the seconds-scale exponential
+	// backoff a networked/remote client would need.
+	retryBaseDelay = 40 * time.Millisecond
+)
+
+// send performs one logical gateway IPC call, retrying transient transport
+// failures within tight, deliberately conservative bounds.
+//
+// Every attempt dials a fresh connection — see roundTrip's doc comment for
+// why this client does not keep a persistent connection open across calls.
+//
+// Retry eligibility depends on whether the request could have already
+// mutated gateway's state:
+//   - Read-only request types (idempotentRequestTypes) are retried on any
+//     transport failure: dial, write, or read. A duplicate read is harmless.
+//   - Mutating request types (add_temporary_rule, remove_rule,
+//     set_egress_mode, ...) are retried ONLY when roundTrip proves the
+//     request bytes were never dispatched onto the wire — i.e. the failure
+//     happened during dial or the mTLS handshake, before writing a single
+//     byte of the request frame. Once a write has been attempted, even one
+//     that itself returned an error, the request is treated as possibly
+//     delivered (net.Conn's Write can push a byte prefix into the kernel send
+//     queue before a deadline/error cuts it off — an ambiguous partial write)
+//     and is never retried, to avoid double-applying a mutation gateway may
+//     have already received and started processing.
+//
+// A well-formed gateway response with Type=="error" (e.g. "malformed
+// hostname pattern") is a deterministic application-level rejection, not a
+// transport failure — retrying it would just get the same answer, so it is
+// surfaced immediately without consuming a retry.
 func (c *Client) send(req Request) (*Response, error) {
+	idempotent := idempotentRequestTypes[req.Type]
+
+	var resp *Response
+	var dispatched bool
+	var err error
+
+	for attempt := 1; attempt <= maxSendAttempts; attempt++ {
+		resp, dispatched, err = c.roundTrip(req)
+		if err == nil {
+			break
+		}
+
+		retryable := idempotent || !dispatched
+		if !retryable || attempt == maxSendAttempts {
+			return nil, err
+		}
+		time.Sleep(retryBaseDelay * time.Duration(attempt))
+	}
+
+	if resp.Type == "error" {
+		return nil, fmt.Errorf("gateway error: %s", resp.Message)
+	}
+	return resp, nil
+}
+
+// roundTrip performs exactly one dial-write-read cycle against gateway's IPC
+// socket.
+//
+// Connection reuse: this client deliberately dials a fresh connection per
+// call rather than keeping one persistent connection open with
+// reconnect-on-error. Two reasons, in order of weight:
+//  1. A single *Client is shared process-wide (orchestrator wires one
+//     instance into the executor, the API handlers, and the health
+//     aggregator — see cmd/orchestrator/main.go) and called concurrently from
+//     many goroutines. A persistent connection would need either a mutex
+//     serializing every call through it (turning concurrent gateway checks
+//     into a queue — a real regression, since a slow mutating call would
+//     block an unrelated health ping or scope check behind it) or a small
+//     connection pool (health-checking idle conns, handling a half-closed
+//     peer, redialing under load) — genuine complexity for a daemon that is
+//     always co-located on the same host.
+//  2. Unix domain sockets are cheap to dial: no DNS, no TCP handshake, just a
+//     local connect(2) syscall. The cost this would save is negligible next
+//     to gateway's own per-request work (nftables lookups, a hash-chained
+//     SQLite audit write).
+//
+// If gateway call volume or latency ever becomes a measured problem, revisit
+// this — but a fresh dial per call is not the bottleneck today, and the
+// concurrency-serialization cost of naive reuse would likely cost more than
+// it saves.
+//
+// dispatched reports whether the request frame may have reached gateway: it
+// is false only when the connection could not even be established (dial or
+// TLS-handshake failure) — the one case send() can prove gateway never saw
+// the request, and so the only case a mutating call is retried on. It flips
+// to true the moment the first write of the request frame is attempted,
+// whether or not that write itself returned an error (see send()'s doc
+// comment for why).
+func (c *Client) roundTrip(req Request) (resp *Response, dispatched bool, err error) {
 	rawConn, err := net.DialTimeout("unix", c.socketPath, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("connect to gateway: %w", err)
+		return nil, false, fmt.Errorf("connect to gateway: %w", err)
 	}
 
 	// Optionally upgrade to mTLS.
@@ -298,59 +412,59 @@ func (c *Client) send(req Request) (*Response, error) {
 		tlsConn := tls.Client(rawConn, c.tlsConfig)
 		if err := tlsConn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
 			_ = rawConn.Close()
-			return nil, fmt.Errorf("set deadline: %w", err)
+			return nil, false, fmt.Errorf("set deadline: %w", err)
 		}
 		if err := tlsConn.Handshake(); err != nil {
 			_ = rawConn.Close()
-			return nil, fmt.Errorf("mTLS handshake: %w", err)
+			return nil, false, fmt.Errorf("mTLS handshake: %w", err)
 		}
 		conn = tlsConn
 	}
 	defer func() { _ = conn.Close() }()
 
 	if err := conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
-		return nil, fmt.Errorf("set deadline: %w", err)
+		return nil, false, fmt.Errorf("set deadline: %w", err)
 	}
 
 	// Write length-prefixed JSON
 	data, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, false, fmt.Errorf("marshal request: %w", err)
 	}
 
 	lenBuf := make([]byte, 4)
 	binary.BigEndian.PutUint32(lenBuf, uint32(len(data)))
+
+	// From this point on the request is considered dispatched: bytes may
+	// already be in flight even if a Write call below returns an error.
+	dispatched = true
 	if err := writeAll(conn, lenBuf); err != nil {
-		return nil, fmt.Errorf("write length: %w", err)
+		return nil, true, fmt.Errorf("write length: %w", err)
 	}
 	if err := writeAll(conn, data); err != nil {
-		return nil, fmt.Errorf("write payload: %w", err)
+		return nil, true, fmt.Errorf("write payload: %w", err)
 	}
 
 	// Read response
 	if _, err := io.ReadFull(conn, lenBuf); err != nil {
-		return nil, fmt.Errorf("read response length: %w", err)
+		return nil, true, fmt.Errorf("read response length: %w", err)
 	}
 	respLen := binary.BigEndian.Uint32(lenBuf)
 	if respLen > 1048576 {
-		return nil, fmt.Errorf("response too large: %d bytes", respLen)
+		return nil, true, fmt.Errorf("response too large: %d bytes", respLen)
 	}
 
 	respBuf := make([]byte, respLen)
 	if _, err := io.ReadFull(conn, respBuf); err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, true, fmt.Errorf("read response: %w", err)
 	}
 
-	var resp Response
-	if err := json.Unmarshal(respBuf, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+	var out Response
+	if err := json.Unmarshal(respBuf, &out); err != nil {
+		return nil, true, fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	if resp.Type == "error" {
-		return nil, fmt.Errorf("gateway error: %s", resp.Message)
-	}
-
-	return &resp, nil
+	return &out, true, nil
 }
 
 func writeAll(conn net.Conn, buf []byte) error {

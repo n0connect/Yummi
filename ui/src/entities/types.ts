@@ -7,6 +7,17 @@ export type ChatProposal = {
   target_tool?: string
 }
 
+// ChatStreamEvent mirrors the orchestrator's conductor.StreamEvent — a raw,
+// incremental display token (or the terminal done signal) broadcast over
+// /ws/events as a "chat.stream" event while a conductor.Engine.Chat /
+// ChatWithHistory call is streaming from Ollama. Purely a display aid: the
+// authoritative reply is still the normal /api/v1/chat REST response.
+export type ChatStreamEvent = {
+  session_id: string
+  delta?: string
+  done: boolean
+}
+
 export type ExecutionRecord = {
   id: string
   session_id: string
@@ -47,6 +58,15 @@ export type ExecutionRecord = {
   // time instead of a static "running" state for however long a real
   // command takes, so a slow scan doesn't look identical to a hang.
   elapsed_secs?: number
+  // output_chunk/output_source mirror elapsed_secs's transient-field
+  // discipline: set only on a WS "execution.output" event (see
+  // orchestrator's execution.Store.publishOutputChunk) while status is
+  // 'running', never on a terminal record. A raw fragment of stdout/stderr
+  // as the sandboxed command produces it — purely a live-display aid, always
+  // superseded by output/error once the execution finishes. See
+  // AssistantPanel's liveOutputs for how these get accumulated and rendered.
+  output_chunk?: string
+  output_source?: 'stdout' | 'stderr' | string
 }
 
 // ─── Session + persisted chat (from /api/v1/sessions[/{id}/messages]) ─────────
@@ -172,6 +192,18 @@ export type ActivityEvent = {
   summary: string
   detail?: string
   timestamp: number
+}
+
+// An in-scope host/IP declared or discovered for a session (from
+// /api/v1/sessions/{id}/targets). Lets the findings view resolve a
+// Finding.target_id into the human-readable host/IP the operator recognizes.
+export type Target = {
+  id: string
+  session_id: string
+  value: string
+  in_scope: boolean
+  notes?: string
+  created_at?: number
 }
 
 // A structured security finding (from /api/v1/sessions/{id}/findings).

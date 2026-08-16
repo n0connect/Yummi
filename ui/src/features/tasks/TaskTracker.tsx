@@ -49,6 +49,18 @@ function stepGlyph(status: string): { icon: string; cls: string } {
   }
 }
 
+// The marker glyph is the only visual signal for done/running/pending/skipped
+// steps (unlike 'failed', which also gets a text line below it) — give it a
+// real accessible name instead of leaving a bare Unicode character for
+// assistive tech to guess at.
+const STEP_STATUS_LABEL: Record<string, string> = {
+  done: t('taskTracker.stepStatus.done'),
+  running: t('taskTracker.stepStatus.running'),
+  failed: t('taskTracker.stepStatus.failed'),
+  skipped: t('taskTracker.stepStatus.skipped'),
+  pending: t('taskTracker.stepStatus.pending')
+}
+
 function PlanTimeline({ plan }: { plan: PlanStep[] }): JSX.Element {
   return (
     <ol className="tt-timeline">
@@ -58,6 +70,7 @@ function PlanTimeline({ plan }: { plan: PlanStep[] }): JSX.Element {
           <li key={step.id} className={`tt-step tt-step-${g.cls}`}>
             <span
               className={`tt-step-marker ${g.cls === 'running' ? 'pulse' : ''}`}
+              aria-label={STEP_STATUS_LABEL[g.cls] ?? g.cls}
             >
               {g.icon}
             </span>
@@ -92,7 +105,7 @@ function LiveActivityFeed({
         <span>{t('taskTracker.liveFeedTitle')}</span>
         <span>{activities.length} {t('taskTracker.eventCountSuffix')}</span>
       </div>
-      <ol className="tt-live-list">
+      <ol className="tt-live-list" aria-live="polite" aria-relevant="additions">
         {activities.slice(-8).map((ev) => {
           const visible = presentActivity(ev)
           return (
@@ -169,8 +182,8 @@ export function TaskTracker({
     <div className={`tt-card tt-status-${task.status}`}>
       <header className="tt-header">
         <div className="tt-header-main">
-          <span className={`tt-pill tt-pill-${task.status}`}>
-            {!terminal && <span className="tt-pulse">●</span>}
+          <span className={`tt-pill tt-pill-${task.status}`} role="status" aria-live="polite">
+            {!terminal && <span className="tt-pulse" aria-hidden="true">●</span>}
             {STATUS_LABEL[task.status] ?? task.status}
           </span>
           <span className="tt-goal">
@@ -178,7 +191,7 @@ export function TaskTracker({
           </span>
         </div>
         {terminal && (
-          <button className="tt-x" onClick={onClose} title={t('taskTracker.closeTitle')}>
+          <button className="tt-x" onClick={onClose} title={t('taskTracker.closeTitle')} aria-label={t('taskTracker.closeTitle')}>
             ✕
           </button>
         )}
@@ -199,7 +212,7 @@ export function TaskTracker({
 
       {/* Awaiting approval — inline gate */}
       {task.status === 'awaiting_approval' && task.pending_proposal_id && (
-        <div className="tt-gate">
+        <div className="tt-gate" role="alert">
           <div className="tt-gate-head">
             <span className={`tt-risk tt-risk-${task.pending_risk}`}>
               {task.pending_risk}
@@ -228,7 +241,7 @@ export function TaskTracker({
           delegated from — see the Props.subTask doc comment above. */}
       {subTask?.status === 'awaiting_approval' &&
         subTask.pending_proposal_id && (
-          <div className="tt-gate tt-gate-nested">
+          <div className="tt-gate tt-gate-nested" role="alert">
             <div className="tt-gate-head">
               <span className="tt-gate-nested-badge">{t('taskTracker.subTaskBadge')}</span>
               <span className={`tt-risk tt-risk-${subTask.pending_risk}`}>
@@ -264,7 +277,7 @@ export function TaskTracker({
           "paused" forever no matter what the operator typed into the main
           chat box, which is a different, unrelated conversation channel). */}
       {task.status === 'paused' && (
-        <div className="tt-paused">
+        <div className="tt-paused" role="alert">
           {task.question && (
             <p className="tt-question">
               {sanitizeOperatorText(task.question, t('taskTracker.defaultQuestion'))}
@@ -288,6 +301,7 @@ export function TaskTracker({
                 }
               }}
               placeholder={t('taskTracker.resumeReplyPlaceholder')}
+              aria-label={t('taskTracker.resumeReplyPlaceholder')}
             />
             <div className="tt-actions">
               <button

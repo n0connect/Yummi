@@ -5,6 +5,12 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
+  /* Hints the browser this page supports both native-widget renderings
+     (scrollbars, form controls) — overridden to `light` inside the light
+     theme below so native chrome follows the active theme, not just our
+     own CSS. */
+  color-scheme: dark;
+
   /* ── Canvas: cool graphite scale ─────────────────────────────────────── */
   --bg-base:       #0a0c0e;   /* app backdrop */
   --bg-primary:    #0e1113;   /* panel canvas */
@@ -23,6 +29,16 @@
   --border-subtle: rgba(255, 255, 255, 0.045);
   --border-strong: rgba(255, 255, 255, 0.14);
   --border-focus:  rgba(45, 212, 191, 0.55);
+
+  /* ── Surface washes ──────────────────────────────────────────────────────
+     A generic "lighten the surface a touch" overlay used for hover states,
+     subtle card fills and header gradients throughout this file. Dark mode
+     lightens (white at low alpha, matching how every one of these call
+     sites was originally hand-tuned); the light theme below darkens instead
+     (same idea, opposite direction — see the LIGHT THEME block for why). */
+  --wash-faint:  rgba(255, 255, 255, 0.02);
+  --wash-soft:   rgba(255, 255, 255, 0.03);
+  --wash-medium: rgba(255, 255, 255, 0.05);
 
   /* ── Text ────────────────────────────────────────────────────────────── */
   --text-primary:   #f4f7f6;
@@ -78,6 +94,163 @@
   --transition-normal: 0.26s var(--ease);
   --transition-spring: 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME — "Graphite & Phosphor," re-lit for daylight.
+   Dark stays the unconditional default on :root (identical to every ruleset
+   above — nothing changes for an operator with no OS preference and no saved
+   choice). Light activates two ways, following the standard
+   "media-query-default, attribute-override" pattern:
+     1. Auto — `prefers-color-scheme: light`, unless an explicit override
+        says otherwise (the `:not([data-theme="dark"])` guard below).
+     2. Explicit — `<html data-theme="light">` (or "dark"), set by
+        StatusBar's toggle button and persisted to localStorage
+        (shared/lib/useTheme.ts). An explicit attribute always wins over the
+        OS preference in both directions — that's why `:root[data-theme=
+        "light"]` further down is a plain rule, NOT nested in the media
+        query: it has to apply even when the OS itself prefers dark.
+   Same custom properties throughout, same semantic meaning per token (e.g.
+   --text-primary is still the highest-contrast text color) — only the
+   values change. A handful of literal, non-token colors elsewhere in this
+   file were hand-tuned specifically for the dark canvas and don't survive a
+   naive value swap (a pastel-on-dark-red threat banner reads as pale-on-
+   pale-pink once the canvas flips, etc.) — those get their own narrow
+   overrides right below each theme's token block instead of a new token.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --bg-base:       #eef0f2;   /* app backdrop */
+    --bg-primary:    #f7f8f9;   /* panel canvas */
+    --bg-secondary:  #ffffff;   /* panel surface */
+    --bg-tertiary:   #f3f5f6;   /* raised surface */
+    --bg-elevated:   #e7eaec;   /* chips, code */
+    --bg-hover:      #dde1e4;
+
+    --glass-bg:      rgba(255, 255, 255, 0.75);
+    --glass-border:  rgba(16, 20, 26, 0.08);
+
+    --border:        rgba(16, 20, 26, 0.10);
+    --border-subtle: rgba(16, 20, 26, 0.06);
+    --border-strong: rgba(16, 20, 26, 0.16);
+    --border-focus:  rgba(15, 118, 110, 0.5);
+
+    /* Dark mode's washes lighten (white-over-dark); on a light canvas the
+       same "differentiate this surface a touch" job is done by darkening
+       instead (near-black-over-white, same low alphas). */
+    --wash-faint:  rgba(16, 20, 26, 0.035);
+    --wash-soft:   rgba(16, 20, 26, 0.05);
+    --wash-medium: rgba(16, 20, 26, 0.075);
+
+    --text-primary:   #10141a;
+    --text-secondary: rgba(16, 20, 26, 0.72);
+    --text-tertiary:  rgba(16, 20, 26, 0.50);
+    --text-muted:     rgba(16, 20, 26, 0.34);
+
+    /* The phosphor teal itself gets deeper, not brighter: #2dd4bf is ~1.9:1
+       against white (fails AA badly used as text), so light mode's --accent
+       is a darkened teal tuned for ~5.5:1 on white, with --accent-ink
+       flipped to a light ink to match (it's still solid-fill text, the fill
+       just got dark instead of bright). */
+    --accent:        #0f766e;
+    --accent-hover:  #115e59;
+    --accent-ink:    #f4fbf9;   /* text on accent fills */
+    --accent-glow:   rgba(15, 118, 110, 0.22);
+    --accent-soft:   rgba(15, 118, 110, 0.10);
+
+    /* Same treatment for the semantic set: each dark-mode hue kept (roughly)
+       but deepened enough to clear ~4.5:1 on white when used as text. The
+       -bg/-glow variants are intentionally NOT redeclared — they're already
+       low-alpha overlays of the *original* vivid hues, which still read as
+       correct pale tints over a white/near-white surface either way. */
+    --cyan:    #0369a1;
+    --green:   #15803d;
+    --yellow:  #a16207;
+    --orange:  #c2410c;
+    --red:     #b91c1c;
+    --purple:  #7e22ce;
+
+    --shadow-sm:    0 1px 2px rgba(15, 23, 32, 0.08);
+    --shadow-md:    0 6px 20px rgba(15, 23, 32, 0.10);
+    --shadow-lg:    0 14px 36px rgba(15, 23, 32, 0.14);
+    --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 18px 40px -26px rgba(15, 23, 32, 0.16);
+  }
+
+  /* Non-token literals that don't survive the flip unmodified (see the
+     block comment above). */
+  :root:not([data-theme="dark"]) .status-bar {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 248, 249, 0.75));
+  }
+  :root:not([data-theme="dark"]) ::-webkit-scrollbar-thumb { background: rgba(16, 20, 26, 0.16); }
+  :root:not([data-theme="dark"]) ::-webkit-scrollbar-thumb:hover { background: rgba(16, 20, 26, 0.26); background-clip: content-box; }
+  :root:not([data-theme="dark"]) .threat-title,
+  :root:not([data-theme="dark"]) .threat-hint,
+  :root:not([data-theme="dark"]) .btn-threat-reject { color: var(--red); }
+  :root:not([data-theme="dark"]) .btn-approve { color: #ffffff; }
+  /* Both hardcode a near-white-at-56%-alpha literal (not a token) tuned for
+     a dark canvas; on white it's nearly invisible. */
+  :root:not([data-theme="dark"]) .status-nav-link,
+  :root:not([data-theme="dark"]) .ctx-value { color: var(--text-tertiary); }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base:       #eef0f2;
+  --bg-primary:    #f7f8f9;
+  --bg-secondary:  #ffffff;
+  --bg-tertiary:   #f3f5f6;
+  --bg-elevated:   #e7eaec;
+  --bg-hover:      #dde1e4;
+
+  --glass-bg:      rgba(255, 255, 255, 0.75);
+  --glass-border:  rgba(16, 20, 26, 0.08);
+
+  --border:        rgba(16, 20, 26, 0.10);
+  --border-subtle: rgba(16, 20, 26, 0.06);
+  --border-strong: rgba(16, 20, 26, 0.16);
+  --border-focus:  rgba(15, 118, 110, 0.5);
+
+  --wash-faint:  rgba(16, 20, 26, 0.035);
+  --wash-soft:   rgba(16, 20, 26, 0.05);
+  --wash-medium: rgba(16, 20, 26, 0.075);
+
+  --text-primary:   #10141a;
+  --text-secondary: rgba(16, 20, 26, 0.72);
+  --text-tertiary:  rgba(16, 20, 26, 0.50);
+  --text-muted:     rgba(16, 20, 26, 0.34);
+
+  --accent:        #0f766e;
+  --accent-hover:  #115e59;
+  --accent-ink:    #f4fbf9;
+  --accent-glow:   rgba(15, 118, 110, 0.22);
+  --accent-soft:   rgba(15, 118, 110, 0.10);
+
+  --cyan:    #0369a1;
+  --green:   #15803d;
+  --yellow:  #a16207;
+  --orange:  #c2410c;
+  --red:     #b91c1c;
+  --purple:  #7e22ce;
+
+  --shadow-sm:    0 1px 2px rgba(15, 23, 32, 0.08);
+  --shadow-md:    0 6px 20px rgba(15, 23, 32, 0.10);
+  --shadow-lg:    0 14px 36px rgba(15, 23, 32, 0.14);
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 18px 40px -26px rgba(15, 23, 32, 0.16);
+}
+
+:root[data-theme="light"] .status-bar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 248, 249, 0.75));
+}
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(16, 20, 26, 0.16); }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(16, 20, 26, 0.26); background-clip: content-box; }
+:root[data-theme="light"] .threat-title,
+:root[data-theme="light"] .threat-hint,
+:root[data-theme="light"] .btn-threat-reject { color: var(--red); }
+:root[data-theme="light"] .btn-approve { color: #ffffff; }
+:root[data-theme="light"] .status-nav-link,
+:root[data-theme="light"] .ctx-value { color: var(--text-tertiary); }
 
 /* ═══ Reset & base ═══════════════════════════════════════════════════════ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -175,7 +348,7 @@ body::before {
   align-items: center;
   gap: 2px;
   padding: 3px;
-  background: rgba(255,255,255,0.03);
+  background: var(--wash-soft);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -192,12 +365,36 @@ body::before {
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
 }
-.status-nav-link:hover { color: var(--text-secondary); background: rgba(255,255,255,0.04); }
+.status-nav-link:hover { color: var(--text-secondary); background: var(--wash-medium); }
 .status-nav-link.active {
   color: var(--accent-hover);
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px rgba(45,212,191,0.25);
 }
+
+/* Theme toggle — icon button trailing the nav segment. */
+.theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.theme-toggle-btn:hover {
+  color: var(--accent-hover);
+  border-color: var(--border);
+  background: var(--wash-soft);
+  box-shadow: none;
+}
+.theme-toggle-icon { width: 17px; height: 17px; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    DASHBOARD — floating panels on a unified canvas
@@ -263,7 +460,7 @@ body::before {
   gap: var(--space-sm);
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
-  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
+  background: linear-gradient(180deg, var(--wash-faint), transparent);
 }
 .panel-header-title {
   display: flex; align-items: center; gap: var(--space-sm);
@@ -423,7 +620,7 @@ body::before {
 
 .log-list { flex: 1; overflow-y: auto; padding: var(--space-xs) 0; min-height: 0; font-size: var(--text-xs); }
 .log-line { display: flex; gap: var(--space-sm); align-items: flex-start; padding: 3px var(--space-lg); font-family: var(--font-mono); line-height: 1.65; transition: background var(--transition-fast); }
-.log-line:hover { background: rgba(255,255,255,0.02); }
+.log-line:hover { background: var(--wash-faint); }
 .log-ts { color: var(--text-muted); flex-shrink: 0; font-size: 10px; padding-top: 1px; width: 64px; }
 .log-level { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; flex-shrink: 0; width: 42px; padding-top: 1px; }
 .log-level-DEBUG { color: var(--text-muted); }
@@ -456,7 +653,7 @@ body::before {
 .msg-content { flex: 1; min-width: 0; padding-top: 1px; }
 
 .msg-user {
-  background: rgba(255,255,255,0.025);
+  background: var(--wash-soft);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: var(--space-md) var(--space-lg);
@@ -484,7 +681,7 @@ body::before {
   cursor: pointer; list-style: none; user-select: none;
   transition: background var(--transition-fast);
 }
-.execution-summary:hover { background: rgba(255,255,255,0.025); }
+.execution-summary:hover { background: var(--wash-soft); }
 .execution-summary::-webkit-details-marker { display: none; }
 .execution-chevron {
   color: var(--text-muted); font-size: var(--text-sm); line-height: 1;
@@ -530,6 +727,13 @@ body::before {
 }
 .execution-output-truncated { color: var(--orange); }
 .execution-output { margin: 0; padding: var(--space-sm) var(--space-lg) var(--space-md); font-family: var(--font-mono); font-size: 12px; line-height: 1.65; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: min(55vh, 460px); overflow-y: auto; background: var(--bg-base); }
+/* A running execution's provisional, still-growing output (WS
+   "execution.output" chunks) — same shape as the finished .execution-output
+   block, plus a small cyan "live" badge so it reads as provisional rather
+   than the authoritative result that replaces it on completion. */
+.execution-output-wrap-live { border-top: 1px solid rgba(56, 189, 248, 0.15); }
+.execution-output-live-badge { color: var(--cyan); font-weight: 600; }
+.execution-output-wrap-live .execution-output { max-height: min(35vh, 260px); }
 .execution-error { padding: var(--space-md) var(--space-lg); background: var(--red-bg); color: var(--red); font-size: var(--text-xs); border-top: 1px solid rgba(255,69,58,0.2); }
 .execution-threat { padding: var(--space-md) var(--space-lg); background: var(--red-bg); color: var(--red); font-size: var(--text-xs); font-weight: 600; line-height: 1.5; border-bottom: 1px solid rgba(255,69,58,0.3); word-break: break-word; }
 
@@ -550,7 +754,7 @@ body::before {
 
 .proposal-card { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--border-subtle); cursor: pointer; transition: all var(--transition-fast); }
 .proposal-card:last-child { border-bottom: none; }
-.proposal-card:hover { background: rgba(255,255,255,0.025); }
+.proposal-card:hover { background: var(--wash-soft); }
 .proposal-card.selected { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .proposal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
 .proposal-command { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-primary); background: var(--bg-base); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-sm); word-break: break-all; display: block; }
@@ -636,7 +840,7 @@ body::before {
 .chat-starter {
   min-height: 88px; padding: var(--space-md);
   display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-sm);
-  background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--wash-soft); border: 1px solid var(--border); border-radius: var(--radius-md);
   color: var(--text-secondary); font-family: var(--font-sans); font-size: var(--text-xs); font-weight: 500;
   line-height: 1.5; text-align: left; box-shadow: none;
 }
@@ -777,7 +981,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
   gap: var(--space-lg);
   padding: 6px 20px 8px;
   border-top: 1px solid var(--border-subtle);
-  background: rgba(255,255,255,0.01);
+  background: var(--wash-faint);
   flex-shrink: 0;
   flex-wrap: wrap;
 }
@@ -833,7 +1037,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
   font-family: var(--font-mono); font-size: 10px; text-align: left;
   transition: all var(--transition-fast);
 }
-.ctx-mode-option:hover { color: var(--text-secondary); background: rgba(255,255,255,0.05); box-shadow: none; }
+.ctx-mode-option:hover { color: var(--text-secondary); background: var(--wash-medium); box-shadow: none; }
 .ctx-mode-option.active { color: var(--accent-hover); background: var(--accent-soft); }
 
 .ctx-dot {
@@ -899,10 +1103,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .trace-page-title { font-family: var(--font-mono, monospace); font-size: 18px; letter-spacing: 0.08em; color: var(--accent); }
 .trace-page-sub { font-size: 13px; color: var(--text-muted); flex: 1; }
 .trace-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
-.trace-section { border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px 16px; background: rgba(255,255,255,0.015); }
+.trace-section { border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px 16px; background: var(--wash-faint); }
 .trace-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .trace-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
-.trace-section-count { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-muted); background: rgba(255,255,255,0.05); padding: 1px 7px; border-radius: 8px; }
+.trace-section-count { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-muted); background: var(--wash-medium); padding: 1px 7px; border-radius: 8px; }
 .trace-empty { font-size: 12px; color: var(--text-muted); font-style: italic; }
 .trace-list { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }
 .trace-row { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
@@ -910,14 +1114,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .trace-ico { flex: none; font-size: 13px; }
 .trace-kind { font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; opacity: 0.6; flex: none; min-width: 64px; }
 .trace-summary { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trace-finding { border-left: 2px solid var(--orange); padding: 4px 0 4px 10px; margin: 6px 0; }
-.trace-finding.sev-critical, .trace-finding.sev-high { border-left-color: var(--red); }
-.trace-finding.sev-info, .trace-finding.sev-low { border-left-color: var(--text-muted); }
-.trace-sev { font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; color: var(--orange); margin-right: 8px; }
-.trace-finding.sev-critical .trace-sev, .trace-finding.sev-high .trace-sev { color: var(--red); }
-.trace-finding-title { font-size: 13px; color: var(--text-primary); }
-.trace-src { font-size: 10px; color: var(--text-muted); margin-left: 8px; }
-.trace-finding-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+/* Findings section styling now lives in features/trace/FindingsPanel.css
+   (severity filtering/sorting/collapsible-evidence view) — see
+   ui/src/features/trace/FindingsPanel.tsx. */
 .trace-tactic { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
 .trace-cmd { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trace-outcome { font-size: 10px; text-transform: uppercase; flex: none; }
@@ -936,3 +1135,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .trace-pending-skill-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .trace-pending-skill-actions { display: flex; gap: 6px; flex: none; }
 .trace-skill-error { color: var(--red, #f87171); font-size: 12px; margin-bottom: 6px; }
+.trace-pending-skill-meta { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-muted); margin: 2px 0 6px; }
+.trace-pending-skill-resolved { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-muted); flex: none; }
+.trace-pending-skill-threat { border-radius: 6px; margin-bottom: 6px; padding: 6px 8px; }
+.trace-pending-skill-reject-reason { margin-bottom: 6px; }
+.trace-trajectory { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.trace-trajectory-field { font-size: 12px; }
+.trace-trajectory-label { display: block; font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px; }
+.trace-trajectory-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.trace-trajectory-list code { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); }
+.trace-trajectory-tag { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--accent); margin-left: 6px; }

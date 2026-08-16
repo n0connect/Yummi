@@ -7,6 +7,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import type { MetricSample } from '../../../features/health/useHealthMetrics'
+import { t } from '../../../shared/i18n/strings'
 
 type Props = {
   samples: MetricSample[]
@@ -22,8 +23,28 @@ function fmtTime(ts: number): string {
 }
 
 export function MetricChart({ samples, dataKey, label, color, unit = '', formatValue }: Props) {
+  // recharts renders an SVG tree with no inherent screen-reader-friendly text
+  // alternative, and re-drawing it on every sample would be a very noisy live
+  // region. Instead: hide the chart visuals from assistive tech and expose a
+  // single accessible summary (the metric name + its latest value) on the
+  // wrapping element, refreshed on each render like the visual chart is.
+  const latest = samples[samples.length - 1]
+  const latestValue = latest ? (latest[dataKey] as number) : undefined
+  const latestDisplay =
+    latestValue === undefined
+      ? undefined
+      : formatValue
+        ? formatValue(latestValue)
+        : `${latestValue}${unit}`
+  const chartAriaLabel = latestDisplay
+    ? `${label}${t('health.chartAriaLabelSeparator')}${latestDisplay}`
+    : label
+
   return (
-    <div className="metric-chart">
+    // role="img" flattens this subtree's accessible-tree presentation (like
+    // native <img> alt text), so recharts' generated SVG internals are never
+    // exposed to assistive tech individually — only the aria-label below is.
+    <div className="metric-chart" role="img" aria-label={chartAriaLabel}>
       <div className="metric-chart-title">{label}</div>
       <ResponsiveContainer width="100%" height={140}>
         <AreaChart data={samples} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>

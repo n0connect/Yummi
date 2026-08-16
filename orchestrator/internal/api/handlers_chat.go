@@ -17,6 +17,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/health"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // taskCreatorFunc creates an agent task from a chat start_task intent and
@@ -319,7 +320,21 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 	}
 }
 
-func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator) http.HandlerFunc {
+// forwardEvent JSON-encodes and writes one event onto the shared /ws/events
+// socket, in the common {type, event, timestamp, data} envelope every event
+// kind on this socket uses. eventName is optional (omitted from the payload
+// when empty — gateway.status events carry no per-event name). Returns false
+// when the write failed (the connection is gone), matching every caller's
+// existing "stop the loop" behavior on a write error.
+func forwardEvent(conn *websocket.Conn, eventType, eventName string, timestamp int64, data any) bool {
+	payload := map[string]any{"type": eventType, "timestamp": timestamp, "data": data}
+	if eventName != "" {
+		payload["event"] = eventName
+	}
+	return conn.WriteJSON(payload) == nil
+}
+
+func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator, curatorStore *skillcurator.Store, assistant *conductor.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if executions == nil {
 			http.Error(w, "execution store unavailable", http.StatusServiceUnavailable)
@@ -380,6 +395,31 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 			}
 		}
 
+		// Pending-skill lifecycle events (auto-skill-creation review queue)
+		// share this websocket too, so the TRACE page's pending-drafts panel
+		// updates live instead of polling. A nil curatorStore simply means no
+		// skill channel.
+		var skillEvents <-chan skillcurator.Event
+		if curatorStore != nil {
+			skillSubID, ch, serr := curatorStore.Subscribe(32)
+			if serr == nil {
+				skillEvents = ch
+				defer curatorStore.Unsubscribe(skillSubID)
+			}
+		}
+
+		// Chat display-token stream (see conductor/stream.go). A nil assistant
+		// (LLM unconfigured) simply means no stream channel — everything else
+		// on this websocket keeps working.
+		var streamEvents <-chan conductor.StreamEvent
+		if assistant != nil {
+			streamSubID, ch, cerr := assistant.SubscribeStream(64)
+			if cerr == nil {
+				streamEvents = ch
+				defer assistant.UnsubscribeStream(streamSubID)
+			}
+		}
+
 		pingTicker := time.NewTicker(20 * time.Second)
 		defer pingTicker.Stop()
 
@@ -392,13 +432,7 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 				if sessionFilter != "" && evt.Record.SessionID != sessionFilter {
 					continue
 				}
-				payload := map[string]any{
-					"type":      "execution.status",
-					"event":     evt.Type,
-					"timestamp": evt.Timestamp,
-					"data":      evt.Record,
-				}
-				if err := conn.WriteJSON(payload); err != nil {
+				if !forwardEvent(conn, "execution.status", evt.Type, evt.Timestamp, evt.Record) {
 					return
 				}
 			case evt, ok := <-taskEvents:
@@ -409,13 +443,7 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 				if sessionFilter != "" && evt.Task.SessionID != sessionFilter {
 					continue
 				}
-				payload := map[string]any{
-					"type":      "task.status",
-					"event":     evt.Type,
-					"timestamp": evt.Timestamp,
-					"data":      evt.Task,
-				}
-				if err := conn.WriteJSON(payload); err != nil {
+				if !forwardEvent(conn, "task.status", evt.Type, evt.Timestamp, evt.Task) {
 					return
 				}
 			case env, ok := <-activityEvents:
@@ -426,11 +454,7 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 				if sessionFilter != "" && env.Event.SessionID != sessionFilter {
 					continue
 				}
-				if err := conn.WriteJSON(map[string]any{
-					"type":      "agent.activity",
-					"timestamp": env.Event.Timestamp,
-					"data":      env.Event,
-				}); err != nil {
+				if !forwardEvent(conn, "agent.activity", "", env.Event.Timestamp, env.Event) {
 					return
 				}
 			case evt, ok := <-gatewayEvents:
@@ -438,13 +462,33 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 					gatewayEvents = nil
 					continue
 				}
-				payload := map[string]any{
-					"type":      "gateway.status",
-					"event":     evt.Type,
-					"timestamp": evt.Timestamp,
-					"data":      evt.Rules,
+				if !forwardEvent(conn, "gateway.status", evt.Type, evt.Timestamp, evt.Rules) {
+					return
 				}
-				if err := conn.WriteJSON(payload); err != nil {
+			case evt, ok := <-skillEvents:
+				if !ok {
+					skillEvents = nil
+					continue
+				}
+				if sessionFilter != "" && evt.Skill.SessionID != sessionFilter {
+					continue
+				}
+				if !forwardEvent(conn, "skill.status", evt.Type, evt.Timestamp, evt.Skill) {
+					return
+				}
+			case evt, ok := <-streamEvents:
+				if !ok {
+					streamEvents = nil
+					continue
+				}
+				if sessionFilter != "" && evt.SessionID != sessionFilter {
+					continue
+				}
+				eventName := "chat.delta"
+				if evt.Done {
+					eventName = "chat.done"
+				}
+				if !forwardEvent(conn, "chat.stream", eventName, time.Now().Unix(), evt) {
 					return
 				}
 			case <-pingTicker.C:
