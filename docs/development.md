@@ -17,7 +17,7 @@ This page assumes you've already completed [Installation](installation.md) — a
 
 ## Two Go modules — the mistake almost everyone makes once <a id="two-go-modules"></a>
 
-This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root and `orchestrator/go.mod` are **two independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI/TUI module — every orchestrator test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/`, you must `cd orchestrator` (or prefix each command with `cd orchestrator &&`) first:
+This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root and `orchestrator/go.mod` are **two independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/`, you must `cd orchestrator` (or prefix each command with `cd orchestrator &&`) first:
 
 ```bash
 # WRONG — silently skips every orchestrator_test.go
@@ -85,7 +85,7 @@ make lint    # golangci-lint run — TWICE: once at the repo root, once `cd orch
 make vuln    # govulncheck — supply-chain scan, both Go modules
 ```
 
-`make lint` running twice is not a typo — it's the same two-module split as above: `golangci-lint` operates per Go module, so one invocation at the repo root lints the CLI/TUI module and a second, separate invocation (`cd orchestrator && golangci-lint run`) lints the orchestrator module. There is only **one** `.golangci.yml` in the repository (at the root) — `golangci-lint` discovers it by walking up from the current directory, so both passes read the same config; you don't need a second copy inside `orchestrator/` for shared rules to apply there too.
+`make lint` running twice is not a typo — it's the same two-module split as above: `golangci-lint` operates per Go module, so one invocation at the repo root lints the CLI module and a second, separate invocation (`cd orchestrator && golangci-lint run`) lints the orchestrator module. There is only **one** `.golangci.yml` in the repository (at the root) — `golangci-lint` discovers it by walking up from the current directory, so both passes read the same config; you don't need a second copy inside `orchestrator/` for shared rules to apply there too.
 
 ---
 

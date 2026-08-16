@@ -11,7 +11,7 @@ docs/
   architecture.md         The 5 runtime components, network topology, the 3 core data flows
   security-model.md       Fail-closed network layer + content-layer threat scanning + audit chain
   installation.md         OS/architecture-specific setup, the cgo/Go-version/Node gotchas, troubleshooting
-  usage-guide.md           The 6 UI tabs, approval flows, the CLI and TUI
+  usage-guide.md           The 6 UI tabs, approval flows, the CLI
   development.md          Fast build loops, running a single test, the two-Go-modules trap
   api-reference.md        Every REST route and WebSocket event, grouped by domain
 
@@ -27,7 +27,7 @@ docs/
   modules/                Code organized BY IMPLEMENTATION STACK — where to find things
     orchestrator.md         Go — orchestrator packages and the conductor/executor boundary
     gateway.md               Rust — the trust-boundary module map and startup sequence
-    cli-and-tui.md           Go (root module) — the yummi binary and its terminal UI
+    cli.md                   Go (root module) — the yummi binary (Docker lifecycle, doctor, web UI launcher)
     ui.md                    Node/React — the dashboard's directory structure
 
   persona/

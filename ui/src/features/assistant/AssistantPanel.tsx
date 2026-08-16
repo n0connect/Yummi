@@ -11,7 +11,6 @@ import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
 import { ContextBar, type ApprovalMode } from './ContextBar'
 import { TaskTracker } from '../tasks/TaskTracker'
-import { RuntimeConnectionNotice } from '../desktop/RuntimeConnectionNotice'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 import { t, LANG } from '../../shared/i18n/strings'
 
@@ -1213,7 +1212,6 @@ export function AssistantPanel({
       </div>
 
       <div className="chat-area">
-        <RuntimeConnectionNotice />
         {historyError && (
           <div className="history-error-banner">
             <span>{t('assistant.historyErrorMsg')}</span>

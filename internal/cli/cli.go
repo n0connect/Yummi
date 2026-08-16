@@ -28,7 +28,6 @@ type topLevelOptions struct {
 
 const (
 	actionUI      = "ui"
-	actionTUI     = "tui"
 	actionStart   = "start"
 	actionStop    = "stop"
 	actionStatus  = "status"
@@ -52,8 +51,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch top.Action {
 	case actionUI:
 		return runUI(stdout, stderr)
-	case actionTUI:
-		return runTUI(stdout, stderr)
 	case actionVersion:
 		return runVersion(stdout, stderr)
 	case actionStart:
@@ -91,10 +88,6 @@ func parseTopLevelOptions(args []string) (topLevelOptions, error) {
 			return topLevelOptions{}, fmt.Errorf("--json is no longer supported; use plain output")
 		case "--help", "-h":
 			top.Opts.Help = true
-		case "--tui":
-			if err := setAction(actionTUI); err != nil {
-				return topLevelOptions{}, err
-			}
 		case "--start":
 			if err := setAction(actionStart); err != nil {
 				return topLevelOptions{}, err
@@ -247,13 +240,12 @@ func runDoctor(stdout, _ io.Writer) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "yummi [--tui|--start|--stop|--status|--doctor|--version] [--help]")
+	fmt.Fprintln(w, "yummi [--start|--stop|--status|--doctor|--version] [--help]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Default:")
 	fmt.Fprintln(w, "  yummi      Start/check services and open Yummi UI in app-window mode")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Operation flags:")
-	fmt.Fprintln(w, "  --tui      Launch the terminal user interface (TUI) instead of the web UI")
 	fmt.Fprintln(w, "  --version  Print version, git SHA, build date")
 	fmt.Fprintln(w, "  --start    Start runtime services via docker compose")
 	fmt.Fprintln(w, "  --stop     Stop runtime services via docker compose")

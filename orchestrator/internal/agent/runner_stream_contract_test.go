@@ -9,7 +9,7 @@ import (
 )
 
 // TestStreamContract_FullTaskEmitsUIEventSequence is the LLM↔Agent communication
-// contract test that guards what the TUI (and web UI) consume over /ws/events.
+// contract test that guards what the web UI consumes over /ws/events.
 //
 // It drives a real LLM-scripted task (real llm.Client → fake Ollama HTTP server,
 // real Store/Runner/Execer — NOT a mock of any Yummi component) through an
@@ -19,7 +19,7 @@ import (
 // client needs to render the agent: the plan, live status transitions, the
 // pending-approval fields, and the legible activity timeline.
 //
-// If the agent loop ever stops emitting one of these, the TUI silently loses the
+// If the agent loop ever stops emitting one of these, the UI silently loses the
 // ability to surface it — which is the class of bug this test exists to catch.
 func TestStreamContract_FullTaskEmitsUIEventSequence(t *testing.T) {
 	store, _ := NewStore(openTestDB(t))
@@ -27,7 +27,7 @@ func TestStreamContract_FullTaskEmitsUIEventSequence(t *testing.T) {
 	validator := conductor.NewValidator() // real risk classification → RequiresApproval
 
 	// Subscribe BEFORE creating the task so we observe the planning event too —
-	// this mirrors the TUI, which opens its WS before any task starts.
+	// this mirrors a real client, which opens its WS before any task starts.
 	taskSubID, taskCh, err := store.Subscribe(128)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -87,7 +87,7 @@ func TestStreamContract_FullTaskEmitsUIEventSequence(t *testing.T) {
 		}
 	}
 
-	// The `planned` event must carry the plan — this is what the TUI renders so
+	// The `planned` event must carry the plan — this is what the UI renders so
 	// the operator can see what the LLM decided to do.
 	if got := seenStatus[StatusPlanned]; len(got.Plan) != 1 {
 		t.Fatalf("planned event must carry the 1-step plan, got %d steps", len(got.Plan))

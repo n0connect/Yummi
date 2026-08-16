@@ -4,7 +4,7 @@
 
 This page is a map of `orchestrator/`'s packages by **implementation boundary** — what each one owns and, more importantly, what it deliberately does *not* know about. If you're looking for *behavior* (how the agent reasons, how memory retrieval works, how a command gets scope-checked), see [Agent](../agent/) — this page is for *"which file do I open"* orientation, not mechanism.
 
-`orchestrator/go.mod` (`github.com/n0connect/yummi/orchestrator`) is its own Go module, separate from the CLI/TUI's root `go.mod` — see [Architecture § Build ecosystems](../architecture.md#build-ecosystems) for why, and [Development § Two Go modules](../development.md#two-go-modules) for the practical `cd orchestrator` consequence.
+`orchestrator/go.mod` (`github.com/n0connect/yummi/orchestrator`) is its own Go module, separate from the CLI's root `go.mod` — see [Architecture § Build ecosystems](../architecture.md#build-ecosystems) for why, and [Development § Two Go modules](../development.md#two-go-modules) for the practical `cd orchestrator` consequence.
 
 ## Table of contents
 
