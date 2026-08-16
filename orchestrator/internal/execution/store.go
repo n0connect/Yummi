@@ -117,6 +117,16 @@ type Record struct {
 	// command (nikto, a full nmap scan, ...) takes, which previously looked
 	// indistinguishable from a hang.
 	ElapsedSecs int64 `json:"elapsed_secs,omitempty"`
+	// OutputChunk/OutputSource carry a single raw output fragment ("stdout"
+	// or "stderr") as the underlying command produces it. Mirrors
+	// ElapsedSecs's transient-field discipline exactly: set only on an
+	// "execution.output" event's Record copy (see publishOutputChunk), never
+	// persisted, never present on the canonical stored record or any
+	// terminal record. Purely a live-display aid for the UI — the final
+	// Output/Error fields (built from the same capped buffers, once the
+	// command exits) remain the single source of truth.
+	OutputChunk  string `json:"output_chunk,omitempty"`
+	OutputSource string `json:"output_source,omitempty"`
 }
 
 // Event is published whenever an execution lifecycle changes.
@@ -129,6 +139,27 @@ type Event struct {
 // ProcessFunc is called to execute a command. It receives the record context
 // and should return the command output or an error.
 type ProcessFunc func(ctx context.Context, rec Record) (output string, err error)
+
+// chunkSinkKey is the unexported context key runWithHeartbeat uses to embed
+// the per-execution output-chunk callback into the context it hands fn. Kept
+// unexported (unlike an exported context key type) since OutputSink is the
+// only sanctioned way to read it back out.
+type chunkSinkKey struct{}
+
+// OutputSink returns the chunk-reporting callback embedded in ctx by
+// runWithHeartbeat, or a no-op if ctx carries none — e.g. a caller invoking a
+// ProcessFunc directly outside the store's own process() loop (tests, the
+// dry-run stub path), where there is nothing to report to. A ProcessFunc
+// implementation that wants to surface incremental output (currently:
+// executor.ProcessFunc, which threads it into sandbox.Bridge.ExecStream)
+// calls this once per invocation and passes the result on as onChunk.
+// Signature is (source, chunk string) — source is "stdout" or "stderr".
+func OutputSink(ctx context.Context) func(source, chunk string) {
+	if fn, ok := ctx.Value(chunkSinkKey{}).(func(source, chunk string)); ok && fn != nil {
+		return fn
+	}
+	return func(string, string) {}
+}
 
 // Store keeps execution records with optional SQLite persistence.
 type Store struct {
@@ -612,15 +643,21 @@ const defaultHeartbeatInterval = 3 * time.Second
 // runWithHeartbeat runs fn in the background and periodically republishes the
 // execution's "running" event with ElapsedSecs set, until fn returns. It does
 // not change fn's contract (still one blocking call, same signature) — the
-// heartbeat is purely additive observability, not real output streaming.
+// heartbeat is additive observability, and so is the output-chunk sink
+// embedded into fn's context (see OutputSink): fn's return value (the
+// authoritative output/error) is built and consumed exactly as before,
+// regardless of whether it also reports chunks along the way.
 func (s *Store) runWithHeartbeat(ctx context.Context, id string, running Record, fn ProcessFunc) (string, error) {
 	type outcome struct {
 		output string
 		err    error
 	}
 	done := make(chan outcome, 1)
+	streamCtx := context.WithValue(ctx, chunkSinkKey{}, func(source, chunk string) {
+		s.publishOutputChunk(id, source, chunk)
+	})
 	go func() {
-		output, err := fn(ctx, running)
+		output, err := fn(streamCtx, running)
 		done <- outcome{output, err}
 	}()
 
@@ -645,6 +682,31 @@ func (s *Store) runWithHeartbeat(ctx context.Context, id string, running Record,
 			})
 		}
 	}
+}
+
+// publishOutputChunk republishes the execution's current record with one
+// output fragment attached, mirroring runWithHeartbeat's own transient-field
+// publish pattern for ElapsedSecs: the fragment is set only on the local
+// copy handed to publish, never written into s.items, so it can never leak
+// into a later Get/ListBySession call or survive a restart. A no-op for an
+// empty chunk, an unknown id, or an execution that is no longer running
+// (e.g. the operator canceled it moments before this chunk arrived) — there
+// is nothing left to show it to.
+func (s *Store) publishOutputChunk(id, source, chunk string) {
+	if chunk == "" {
+		return
+	}
+	rec, ok := s.Get(id)
+	if !ok || rec.Status != StatusRunning {
+		return
+	}
+	rec.OutputChunk = chunk
+	rec.OutputSource = source
+	s.publish(Event{
+		Type:      "execution.output",
+		Timestamp: time.Now().Unix(),
+		Record:    rec,
+	})
 }
 
 // finishOrHoldForThreat records an execution result and pauses the

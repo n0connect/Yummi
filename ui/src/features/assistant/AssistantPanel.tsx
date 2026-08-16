@@ -233,6 +233,19 @@ function formatElapsed(secs: number): string {
 // omitted, the same edge-preserving pattern operatorText.ts uses for
 // oversized model text.
 const MAX_DISPLAY_CHARS = 120_000
+
+// LIVE_OUTPUT_CAP bounds the client-side buffer a running execution's
+// streamed chunks accumulate into (see AssistantPanel's liveOutputs) — the
+// server already caps what it will ever send (sandbox.Bridge's maxOutputBytes
+// and its own streaming tap stop emitting once that cap hits), but a very
+// chatty command producing many small chunks under that byte cap could still
+// build a large JS string client-side without this. Kept in sync with
+// MAX_DISPLAY_CHARS: the live view is truncated for display the same way the
+// final output is. Unlike formatOutputForDisplay's head+tail snapshot, a live
+// tail keeps only the most recent bytes — for output still growing, the
+// newest lines are the relevant ones.
+const LIVE_OUTPUT_CAP = MAX_DISPLAY_CHARS
+
 function formatOutputForDisplay(text: string): {
   display: string
   truncated: boolean
@@ -252,10 +265,16 @@ function formatOutputForDisplay(text: string): {
 
 function ExecutionMessage({
   content,
-  execution
+  execution,
+  liveOutput
 }: {
   content: string
   execution: ExecutionRecord
+  // Streamed output accumulated so far (WS "execution.output" events) while
+  // this execution is still running — see AssistantPanel's liveOutputs.
+  // undefined/empty until the first chunk arrives; always superseded by
+  // execution.output once the record reaches a terminal status.
+  liveOutput?: string
 }): JSX.Element {
   const status = execution.status
   const isActive = ['queued', 'running'].includes(status)
@@ -264,6 +283,10 @@ function ExecutionMessage({
   const outputView = useMemo(
     () => formatOutputForDisplay(visibleOutput),
     [visibleOutput]
+  )
+  const liveOutputView = useMemo(
+    () => (liveOutput ? formatOutputForDisplay(liveOutput) : null),
+    [liveOutput]
   )
   const statusLabel: Record<string, string> = {
     queued: t('assistant.execStatus.queued'),
@@ -326,6 +349,21 @@ function ExecutionMessage({
         {execution.security_banner && (
           <div className="execution-threat" role="alert">
             ⚠ {execution.security_banner}
+          </div>
+        )}
+        {isActive && liveOutputView && (
+          <div className="execution-output-wrap execution-output-wrap-live">
+            <div className="execution-output-meta">
+              <span className="execution-output-live-badge">
+                {t('assistant.liveOutputLabel')}
+              </span>
+              {liveOutputView.truncated && (
+                <span className="execution-output-truncated">
+                  {t('assistant.truncatedBadge')}
+                </span>
+              )}
+            </div>
+            <pre className="execution-output">{liveOutputView.display}</pre>
           </div>
         )}
         {!isActive && visibleOutput && (
@@ -463,6 +501,16 @@ export function AssistantPanel({
   // scanner. Unlike a banner-only warning, these records cannot be fed back to
   // the conductor until the operator explicitly releases them.
   const [threatHolds, setThreatHolds] = useState<ExecutionRecord[]>([])
+  // liveOutputs accumulates each running execution's streamed output chunks
+  // (WS "execution.output" events — see execution.Store.publishOutputChunk
+  // server-side), keyed by execution id, so ExecutionMessage can render a
+  // growing live view instead of only a static "running" ticker. Purely a
+  // display aid, same discipline as streamingText for chat: the canonical
+  // Output field on the terminal record always supersedes this once the
+  // execution finishes, and a dropped WS stream just leaves the view frozen
+  // at its last chunk rather than hanging — the terminal record still lands
+  // over the same subscription (or a page reload) either way.
+  const [liveOutputs, setLiveOutputs] = useState<Record<string, string>>({})
   const [approvalMode, setApprovalModeState] =
     useState<ApprovalMode>(loadApprovalMode)
   // needsTitleRef marks a freshly-created session whose name should be set from
@@ -499,6 +547,7 @@ export function AssistantPanel({
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setLiveOutputs({})
     // isLoading isn't session-scoped state, so it must be cleared here too:
     // an in-flight request from the previous session now skips its own
     // `finally` (sessionIDRef no longer matches), so nothing else would ever
@@ -678,6 +727,7 @@ export function AssistantPanel({
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setLiveOutputs({})
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
         method: 'POST',
@@ -795,6 +845,22 @@ export function AssistantPanel({
     (record: ExecutionRecord) => {
       if (record.session_id !== sessionID) return
 
+      // A streamed output fragment (WS "execution.output") — accumulate it
+      // for the live view and stop here. It carries no status change (the
+      // record is still 'running'), so there's nothing else in this
+      // function that applies to it.
+      if (record.output_chunk) {
+        setLiveOutputs((prev) => {
+          const next = (prev[record.id] ?? '') + record.output_chunk
+          return {
+            ...prev,
+            [record.id]:
+              next.length > LIVE_OUTPUT_CAP ? next.slice(-LIVE_OUTPUT_CAP) : next
+          }
+        })
+        return
+      }
+
       upsertExecutionMessage(record)
 
       // Gateway Ask mode: the command is held until the operator approves the
@@ -824,6 +890,14 @@ export function AssistantPanel({
         // A resolved execution leaves the egress-hold list if it was there.
         setEgressHolds((prev) => prev.filter((r) => r.id !== record.id))
         setThreatHolds((prev) => prev.filter((r) => r.id !== record.id))
+        // The terminal record's own Output/Error is now authoritative —
+        // drop the provisional live buffer rather than let it linger.
+        setLiveOutputs((prev) => {
+          if (!(record.id in prev)) return prev
+          const next = { ...prev }
+          delete next[record.id]
+          return next
+        })
         // Feed back both completed AND failed to the conductor so the model can
         // react. Skip 'canceled' (user-initiated) and agent_task mode (the
         // agent loop handles its own feedback internally).
@@ -1359,6 +1433,7 @@ export function AssistantPanel({
                     key={msg.id}
                     content={msg.content}
                     execution={msg.execution}
+                    liveOutput={liveOutputs[msg.execution.id]}
                   />
                 )
               }

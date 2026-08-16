@@ -3,8 +3,12 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -351,6 +355,161 @@ func TestProcessFunc_MCPRecord_SurfacesStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(output, "Failed to resolve host") {
 		t.Fatalf("output = %q, want it to contain the MCP failure text (Stderr)", output)
+	}
+}
+
+// startTestSandboxContainer mirrors sandbox package's own test helper of the
+// same name (unexported, so it can't be reused across packages) — a real
+// standalone container from yummi/sandbox:local with the entrypoint
+// overridden to a bare sleep (the real entrypoint.sh needs NET_ADMIN + a
+// live gateway to do its routing setup, neither of which this test
+// provides). Skips (not fails) when docker or the image is unavailable.
+func startTestSandboxContainer(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available")
+	}
+	if err := exec.Command("docker", "image", "inspect", "yummi/sandbox:local").Run(); err != nil {
+		t.Skip("yummi/sandbox:local image not available locally")
+	}
+	name := fmt.Sprintf("yummi-sandbox-executor-test-%d", time.Now().UnixNano())
+	runArgs := []string{"run", "-d", "--rm", "--name", name, "--entrypoint", "/bin/sleep", "yummi/sandbox:local", "infinity"}
+	if out, err := exec.Command("docker", runArgs...).CombinedOutput(); err != nil {
+		t.Skipf("failed to start test sandbox container: %v (%s)", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "-f", name).Run()
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := exec.Command("docker", "exec", name, "true").Run(); err == nil {
+			return name
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Skip("test sandbox container did not become ready in time")
+	return ""
+}
+
+// TestRunScopedCommandStreamForwardsChunks proves the streaming variant
+// carries onChunk through the exact same scope-check-then-exec path
+// RunScopedCommand uses — real gateway allow verdict, real docker exec —
+// down to sandbox.Bridge.ExecStream, and that the concatenated chunks match
+// the final result exactly.
+func TestRunScopedCommandStreamForwardsChunks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	container := startTestSandboxContainer(t)
+
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "allow"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge(container)
+
+	var mu sync.Mutex
+	var gotStdout, gotStderr strings.Builder
+	onChunk := func(source string, chunk []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch source {
+		case "stdout":
+			gotStdout.Write(chunk)
+		case "stderr":
+			gotStderr.Write(chunk)
+		default:
+			t.Errorf("unexpected chunk source %q", source)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// "true 10.0.0.1" gives scope.ExtractTargets a real target token (so this
+	// exercises the gateway-checked branch, not the no-target bypass) while
+	// being a real no-op command (true ignores its arguments, no output); the
+	// for loop after it is the actual thing whose chunked output we assert on.
+	result, err := RunScopedCommandStream(ctx, bridge, pc, "true 10.0.0.1 ; for i in 1 2; do echo chunk-$i; sleep 0.1; done", onChunk)
+	if err != nil {
+		t.Fatalf("RunScopedCommandStream: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotStdout.String() != result.Stdout {
+		t.Fatalf("streamed stdout %q does not match Result.Stdout %q", gotStdout.String(), result.Stdout)
+	}
+	if gotStderr.String() != result.Stderr {
+		t.Fatalf("streamed stderr %q does not match Result.Stderr %q", gotStderr.String(), result.Stderr)
+	}
+	if !strings.Contains(gotStdout.String(), "chunk-1") || !strings.Contains(gotStdout.String(), "chunk-2") {
+		t.Fatalf("expected streamed stdout to contain both chunks, got %q", gotStdout.String())
+	}
+}
+
+// TestProcessFuncThreadsOutputSinkIntoBridge is the highest-level proof of
+// the whole streaming path: execution.Store's own OutputSink context value
+// (installed by runWithHeartbeat) reaches all the way through
+// executor.ProcessFunc → RunScopedCommandStream → sandbox.Bridge.ExecStream
+// and back out as real "execution.output" events on the store's own
+// pub/sub — the exact wiring cmd/orchestrator/main.go uses in production,
+// exercised here without needing the whole orchestrator binary.
+func TestProcessFuncThreadsOutputSinkIntoBridge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	container := startTestSandboxContainer(t)
+
+	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
+		if req.Type == "check_scope" {
+			return gateway.Response{Type: "scope_check_result", IP: req.IP, Verdict: "allow"}
+		}
+		return gateway.Response{Type: "error", Message: "unexpected request"}
+	})
+	pc := gateway.NewClient(socket)
+	bridge := sandbox.NewBridge(container)
+	e := New(bridge, pc, nil, nil)
+
+	store := execution.NewStore()
+	store.SetProcessor(e.ProcessFunc())
+
+	subID, events, err := store.Subscribe(32)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer store.Unsubscribe(subID)
+
+	rec, err := store.Enqueue("s1", "p1", "for i in 1 2; do echo out-$i; sleep 0.1; done", "manual_terminal")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	var chunkCount int
+	completed := false
+	deadline := time.Now().Add(15 * time.Second)
+	for !completed && time.Now().Before(deadline) {
+		select {
+		case evt := <-events:
+			if evt.Record.ID != rec.ID {
+				continue
+			}
+			if evt.Type == "execution.output" {
+				chunkCount++
+			}
+			if evt.Type == "execution.completed" {
+				completed = true
+			}
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if !completed {
+		t.Fatal("execution never completed")
+	}
+	if chunkCount == 0 {
+		t.Fatal("expected at least one execution.output event to reach the store's pub/sub via ProcessFunc")
 	}
 }
 

@@ -58,6 +58,15 @@ export type ExecutionRecord = {
   // time instead of a static "running" state for however long a real
   // command takes, so a slow scan doesn't look identical to a hang.
   elapsed_secs?: number
+  // output_chunk/output_source mirror elapsed_secs's transient-field
+  // discipline: set only on a WS "execution.output" event (see
+  // orchestrator's execution.Store.publishOutputChunk) while status is
+  // 'running', never on a terminal record. A raw fragment of stdout/stderr
+  // as the sandboxed command produces it — purely a live-display aid, always
+  // superseded by output/error once the execution finishes. See
+  // AssistantPanel's liveOutputs for how these get accumulated and rendered.
+  output_chunk?: string
+  output_source?: 'stdout' | 'stderr' | string
 }
 
 // ─── Session + persisted chat (from /api/v1/sessions[/{id}/messages]) ─────────
