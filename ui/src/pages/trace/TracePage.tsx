@@ -175,14 +175,34 @@ function ActivityRow({ ev }: { ev: ActivityEvent }): JSX.Element {
   )
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }): JSX.Element {
+function Section({
+  title,
+  count,
+  children,
+  live = false
+}: {
+  title: string
+  count: number
+  children: React.ReactNode
+  // live sections stream new items over the agent.activity websocket (see
+  // useTraceData) without any user action — mark them as a polite,
+  // additions-only live region so a screen reader user notices new entries
+  // arriving instead of only seeing the count badge change silently.
+  live?: boolean
+}): JSX.Element {
   return (
     <div className="trace-section">
       <div className="trace-section-head">
         <span className="trace-section-title">{title}</span>
         <span className="trace-section-count">{count}</span>
       </div>
-      {count === 0 ? <div className="trace-empty">{t('trace.emptyDash')}</div> : children}
+      {count === 0 ? (
+        <div className="trace-empty">{t('trace.emptyDash')}</div>
+      ) : live ? (
+        <div aria-live="polite" aria-relevant="additions">{children}</div>
+      ) : (
+        children
+      )}
     </div>
   )
 }
@@ -220,7 +240,7 @@ export function TracePage(): JSX.Element {
 
       <div className="trace-grid">
         {/* Live trace */}
-        <Section title={t('trace.sectionActivity')} count={activity.length}>
+        <Section title={t('trace.sectionActivity')} count={activity.length} live>
           <div className="trace-list">
             {activity.map(ev => <ActivityRow key={ev.id} ev={ev} />)}
           </div>
@@ -275,7 +295,7 @@ export function TracePage(): JSX.Element {
             the trajectory it was learned from, and any threat-scan/reject
             metadata so an operator can judge it without leaving this page. */}
         <Section title={t('trace.sectionPendingSkills')} count={pendingSkills.length}>
-          {skillError && <div className="trace-skill-error">{skillError}</div>}
+          {skillError && <div className="trace-skill-error" role="alert">{skillError}</div>}
           {pendingSkills.map(p => (
             <PendingSkillCard key={p.id} skill={p} onApprove={handleApproveSkill} onReject={handleRejectSkill} />
           ))}

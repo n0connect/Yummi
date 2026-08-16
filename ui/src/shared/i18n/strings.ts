@@ -20,6 +20,7 @@ const en = {
   'statusBar.nav.logs': 'Logs',
   'statusBar.nav.gateway': 'Gateway',
   'statusBar.nav.health': 'Health',
+  'statusBar.navAriaLabel': 'Main navigation',
 
   // ── SessionRail ─────────────────────────────────────────────────────────
   'sessionRail.toggleOpenTitle': 'Close conversation list',
@@ -46,6 +47,8 @@ const en = {
   'debugLog.filterPlaceholder': 'Filter...',
   'debugLog.noEntries': 'No log entries yet...',
   'debugLog.noMatches': 'No matching entries',
+  'debugLog.filterGroupAriaLabel': 'Log level filter',
+  'debugLog.logListAriaLabel': 'Log stream',
 
   // ── TerminalPanel ───────────────────────────────────────────────────────
   'terminalPanel.title': 'Terminal — Sandbox',
@@ -79,6 +82,7 @@ const en = {
   'gateway.emptyDash': '— empty —',
   'gateway.selectBlock': 'Block',
   'gateway.selectAllow': 'Allow',
+  'gateway.hostnameListSelectAriaLabel': 'List type',
   'gateway.hostnamePlaceholder': '*.example.com or example.com',
   'gateway.activeRulesTitle': 'Active Rules',
   'gateway.table.network': 'Network',
@@ -86,6 +90,7 @@ const en = {
   'gateway.table.source': 'Source',
   'gateway.table.reason': 'Reason',
   'gateway.table.expires': 'Expires',
+  'gateway.table.actions': 'Actions',
   'gateway.table.time': 'Time',
   'gateway.table.decision': 'Decision',
   'gateway.table.target': 'Target',
@@ -113,6 +118,8 @@ const en = {
   'health.goroutineLabel': 'Goroutine count',
   'health.offline': 'offline',
   'health.metricsCollecting': 'Collecting metrics…',
+  'health.windowSelectorAriaLabel': 'Metrics time window',
+  'health.chartAriaLabelSeparator': ' — current value: ',
 
   // ── ModuleStatusPanel ───────────────────────────────────────────────────
   'moduleStatus.label.sandbox': 'Sandbox',
@@ -189,6 +196,7 @@ const en = {
   'contextBar.contextLabel': 'context',
   'contextBar.usageTitleBefore': 'About ',
   'contextBar.usageTitleAfter': '% of context is in use',
+  'contextBar.usageBarAriaLabel': 'Context window usage',
 
   // ── TaskTracker ─────────────────────────────────────────────────────────
   'taskTracker.status.planning': 'Planning',
@@ -203,6 +211,11 @@ const en = {
   'taskTracker.verdict.verified': 'VERIFIED',
   'taskTracker.verdict.unsupported': 'UNSUPPORTED',
   'taskTracker.verdict.candidate': 'CLAIM',
+  'taskTracker.stepStatus.pending': 'Pending',
+  'taskTracker.stepStatus.running': 'Running',
+  'taskTracker.stepStatus.done': 'Done',
+  'taskTracker.stepStatus.failed': 'Failed',
+  'taskTracker.stepStatus.skipped': 'Skipped',
   'taskTracker.defaultStepDesc': 'Plan step',
   'taskTracker.stepFailed': 'Step could not complete.',
   'taskTracker.stepResultSaved': 'Result recorded.',
@@ -241,6 +254,9 @@ const en = {
   'assistant.emptyTitle': 'Start with a clear goal.',
   'assistant.emptyBody': 'Write your goal, scope, or the task you want done. Yummi clarifies the plan first; no command runs without operator approval.',
   'assistant.startersAriaLabel': 'Starter suggestions',
+  'assistant.chatInputAriaLabel': 'Message to Yummi',
+  'assistant.messagesLogAriaLabel': 'Conversation transcript',
+  'assistant.proposalsListAriaLabel': 'Suggested commands',
   'assistant.secondsShort': 's',
   'assistant.minutesShort': 'm',
   'assistant.truncatedNoticeBefore': '\n\n… ',
@@ -356,6 +372,7 @@ const tr = {
   'statusBar.nav.logs': 'Logs',
   'statusBar.nav.gateway': 'Gateway',
   'statusBar.nav.health': 'Health',
+  'statusBar.navAriaLabel': 'Ana gezinme',
 
   // ── SessionRail ─────────────────────────────────────────────────────────
   'sessionRail.toggleOpenTitle': 'Sohbet listesini kapat',
@@ -382,6 +399,8 @@ const tr = {
   'debugLog.filterPlaceholder': 'Filtrele...',
   'debugLog.noEntries': 'Henüz log kaydı yok...',
   'debugLog.noMatches': 'Eşleşen kayıt yok',
+  'debugLog.filterGroupAriaLabel': 'Log seviyesi filtresi',
+  'debugLog.logListAriaLabel': 'Log akışı',
 
   // ── TerminalPanel ───────────────────────────────────────────────────────
   'terminalPanel.title': 'Terminal — Sandbox',
@@ -415,6 +434,7 @@ const tr = {
   'gateway.emptyDash': '— boş —',
   'gateway.selectBlock': 'Engelle',
   'gateway.selectAllow': 'İzin ver',
+  'gateway.hostnameListSelectAriaLabel': 'Liste türü',
   'gateway.hostnamePlaceholder': '*.example.com veya example.com',
   'gateway.activeRulesTitle': 'Active Rules',
   'gateway.table.network': 'Ağ',
@@ -422,6 +442,7 @@ const tr = {
   'gateway.table.source': 'Kaynak',
   'gateway.table.reason': 'Sebep',
   'gateway.table.expires': 'Süre Sonu',
+  'gateway.table.actions': 'İşlemler',
   'gateway.table.time': 'Zaman',
   'gateway.table.decision': 'Karar',
   'gateway.table.target': 'Hedef',
@@ -449,6 +470,8 @@ const tr = {
   'health.goroutineLabel': 'Goroutine sayısı',
   'health.offline': 'çevrimdışı',
   'health.metricsCollecting': 'Metrikler toplanıyor…',
+  'health.windowSelectorAriaLabel': 'Metrik zaman aralığı',
+  'health.chartAriaLabelSeparator': ' — güncel değer: ',
 
   // ── ModuleStatusPanel ───────────────────────────────────────────────────
   'moduleStatus.label.sandbox': 'Sandbox',
@@ -526,6 +549,7 @@ const tr = {
   'contextBar.usageTitleBefore': 'Bağlamın yaklaşık %',
   'contextBar.usageTitleAfter': " kadarı kullanılıyor",
   // Note: matches "Bağlamın yaklaşık %NN kadarı kullanılıyor" when composed.
+  'contextBar.usageBarAriaLabel': 'Bağlam penceresi kullanımı',
 
   // ── TaskTracker ─────────────────────────────────────────────────────────
   'taskTracker.status.planning': 'Planlanıyor',
@@ -540,6 +564,11 @@ const tr = {
   'taskTracker.verdict.verified': 'DOĞRULANDI',
   'taskTracker.verdict.unsupported': 'DESTEKSİZ',
   'taskTracker.verdict.candidate': 'İDDİA',
+  'taskTracker.stepStatus.pending': 'Bekliyor',
+  'taskTracker.stepStatus.running': 'Çalışıyor',
+  'taskTracker.stepStatus.done': 'Tamamlandı',
+  'taskTracker.stepStatus.failed': 'Başarısız',
+  'taskTracker.stepStatus.skipped': 'Atlandı',
   'taskTracker.defaultStepDesc': 'Plan adımı',
   'taskTracker.stepFailed': 'Adım tamamlanamadı.',
   'taskTracker.stepResultSaved': 'Sonuç kaydedildi.',
@@ -578,6 +607,9 @@ const tr = {
   'assistant.emptyTitle': 'Net bir hedefle başlayın.',
   'assistant.emptyBody': 'Hedefinizi, kapsamı veya yapmak istediğiniz işi yazın. Yummi önce planı netleştirir; hiçbir komut operatör onayı olmadan çalışmaz.',
   'assistant.startersAriaLabel': 'Başlangıç önerileri',
+  'assistant.chatInputAriaLabel': "Yummi'ye mesaj",
+  'assistant.messagesLogAriaLabel': 'Sohbet dökümü',
+  'assistant.proposalsListAriaLabel': 'Önerilen komutlar',
   'assistant.secondsShort': 'sn',
   'assistant.minutesShort': 'dk',
   'assistant.truncatedNoticeBefore': '\n\n… ',

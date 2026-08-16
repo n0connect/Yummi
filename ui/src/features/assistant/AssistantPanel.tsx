@@ -283,9 +283,13 @@ function ExecutionMessage({
       open={isActive}
     >
       <summary className="execution-summary">
-        <span className="execution-chevron">›</span>
+        <span className="execution-chevron" aria-hidden="true">›</span>
+        {/* Decorative — the adjacent execution-state span already spells out
+            the same status as real text, so this glyph is hidden from
+            assistive tech rather than announced as a bare Unicode character. */}
         <span
           className={`execution-status ${status === 'completed' ? 'status-ok' : isActive ? 'status-live' : 'status-err'}`}
+          aria-hidden="true"
         >
           {status === 'completed'
             ? '✓'
@@ -1195,13 +1199,13 @@ export function AssistantPanel({
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
         {taskRunning && (
-          <span className="running-indicator">
-            <span className="loading-dot pulse">●</span> {t('assistant.taskRunningIndicator')}
+          <span className="running-indicator" role="status" aria-live="polite">
+            <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.taskRunningIndicator')}
           </span>
         )}
         {!taskRunning && isLoading && (
-          <span className="running-indicator">
-            <span className="loading-dot pulse">●</span> {t('assistant.replyPreparingIndicator')}
+          <span className="running-indicator" role="status" aria-live="polite">
+            <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.replyPreparingIndicator')}
           </span>
         )}
         <span className="panel-header-actions">
@@ -1213,7 +1217,7 @@ export function AssistantPanel({
 
       <div className="chat-area">
         {historyError && (
-          <div className="history-error-banner">
+          <div className="history-error-banner" role="alert">
             <span>{t('assistant.historyErrorMsg')}</span>
             <button
               className="small-button"
@@ -1224,10 +1228,22 @@ export function AssistantPanel({
           </div>
         )}
         {historyLoading && !historyError && (
-          <div className="history-loading-banner">{t('assistant.historyLoading')}</div>
+          <div className="history-loading-banner" role="status" aria-live="polite">{t('assistant.historyLoading')}</div>
         )}
-        {/* Message thread */}
-        <div className="chat-messages">
+        {/* Message thread. role="log" + polite/additions-only live
+            announcements: new turns (assistant replies, execution results,
+            task cards) are meant to be noticed without interrupting whatever
+            the operator is doing, matching the ARIA "log" role's intended use
+            for chat-style transcripts. aria-relevant is deliberately scoped to
+            "additions" so a nested widget's own internal updates (e.g. a task
+            card's progress bar) don't also re-trigger this outer region. */}
+        <div
+          className="chat-messages"
+          role="log"
+          aria-label={t('assistant.messagesLogAriaLabel')}
+          aria-live="polite"
+          aria-relevant="additions"
+        >
           {isFreshWorkspace ? (
             <EmptyWorkspace onUsePrompt={useStarterPrompt} />
           ) : (
@@ -1285,9 +1301,10 @@ export function AssistantPanel({
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Egress approval holds (gateway Ask mode) */}
+        {/* Egress approval holds (gateway Ask mode) — an operator-blocking
+            approval gate, so this is genuinely urgent: assertive, not polite. */}
         {egressHolds.length > 0 && (
-          <div className="egress-bar">
+          <div className="egress-bar" role="alert">
             {egressHolds.map((rec) => (
               <div key={rec.id} className="egress-card">
                 <div className="egress-main">
@@ -1319,9 +1336,10 @@ export function AssistantPanel({
           </div>
         )}
 
-        {/* Content-layer approval holds for single-command assistant output. */}
+        {/* Content-layer approval holds for single-command assistant output —
+            a threat-scan hold, the other genuinely urgent case: assertive. */}
         {threatHolds.length > 0 && (
-          <div className="threat-bar">
+          <div className="threat-bar" role="alert">
             {threatHolds.map((rec) => (
               <div key={rec.id} className="threat-card">
                 <div className="threat-main">
@@ -1373,10 +1391,18 @@ export function AssistantPanel({
                 {t('assistant.proposalsHint')}
               </span>
             </div>
-            <div className="proposals-list">
+            <div
+              className="proposals-list"
+              id="assistant-proposals-listbox"
+              role="listbox"
+              aria-label={t('assistant.proposalsListAriaLabel')}
+            >
               {proposals.map((p, idx) => (
                 <div
                   key={p.id ?? idx}
+                  id={`proposal-option-${idx}`}
+                  role="option"
+                  aria-selected={idx === selectedIdx}
                   className={`proposal-card ${idx === selectedIdx ? 'selected' : ''}`}
                   onClick={() => setSelectedIdx(idx)}
                   onDoubleClick={() => void approveProposal(p)}
@@ -1416,6 +1442,7 @@ export function AssistantPanel({
                         rejectProposal(p)
                       }}
                       title={t('common.reject')}
+                      aria-label={t('common.reject')}
                     >
                       ✕
                     </button>
@@ -1426,6 +1453,7 @@ export function AssistantPanel({
                         if (p.command) copyCommand(p.command)
                       }}
                       title={t('common.copy')}
+                      aria-label={t('common.copy')}
                     >
                       ⎘
                     </button>
@@ -1452,6 +1480,13 @@ export function AssistantPanel({
                     ? t('assistant.inputPlaceholderProposalReady')
                     : t('assistant.inputPlaceholderDefault')
             }
+            aria-label={t('assistant.chatInputAriaLabel')}
+            // While proposals are showing, this input drives selection over
+            // the listbox below via ArrowUp/ArrowDown/Enter (see
+            // handleKeyDown) — aria-controls + aria-activedescendant surface
+            // that same relationship to assistive tech.
+            aria-controls={proposals.length > 0 ? 'assistant-proposals-listbox' : undefined}
+            aria-activedescendant={proposals.length > 0 ? `proposal-option-${selectedIdx}` : undefined}
             disabled={isLoading}
           />
           {taskRunning ? (

@@ -40,24 +40,40 @@ export function DebugLogPanel(): JSX.Element {
         </span>
       </div>
       <div className="log-filter-bar">
-        {FILTERS.map(f => (
-          <button
-            key={f}
-            className={`log-filter-btn${activeFilter === f ? ' active' : ''}`}
-            onClick={() => setActiveFilter(f)}
-          >
-            {f}
-          </button>
-        ))}
+        <div role="group" aria-label={t('debugLog.filterGroupAriaLabel')} style={{ display: 'contents' }}>
+          {FILTERS.map(f => (
+            <button
+              key={f}
+              className={`log-filter-btn${activeFilter === f ? ' active' : ''}`}
+              aria-pressed={activeFilter === f}
+              onClick={() => setActiveFilter(f)}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
         <input
           type="text"
           placeholder={t('debugLog.filterPlaceholder')}
+          aria-label={t('debugLog.filterPlaceholder')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="log-search-input"
         />
       </div>
-      <div className="log-list" ref={listRef} onScroll={onScroll}>
+      {/* role="log" + polite live announcements for newly streamed lines
+          (useLogStream is an EventSource feed) — additions-only so a fast
+          burst of lines doesn't also re-announce unrelated attribute/text
+          churn elsewhere in the region. */}
+      <div
+        className="log-list"
+        ref={listRef}
+        onScroll={onScroll}
+        role="log"
+        aria-label={t('debugLog.logListAriaLabel')}
+        aria-live="polite"
+        aria-relevant="additions"
+      >
         {visible.length === 0 ? (
           <div className="log-empty">
             {entries.length === 0 ? t('debugLog.noEntries') : t('debugLog.noMatches')}
