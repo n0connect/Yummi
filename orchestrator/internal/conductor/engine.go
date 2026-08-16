@@ -23,6 +23,10 @@ type Engine struct {
 
 	histMu  sync.Mutex
 	history map[string][]llm.Message // keyed by session ID
+
+	// stream fans out raw display-token deltas (see stream.go) while a chat
+	// call is in flight. Zero-value-usable — no constructor wiring needed.
+	stream streamBroker
 }
 
 // maxHistoryPerSession caps stored turns to bound memory usage.
@@ -151,7 +155,7 @@ func (e *Engine) Chat(ctx context.Context, message string) ChatResponse {
 		})
 	}
 
-	resp, err := e.chatWithLLM(ctx, text)
+	resp, err := e.chatWithLLM(ctx, "", text)
 	if err != nil {
 		slog.Warn("ollama chat failed", "error", err)
 		return e.finalize(ChatResponse{
@@ -186,7 +190,7 @@ func (e *Engine) ChatWithHistory(ctx context.Context, sessionID, message string)
 	e.history[sessionID] = msgs
 	e.histMu.Unlock()
 
-	resp, err := e.chatWithLLMHistory(ctx, msgs)
+	resp, err := e.chatWithLLMHistory(ctx, sessionID, msgs)
 	if err != nil {
 		slog.Warn("ollama history chat failed", "error", err, "session", sessionID)
 		return e.Chat(ctx, text)
@@ -230,9 +234,12 @@ func (e *Engine) SeedHistory(sessionID string, msgs []llm.Message) {
 
 // ── LLM helpers ──────────────────────────────────────────────────────────────
 
-func (e *Engine) chatWithLLMHistory(ctx context.Context, history []llm.Message) (ChatResponse, error) {
+func (e *Engine) chatWithLLMHistory(ctx context.Context, sessionID string, history []llm.Message) (ChatResponse, error) {
 	system := e.buildSystemPrompt()
-	raw, err := e.llmClient.ChatHistory(ctx, system, history)
+	raw, err := e.llmClient.ChatHistoryStream(ctx, system, history, func(chunk string) {
+		e.publishStream(sessionID, chunk, false)
+	})
+	e.publishStream(sessionID, "", true)
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -251,10 +258,17 @@ func (e *Engine) chatWithLLMHistory(ctx context.Context, history []llm.Message) 
 
 // chatWithLLM sends the message to Ollama, retries on parse failure, and
 // issues an intent-rescue retry when the model returns explain with no proposals
-// for an actionable request.
-func (e *Engine) chatWithLLM(ctx context.Context, message string) (ChatResponse, error) {
+// for an actionable request. Only the primary attempt streams display tokens
+// (via sessionID, empty for the session-less Chat() path) — the rare
+// error-recovery retries below fall back to the plain blocking call, since
+// they're already a degraded path where perceived-progress polish matters
+// far less than keeping the diff (and risk surface) small.
+func (e *Engine) chatWithLLM(ctx context.Context, sessionID, message string) (ChatResponse, error) {
 	system := e.buildSystemPrompt()
-	raw, err := e.llmClient.Chat(ctx, system, message)
+	raw, err := e.llmClient.ChatStream(ctx, system, message, func(chunk string) {
+		e.publishStream(sessionID, chunk, false)
+	})
+	e.publishStream(sessionID, "", true)
 	if err != nil {
 		return ChatResponse{}, err
 	}
