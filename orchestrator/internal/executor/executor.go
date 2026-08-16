@@ -139,16 +139,29 @@ func runScopedTarget(ctx context.Context, pc *gateway.Client, target string, pin
 // if so, and only then runs the command in the sandbox. Every Go code path
 // that executes a pentest command — the agent/chat pipeline (ProcessFunc,
 // below) and the API's direct-exec endpoint — must route through this
-// function. Gateway is the only component that decides "is this target
-// reachable"; this function never makes that decision itself, only asks.
+// function (or its streaming counterpart, RunScopedCommandStream). Gateway
+// is the only component that decides "is this target reachable"; this
+// function never makes that decision itself, only asks. Thin wrapper around
+// RunScopedCommandStream with a nil onChunk.
 func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.Client, command string, pinnedIPs ...string) (*sandbox.Result, error) {
+	return RunScopedCommandStream(ctx, bridge, pc, command, nil, pinnedIPs...)
+}
+
+// RunScopedCommandStream is RunScopedCommand's streaming counterpart: the
+// exact same scope-check-then-exec shape (same target extraction, same
+// per-target gateway checks, same rule-opening order), but the final exec
+// goes through sandbox.Bridge.ExecStream with onChunk so a caller can
+// observe the command's stdout/stderr as it arrives instead of only once it
+// finishes. onChunk may be nil, in which case behavior is identical to
+// RunScopedCommand.
+func RunScopedCommandStream(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.Client, command string, onChunk func(source string, chunk []byte), pinnedIPs ...string) (*sandbox.Result, error) {
 	if bridge == nil {
 		return nil, fmt.Errorf("sandbox bridge not configured")
 	}
 
 	targets := scope.ExtractTargets(command)
 	if len(targets) == 0 {
-		return bridge.Exec(ctx, command)
+		return bridge.ExecStream(ctx, command, onChunk)
 	}
 	if pc == nil {
 		return nil, fmt.Errorf("gateway scope check unavailable: client not configured")
@@ -178,7 +191,7 @@ func RunScopedCommand(ctx context.Context, bridge *sandbox.Bridge, pc *gateway.C
 	}
 	nftWarning := strings.Join(nftWarnings, "; ")
 
-	result, err := bridge.Exec(ctx, command)
+	result, err := bridge.ExecStream(ctx, command, onChunk)
 	if nftWarning != "" && result != nil {
 		result.Warning = nftWarning
 	}
@@ -248,7 +261,14 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 			_ = json.Unmarshal([]byte(rec.PinnedIPs), &pinned)
 		}
 
-		result, err := RunScopedCommand(ctx, e.bridge, e.gateway, rec.Command, pinned...)
+		// A no-op sink outside the store's own process() loop (execution.OutputSink
+		// degrades gracefully — see its doc comment), so this line is safe even
+		// when ProcessFunc is invoked directly, e.g. in tests.
+		sink := execution.OutputSink(ctx)
+		onChunk := func(source string, chunk []byte) {
+			sink(source, string(chunk))
+		}
+		result, err := RunScopedCommandStream(ctx, e.bridge, e.gateway, rec.Command, onChunk, pinned...)
 		if err != nil {
 			// Egress Ask mode: the gateway wants operator approval before the
 			// target may be reached. Hold the execution (fail-closed, no

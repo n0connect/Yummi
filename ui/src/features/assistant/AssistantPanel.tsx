@@ -3,6 +3,7 @@ import type {
   ActivityEvent,
   AgentTask,
   ChatProposal,
+  ChatStreamEvent,
   ExecutionRecord,
   ServerChatMessage,
   SessionSummary
@@ -10,13 +11,29 @@ import type {
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
 import { ContextBar, type ApprovalMode } from './ContextBar'
-import { TaskTracker } from '../tasks/TaskTracker'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
-import { t, LANG } from '../../shared/i18n/strings'
-
-// Locale for number/date formatting, derived from the build-time UI language
-// (distinct from `t()`'s string dictionary — Intl needs a real BCP-47 tag).
-const NUMBER_LOCALE = LANG === 'en' ? 'en-US' : 'tr-TR'
+import { t } from '../../shared/i18n/strings'
+import type { Message } from './messageTypes'
+import {
+  WELCOME,
+  TERMINAL,
+  nextId,
+  capMessageContent,
+  freshWelcome,
+  loadDefaultMessages,
+  rebuildMessages,
+  loadApprovalMode,
+  saveApprovalMode,
+  STORAGE_MSGS
+} from './messageStorage'
+import {
+  TaskCardMessage,
+  EmptyWorkspace,
+  ExecutionMessage,
+  TextMessage,
+  StreamingMessage,
+  LIVE_OUTPUT_CAP
+} from './MessageRenderers'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,341 +50,6 @@ type ChatResponse = {
     task_id?: string
     task_goal?: string
   }
-}
-
-type MessageRole =
-  | 'user'
-  | 'assistant'
-  | 'system'
-  | 'execution'
-  | 'task'
-  | 'activity'
-
-type Message = {
-  id: string
-  role: MessageRole
-  content: string
-  timestamp: string
-  execution?: ExecutionRecord
-  taskID?: string
-  activity?: ActivityEvent
-}
-
-// ─── Storage ─────────────────────────────────────────────────────────────────
-
-// Real sessions persist server-side (chat_messages); only the legacy "default"
-// ad-hoc bucket still uses sessionStorage so a quick unsaved chat survives a
-// reload. STORAGE_MSGS is therefore scoped to the default bucket only.
-const STORAGE_MSGS = 'yummi:chat:messages:default'
-const STORAGE_MODE = 'yummi:agent:approvalMode'
-const WELCOME: Omit<Message, 'id' | 'timestamp'> = {
-  role: 'system',
-  content: t('assistant.welcome')
-}
-
-let _id = 0
-const nextId = () => `msg-${++_id}`
-
-// MAX_MESSAGE_CONTENT_CHARS bounds a single message's rendered/stored text.
-// Execution output, task summaries, and findings all ultimately originate
-// from sandbox tool output run against a (hostile) pentest target — an
-// unbounded field could pressure the render tree or sessionStorage with a
-// single oversized record. Mirrors the head+tail capping the orchestrator
-// already applies to agent observations (orchestrator/internal/agent/memory.go).
-const MAX_MESSAGE_CONTENT_CHARS = 64 * 1024
-
-function capMessageContent(content: string): string {
-  if (content.length <= MAX_MESSAGE_CONTENT_CHARS) return content
-  const edge = MAX_MESSAGE_CONTENT_CHARS / 2
-  return `${content.slice(0, edge)}\n...[message capped: ${content.length} chars total, middle elided]...\n${content.slice(-edge)}`
-}
-const freshWelcome = (): Message => ({
-  ...WELCOME,
-  id: nextId(),
-  timestamp: new Date().toISOString()
-})
-
-// loadDefaultMessages restores the ad-hoc "default" bucket from sessionStorage.
-function loadDefaultMessages(): Message[] {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_MSGS)
-    if (raw) return JSON.parse(raw) as Message[]
-  } catch {
-    /* corrupted — fall through */
-  }
-  return [freshWelcome()]
-}
-
-// rebuildMessages turns persisted server turns back into thread messages.
-// Reloaded turns render as plain text — any proposals they carried were
-// already acted on, so they are intentionally not made re-actionable here.
-function rebuildMessages(rows: ServerChatMessage[]): Message[] {
-  if (rows.length === 0) return [freshWelcome()]
-  return rows.map((r) => {
-    const role =
-      r.role === 'user' || r.role === 'assistant' || r.role === 'system'
-        ? r.role
-        : 'system'
-    return {
-      id: nextId(),
-      role,
-      content:
-        role === 'assistant' ? sanitizeOperatorText(r.content) : r.content,
-      timestamp: new Date((r.created_at ?? 0) * 1000).toISOString()
-    }
-  })
-}
-
-function loadApprovalMode(): ApprovalMode {
-  try {
-    return localStorage.getItem(STORAGE_MODE) === 'auto'
-      ? 'auto'
-      : 'ask_permission'
-  } catch {
-    return 'ask_permission'
-  }
-}
-
-function saveApprovalMode(mode: ApprovalMode): void {
-  try {
-    localStorage.setItem(STORAGE_MODE, mode)
-  } catch {
-    /* unavailable — UI cache only */
-  }
-}
-
-// Terminal statuses where the task is no longer active.
-const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'])
-
-// ─── Message row renderers ──────────────────────────────────────────────────
-// Pure presentational pieces of the message thread — each takes only the
-// props it needs and holds no state of its own, so they can be read (and
-// changed) independently of the stateful logic in AssistantPanel below.
-
-function TaskCardMessage({
-  task,
-  activities,
-  onClose,
-  onApprove,
-  onStop,
-  onResume,
-  subTask,
-  onApproveSub
-}: {
-  task: AgentTask
-  activities?: ActivityEvent[]
-  onClose: () => void
-  onApprove: (proposalID: string, approved: boolean) => void
-  onStop: () => void
-  onResume: (message: string) => void
-  subTask?: AgentTask | null
-  onApproveSub?: (proposalID: string, approved: boolean) => void
-}): JSX.Element {
-  return (
-    <div className="msg-task-card">
-      <TaskTracker
-        liveTask={task}
-        onClose={onClose}
-        onApprove={onApprove}
-        onStop={onStop}
-        onResume={onResume}
-        subTask={subTask}
-        onApproveSub={onApproveSub}
-        activities={activities}
-      />
-    </div>
-  )
-}
-
-const STARTER_PROMPTS = [
-  t('assistant.starterPrompt.0'),
-  t('assistant.starterPrompt.1'),
-  t('assistant.starterPrompt.2')
-]
-
-function EmptyWorkspace({
-  onUsePrompt
-}: {
-  onUsePrompt: (prompt: string) => void
-}): JSX.Element {
-  return (
-    <div className="chat-empty">
-      <div className="chat-empty-mark" aria-hidden="true">
-        Y
-      </div>
-      <span className="chat-empty-eyebrow">{t('assistant.emptyEyebrow')}</span>
-      <h1>{t('assistant.emptyTitle')}</h1>
-      <p>
-        {t('assistant.emptyBody')}
-      </p>
-      <div className="chat-starters" aria-label={t('assistant.startersAriaLabel')}>
-        {STARTER_PROMPTS.map((prompt) => (
-          <button
-            key={prompt}
-            className="chat-starter"
-            type="button"
-            onClick={() => onUsePrompt(prompt)}
-          >
-            <span>{prompt}</span>
-            <span aria-hidden="true">↗</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// formatElapsed renders a heartbeat's elapsed_secs as "Ns" or "MdkSs" — long
-// enough that a plain seconds counter would stop being readable at a glance.
-function formatElapsed(secs: number): string {
-  const s = t('assistant.secondsShort')
-  if (secs < 60) return `${secs}${s}`
-  return `${Math.floor(secs / 60)}${t('assistant.minutesShort')} ${secs % 60}${s}`
-}
-
-// Very large tool output (a full nikto/nmap -A report can run into the
-// hundreds of KB) shouldn't be dumped whole into the DOM just because the
-// operator expanded the row — keep both ends (the start is usually the most
-// orienting part, the end is often the summary/conclusion) and note what was
-// omitted, the same edge-preserving pattern operatorText.ts uses for
-// oversized model text.
-const MAX_DISPLAY_CHARS = 120_000
-function formatOutputForDisplay(text: string): {
-  display: string
-  truncated: boolean
-  lineCount: number
-} {
-  const lineCount = text.length ? text.split('\n').length : 0
-  if (text.length <= MAX_DISPLAY_CHARS)
-    return { display: text, truncated: false, lineCount }
-  const edge = MAX_DISPLAY_CHARS / 2
-  const omitted = (text.length - MAX_DISPLAY_CHARS).toLocaleString(NUMBER_LOCALE)
-  return {
-    display: `${text.slice(0, edge)}${t('assistant.truncatedNoticeBefore')}${omitted}${t('assistant.truncatedNoticeAfter')}${text.slice(-edge)}`,
-    truncated: true,
-    lineCount
-  }
-}
-
-function ExecutionMessage({
-  content,
-  execution
-}: {
-  content: string
-  execution: ExecutionRecord
-}): JSX.Element {
-  const status = execution.status
-  const isActive = ['queued', 'running'].includes(status)
-  const visibleOutput =
-    execution.output || (content !== execution.error ? content : '')
-  const outputView = useMemo(
-    () => formatOutputForDisplay(visibleOutput),
-    [visibleOutput]
-  )
-  const statusLabel: Record<string, string> = {
-    queued: t('assistant.execStatus.queued'),
-    running: t('assistant.execStatus.running'),
-    awaiting_egress_approval: t('assistant.execStatus.awaiting_egress_approval'),
-    awaiting_threat_approval: t('assistant.execStatus.awaiting_threat_approval'),
-    completed: t('assistant.execStatus.completed'),
-    failed: t('assistant.execStatus.failed'),
-    canceled: t('assistant.execStatus.canceled')
-  }
-  const completedLabel =
-    status === 'completed' && visibleOutput
-      ? t('assistant.completedWithOutput')
-      : (statusLabel[status] ?? status)
-  return (
-    <details
-      className={`msg msg-execution execution-${status}`}
-      open={isActive}
-    >
-      <summary className="execution-summary">
-        <span className="execution-chevron">›</span>
-        <span
-          className={`execution-status ${status === 'completed' ? 'status-ok' : isActive ? 'status-live' : 'status-err'}`}
-        >
-          {status === 'completed'
-            ? '✓'
-            : isActive
-              ? '●'
-              : status === 'awaiting_egress_approval' ||
-                  status === 'awaiting_threat_approval'
-                ? '!'
-                : '✗'}
-        </span>
-        <div className="execution-heading">
-          <code className="execution-cmd">{execution.command}</code>
-          <span className="execution-state">{completedLabel}</span>
-        </div>
-      </summary>
-      <div className="execution-detail">
-        {isActive && (
-          <div className="execution-live" aria-live="polite">
-            <span className="typing-dots" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-            <span>
-              {status === 'queued'
-                ? t('assistant.queuedLive')
-                : execution.elapsed_secs
-                  ? `${t('assistant.runningWithElapsedBefore')}${formatElapsed(execution.elapsed_secs)}${t('assistant.runningWithElapsedAfter')}`
-                  : t('assistant.runningNoElapsed')}
-            </span>
-          </div>
-        )}
-        {execution.security_banner && (
-          <div className="execution-threat" role="alert">
-            ⚠ {execution.security_banner}
-          </div>
-        )}
-        {!isActive && visibleOutput && (
-          <div className="execution-output-wrap">
-            <div className="execution-output-meta">
-              <span>{outputView.lineCount.toLocaleString(NUMBER_LOCALE)} {t('assistant.lineCountSuffix')}</span>
-              {outputView.truncated && (
-                <span className="execution-output-truncated">
-                  {t('assistant.truncatedBadge')}
-                </span>
-              )}
-            </div>
-            <pre className="execution-output">{outputView.display}</pre>
-          </div>
-        )}
-        {execution.error && execution.status !== 'completed' && (
-          <div className="execution-error">{execution.error}</div>
-        )}
-      </div>
-    </details>
-  )
-}
-
-function TextMessage({
-  role,
-  content,
-  timestamp
-}: {
-  role: MessageRole
-  content: string
-  timestamp: string
-}): JSX.Element {
-  const visibleContent =
-    role === 'assistant' ? sanitizeOperatorText(content) : content
-  return (
-    <div
-      className={`msg msg-${role}`}
-      title={new Date(timestamp).toLocaleTimeString()}
-    >
-      {role === 'user' && <span className="msg-prefix">{t('assistant.userPrefix')}</span>}
-      {role === 'assistant' && <span className="msg-prefix">{t('assistant.assistantPrefix')}</span>}
-      {role === 'system' && <span className="msg-prefix">{t('assistant.systemPrefix')}</span>}
-      <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>
-        {visibleContent}
-      </span>
-    </div>
-  )
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -394,6 +76,14 @@ export function AssistantPanel({
   const [input, setInput] = useState('')
   const [proposals, setProposals] = useState<ChatProposal[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  // streamingText holds the raw display tokens accumulated so far for the
+  // in-flight /api/v1/chat call, rendered as a growing in-progress assistant
+  // bubble (see onChatStream below). null = no stream in progress; '' = a
+  // stream has started but no delta has arrived yet (shows a typing
+  // indicator, same as ExecutionMessage's live state). Always cleared once
+  // the REST response resolves — that response, not this WS-driven text, is
+  // the authoritative source for the final message.
+  const [streamingText, setStreamingText] = useState<string | null>(null)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
   // subTask tracks a sub-agent task delegated (via [HANDOFF]) from
@@ -416,6 +106,16 @@ export function AssistantPanel({
   // scanner. Unlike a banner-only warning, these records cannot be fed back to
   // the conductor until the operator explicitly releases them.
   const [threatHolds, setThreatHolds] = useState<ExecutionRecord[]>([])
+  // liveOutputs accumulates each running execution's streamed output chunks
+  // (WS "execution.output" events — see execution.Store.publishOutputChunk
+  // server-side), keyed by execution id, so ExecutionMessage can render a
+  // growing live view instead of only a static "running" ticker. Purely a
+  // display aid, same discipline as streamingText for chat: the canonical
+  // Output field on the terminal record always supersedes this once the
+  // execution finishes, and a dropped WS stream just leaves the view frozen
+  // at its last chunk rather than hanging — the terminal record still lands
+  // over the same subscription (or a page reload) either way.
+  const [liveOutputs, setLiveOutputs] = useState<Record<string, string>>({})
   const [approvalMode, setApprovalModeState] =
     useState<ApprovalMode>(loadApprovalMode)
   // needsTitleRef marks a freshly-created session whose name should be set from
@@ -452,11 +152,16 @@ export function AssistantPanel({
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setLiveOutputs({})
     // isLoading isn't session-scoped state, so it must be cleared here too:
     // an in-flight request from the previous session now skips its own
     // `finally` (sessionIDRef no longer matches), so nothing else would ever
     // clear it and the new session's input would look permanently disabled.
     setIsLoading(false)
+    // Same reasoning for the streaming bubble: an in-flight request's deltas
+    // are about to start being filtered out by the new sessionID anyway (see
+    // onChatStream), but the stale partial text must not linger on screen.
+    setStreamingText(null)
     autoFeedbackCountRef.current = 0
     analyzedExecutionIDsRef.current = new Set()
     if (sid === 'default') {
@@ -533,7 +238,7 @@ export function AssistantPanel({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, activeTask])
+  }, [messages, activeTask, streamingText])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -627,6 +332,7 @@ export function AssistantPanel({
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setLiveOutputs({})
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
         method: 'POST',
@@ -710,6 +416,7 @@ export function AssistantPanel({
 
       const sid = sessionID
       setIsLoading(true)
+      setStreamingText('') // this call streams too — see onChatStream
       try {
         const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
           method: 'POST',
@@ -730,7 +437,10 @@ export function AssistantPanel({
       } catch {
         /* silent — execution output already visible in card */
       } finally {
-        if (sessionIDRef.current === sid) setIsLoading(false)
+        if (sessionIDRef.current === sid) {
+          setIsLoading(false)
+          setStreamingText(null)
+        }
       }
     },
     [sessionID, appendMessage]
@@ -739,6 +449,22 @@ export function AssistantPanel({
   const onExecution = useCallback(
     (record: ExecutionRecord) => {
       if (record.session_id !== sessionID) return
+
+      // A streamed output fragment (WS "execution.output") — accumulate it
+      // for the live view and stop here. It carries no status change (the
+      // record is still 'running'), so there's nothing else in this
+      // function that applies to it.
+      if (record.output_chunk) {
+        setLiveOutputs((prev) => {
+          const next = (prev[record.id] ?? '') + record.output_chunk
+          return {
+            ...prev,
+            [record.id]:
+              next.length > LIVE_OUTPUT_CAP ? next.slice(-LIVE_OUTPUT_CAP) : next
+          }
+        })
+        return
+      }
 
       upsertExecutionMessage(record)
 
@@ -769,6 +495,14 @@ export function AssistantPanel({
         // A resolved execution leaves the egress-hold list if it was there.
         setEgressHolds((prev) => prev.filter((r) => r.id !== record.id))
         setThreatHolds((prev) => prev.filter((r) => r.id !== record.id))
+        // The terminal record's own Output/Error is now authoritative —
+        // drop the provisional live buffer rather than let it linger.
+        setLiveOutputs((prev) => {
+          if (!(record.id in prev)) return prev
+          const next = { ...prev }
+          delete next[record.id]
+          return next
+        })
         // Feed back both completed AND failed to the conductor so the model can
         // react. Skip 'canceled' (user-initiated) and agent_task mode (the
         // agent loop handles its own feedback internally).
@@ -845,7 +579,22 @@ export function AssistantPanel({
     [sessionID]
   )
 
-  useChatStream({ onExecution, onTask, onActivity })
+  // onChatStream appends raw display tokens to the in-progress assistant
+  // bubble as they arrive. It never finalizes the bubble itself (that's
+  // sendChat/analyzeOutput's job once the REST response resolves) — a
+  // dropped or never-arriving `done` event (e.g. the websocket disconnects
+  // mid-response) is harmless here for exactly that reason: the bubble just
+  // stops growing and gets replaced wholesale once the REST reply lands.
+  const onChatStream = useCallback(
+    (ev: ChatStreamEvent) => {
+      if (ev.session_id !== sessionID || ev.done) return
+      if (!ev.delta) return
+      setStreamingText((prev) => (prev ?? '') + ev.delta)
+    },
+    [sessionID]
+  )
+
+  useChatStream({ onExecution, onTask, onActivity, onChatStream })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -986,6 +735,9 @@ export function AssistantPanel({
     setInput('')
     appendMessage({ role: 'user', content: text })
     setIsLoading(true)
+    // Show the in-progress bubble immediately (typing indicator until the
+    // first delta lands) — see onChatStream / the streamingText render below.
+    setStreamingText('')
 
     // Auto-title a freshly-created session from the operator's first message
     // (Claude-style), then let the rail pick up the new name.
@@ -1058,6 +810,11 @@ export function AssistantPanel({
     } finally {
       if (sessionIDRef.current === sid) {
         setIsLoading(false)
+        // The REST response (already handled above, success or failure) is
+        // the authoritative source for the final message — the in-progress
+        // bubble's job ends here regardless of whether any/all/no deltas
+        // ever arrived over the websocket.
+        setStreamingText(null)
         inputRef.current?.focus()
       }
     }
@@ -1195,13 +952,13 @@ export function AssistantPanel({
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
         {taskRunning && (
-          <span className="running-indicator">
-            <span className="loading-dot pulse">●</span> {t('assistant.taskRunningIndicator')}
+          <span className="running-indicator" role="status" aria-live="polite">
+            <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.taskRunningIndicator')}
           </span>
         )}
         {!taskRunning && isLoading && (
-          <span className="running-indicator">
-            <span className="loading-dot pulse">●</span> {t('assistant.replyPreparingIndicator')}
+          <span className="running-indicator" role="status" aria-live="polite">
+            <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.replyPreparingIndicator')}
           </span>
         )}
         <span className="panel-header-actions">
@@ -1213,7 +970,7 @@ export function AssistantPanel({
 
       <div className="chat-area">
         {historyError && (
-          <div className="history-error-banner">
+          <div className="history-error-banner" role="alert">
             <span>{t('assistant.historyErrorMsg')}</span>
             <button
               className="small-button"
@@ -1224,10 +981,22 @@ export function AssistantPanel({
           </div>
         )}
         {historyLoading && !historyError && (
-          <div className="history-loading-banner">{t('assistant.historyLoading')}</div>
+          <div className="history-loading-banner" role="status" aria-live="polite">{t('assistant.historyLoading')}</div>
         )}
-        {/* Message thread */}
-        <div className="chat-messages">
+        {/* Message thread. role="log" + polite/additions-only live
+            announcements: new turns (assistant replies, execution results,
+            task cards) are meant to be noticed without interrupting whatever
+            the operator is doing, matching the ARIA "log" role's intended use
+            for chat-style transcripts. aria-relevant is deliberately scoped to
+            "additions" so a nested widget's own internal updates (e.g. a task
+            card's progress bar) don't also re-trigger this outer region. */}
+        <div
+          className="chat-messages"
+          role="log"
+          aria-label={t('assistant.messagesLogAriaLabel')}
+          aria-live="polite"
+          aria-relevant="additions"
+        >
           {isFreshWorkspace ? (
             <EmptyWorkspace onUsePrompt={useStarterPrompt} />
           ) : (
@@ -1269,6 +1038,7 @@ export function AssistantPanel({
                     key={msg.id}
                     content={msg.content}
                     execution={msg.execution}
+                    liveOutput={liveOutputs[msg.execution.id]}
                   />
                 )
               }
@@ -1282,12 +1052,14 @@ export function AssistantPanel({
               )
             })
           )}
+          {streamingText !== null && <StreamingMessage text={streamingText} />}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Egress approval holds (gateway Ask mode) */}
+        {/* Egress approval holds (gateway Ask mode) — an operator-blocking
+            approval gate, so this is genuinely urgent: assertive, not polite. */}
         {egressHolds.length > 0 && (
-          <div className="egress-bar">
+          <div className="egress-bar" role="alert">
             {egressHolds.map((rec) => (
               <div key={rec.id} className="egress-card">
                 <div className="egress-main">
@@ -1319,9 +1091,10 @@ export function AssistantPanel({
           </div>
         )}
 
-        {/* Content-layer approval holds for single-command assistant output. */}
+        {/* Content-layer approval holds for single-command assistant output —
+            a threat-scan hold, the other genuinely urgent case: assertive. */}
         {threatHolds.length > 0 && (
-          <div className="threat-bar">
+          <div className="threat-bar" role="alert">
             {threatHolds.map((rec) => (
               <div key={rec.id} className="threat-card">
                 <div className="threat-main">
@@ -1373,10 +1146,18 @@ export function AssistantPanel({
                 {t('assistant.proposalsHint')}
               </span>
             </div>
-            <div className="proposals-list">
+            <div
+              className="proposals-list"
+              id="assistant-proposals-listbox"
+              role="listbox"
+              aria-label={t('assistant.proposalsListAriaLabel')}
+            >
               {proposals.map((p, idx) => (
                 <div
                   key={p.id ?? idx}
+                  id={`proposal-option-${idx}`}
+                  role="option"
+                  aria-selected={idx === selectedIdx}
                   className={`proposal-card ${idx === selectedIdx ? 'selected' : ''}`}
                   onClick={() => setSelectedIdx(idx)}
                   onDoubleClick={() => void approveProposal(p)}
@@ -1416,6 +1197,7 @@ export function AssistantPanel({
                         rejectProposal(p)
                       }}
                       title={t('common.reject')}
+                      aria-label={t('common.reject')}
                     >
                       ✕
                     </button>
@@ -1426,6 +1208,7 @@ export function AssistantPanel({
                         if (p.command) copyCommand(p.command)
                       }}
                       title={t('common.copy')}
+                      aria-label={t('common.copy')}
                     >
                       ⎘
                     </button>
@@ -1452,6 +1235,13 @@ export function AssistantPanel({
                     ? t('assistant.inputPlaceholderProposalReady')
                     : t('assistant.inputPlaceholderDefault')
             }
+            aria-label={t('assistant.chatInputAriaLabel')}
+            // While proposals are showing, this input drives selection over
+            // the listbox below via ArrowUp/ArrowDown/Enter (see
+            // handleKeyDown) — aria-controls + aria-activedescendant surface
+            // that same relationship to assistive tech.
+            aria-controls={proposals.length > 0 ? 'assistant-proposals-listbox' : undefined}
+            aria-activedescendant={proposals.length > 0 ? `proposal-option-${selectedIdx}` : undefined}
             disabled={isLoading}
           />
           {taskRunning ? (

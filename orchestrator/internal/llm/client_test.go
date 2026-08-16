@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -224,4 +225,175 @@ func TestQwen3ThinkTopLevel(t *testing.T) {
 	client := NewClient(server.URL, "qwen3:14b")
 	// DefaultQwen3Options sets Think=&false — must arrive at top-level, not options.
 	client.Chat(context.Background(), "You are Yummi", "scan target")
+}
+
+// ── Streaming ─────────────────────────────────────────────────────────────
+
+// newNDJSONOllamaServer is a real httptest.Server (not a mock) that answers
+// /api/chat with newline-delimited JSON, one line per element of chunks plus
+// a final {done:true} line — the shape Ollama's stream:true response takes.
+// Returns an accessor for the decoded request body, safe to call once the
+// client call has returned (the handler always finishes writing before the
+// client's scanner sees EOF, so there is a real happens-before edge, but the
+// accessor is still mutex-guarded to keep `go test -race` happy).
+func newNDJSONOllamaServer(t *testing.T, chunks ...string) (*httptest.Server, func() ollamaRequest) {
+	t.Helper()
+	var mu sync.Mutex
+	var captured ollamaRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ollamaRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		captured = req
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		flusher, _ := w.(http.Flusher)
+		for _, c := range chunks {
+			line, _ := json.Marshal(ollamaResponse{Message: Message{Role: "assistant", Content: c}})
+			_, _ = w.Write(append(line, '\n'))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		doneLine, _ := json.Marshal(ollamaResponse{Message: Message{Role: "assistant"}, Done: true})
+		_, _ = w.Write(append(doneLine, '\n'))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() ollamaRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return captured
+	}
+}
+
+func TestClientChatStreamAccumulatesAndInvokesOnChunk(t *testing.T) {
+	srv, getReq := newNDJSONOllamaServer(t, `{"in`, `tent":"ex`, `plain","message":"ok"}`)
+	client := NewClient(srv.URL, "test-model")
+
+	var mu sync.Mutex
+	var received []string
+	full, err := client.ChatStream(context.Background(), "system prompt", "user question", func(chunk string) {
+		mu.Lock()
+		received = append(received, chunk)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("ChatStream failed: %v", err)
+	}
+	want := `{"intent":"explain","message":"ok"}`
+	if full != want {
+		t.Fatalf("expected accumulated %q, got %q", want, full)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 3 {
+		t.Fatalf("expected 3 onChunk calls, got %d: %+v", len(received), received)
+	}
+	if strings.Join(received, "") != want {
+		t.Fatalf("chunks did not reassemble to full text: %q", strings.Join(received, ""))
+	}
+
+	req := getReq()
+	if !req.Stream {
+		t.Error("expected stream=true in request body")
+	}
+	if req.Format != "json" {
+		t.Errorf("expected format=json, got %q", req.Format)
+	}
+	if len(req.Messages) < 2 || req.Messages[0].Role != "system" {
+		t.Error("expected first message to be system")
+	}
+}
+
+func TestClientChatHistoryStreamSendsFullHistoryAndAllowsNilOnChunk(t *testing.T) {
+	srv, getReq := newNDJSONOllamaServer(t, "history ", "response")
+	client := NewClient(srv.URL, "test-model")
+
+	history := []Message{
+		{Role: "user", Content: "first message"},
+		{Role: "assistant", Content: "first reply"},
+	}
+	// nil onChunk must not panic — ChatHistoryStream degrades to accumulate-only.
+	full, err := client.ChatHistoryStream(context.Background(), "system", history, nil)
+	if err != nil {
+		t.Fatalf("ChatHistoryStream failed: %v", err)
+	}
+	if full != "history response" {
+		t.Errorf("expected 'history response', got %q", full)
+	}
+
+	req := getReq()
+	if len(req.Messages) != 3 {
+		t.Errorf("expected 3 messages (system + 2 history), got %d", len(req.Messages))
+	}
+	if !req.Stream {
+		t.Error("expected stream=true in request body")
+	}
+}
+
+func TestClientChatStreamMidStreamOllamaErrorStopsAccumulation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"partial"}}` + "\n"))
+		_, _ = w.Write([]byte(`{"error":"model overloaded"}` + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL, "test-model")
+	var chunks []string
+	_, err := client.ChatStream(context.Background(), "sys", "user", func(c string) {
+		chunks = append(chunks, c)
+	})
+	if err == nil {
+		t.Fatal("expected error from a mid-stream ollama error line")
+	}
+	if !strings.Contains(err.Error(), "model overloaded") {
+		t.Fatalf("expected error to mention model overloaded, got: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected exactly 1 onChunk call before the error line, got %d", len(chunks))
+	}
+}
+
+func TestClientChatStreamSkipsMalformedLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"good"}}` + "\n"))
+		_, _ = w.Write([]byte("not json at all\n"))
+		doneLine, _ := json.Marshal(ollamaResponse{Done: true})
+		_, _ = w.Write(append(doneLine, '\n'))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL, "test-model")
+	full, err := client.ChatStream(context.Background(), "sys", "user", nil)
+	if err != nil {
+		t.Fatalf("expected a malformed line to be skipped, not fail the stream: %v", err)
+	}
+	if full != "good" {
+		t.Errorf("expected 'good', got %q", full)
+	}
+}
+
+func TestClientChatStreamEmptyResultIsError(t *testing.T) {
+	srv, _ := newNDJSONOllamaServer(t, "   ", "\n")
+	client := NewClient(srv.URL, "test-model")
+
+	_, err := client.ChatStream(context.Background(), "sys", "user", nil)
+	if err == nil {
+		t.Fatal("expected an error for empty/whitespace-only accumulated content")
+	}
+	if !strings.Contains(err.Error(), "empty message") {
+		t.Fatalf("expected empty-message error, got: %v", err)
+	}
+}
+
+func TestClientChatStreamNilClientSafe(t *testing.T) {
+	var c *Client
+	if _, err := c.ChatStream(context.Background(), "sys", "msg", nil); err == nil {
+		t.Error("nil client ChatStream() should return error")
+	}
+	if _, err := c.ChatHistoryStream(context.Background(), "sys", nil, nil); err == nil {
+		t.Error("nil client ChatHistoryStream() should return error")
+	}
 }

@@ -93,7 +93,7 @@ export function GatewayPage(): JSX.Element {
 
   if (status === 'disconnected') {
     return (
-      <div className="gateway-page">
+      <main className="gateway-page">
         <div className="gateway-card gateway-unreachable">
           <span className="gateway-unreachable-mark" aria-hidden="true">⌁</span>
           <div>
@@ -102,15 +102,15 @@ export function GatewayPage(): JSX.Element {
           </div>
           <button className="small-button" onClick={() => void refreshRules()}>{t('common.retry')}</button>
         </div>
-      </div>
+      </main>
     )
   }
 
   return (
-    <div className="gateway-page">
+    <main className="gateway-page">
       <div className="gateway-header">
         <h2 className="gateway-title">{t('gateway.title')}</h2>
-        <span className={`gateway-status-badge ${status}`}>{status}</span>
+        <span className={`gateway-status-badge ${status}`} role="status" aria-live="polite">{status}</span>
       </div>
 
       <div className="gateway-card gateway-egress-card">
@@ -138,7 +138,7 @@ export function GatewayPage(): JSX.Element {
             {egressStatus === 'not_configured' ? t('gateway.notConfigured') : t('gateway.unreachableShort')}
           </p>
         )}
-        {egressError && <div className="gateway-form-error">{egressError}</div>}
+        {egressError && <div className="gateway-form-error" role="alert">{egressError}</div>}
       </div>
 
       <div className="gateway-card">
@@ -153,7 +153,7 @@ export function GatewayPage(): JSX.Element {
             {hostnamePolicy.allow.map(p => (
               <div key={`allow-${p}`} className="gateway-hostname-item">
                 <code>{p}</code>
-                <button onClick={() => handleRemoveHostname('allow', p)} title={t('common.remove')}>✕</button>
+                <button onClick={() => handleRemoveHostname('allow', p)} title={t('common.remove')} aria-label={`${t('common.remove')} ${p}`}>✕</button>
               </div>
             ))}
           </div>
@@ -163,32 +163,33 @@ export function GatewayPage(): JSX.Element {
             {hostnamePolicy.block.map(p => (
               <div key={`block-${p}`} className="gateway-hostname-item">
                 <code>{p}</code>
-                <button onClick={() => handleRemoveHostname('block', p)} title={t('common.remove')}>✕</button>
+                <button onClick={() => handleRemoveHostname('block', p)} title={t('common.remove')} aria-label={`${t('common.remove')} ${p}`}>✕</button>
               </div>
             ))}
           </div>
         </div>
         <div className="gateway-add-form">
-          <select value={hnList} onChange={e => setHnList(e.target.value as HostnameList)}>
+          <select value={hnList} onChange={e => setHnList(e.target.value as HostnameList)} aria-label={t('gateway.hostnameListSelectAriaLabel')}>
             <option value="block">{t('gateway.selectBlock')}</option>
             <option value="allow">{t('gateway.selectAllow')}</option>
           </select>
           <input
             placeholder={t('gateway.hostnamePlaceholder')}
+            aria-label={t('gateway.hostnamePlaceholder')}
             value={hnPattern}
             onChange={e => setHnPattern(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') void handleAddHostname() }}
           />
           <button disabled={hnPattern.trim() === ''} onClick={() => void handleAddHostname()}>{t('common.add')}</button>
         </div>
-        {hnError && <div className="gateway-form-error">{hnError}</div>}
+        {hnError && <div className="gateway-form-error" role="alert">{hnError}</div>}
       </div>
 
       <div className="gateway-card">
         <h3>{t('gateway.activeRulesTitle')}</h3>
         <table className="gateway-rules-table">
           <thead>
-            <tr><th>{t('gateway.table.network')}</th><th>{t('gateway.table.action')}</th><th>{t('gateway.table.source')}</th><th>{t('gateway.table.reason')}</th><th>{t('gateway.table.expires')}</th><th></th></tr>
+            <tr><th>{t('gateway.table.network')}</th><th>{t('gateway.table.action')}</th><th>{t('gateway.table.source')}</th><th>{t('gateway.table.reason')}</th><th>{t('gateway.table.expires')}</th><th aria-label={t('gateway.table.actions')}></th></tr>
           </thead>
           <tbody>
             {rules.map(rule => (
@@ -198,7 +199,7 @@ export function GatewayPage(): JSX.Element {
                 <td><span className={`source-badge ${rule.source}`}>{rule.source}</span></td>
                 <td>{rule.description}</td>
                 <td>{rule.expires_at ? new Date(rule.expires_at * 1000).toLocaleTimeString() : t('gateway.permanent')}</td>
-                <td><button onClick={() => handleRemove(rule.id)}>{t('common.remove')}</button></td>
+                <td><button onClick={() => handleRemove(rule.id)} aria-label={`${t('common.remove')} ${rule.network}`}>{t('common.remove')}</button></td>
               </tr>
             ))}
           </tbody>
@@ -220,12 +221,12 @@ export function GatewayPage(): JSX.Element {
       <div className="gateway-card">
         <h3>{t('gateway.addManualRuleTitle')}</h3>
         <div className="gateway-add-form">
-          <input placeholder={t('gateway.cidrPlaceholder')} value={network} onChange={e => setNetwork(e.target.value)} />
-          <input placeholder={t('gateway.ttlPlaceholder')} value={ttl} onChange={e => setTtl(e.target.value)} type="number" min="1" />
-          <input placeholder={t('gateway.reasonPlaceholder')} value={reason} onChange={e => setReason(e.target.value)} />
+          <input placeholder={t('gateway.cidrPlaceholder')} aria-label={t('gateway.cidrPlaceholder')} value={network} onChange={e => setNetwork(e.target.value)} />
+          <input placeholder={t('gateway.ttlPlaceholder')} aria-label={t('gateway.ttlPlaceholder')} value={ttl} onChange={e => setTtl(e.target.value)} type="number" min="1" />
+          <input placeholder={t('gateway.reasonPlaceholder')} aria-label={t('gateway.reasonPlaceholder')} value={reason} onChange={e => setReason(e.target.value)} />
           <button disabled={!canSubmit} onClick={handleAddRule}>{t('gateway.addRuleButton')}</button>
         </div>
-        {formError && <div className="gateway-form-error">{formError}</div>}
+        {formError && <div className="gateway-form-error" role="alert">{formError}</div>}
       </div>
 
       <div className="gateway-card">
@@ -246,6 +247,6 @@ export function GatewayPage(): JSX.Element {
           </tbody>
         </table>
       </div>
-    </div>
+    </main>
   )
 }

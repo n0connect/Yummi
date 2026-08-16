@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
-  ActivityEvent, Finding, PersistentContext, SkillInfo, Tactic,
+  ActivityEvent, Finding, PersistentContext, SkillInfo, Tactic, Target,
 } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
@@ -18,6 +18,7 @@ export function resolveSessionID(): string {
 export type TraceData = {
   activity: ActivityEvent[]
   findings: Finding[]
+  targets: Target[]
   tactics: Tactic[]
   context: PersistentContext[]
   skills: SkillInfo[]
@@ -30,6 +31,7 @@ export type TraceData = {
 export function useTraceData(sessionID: string): TraceData {
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [findings, setFindings] = useState<Finding[]>([])
+  const [targets, setTargets]   = useState<Target[]>([])
   const [tactics, setTactics]   = useState<Tactic[]>([])
   const [context, setContext]   = useState<PersistentContext[]>([])
   const [skills, setSkills]     = useState<SkillInfo[]>([])
@@ -39,6 +41,7 @@ export function useTraceData(sessionID: string): TraceData {
     const sid = sessionID || 'default'
     fetchJSON<ActivityEvent[]>(`/api/v1/sessions/${sid}/activity`).then(d => setActivity(d ?? [])).catch(() => {})
     fetchJSON<Finding[]>(`/api/v1/sessions/${sid}/findings`).then(d => setFindings(d ?? [])).catch(() => {})
+    fetchJSON<Target[]>(`/api/v1/sessions/${sid}/targets`).then(d => setTargets(d ?? [])).catch(() => {})
     fetchJSON<Tactic[]>(`/api/v1/tactics`).then(d => setTactics(d ?? [])).catch(() => {})
     fetchJSON<PersistentContext[]>(`/api/v1/sessions/${sid}/context`).then(d => setContext(d ?? [])).catch(() => {})
     fetchJSON<SkillInfo[]>(`/api/v1/skills`).then(d => setSkills(d ?? [])).catch(() => {})
@@ -65,5 +68,5 @@ export function useTraceData(sessionID: string): TraceData {
 
   useChatStream({ onActivity })
 
-  return { activity, findings, tactics, context, skills, roles, refresh }
+  return { activity, findings, targets, tactics, context, skills, roles, refresh }
 }
