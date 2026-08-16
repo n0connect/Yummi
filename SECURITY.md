@@ -14,7 +14,7 @@ Yummi is a pentest tool — its whole job is to run security-sensitive commands 
 
 ### Supported versions
 
-Yummi hasn't cut a tagged release yet — until it does, only the latest commit on `main` is supported. Once versioned releases start, this section will list which lines still receive security fixes.
+Only the latest tagged release (currently v1.0.0) and the latest commit on `main` are supported. This is a young, actively-developed project without parallel maintenance branches — there is no older line still receiving backported fixes; upgrading to latest is the fix.
 
 ## What Yummi's security model actually claims — and what it doesn't
 
