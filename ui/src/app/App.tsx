@@ -15,7 +15,7 @@ function Layout() {
   return (
     <>
       <StatusBar />
-      <Suspense fallback={<div className="route-loading">{t('app.routeLoading')}</div>}>
+      <Suspense fallback={<div className="route-loading" role="status" aria-live="polite">{t('app.routeLoading')}</div>}>
         <Outlet />
       </Suspense>
     </>

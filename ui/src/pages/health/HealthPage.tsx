@@ -17,17 +17,18 @@ export function HealthPage() {
   const latest = samples[samples.length - 1]
 
   return (
-    <div className="health-page">
+    <main className="health-page">
       <div className="health-header">
         <div>
           <span className="health-eyebrow">{t('health.eyebrow')}</span>
           <h2 className="health-title">{t('health.title')}</h2>
         </div>
-        <div className="window-selector">
+        <div className="window-selector" role="group" aria-label={t('health.windowSelectorAriaLabel')}>
           {WINDOWS.map(w => (
             <button
               key={w}
               className={`window-btn ${timeWindow === w ? 'active' : ''}`}
+              aria-pressed={timeWindow === w}
               onClick={() => setTimeWindow(w)}
             >
               {w}
@@ -64,8 +65,8 @@ export function HealthPage() {
       </div>
 
       {samples.length === 0 && (
-        <div className="health-empty">{t('health.metricsCollecting')}</div>
+        <div className="health-empty" role="status" aria-live="polite">{t('health.metricsCollecting')}</div>
       )}
-    </div>
+    </main>
   )
 }

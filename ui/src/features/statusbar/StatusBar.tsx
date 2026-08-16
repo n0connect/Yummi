@@ -8,7 +8,7 @@ export function StatusBar(): JSX.Element {
         <span className="logo">YUMMI</span>
       </div>
       <div className="right">
-        <nav className="nav-seg">
+        <nav className="nav-seg" aria-label={t('statusBar.navAriaLabel')}>
           {[
             { to: '/', label: t('statusBar.nav.agent'), end: true },
             { to: '/terminal', label: t('statusBar.nav.bash'), end: false },
