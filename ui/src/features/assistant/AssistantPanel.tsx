@@ -3,6 +3,7 @@ import type {
   ActivityEvent,
   AgentTask,
   ChatProposal,
+  ChatStreamEvent,
   ExecutionRecord,
   ServerChatMessage,
   SessionSummary
@@ -374,6 +375,40 @@ function TextMessage({
   )
 }
 
+// StreamingMessage renders the in-progress assistant bubble while a chat
+// call's raw display tokens are still arriving over the websocket (see
+// AssistantPanel's onChatStream/streamingText). It intentionally does NOT
+// run sanitizeOperatorText's think-block stripping on the raw text — the
+// stream carries fragments of the model's still-forming structured JSON
+// envelope (the orchestrator forces format:json), not finished prose, so
+// mid-stream it can legitimately look like raw JSON syntax growing in real
+// time rather than a clean sentence; that's expected here and is purely a
+// perceived-progress aid — the bubble is always replaced wholesale by the
+// finished, fully-sanitized reply once the REST response resolves.
+function StreamingMessage({ text }: { text: string }): JSX.Element {
+  // aria-live="off": this bubble mutates on almost every token and is always
+  // discarded in favor of the finished, sanitized reply — announcing every
+  // partial-JSON fragment to a screen reader would be noisy and useless. The
+  // outer .chat-messages region (aria-live="polite") announces the real
+  // reply normally once it replaces this bubble as a genuine TextMessage.
+  return (
+    <div className="msg msg-assistant msg-streaming" aria-live="off">
+      <span className="msg-prefix">{t('assistant.assistantPrefix')}</span>
+      {text ? (
+        <span className="msg-content" style={{ whiteSpace: 'pre-wrap' }}>
+          {text}
+        </span>
+      ) : (
+        <span className="typing-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 type AssistantPanelProps = {
@@ -398,6 +433,14 @@ export function AssistantPanel({
   const [input, setInput] = useState('')
   const [proposals, setProposals] = useState<ChatProposal[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  // streamingText holds the raw display tokens accumulated so far for the
+  // in-flight /api/v1/chat call, rendered as a growing in-progress assistant
+  // bubble (see onChatStream below). null = no stream in progress; '' = a
+  // stream has started but no delta has arrived yet (shows a typing
+  // indicator, same as ExecutionMessage's live state). Always cleared once
+  // the REST response resolves — that response, not this WS-driven text, is
+  // the authoritative source for the final message.
+  const [streamingText, setStreamingText] = useState<string | null>(null)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
   // subTask tracks a sub-agent task delegated (via [HANDOFF]) from
@@ -461,6 +504,10 @@ export function AssistantPanel({
     // `finally` (sessionIDRef no longer matches), so nothing else would ever
     // clear it and the new session's input would look permanently disabled.
     setIsLoading(false)
+    // Same reasoning for the streaming bubble: an in-flight request's deltas
+    // are about to start being filtered out by the new sessionID anyway (see
+    // onChatStream), but the stale partial text must not linger on screen.
+    setStreamingText(null)
     autoFeedbackCountRef.current = 0
     analyzedExecutionIDsRef.current = new Set()
     if (sid === 'default') {
@@ -537,7 +584,7 @@ export function AssistantPanel({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, activeTask])
+  }, [messages, activeTask, streamingText])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -714,6 +761,7 @@ export function AssistantPanel({
 
       const sid = sessionID
       setIsLoading(true)
+      setStreamingText('') // this call streams too — see onChatStream
       try {
         const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
           method: 'POST',
@@ -734,7 +782,10 @@ export function AssistantPanel({
       } catch {
         /* silent — execution output already visible in card */
       } finally {
-        if (sessionIDRef.current === sid) setIsLoading(false)
+        if (sessionIDRef.current === sid) {
+          setIsLoading(false)
+          setStreamingText(null)
+        }
       }
     },
     [sessionID, appendMessage]
@@ -849,7 +900,22 @@ export function AssistantPanel({
     [sessionID]
   )
 
-  useChatStream({ onExecution, onTask, onActivity })
+  // onChatStream appends raw display tokens to the in-progress assistant
+  // bubble as they arrive. It never finalizes the bubble itself (that's
+  // sendChat/analyzeOutput's job once the REST response resolves) — a
+  // dropped or never-arriving `done` event (e.g. the websocket disconnects
+  // mid-response) is harmless here for exactly that reason: the bubble just
+  // stops growing and gets replaced wholesale once the REST reply lands.
+  const onChatStream = useCallback(
+    (ev: ChatStreamEvent) => {
+      if (ev.session_id !== sessionID || ev.done) return
+      if (!ev.delta) return
+      setStreamingText((prev) => (prev ?? '') + ev.delta)
+    },
+    [sessionID]
+  )
+
+  useChatStream({ onExecution, onTask, onActivity, onChatStream })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -990,6 +1056,9 @@ export function AssistantPanel({
     setInput('')
     appendMessage({ role: 'user', content: text })
     setIsLoading(true)
+    // Show the in-progress bubble immediately (typing indicator until the
+    // first delta lands) — see onChatStream / the streamingText render below.
+    setStreamingText('')
 
     // Auto-title a freshly-created session from the operator's first message
     // (Claude-style), then let the rail pick up the new name.
@@ -1062,6 +1131,11 @@ export function AssistantPanel({
     } finally {
       if (sessionIDRef.current === sid) {
         setIsLoading(false)
+        // The REST response (already handled above, success or failure) is
+        // the authoritative source for the final message — the in-progress
+        // bubble's job ends here regardless of whether any/all/no deltas
+        // ever arrived over the websocket.
+        setStreamingText(null)
         inputRef.current?.focus()
       }
     }
@@ -1298,6 +1372,7 @@ export function AssistantPanel({
               )
             })
           )}
+          {streamingText !== null && <StreamingMessage text={streamingText} />}
           <div ref={messagesEndRef} />
         </div>
 
