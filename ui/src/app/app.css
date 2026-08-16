@@ -931,3 +931,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .trace-pending-skill-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .trace-pending-skill-actions { display: flex; gap: 6px; flex: none; }
 .trace-skill-error { color: var(--red, #f87171); font-size: 12px; margin-bottom: 6px; }
+.trace-pending-skill-meta { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-muted); margin: 2px 0 6px; }
+.trace-pending-skill-resolved { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text-muted); flex: none; }
+.trace-pending-skill-threat { border-radius: 6px; margin-bottom: 6px; padding: 6px 8px; }
+.trace-pending-skill-reject-reason { margin-bottom: 6px; }
+.trace-trajectory { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.trace-trajectory-field { font-size: 12px; }
+.trace-trajectory-label { display: block; font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px; }
+.trace-trajectory-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.trace-trajectory-list code { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); }
+.trace-trajectory-tag { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--accent); margin-left: 6px; }
