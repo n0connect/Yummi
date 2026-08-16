@@ -174,6 +174,18 @@ export type ActivityEvent = {
   timestamp: number
 }
 
+// An in-scope host/IP declared or discovered for a session (from
+// /api/v1/sessions/{id}/targets). Lets the findings view resolve a
+// Finding.target_id into the human-readable host/IP the operator recognizes.
+export type Target = {
+  id: string
+  session_id: string
+  value: string
+  in_scope: boolean
+  notes?: string
+  created_at?: number
+}
+
 // A structured security finding (from /api/v1/sessions/{id}/findings).
 export type Finding = {
   id: string
