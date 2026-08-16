@@ -2,9 +2,6 @@ package eino
 
 import (
 	"context"
-	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
@@ -12,28 +9,24 @@ import (
 )
 
 // buildMemoryBlock queries the retrieval strategy for facts/tactics relevant
-// to the goal and renders a MEMORY block, in the same format node_step.go's
-// buildMemory uses for the graph backend. Unlike graph — which rebuilds the
-// whole prompt from scratch every step and so re-queries every turn — Eino's
-// ChatModelAgent keeps native chat history across its own tool-calling turns,
-// so this is deliberately queried once, up front, and folded into the
-// static Instruction: that's the correct one-time analogue of graph's
-// per-step re-injection for a backend that already retains its own history.
-// Empty string when retrieval is nil or nothing comes back.
+// to the goal and renders a MEMORY block via agent.FormatMemoryItems — the
+// same rendering node_step.go's buildMemory uses for the graph backend.
+// Unlike graph — which rebuilds the whole prompt from scratch every step and
+// so re-queries every turn — Eino's ChatModelAgent keeps native chat history
+// across its own tool-calling turns, so this is deliberately queried once, up
+// front, and folded into the static Instruction: that's the correct one-time
+// analogue of graph's per-step re-injection for a backend that already
+// retains its own history. Empty string when retrieval is nil or nothing
+// comes back.
 func buildMemoryBlock(ctx context.Context, retrieval knowledge.RetrievalStrategy, sessionID, goal string) string {
 	if retrieval == nil {
 		return ""
 	}
 	items, err := retrieval.Retrieve(ctx, knowledge.Query{SessionID: sessionID, Goal: goal, Limit: 5})
-	if err != nil || len(items) == 0 {
+	if err != nil {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("MEMORY (prior knowledge — use it, don't rediscover):\n")
-	for _, it := range items {
-		fmt.Fprintf(&b, "  • %s\n", it.Text)
-	}
-	return b.String()
+	return agent.FormatMemoryItems(items)
 }
 
 // buildSkillsBlock selects and renders the playbooks relevant to the goal,
@@ -50,29 +43,18 @@ func buildSkillsBlock(skills *skill.Registry, goal string) (block string, names 
 }
 
 // buildDelegationBlock lists the sub-agent roles the handoff tool can reach,
-// mirroring node_step.go's buildDelegation. Empty when no sub-agents are
-// configured (delegation simply doesn't show up as an option). hints maps a
-// role name to its short routing-hint sentence (agent.Config.SubAgentHints);
-// a role with no hint (or a nil map) still renders as a bare name.
+// via agent.FormatDelegationRoles — the same role-list rendering
+// node_step.go's buildDelegation uses for the graph backend (the two differ
+// only in which delegation mechanism they instruct the model to use). Empty
+// when no sub-agents are configured (delegation simply doesn't show up as an
+// option). hints maps a role name to its short routing-hint sentence
+// (agent.Config.SubAgentHints); a role with no hint (or a nil map) still
+// renders as a bare name.
 func buildDelegationBlock(subAgents map[string]*agent.Runner, hints map[string]string) string {
 	if len(subAgents) == 0 {
 		return ""
 	}
-	roles := make([]string, 0, len(subAgents))
-	for r := range subAgents {
-		roles = append(roles, r)
-	}
-	sort.Strings(roles)
-	var b strings.Builder
-	b.WriteString("DELEGATION: call the handoff tool to hand a focused subtask to a specialist. Call handoff more " +
+	return "DELEGATION: call the handoff tool to hand a focused subtask to a specialist. Call handoff more " +
 		"than once in a turn to delegate to several specialists at once — they run concurrently, not one after " +
-		"another. Available roles:\n")
-	for _, r := range roles {
-		if hint := strings.TrimSpace(hints[r]); hint != "" {
-			fmt.Fprintf(&b, "  - %s: %s\n", r, hint)
-		} else {
-			fmt.Fprintf(&b, "  - %s\n", r)
-		}
-	}
-	return b.String()
+		"another. " + agent.FormatDelegationRoles(subAgents, hints)
 }

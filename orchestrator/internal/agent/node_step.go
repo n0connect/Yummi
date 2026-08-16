@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
@@ -260,25 +259,11 @@ func (s *GraphState) buildDelegation() string {
 	if len(s.cfg.SubAgents) == 0 {
 		return ""
 	}
-	roles := make([]string, 0, len(s.cfg.SubAgents))
-	for r := range s.cfg.SubAgents {
-		roles = append(roles, r)
-	}
-	sort.Strings(roles)
-	var b strings.Builder
-	b.WriteString("DELEGATION: hand a focused subtask to a specialist with ")
-	b.WriteString(`[HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}`)
-	b.WriteString(". To delegate to SEVERAL specialists AT ONCE — they run concurrently, not one after another — use ")
-	b.WriteString(`[HANDOFF] {"handoffs":[{"role":"<role>","subgoal":"<...>"},{"role":"<role>","subgoal":"<...>"}]}`)
-	b.WriteString(". Available roles:\n")
-	for _, r := range roles {
-		if hint := strings.TrimSpace(s.cfg.SubAgentHints[r]); hint != "" {
-			fmt.Fprintf(&b, "  - %s: %s\n", r, hint)
-		} else {
-			fmt.Fprintf(&b, "  - %s\n", r)
-		}
-	}
-	return b.String()
+	return "DELEGATION: hand a focused subtask to a specialist with " +
+		`[HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}` +
+		". To delegate to SEVERAL specialists AT ONCE — they run concurrently, not one after another — use " +
+		`[HANDOFF] {"handoffs":[{"role":"<role>","subgoal":"<...>"},{"role":"<role>","subgoal":"<...>"}]}` +
+		". " + FormatDelegationRoles(s.cfg.SubAgents, s.cfg.SubAgentHints)
 }
 
 // buildMemory queries the retrieval strategy for facts/tactics relevant to the
@@ -297,16 +282,11 @@ func (s *GraphState) buildMemory(ctx context.Context, task Task) string {
 	if err != nil || len(items) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("MEMORY (prior knowledge — use it, don't rediscover):\n")
-	for _, it := range items {
-		fmt.Fprintf(&b, "  • %s\n", it.Text)
-	}
 	if sig := items[0].Text; sig != s.lastMemorySig {
 		s.lastMemorySig = sig
 		s.emit(ActMemory, "Relevant session context applied", "")
 	}
-	return b.String()
+	return FormatMemoryItems(items)
 }
 
 // toolsFromCommands returns the distinct tool names (first token) of the most
