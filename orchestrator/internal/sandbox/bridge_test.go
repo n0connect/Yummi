@@ -160,7 +160,12 @@ func TestStreamWriterStopsChunksOnceTruncated(t *testing.T) {
 	if len(chunks) != 2 {
 		t.Fatalf("expected exactly 2 onChunk calls (the writes before truncation), got %d: %q", len(chunks), chunks)
 	}
-	if string(chunks[0]) != "hello" || string(chunks[1]) != "world!!!!!" {
+	// The second write crosses the cap mid-write: cappedBuffer only keeps
+	// "world" (5 of the 10 bytes — the buffer had exactly 5 bytes of
+	// headroom left after "hello"). onChunk must receive only that accepted
+	// prefix, never the dropped tail — the live side-channel must not show
+	// the operator bytes the persisted/final output never actually kept.
+	if string(chunks[0]) != "hello" || string(chunks[1]) != "world" {
 		t.Fatalf("unexpected chunk contents: %q", chunks)
 	}
 	if !w.truncated {

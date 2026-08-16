@@ -78,7 +78,7 @@ func TestEngineSubscribeStreamNilSafe(t *testing.T) {
 	if _, ok := <-ch; ok {
 		t.Fatal("expected an already-closed channel from a nil engine")
 	}
-	e.UnsubscribeStream(1) // must not panic
+	e.UnsubscribeStream(1)                // must not panic
 	e.publishStream("s1", "delta", false) // must not panic
 }
 
