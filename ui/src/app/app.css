@@ -910,14 +910,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .trace-ico { flex: none; font-size: 13px; }
 .trace-kind { font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; opacity: 0.6; flex: none; min-width: 64px; }
 .trace-summary { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trace-finding { border-left: 2px solid var(--orange); padding: 4px 0 4px 10px; margin: 6px 0; }
-.trace-finding.sev-critical, .trace-finding.sev-high { border-left-color: var(--red); }
-.trace-finding.sev-info, .trace-finding.sev-low { border-left-color: var(--text-muted); }
-.trace-sev { font-family: var(--font-mono, monospace); font-size: 10px; text-transform: uppercase; color: var(--orange); margin-right: 8px; }
-.trace-finding.sev-critical .trace-sev, .trace-finding.sev-high .trace-sev { color: var(--red); }
-.trace-finding-title { font-size: 13px; color: var(--text-primary); }
-.trace-src { font-size: 10px; color: var(--text-muted); margin-left: 8px; }
-.trace-finding-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+/* Findings section styling now lives in features/trace/FindingsPanel.css
+   (severity filtering/sorting/collapsible-evidence view) — see
+   ui/src/features/trace/FindingsPanel.tsx. */
 .trace-tactic { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
 .trace-cmd { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trace-outcome { font-size: 10px; text-transform: uppercase; flex: none; }

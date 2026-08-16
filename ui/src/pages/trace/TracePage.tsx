@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ActivityEvent, ActivityKind } from '../../entities/types'
 import { presentActivity } from '../../shared/lib/activityPresentation'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
+import { FindingsPanel } from '../../features/trace/FindingsPanel'
 import { usePendingSkills } from '../../features/skills/usePendingSkills'
 import { t } from '../../shared/i18n/strings'
 
@@ -19,21 +20,10 @@ const KIND_META: Record<ActivityKind, [string, string]> = {
   finish:            ['■', t('trace.kind.finish')],
 }
 
-// Both severity and outcome are typed `<literal> | string` (entities/types.ts)
-// so a future/unrecognized backend value type-checks — but that means it must
+// outcome is typed `<literal> | string` (entities/types.ts) so a
+// future/unrecognized backend value type-checks — but that means it must
 // never be interpolated directly into a className. Closed-set lookup with a
 // safe default instead.
-function severityClass(severity: string): string {
-  switch (severity) {
-    case 'info':     return 'trace-finding sev-info'
-    case 'low':       return 'trace-finding sev-low'
-    case 'medium':    return 'trace-finding sev-medium'
-    case 'high':      return 'trace-finding sev-high'
-    case 'critical':  return 'trace-finding sev-critical'
-    default:          return 'trace-finding sev-unknown'
-  }
-}
-
 function outcomeClass(outcome: string): string {
   switch (outcome) {
     case 'worked':       return 'trace-outcome out-worked'
@@ -71,7 +61,7 @@ function Section({ title, count, children }: { title: string; count: number; chi
 
 export function TracePage(): JSX.Element {
   const [sessionID] = useState(resolveSessionID)
-  const { activity, findings, tactics, context, skills, roles, refresh } = useTraceData(sessionID)
+  const { activity, findings, targets, tactics, context, skills, roles, refresh } = useTraceData(sessionID)
   const { pending: pendingSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
   const [skillError, setSkillError] = useState<string | null>(null)
 
@@ -108,17 +98,17 @@ export function TracePage(): JSX.Element {
           </div>
         </Section>
 
-        {/* Findings */}
-        <Section title={t('trace.sectionFindings')} count={findings.length}>
-          {findings.map(f => (
-            <div key={f.id} className={severityClass(f.severity)}>
-              <span className="trace-sev">{f.severity}</span>
-              <span className="trace-finding-title">{f.title}</span>
-              {f.source && <span className="trace-src">{f.source}</span>}
-              {f.description && <div className="trace-finding-desc">{f.description}</div>}
-            </div>
-          ))}
-        </Section>
+        {/* Findings — severity-color-coded, filterable/sortable; see
+            features/trace/FindingsPanel.tsx. Wrapped in its own grid cell
+            (not the generic Section) since it owns its filter toolbar and
+            empty-state copy. */}
+        <div className="trace-section trace-section-findings">
+          <div className="trace-section-head">
+            <span className="trace-section-title">{t('trace.sectionFindings')}</span>
+            <span className="trace-section-count">{findings.length}</span>
+          </div>
+          <FindingsPanel findings={findings} targets={targets} />
+        </div>
 
         {/* Procedural memory */}
         <Section title={t('trace.sectionTactics')} count={tactics.length}>
