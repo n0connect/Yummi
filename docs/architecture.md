@@ -27,7 +27,7 @@ If you take away one sentence from this whole page, take this one: **the model p
                          └──────────┬───────────┘
                                     │ /api, /ws (proxied)
                          ┌──────────▼───────────┐
-        CLI / TUI ──────▶│  orchestrator (Go)   │  :9080 (127.0.0.1 only)
+        CLI ──────▶│  orchestrator (Go)   │  :9080 (127.0.0.1 only)
                          │  conductor + agent    │
                          └─────┬────────┬────────┘
                                 │        │
@@ -60,7 +60,7 @@ Two independent arrows reach `sandbox`, and they do two different jobs: `docker 
 | 4 | **docker-proxy** | `tecnativa/docker-socket-proxy` | Forward exactly `docker exec`/`docker inspect`-shaped Docker API calls from orchestrator to the host socket | Start, stop, kill, build, or otherwise manage *any* container — every other Docker API resource family is explicitly zeroed |
 | 5 | **ui** | React 18 + Vite, served by nginx | Render operator-facing dashboards, proxy `/api` and `/ws` to orchestrator | Talk to gateway or sandbox directly — it only ever talks to orchestrator |
 
-Two **alternative front-ends** talk to that same orchestrator API rather than being separate backends: `desktop/` packages the identical `ui/` React app in a Tauri (Rust) window in place of nginx — same components, same bugs, same fixes, just a native shell whose webview has no capability beyond the loopback API (see [Security Model § Desktop app isolation](security-model.md#desktop-isolation)); and the terminal UI (TUI), a Go binary (`./bin/yummi --tui`), is a from-scratch `bubbletea` client against the same REST/WS surface — see [CLI & TUI](modules/cli-and-tui.md).
+Yummi is managed entirely from this web UI — there is deliberately no alternative front-end (a native desktop shell and a terminal UI both existed at one point and were removed in favor of a single, simpler operator surface). The root-module `yummi` binary ([CLI](modules/cli.md)) only handles Docker lifecycle, diagnostics, and opening this same web UI in an app-style browser window; it is not a second client of the API.
 
 > These are defense-in-depth boundaries, not universal impossibility claims. Linux capabilities, a read-only filesystem, the Docker API proxy, and network topology constrain the normal shipped processes; container-root compromise, host compromise, an `insecure-bridge` run, or operator reconfiguration changes that threat model. See [Security Model](security-model.md) for the enforcement chain and residual limits.
 
@@ -189,12 +189,12 @@ Yummi's code is organized by **implementation stack**, and this documentation se
 
 | Ecosystem | Component(s) | Entry point for reading the code | Docs page |
 |---|---|---|---|
-| **Go — two separate modules** | CLI/TUI (root `go.mod`) + orchestrator (`orchestrator/go.mod`, its own `go.mod`) | `cmd/yummi/main.go`, `orchestrator/cmd/orchestrator/main.go` | [Orchestrator module](modules/orchestrator.md), [CLI & TUI](modules/cli-and-tui.md) |
+| **Go — two separate modules** | CLI (root `go.mod`) + orchestrator (`orchestrator/go.mod`, its own `go.mod`) | `cmd/yummi/main.go`, `orchestrator/cmd/orchestrator/main.go` | [Orchestrator module](modules/orchestrator.md), [CLI](modules/cli.md) |
 | **Rust** | gateway | `gateway/src/main.rs` | [Gateway module](modules/gateway.md) |
 | **Node / React** | ui | `ui/src/main.tsx` | [UI module](modules/ui.md) |
 | **Shell / declarative** | sandbox image, persona YAML | `sandbox/Dockerfile`, `persona/v0.1/` | [Sandbox execution](agent/sandbox-execution.md), [Persona & Skills](persona/persona-and-skills.md) |
 
-**Why two Go modules and not one?** `go.mod` at the repo root (`github.com/n0connect/yummi`) is the CLI/TUI only — it depends on terminal UI libraries (`bubbletea`, `lipgloss`) that the server has no business importing. `orchestrator/go.mod` (`github.com/n0connect/yummi/orchestrator`) is everything AI/API/execution-related, with its own dependency set (`chi`, `mattn/go-sqlite3`, etc.). Splitting them means `go test ./...` from the repo root **silently skips every orchestrator test** — it's a different module, so you must `cd orchestrator` (or prefix `cd orchestrator &&`) first. This is a common first surprise; see the [Installation](installation.md) and [Development](development.md) pages for the exact commands.
+**Why two Go modules and not one?** `go.mod` at the repo root (`github.com/n0connect/yummi`) is the CLI only — it depends on terminal UI libraries (`bubbletea`, `lipgloss`) that the server has no business importing. `orchestrator/go.mod` (`github.com/n0connect/yummi/orchestrator`) is everything AI/API/execution-related, with its own dependency set (`chi`, `mattn/go-sqlite3`, etc.). Splitting them means `go test ./...` from the repo root **silently skips every orchestrator test** — it's a different module, so you must `cd orchestrator` (or prefix `cd orchestrator &&`) first. This is a common first surprise; see the [Installation](installation.md) and [Development](development.md) pages for the exact commands.
 
 ---
 

@@ -2,7 +2,7 @@
 
 # Usage Guide
 
-Yummi has **three interfaces to the same orchestrator API**: a web UI (nginx-served React app, port 3000), a terminal UI (Go binary, `./bin/yummi --tui`), and the raw REST/WS API itself (see [API Reference](api-reference.md)). This page walks the web UI's six tabs, then the CLI/TUI, in the order you'll actually use them.
+Yummi is managed entirely through **one web UI** (nginx-served React app, port 3000) talking to the orchestrator's REST/WS API (see [API Reference](api-reference.md)) — there is no alternative operator surface. This page walks the web UI's six tabs, then the CLI helper binary, in the order you'll actually use them.
 
 ## Table of contents
 
@@ -16,23 +16,19 @@ Yummi has **three interfaces to the same orchestrator API**: a web UI (nginx-ser
   - [Health](#tab-health)
 - [Approval flows — what you'll actually be asked to decide](#approval-flows)
 - [The CLI](#the-cli)
-- [The TUI](#the-tui)
 
 ---
 
 ## Starting a session <a id="starting-a-session"></a>
 
 The preferred local operator workflow is just **`make start`** (see
-[Installation](installation.md#full-stack)): it starts the runtime and opens
-the native Yummi desktop application directly — no separate step, no browser
-tab to open by hand — and the desktop shell connects only to the loopback
-orchestrator (see [Security Model § Desktop app isolation](security-model.md#desktop-isolation)
-for exactly what it can and can't do). Use `NO_DESKTOP=1` for a headless
-runtime-only start, and `make desktop-dev` to reattach the console on its own
-without restarting the stack. **http://localhost:3000** remains available as
-the browser fallback for container/headless deployments. Every conversation
-and task belongs to a **session** — a session groups the chat history,
-discovered targets, findings, and the agent tasks run within it.
+[Installation](installation.md#full-stack)): it starts the runtime and the UI
+is served at **http://localhost:3000**. The root-module `yummi` binary's
+default (no-flag) behavior opens that same URL in an app-style browser window
+for convenience — see [The CLI](#the-cli) — but the web UI at that URL is the
+one operator surface either way. Every conversation and task belongs to a
+**session** — a session groups the chat history, discovered targets,
+findings, and the agent tasks run within it.
 Creating one is implicit the first time you send a message; you don't need to
 explicitly provision it first.
 
@@ -110,7 +106,6 @@ If a single-command chat proposal sits too long, it expires after a 20-minute TT
 
 ```bash
 ./bin/yummi            # launches the web browser to the UI (default, no subcommand)
-./bin/yummi --tui       # launches the terminal UI instead
 ./bin/yummi --start     # start the configured sandbox Compose service (and its dependencies)
 ./bin/yummi --stop      # stop that configured sandbox service
 ./bin/yummi --status    # check status
@@ -118,9 +113,3 @@ If a single-command chat proposal sits too long, it expires after a 20-minute TT
 ./bin/yummi --version   # print build metadata (semver, git SHA, build date)
 ./bin/yummi --help      # usage
 ```
-
----
-
-## The TUI <a id="the-tui"></a>
-
-`./bin/yummi --tui` (or `make start-tui`, which starts the full runtime headlessly first) opens a Bubble Tea console against the orchestrator API. It can send goals, watch activity/task events, resolve task command gates, and resolve egress holds. It displays threat-scan warnings, but a single-execution threat release currently requires the web UI or raw `POST /api/v1/executions/{id}/resolve-threat` API.

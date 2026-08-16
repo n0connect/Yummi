@@ -11,9 +11,6 @@ ORCHESTRATOR_PKG           := ./cmd/orchestrator
 GATEWAY_DIR        := gateway
 UI_DIR           := ui
 UI_DIST_DIR      := $(UI_DIR)/dist
-DESKTOP_DIR      := desktop
-DESKTOP_TARGET_DIR := $(DESKTOP_DIR)/src-tauri/target
-DESKTOP_APP      := $(DESKTOP_TARGET_DIR)/release/bundle/macos/Yummi.app
 
 # ── Local configuration (written by `make conf`; gitignored, per-machine) ────
 # Run `make conf` once to pick your container engine setup interactively; it
@@ -60,9 +57,9 @@ endif
 # YUMMI_LANG: en (default) or tr — the UI's build-time display language.
 # There is no runtime switch (see ui/src/shared/i18n/strings.ts): changing
 # this requires `make conf` + a rebuild. Propagated to every UI build path as
-# VITE_YUMMI_LANG — the native path (_build-ui, desktop, dev-ui) via this
-# exported env var, the Docker path (yummi-ui image) via docker-compose.yml's
-# build arg, which reads the same YUMMI_LANG from the environment/.yummi.conf.
+# VITE_YUMMI_LANG — the native path (_build-ui, dev-ui) via this exported env
+# var, the Docker path (yummi-ui image) via docker-compose.yml's build arg,
+# which reads the same YUMMI_LANG from the environment/.yummi.conf.
 YUMMI_LANG ?= en
 export VITE_YUMMI_LANG := $(YUMMI_LANG)
 
@@ -121,11 +118,11 @@ endef
 
 # ── Phony declarations ────────────────────────────────────────────────────────
 .PHONY: help conf \
-	build start start-tui stop clean force-restart close \
+	build start stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
 	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
-	app desktop desktop-dev _check-desktop-deps _desktop-deps \
+	app \
 	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp \
 	docker-build docker-orchestrator docker-ui \
 	_ollama-ensure
@@ -268,12 +265,10 @@ build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _buil
 	@printf "\n"
 
 ## start   Start Ollama + runtime services via compose (always rebuilds
-##         images first so source changes are never silently skipped), then
-##         launches the native Tauri console directly — no browser tab to
-##         open by hand. Engine: CONTAINER_ENGINE=docker|podman (default docker).
+##         images first so source changes are never silently skipped).
+##         UI is served at http://localhost:3000 — Yummi is web-managed only.
+##         Engine: CONTAINER_ENGINE=docker|podman (default docker).
 ##         Network trade-off: YUMMI_NETWORK_MODE=secure|insecure-bridge (default secure).
-##         Headless/CI/server: NO_DESKTOP=1 skips the desktop launch and
-##         leaves http://localhost:3000 as the only surface.
 start: _check-deps _check-network-mode _ollama-ensure
 	@$(call log_section,Starting Services)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Building images...)
@@ -282,19 +277,6 @@ start: _check-deps _check-network-mode _ollama-ensure
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
 	@$(call log_pass,services,Running — UI on http://localhost:3000)
-ifneq ($(NO_DESKTOP),1)
-	@$(MAKE) desktop-dev
-endif
-
-## start-tui Start services (headless) and immediately launch the Terminal UI.
-##           Always passes NO_DESKTOP=1 to 'start' — the terminal UI and the
-##           native desktop console are alternative operator surfaces, not
-##           something to launch both of from one command.
-start-tui:
-	@$(MAKE) start NO_DESKTOP=1
-	@$(call log_section,Launching TUI)
-	@$(call log_info,yummi,Starting terminal interface...)
-	@./bin/$(BINARY) --tui
 
 ## stop    Stop all runtime services
 stop:
@@ -310,8 +292,6 @@ clean:
 	@rm -rf $(BIN_DIR)
 	@$(call log_info,clean,Removing $(UI_DIST_DIR)...)
 	@rm -rf $(UI_DIST_DIR)
-	@$(call log_info,clean,Removing $(DESKTOP_TARGET_DIR)...)
-	@rm -rf $(DESKTOP_TARGET_DIR)
 	@$(call log_info,clean,Removing databases...)
 	@find . -name "*.db" -type f -delete 2>/dev/null || true
 	@$(call log_pass,clean,Workspace is tidy.)
@@ -592,37 +572,8 @@ dev-orchestrator: ## Run orchestrator orchestrator locally (port 9080)
 	@$(call log_info,dev,Starting orchestrator...)
 	@cd orchestrator && go run ./cmd/orchestrator
 
-_check-desktop-deps:
-	@command -v cargo >/dev/null 2>&1 || { $(call log_error,desktop,Rust/Cargo is not installed. Install from https://rustup.rs/); exit 1; }
-	@command -v npm >/dev/null 2>&1 || { $(call log_error,desktop,Node.js/npm is not installed. Install from https://nodejs.org/); exit 1; }
-
-_desktop-deps: _check-desktop-deps
-	@if [ ! -x "$(DESKTOP_DIR)/node_modules/.bin/tauri" ] || [ "$(DESKTOP_DIR)/package-lock.json" -nt "$(DESKTOP_DIR)/node_modules/.package-lock.json" ]; then \
-		$(call log_info,desktop,Installing locked Tauri CLI dependencies...); \
-		cd $(DESKTOP_DIR) && npm ci --silent || { $(call log_error,desktop,npm ci failed.); exit 1; }; \
-	else \
-		$(call log_pass,desktop,Tauri CLI dependencies are current.); \
-	fi
-
 ## app       Alias for 'start' — kept for anyone with the old habit memorized.
-##           'start' has launched the native desktop console directly since
-##           the workflow merged; this no longer does anything extra on top.
 app: start
-
-## desktop   Build the native Tauri operator console (runtime stack stays separate).
-desktop: _desktop-deps
-	@$(call log_section,Desktop Build)
-	@$(call log_info,desktop,Building native operator console...)
-	@cd $(DESKTOP_DIR) && npm run build || { $(call log_error,desktop,Tauri build failed.); exit 1; }
-	@$(call log_pass,desktop,Native Yummi bundle is ready at $(DESKTOP_APP).)
-
-## desktop-dev  Launch the native Tauri console on its own — 'make start' already
-##              calls this automatically; use this directly only to reattach the
-##              console without rebuilding/restarting the already-running stack.
-desktop-dev: _desktop-deps
-	@$(call log_section,Desktop Development)
-	@$(call log_info,desktop,Launching native operator console...)
-	@cd $(DESKTOP_DIR) && npm run dev
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  HELP
@@ -634,11 +585,8 @@ help:
 	@printf "$(BOLD)  User commands$(RESET)\n"
 	@printf "  $(CYAN)make conf$(RESET)        Pick your container engine setup once (interactive, persists to .yummi.conf)\n"
 	@printf "  $(CYAN)make build$(RESET)       Build native binaries and UI (CLI + orchestrator + gateway + UI)\n"
-	@printf "  $(CYAN)make start$(RESET)       Start runtime services AND launch the native desktop console (NO_DESKTOP=1 to skip)\n"
+	@printf "  $(CYAN)make start$(RESET)       Start runtime services — UI on http://localhost:3000\n"
 	@printf "  $(CYAN)make app$(RESET)         Alias for 'start'\n"
-	@printf "  $(CYAN)make desktop-dev$(RESET) Reattach the desktop console without restarting the stack\n"
-	@printf "  $(CYAN)make desktop$(RESET)     Build a native Tauri application bundle\n"
-	@printf "  $(CYAN)make start-tui$(RESET)   Start runtime services (headless) and launch Terminal UI\n"
 	@printf "  $(CYAN)make stop$(RESET)        Stop runtime services\n"
 	@printf "  $(CYAN)make clean$(RESET)       Remove all build artifacts\n"
 	@printf "  $(CYAN)make force-restart$(RESET) Stop services, free RAM, and restart\n"
@@ -650,7 +598,6 @@ help:
 	@printf "    isolation as an engine-bug workaround, and requires typing a confirmation. Prefer OrbStack instead.$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_LANG=en|tr$(RESET)  $(DIM)default en — build-time UI language, baked into the UI at build time (no runtime switch)$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_AGENT_BACKEND=graph|eino$(RESET)  $(DIM)default graph — which agentic engine to run (no rebuild needed to change)$(RESET)\n"
-	@printf "  $(CYAN)NO_DESKTOP=1$(RESET)  $(DIM)default unset — skip launching the desktop console from 'make start' (headless/CI/server)$(RESET)\n"
 	@printf "\n$(BOLD)  Developer commands$(RESET)\n"
 	@printf "  $(CYAN)make test$(RESET)        Run all test suites\n"
 	@printf "  $(CYAN)make test-agent-live$(RESET) Agentic loop e2e vs. real model + sandbox\n"
