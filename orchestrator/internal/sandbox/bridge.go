@@ -61,6 +61,35 @@ func (b *cappedBuffer) String() string {
 	return b.buf.String()
 }
 
+// streamWriter wraps a cappedBuffer so a command's output can be tapped as it
+// arrives, without changing what ends up stored or how the cap is enforced:
+// every Write still goes through cappedBuffer's own Write first (same
+// accounting, same truncation), and — only for bytes accepted before the cap
+// was hit — onChunk (display-only) is invoked with a defensive copy of that
+// Write's bytes afterward. Once the buffer is truncated, onChunk stops being
+// called entirely: the live side-channel can never outlive or outgrow the
+// same bound the persisted output already respects. onChunk may be nil, in
+// which case a streamWriter behaves exactly like a bare cappedBuffer.
+type streamWriter struct {
+	*cappedBuffer
+	source  string
+	onChunk func(source string, chunk []byte)
+}
+
+func (w *streamWriter) Write(p []byte) (int, error) {
+	wasTruncated := w.truncated
+	n, err := w.cappedBuffer.Write(p)
+	if w.onChunk != nil && !wasTruncated && len(p) > 0 {
+		// os/exec's stdout/stderr copy goroutines reuse their read buffer
+		// across calls, so p's backing array is not ours to hold onto past
+		// this call — copy before handing it to the callback.
+		chunk := make([]byte, len(p))
+		copy(chunk, p)
+		w.onChunk(w.source, chunk)
+	}
+	return n, err
+}
+
 // Bridge provides command execution inside the sandbox Docker container.
 type Bridge struct {
 	container string
@@ -93,8 +122,23 @@ func NewBridge(container string) *Bridge {
 }
 
 // Exec runs a command inside the sandbox container via docker exec.
-// The command runs as the pentester user (uid 1000) in a non-interactive shell.
+// The command runs as the pentester user (uid 1000) in a non-interactive
+// shell. It is a thin wrapper around ExecStream with a nil callback — see
+// ExecStream for the shared implementation.
 func (b *Bridge) Exec(ctx context.Context, command string) (*Result, error) {
+	return b.ExecStream(ctx, command, nil)
+}
+
+// ExecStream behaves exactly like Exec — same docker exec invocation, same
+// timeout/cancellation handling, same capped output accounting, same final
+// *Result — but additionally invokes onChunk with each raw stdout/stderr
+// write as the command produces it (source is "stdout" or "stderr"), so a
+// caller can show live progress while a slow command (a full nikto run, a
+// wide nmap sweep) is still in flight. onChunk is purely a display aid: it
+// taps the same cappedBuffer writers Exec already used, so it changes
+// nothing about what is invoked or what is ultimately returned/stored.
+// onChunk may be nil, in which case this is identical to Exec.
+func (b *Bridge) ExecStream(ctx context.Context, command string, onChunk func(source string, chunk []byte)) (*Result, error) {
 	if command == "" {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -114,8 +158,8 @@ func (b *Bridge) Exec(ctx context.Context, command string) (*Result, error) {
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 
-	stdout := newCappedBuffer(maxOutputBytes)
-	stderr := newCappedBuffer(maxOutputBytes)
+	stdout := &streamWriter{cappedBuffer: newCappedBuffer(maxOutputBytes), source: "stdout", onChunk: onChunk}
+	stderr := &streamWriter{cappedBuffer: newCappedBuffer(maxOutputBytes), source: "stderr", onChunk: onChunk}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
