@@ -66,15 +66,20 @@ export function ModuleStatusPanel({ latest, systemStatus }: Props) {
           <p>{t('moduleStatus.subtitle')}</p>
         </div>
         {systemStatus && (
-          <span className={overallClass(systemStatus.overall)}>
+          <span className={overallClass(systemStatus.overall)} role="status" aria-live="polite">
             {STATUS_LABEL[systemStatus.overall] ?? systemStatus.overall}
           </span>
         )}
       </div>
-      <div className="module-status-grid">
+      {/* Polled every few seconds (useSystemStatus/useHealthMetrics) — a module
+          going from healthy to down is worth announcing even when the operator
+          isn't looking at this tab. The colored dot is purely decorative: the
+          adjacent module-status-label span already spells out the same state
+          as text, so it's hidden from assistive tech rather than duplicated. */}
+      <div className="module-status-grid" aria-live="polite" aria-relevant="additions text">
         {modules.map(m => (
           <div key={m.name} className="module-status-card">
-            <span className={dotClass(m.status)} />
+            <span className={dotClass(m.status)} aria-hidden="true" />
             <span className="module-status-main">
               <span className="module-status-name">{MODULE_LABEL[m.name] ?? m.name}</span>
               {moduleMeta(m) && <span className="module-status-meta">{moduleMeta(m)}</span>}

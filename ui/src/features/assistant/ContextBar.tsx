@@ -36,6 +36,15 @@ export function ContextBar({
     return () => document.removeEventListener('mousedown', onOutside)
   }, [modeOpen])
 
+  // Escape closes the dropdown, matching SessionRail's established pattern
+  // for dismissible overlays elsewhere in the app.
+  useEffect(() => {
+    if (!modeOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModeOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [modeOpen])
+
   const pickMode = (mode: ApprovalMode) => {
     onApprovalModeChange(mode)
     setModeOpen(false)
@@ -100,7 +109,15 @@ export function ContextBar({
             } / {(ctxWindow / 1024).toFixed(0)}k
           </span>
         </span>
-        <div className="ctx-track" title={`${t('contextBar.usageTitleBefore')}${fillPct.toFixed(0)}${t('contextBar.usageTitleAfter')}`}>
+        <div
+          className="ctx-track"
+          title={`${t('contextBar.usageTitleBefore')}${fillPct.toFixed(0)}${t('contextBar.usageTitleAfter')}`}
+          role="progressbar"
+          aria-label={t('contextBar.usageBarAriaLabel')}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(fillPct)}
+        >
           <div
             className="ctx-fill"
             style={{ width: `${fillPct}%`, background: fillColor }}

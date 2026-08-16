@@ -30,7 +30,7 @@ export function ChatPage(): JSX.Element {
   }, [])
 
   return (
-    <div className="chat-page">
+    <main className="chat-page">
       <SessionRail
         open={railOpen}
         onToggle={() => setRailOpen(o => !o)}
@@ -47,6 +47,6 @@ export function ChatPage(): JSX.Element {
           newChatRequest={newChatRequest}
         />
       </div>
-    </div>
+    </main>
   )
 }
