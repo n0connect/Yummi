@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"time"
 
@@ -64,10 +65,26 @@ func errResult(msg string) (*mcp.CallToolResult, any, error) {
 // result (there is none today — kept for signature symmetry with AddTool's
 // handler shape).
 func runCaptured(ctx context.Context, program string, args ...string) (*mcp.CallToolResult, any, error) {
+	return runCapturedEnv(ctx, nil, program, args...)
+}
+
+// runCapturedEnv is runCaptured with additional environment variables layered
+// on top of the inherited environment (each entry overrides any existing var
+// of the same name, matching os/exec.Cmd.Env's "last wins" semantics). Exists
+// for the rare tool that needs a per-invocation override — e.g. wpscan writes
+// its vulnerability-database cache under $HOME/.cache, which fails outright
+// under the sandbox's read-only root filesystem unless HOME is redirected
+// somewhere writable (/tmp is a tmpfs mount, unaffected by the read-only
+// root) — rather than a global os.Setenv, which would race across this
+// server's concurrently-handled tool calls.
+func runCapturedEnv(ctx context.Context, extraEnv []string, program string, args ...string) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, program, args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	stdout := newCappedBuffer(maxOutputBytes)
 	stderr := newCappedBuffer(maxOutputBytes)
 	cmd.Stdout = stdout

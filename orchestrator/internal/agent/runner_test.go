@@ -251,6 +251,51 @@ func TestRunnerE2E_ApprovalGate(t *testing.T) {
 	}
 }
 
+// TestRunnerE2E_AutoModeStillGatesOnDestructiveCommand proves the one hard
+// exception to "auto mode never gates": a command matching validator.go's
+// destructiveFloor (rm -rf here) still pauses awaiting_approval even in
+// ModeAuto, despite the model declaring it "low" risk — closing the gap
+// where a small/misjudging model could otherwise run an irreversible
+// destructive command completely unattended.
+func TestRunnerE2E_AutoModeStillGatesOnDestructiveCommand(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	es := realShellStore(t)
+	validator := conductor.NewValidator()
+	ollama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"clean up a directory"}]}`,
+		"[RUN_COMMAND]\n{\"command\":\"rm -rf /tmp/yummi-test-destructive\",\"step_id\":\"s1\",\"risk_level\":\"low\"}",
+		"[FINISH]\n{\"summary\":\"cleanup approved and done\"}",
+	)
+
+	cfg := fastRetryCfg()       // ModeAuto by default
+	cfg.ApprovalMode = ModeAuto // explicit: this is exactly what auto mode should NOT bypass
+	runner := NewRunner(store, ollama, validator, NewStoreExecer(es, 5*time.Second), cfg)
+
+	task, err := runner.CreateAndPlan(context.Background(), "test-session", "clean up temp directory")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if err := runner.Start(task.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	pending := waitForStatus(t, store, task.ID, StatusAwaitingApproval, 5*time.Second)
+	if pending.PendingCommand != "rm -rf /tmp/yummi-test-destructive" {
+		t.Fatalf("expected the destructive command pending approval, got %q", pending.PendingCommand)
+	}
+	if pending.PendingRisk != "high" {
+		t.Fatalf("expected destructiveFloor to escalate risk to high despite model saying low, got %q", pending.PendingRisk)
+	}
+
+	if err := runner.Approve(task.ID, pending.PendingProposalID, true, ""); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
+	if !strings.Contains(got.Summary, "cleanup approved and done") {
+		t.Fatalf("summary mismatch: %q", got.Summary)
+	}
+}
+
 // TestResumeAfterAskOperatorInjectsMessageAndContinues is a regression test
 // for a bug found via live stress-testing: once a task paused via
 // [ASK_OPERATOR], resuming it (POST /api/v1/tasks/{id}/start) just re-entered
