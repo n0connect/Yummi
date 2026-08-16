@@ -571,6 +571,96 @@ func TestHeartbeatPublishesElapsedSecsWhileRunning(t *testing.T) {
 	}
 }
 
+// TestOutputSinkPublishesExecutionOutputEvents proves the output-chunk side
+// channel end to end at the store level: a ProcessFunc that calls
+// OutputSink(ctx) to report fragments as it goes produces "execution.output"
+// events carrying OutputChunk/OutputSource, in order, before the terminal
+// "execution.completed" — and, mirroring ElapsedSecs, those transient fields
+// never leak into the canonical stored record or the terminal event.
+func TestOutputSinkPublishesExecutionOutputEvents(t *testing.T) {
+	store := NewStore()
+
+	type seen struct{ source, chunk string }
+	var chunks []seen
+
+	store.SetProcessor(func(ctx context.Context, rec Record) (string, error) {
+		sink := OutputSink(ctx)
+		sink("stdout", "hello ")
+		sink("stdout", "world")
+		sink("stderr", "a warning")
+		return "hello world", nil
+	})
+
+	subID, events, err := store.Subscribe(32)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer store.Unsubscribe(subID)
+
+	rec, err := store.Enqueue("s1", "p1", "echo hi", "manual_terminal")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	completed := false
+	for !completed && time.Now().Before(deadline) {
+		select {
+		case evt := <-events:
+			if evt.Record.ID != rec.ID {
+				continue
+			}
+			switch evt.Type {
+			case "execution.output":
+				chunks = append(chunks, seen{evt.Record.OutputSource, evt.Record.OutputChunk})
+			case "execution.completed":
+				completed = true
+				if evt.Record.OutputChunk != "" || evt.Record.OutputSource != "" {
+					t.Fatalf("terminal record must not carry a leftover output chunk, got source=%q chunk=%q",
+						evt.Record.OutputSource, evt.Record.OutputChunk)
+				}
+				if evt.Record.Output != "hello world" {
+					t.Fatalf("completed output = %q, want %q", evt.Record.Output, "hello world")
+				}
+			}
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if !completed {
+		t.Fatal("execution never completed")
+	}
+
+	want := []seen{{"stdout", "hello "}, {"stdout", "world"}, {"stderr", "a warning"}}
+	if len(chunks) != len(want) {
+		t.Fatalf("got %d execution.output events, want %d: %+v", len(chunks), len(want), chunks)
+	}
+	for i, w := range want {
+		if chunks[i] != w {
+			t.Fatalf("chunk[%d] = %+v, want %+v", i, chunks[i], w)
+		}
+	}
+
+	// The canonical stored record must never have picked up the transient
+	// fields either — Get() reads straight from the store's own map, not
+	// from anything publish() saw.
+	final, ok := store.Get(rec.ID)
+	if !ok {
+		t.Fatal("record missing after completion")
+	}
+	if final.OutputChunk != "" || final.OutputSource != "" {
+		t.Fatalf("stored record must never carry chunk fields, got %+v", final)
+	}
+}
+
+// TestOutputSinkNoopOutsideStoreLoop proves OutputSink degrades safely (a
+// callable no-op, not a nil-panic) when called on a context that never went
+// through runWithHeartbeat — e.g. a ProcessFunc invoked directly by a test,
+// or by another caller outside the store's own process() loop.
+func TestOutputSinkNoopOutsideStoreLoop(t *testing.T) {
+	sink := OutputSink(context.Background())
+	sink("stdout", "should not panic or go anywhere")
+}
+
 func TestEnqueueMCP_ReachesProcessorAndCompletes(t *testing.T) {
 	es := NewStore()
 	var gotTool string
