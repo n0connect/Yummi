@@ -156,6 +156,20 @@ const en = {
   'trace.approve': 'Approve',
   'trace.draftYamlSummary': 'draft YAML',
 
+  // ── FindingsPanel (Trace tab's Findings section) ───────────────────────
+  'trace.findings.targetLabel': 'Target',
+  'trace.findings.targetAll': 'All targets',
+  'trace.findings.targetUnassigned': 'No target',
+  'trace.findings.sourceLabel': 'Source',
+  'trace.findings.sourceAll': 'All sources',
+  'trace.findings.sortLabel': 'Sort',
+  'trace.findings.sortNewest': 'Newest',
+  'trace.findings.sortOldest': 'Oldest',
+  'trace.findings.sortSeverity': 'Severity',
+  'trace.findings.evidenceToggle': 'Evidence',
+  'trace.findings.noMatch': 'No findings match the current filters.',
+  'trace.findings.clearFilters': 'Clear filters',
+
   // ── ContextBar ──────────────────────────────────────────────────────────
   'contextBar.mode.ask_permission': 'ask permission',
   'contextBar.mode.auto': 'auto',
@@ -466,6 +480,20 @@ const tr = {
   'trace.sectionRoles': 'Uzman görev rolleri',
   'trace.approve': 'Onayla',
   'trace.draftYamlSummary': 'taslak YAML',
+
+  // ── FindingsPanel (Trace sekmesinin Bulgular bölümü) ────────────────────
+  'trace.findings.targetLabel': 'Hedef',
+  'trace.findings.targetAll': 'Tüm hedefler',
+  'trace.findings.targetUnassigned': 'Hedef yok',
+  'trace.findings.sourceLabel': 'Kaynak',
+  'trace.findings.sourceAll': 'Tüm kaynaklar',
+  'trace.findings.sortLabel': 'Sırala',
+  'trace.findings.sortNewest': 'En yeni',
+  'trace.findings.sortOldest': 'En eski',
+  'trace.findings.sortSeverity': 'Önem derecesi',
+  'trace.findings.evidenceToggle': 'Kanıt',
+  'trace.findings.noMatch': 'Filtrelere uyan bulgu yok.',
+  'trace.findings.clearFilters': 'Filtreleri temizle',
 
   // ── ContextBar ──────────────────────────────────────────────────────────
   'contextBar.mode.ask_permission': 'onay iste',
