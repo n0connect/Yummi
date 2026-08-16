@@ -1,0 +1,60 @@
+name: weekly-agent-eval
+
+# make test-agent-eval (the assertion-bearing quality gate against a REAL
+# model + real sandbox container) never runs in the regular CI workflow —
+# GitHub-hosted PR runners have no GPU and pulling/serving a model on every
+# push would be far too slow. That leaves it running only when a developer
+# remembers to invoke it locally, which in practice means close to never.
+# This workflow gives it a real, scheduled, CI-enforced cadence instead —
+# a small model (qwen3:4b, the "lite" tier) on a plain GitHub-hosted runner,
+# CPU-only inference, so no self-hosted/GPU infrastructure is required.
+on:
+  schedule:
+    # Sunday 03:00 UTC — low-traffic slot, well clear of any release cutting.
+    - cron: "0 3 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  agent-eval:
+    name: Live agent quality eval (qwen3:4b)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama and pull the eval model
+        run: |
+          nohup ollama serve > /tmp/ollama.log 2>&1 &
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:11434/ >/dev/null 2>&1 && break; sleep 1; done
+          curl -sf http://127.0.0.1:11434/ >/dev/null || { echo "ollama did not come up"; cat /tmp/ollama.log; exit 1; }
+          ollama pull qwen3:4b
+
+      - name: Build stack images
+        run: docker compose build gateway sandbox orchestrator docker-proxy
+
+      - name: Start stack (headless, no UI needed for eval)
+        run: |
+          docker compose up -d gateway sandbox orchestrator docker-proxy
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:9080/api/v1/system/status >/dev/null 2>&1 && break; sleep 2; done
+          curl -sf http://127.0.0.1:9080/api/v1/system/status || { echo "orchestrator did not come up"; docker compose logs; exit 1; }
+
+      - name: Run live agent quality evaluation
+        run: make test-agent-eval LIVE_TEST_MODEL=qwen3:4b
+
+      - name: Dump stack logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

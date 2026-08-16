@@ -42,6 +42,29 @@ func TestRunCaptured_LaunchFailure(t *testing.T) {
 	}
 }
 
+// TestRunCapturedEnv_OverridesVar proves runCapturedEnv actually layers the
+// extra env on top of the inherited environment (not replacing it) — the
+// regression this exists for: wpscanHandler needs HOME redirected to a
+// writable path without losing PATH/etc, which a bare os.Setenv would also
+// achieve but unsafely, racing across this server's concurrent tool calls.
+func TestRunCapturedEnv_OverridesVar(t *testing.T) {
+	t.Setenv("YUMMI_TEST_MARKER", "inherited")
+	result, _, err := runCapturedEnv(context.Background(), []string{"HOME=/tmp/overridden"}, "sh", "-c", "echo HOME=$HOME MARKER=$YUMMI_TEST_MARKER")
+	if err != nil {
+		t.Fatalf("runCapturedEnv: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got IsError with content %+v", result.Content)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok || !strings.Contains(text.Text, "HOME=/tmp/overridden") {
+		t.Fatalf("expected overridden HOME, got %+v", result.Content)
+	}
+	if !strings.Contains(text.Text, "MARKER=inherited") {
+		t.Fatalf("expected inherited env to survive alongside the override, got %+v", result.Content)
+	}
+}
+
 func TestCappedBuffer_Truncates(t *testing.T) {
 	b := newCappedBuffer(10)
 	_, _ = b.Write([]byte("0123456789ABCDEF"))

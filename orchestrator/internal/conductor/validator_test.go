@@ -192,3 +192,76 @@ func TestValidateChatResponseStripsInternalReasoningFromVisibleFields(t *testing
 		t.Fatalf("visible rationale was not sanitized: %q", resp.Proposals[0].Rationale)
 	}
 }
+
+// TestDestructiveFloorCatchesShapeSafeButCatastrophicCommands proves the
+// gap classifyRisk's allowlist deliberately does not cover: a structurally
+// simple command (no chaining/redirection/substitution) can still be
+// catastrophically destructive. classifyRisk alone would call every one of
+// these "low"; destructiveFloor is the independent second check that forces
+// them up regardless of the model's own risk_level.
+func TestDestructiveFloorCatchesShapeSafeButCatastrophicCommands(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		risk string
+	}{
+		{"rm -rf /", "high"},
+		{"rm -fr /var/lib/data", "high"},
+		{"rm --recursive --force /home/pentester", "high"},
+		{"rm -r --force /tmp/x", "high"},
+		{"dd if=/dev/zero of=/dev/sda", "critical"},
+		{"mkfs.ext4 /dev/sdb1", "critical"},
+		{"shred -u secrets.txt", "high"},
+		// Not destructive by this floor's narrow scope — recursive alone
+		// (no force), or force alone (no recursive), is left to the model.
+		{"rm -r ./build", ""},
+		{"rm -f ./notes.txt", ""},
+		{"rm ./notes.txt", ""},
+		{"ls -la", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			// classifyRisk must actually call these "low" on its own (proving
+			// the floor is catching something classifyRisk's shape check
+			// misses, not something already caught by chaining/redirection).
+			if got := classifyRisk(tt.cmd); got != "low" {
+				t.Fatalf("precondition failed: classifyRisk(%q) = %q, want %q (test no longer isolates the gap)", tt.cmd, got, "low")
+			}
+			risk, label := destructiveFloor(tt.cmd)
+			if tt.risk == "" {
+				if label != "" {
+					t.Fatalf("destructiveFloor(%q) = (%q, %q), want no match", tt.cmd, risk, label)
+				}
+				return
+			}
+			if risk != tt.risk || label == "" {
+				t.Fatalf("destructiveFloor(%q) = (%q, %q), want risk %q with a non-empty label", tt.cmd, risk, label, tt.risk)
+			}
+		})
+	}
+}
+
+// TestValidateChatResponseSetsForceApprovalReason proves the floor is wired
+// into ValidateChatResponse end-to-end: RiskLevel is escalated even when the
+// model declared "low", and ForceApprovalReason is set — the field the agent
+// loop's auto mode checks to override its own "never gate" default.
+func TestValidateChatResponseSetsForceApprovalReason(t *testing.T) {
+	v := NewValidator()
+	resp := v.ValidateChatResponse(ChatResponse{
+		Proposals: []Proposal{
+			{Command: "rm -rf /data", RiskLevel: "low"},
+			{Command: "nmap -sV 10.0.0.1", RiskLevel: "low"},
+		},
+	})
+	if resp.Proposals[0].RiskLevel != "high" {
+		t.Errorf("rm -rf should be escalated to high despite model saying low, got %s", resp.Proposals[0].RiskLevel)
+	}
+	if resp.Proposals[0].ForceApprovalReason == "" {
+		t.Error("rm -rf should set ForceApprovalReason")
+	}
+	if !resp.Proposals[0].RequiresApproval {
+		t.Error("rm -rf should require approval")
+	}
+	if resp.Proposals[1].ForceApprovalReason != "" {
+		t.Errorf("an ordinary command must not set ForceApprovalReason, got %q", resp.Proposals[1].ForceApprovalReason)
+	}
+}

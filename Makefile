@@ -112,6 +112,9 @@ endef
 define log_error
 printf "$(RED)[ERROR]$(RESET) $(BOLD)$(1)$(RESET) $(DIM)$(2)$(RESET)\n"
 endef
+define log_warn
+printf "$(YELLOW)[WARN]$(RESET) $(BOLD)$(1)$(RESET) $(DIM)$(2)$(RESET)\n"
+endef
 define log_section
 printf "\n$(BOLD)$(CYAN)[INFO] ══ $(1) ══$(RESET)\n"
 endef
@@ -120,7 +123,8 @@ endef
 .PHONY: help conf \
 	build start start-tui stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
-	test test-agent-live test-agent-eval lint vuln doctor install dev dev-ui dev-orchestrator \
+	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
+	lint vuln doctor install dev dev-ui dev-orchestrator \
 	app desktop desktop-dev _check-desktop-deps _desktop-deps \
 	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp \
 	docker-build docker-orchestrator docker-ui \
@@ -354,19 +358,72 @@ test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sand
 test-agent-live: _check-deps
 	@$(call log_section,Agent Live E2E)
 	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
+	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
+		$(call log_warn,agent live,yummi-sandbox container is NOT running — this run will SILENTLY SKIP the real test); \
+		$(call log_warn,agent live,rather than actually exercising the model + sandbox path. Run 'make start' first.); \
+	fi
 	@$(call log_info,go test,Running real $(LIVE_TEST_MODEL) + sandbox container...)
+	@# -count=1 disables go test's result cache — without it, a second run with
+	@# nothing source-changed (e.g. after 'docker stop yummi-sandbox') silently
+	@# replays yesterday's cached PASS instead of re-executing at all, since Go's
+	@# cache doesn't know this test's outcome depends on live container state.
 	@set -o pipefail; cd orchestrator && YUMMI_LIVE=1 YUMMI_OLLAMA_URL=$(OLLAMA_URL) YUMMI_OLLAMA_MODEL=$(LIVE_TEST_MODEL) \
-		go test ./internal/agent/ -run TestRunnerLive -v -timeout 15m 2>&1 | sed 's/^/  /' || { $(call log_error,agent live,Test failed.); exit 1; }
-	@$(call log_pass,agent live e2e,Test passed.)
+		go test -count=1 ./internal/agent/ -run TestRunnerLive -v -timeout 15m 2>&1 | tee /tmp/yummi-test-agent-live.out | sed 's/^/  /' || { $(call log_error,agent live,Test failed.); exit 1; }
+	@if grep -q '^--- SKIP' /tmp/yummi-test-agent-live.out; then \
+		$(call log_warn,agent live,Test was SKIPPED, not actually run against real infra — see the SKIP reason above.); \
+	else \
+		$(call log_pass,agent live e2e,Test passed.); \
+	fi
+	@rm -f /tmp/yummi-test-agent-live.out
 
 ## test-agent-eval  Assertion-bearing multi-scenario quality gate against the REAL model + sandbox
 test-agent-eval: _check-deps
 	@$(call log_section,Agent Quality Evaluation)
 	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
+	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
+		$(call log_warn,agent eval,yummi-sandbox container is NOT running — this run will SILENTLY SKIP the real test); \
+		$(call log_warn,agent eval,rather than actually exercising the model + sandbox path. Run 'make start' first.); \
+	fi
 	@$(call log_info,go test,Running quality scenarios with $(LIVE_TEST_MODEL) + sandbox...)
 	@set -o pipefail; cd orchestrator && YUMMI_EVAL=1 YUMMI_OLLAMA_URL=$(OLLAMA_URL) YUMMI_OLLAMA_MODEL=$(LIVE_TEST_MODEL) \
-		go test ./internal/agent/ -run TestLiveEval_Quality -v -timeout 45m 2>&1 | sed 's/^/  /' || { $(call log_error,agent eval,Quality thresholds failed.); exit 1; }
-	@$(call log_pass,agent quality eval,All thresholds passed.)
+		go test -count=1 ./internal/agent/ -run TestLiveEval_Quality -v -timeout 45m 2>&1 | tee /tmp/yummi-test-agent-eval.out | sed 's/^/  /' || { $(call log_error,agent eval,Quality thresholds failed.); exit 1; }
+	@if grep -q '^--- SKIP' /tmp/yummi-test-agent-eval.out; then \
+		$(call log_warn,agent eval,Test was SKIPPED, not actually run against real infra — see the SKIP reason above.); \
+	else \
+		$(call log_pass,agent quality eval,All thresholds passed.); \
+	fi
+	@rm -f /tmp/yummi-test-agent-eval.out
+
+## bench-target-up    Start the intentionally-vulnerable local benchmark target (outdated WordPress)
+bench-target-up: _check-deps
+	@$(call log_section,Benchmark Target)
+	@docker compose -f docker-compose.yml -f docker-compose.override.eval-target.yml \
+		up -d gateway sandbox orchestrator docker-proxy eval-target-db eval-target || { $(call log_error,bench target,Failed to start.); exit 1; }
+	@$(call log_pass,bench target,eval-target is up at 203.0.113.10 (see docker-compose.override.eval-target.yml).)
+
+## bench-target-down  Stop and remove the benchmark target
+bench-target-down:
+	@docker compose -f docker-compose.yml -f docker-compose.override.eval-target.yml \
+		rm -sf eval-target eval-target-db || true
+	@$(call log_pass,bench target,eval-target stopped.)
+
+## test-agent-benchmark  Prove the agent finds a REAL, known vulnerability on the local benchmark target
+test-agent-benchmark: _check-deps
+	@$(call log_section,Agent Vulnerability-Finding Benchmark)
+	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
+	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
+		$(call log_warn,agent benchmark,yummi-sandbox container is NOT running — this run will SILENTLY SKIP the real test); \
+		$(call log_warn,agent benchmark,Run 'make bench-target-up' first.); \
+	fi
+	@$(call log_info,go test,Running the vulnerability-finding benchmark with $(LIVE_TEST_MODEL) + sandbox + eval-target...)
+	@set -o pipefail; cd orchestrator && YUMMI_BENCHMARK=1 YUMMI_OLLAMA_URL=$(OLLAMA_URL) YUMMI_OLLAMA_MODEL=$(LIVE_TEST_MODEL) \
+		go test -count=1 ./internal/agent/ -run TestBenchmark_FindsRealVulnerability -v -timeout 15m 2>&1 | tee /tmp/yummi-test-agent-benchmark.out | sed 's/^/  /' || { $(call log_error,agent benchmark,Test failed.); exit 1; }
+	@if grep -q '^--- SKIP' /tmp/yummi-test-agent-benchmark.out; then \
+		$(call log_warn,agent benchmark,Test was SKIPPED, not actually run against real infra — see the SKIP reason above.); \
+	else \
+		$(call log_pass,agent benchmark,The agent found and correctly reported the real vulnerability.); \
+	fi
+	@rm -f /tmp/yummi-test-agent-benchmark.out
 
 ## lint    Run Go static analysis
 lint: _check-deps
@@ -597,6 +654,8 @@ help:
 	@printf "\n$(BOLD)  Developer commands$(RESET)\n"
 	@printf "  $(CYAN)make test$(RESET)        Run all test suites\n"
 	@printf "  $(CYAN)make test-agent-live$(RESET) Agentic loop e2e vs. real model + sandbox\n"
+	@printf "  $(CYAN)make bench-target-up$(RESET) Start the intentionally-vulnerable local benchmark target\n"
+	@printf "  $(CYAN)make test-agent-benchmark$(RESET) Prove the agent finds a REAL vulnerability on it\n"
 	@printf "  $(CYAN)make lint$(RESET)        Static analysis (golangci-lint)\n"
 	@printf "  $(CYAN)make vuln$(RESET)        Supply-chain vuln scan (govulncheck)\n"
 	@printf "  $(CYAN)make doctor$(RESET)      Environment diagnostics\n"
