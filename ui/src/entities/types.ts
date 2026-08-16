@@ -7,6 +7,17 @@ export type ChatProposal = {
   target_tool?: string
 }
 
+// ChatStreamEvent mirrors the orchestrator's conductor.StreamEvent — a raw,
+// incremental display token (or the terminal done signal) broadcast over
+// /ws/events as a "chat.stream" event while a conductor.Engine.Chat /
+// ChatWithHistory call is streaming from Ollama. Purely a display aid: the
+// authoritative reply is still the normal /api/v1/chat REST response.
+export type ChatStreamEvent = {
+  session_id: string
+  delta?: string
+  done: boolean
+}
+
 export type ExecutionRecord = {
   id: string
   session_id: string
