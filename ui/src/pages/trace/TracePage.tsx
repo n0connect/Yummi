@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { ActivityEvent, ActivityKind } from '../../entities/types'
+import { useMemo, useState } from 'react'
+import type { ActivityEvent, ActivityKind, PendingSkill } from '../../entities/types'
 import { presentActivity } from '../../shared/lib/activityPresentation'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
 import { usePendingSkills } from '../../features/skills/usePendingSkills'
@@ -43,6 +43,134 @@ function outcomeClass(outcome: string): string {
   }
 }
 
+// The trajectory a curator draft was derived from, JSON-marshaled server-side
+// from skillcurator.Trajectory (orchestrator/internal/skillcurator/draft.go)
+// with Go's default (capitalized, untagged) field names. Every field is
+// optional here defensively — this is best-effort presentation of a raw
+// string blob, not a validated wire contract, so a shape mismatch degrades
+// to the raw-JSON fallback in TrajectoryView rather than throwing.
+type ParsedTrajectory = {
+  Goal?: string
+  Summary?: string
+  Observations?: string[]
+  Tactics?: { tool?: string; command_pattern?: string; outcome?: string }[]
+}
+
+function parseTrajectory(raw: string): ParsedTrajectory | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object') return parsed as ParsedTrajectory
+    return null
+  } catch {
+    return null
+  }
+}
+
+// TrajectoryView renders the task a skill draft was learned from — the
+// "why this was proposed" context an operator needs to judge a draft, not
+// just its resulting YAML. Falls back to the raw JSON blob when it doesn't
+// parse into the expected shape (e.g. a future/older server payload).
+function TrajectoryView({ raw }: { raw: string }): JSX.Element {
+  const parsed = useMemo(() => parseTrajectory(raw), [raw])
+  if (!parsed || (!parsed.Goal && !parsed.Summary && !parsed.Observations?.length && !parsed.Tactics?.length)) {
+    return <pre className="trace-context-val">{raw}</pre>
+  }
+  return (
+    <div className="trace-trajectory">
+      {parsed.Goal && (
+        <div className="trace-trajectory-field">
+          <span className="trace-trajectory-label">{t('trace.trajectoryGoal')}</span>
+          <span>{parsed.Goal}</span>
+        </div>
+      )}
+      {parsed.Summary && (
+        <div className="trace-trajectory-field">
+          <span className="trace-trajectory-label">{t('trace.trajectoryOutcome')}</span>
+          <span>{parsed.Summary}</span>
+        </div>
+      )}
+      {!!parsed.Tactics?.length && (
+        <div className="trace-trajectory-field">
+          <span className="trace-trajectory-label">{t('trace.trajectoryTactics')}</span>
+          <ul className="trace-trajectory-list">
+            {parsed.Tactics.map((tac, i) => (
+              <li key={i}>
+                <code>{tac.command_pattern ?? '—'}</code>
+                {tac.tool && <span className="trace-trajectory-tag">{tac.tool}</span>}
+                {tac.outcome && <span className={outcomeClass(tac.outcome)}>{tac.outcome}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!!parsed.Observations?.length && (
+        <div className="trace-trajectory-field">
+          <span className="trace-trajectory-label">{t('trace.trajectoryObservations')}</span>
+          <ul className="trace-trajectory-list">
+            {parsed.Observations.map((obs, i) => <li key={i}>{obs}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatEpochSecs(secs: number): string {
+  return new Date(secs * 1000).toLocaleString()
+}
+
+// PendingSkillCard renders one curator-drafted skill: the operator-review
+// case (actions + no resolution metadata) and the read-only audit case
+// (already resolved — surfaces threat_scan_result/reject_reason/resolved_at,
+// the whole point of not hiding a quarantined draft's paper trail) share this
+// component, distinguished by whether onApprove/onReject are supplied.
+function PendingSkillCard({ skill, onApprove, onReject }: {
+  skill: PendingSkill
+  onApprove?: (id: string) => void
+  onReject?: (id: string) => void
+}): JSX.Element {
+  return (
+    <div className="trace-skill trace-pending-skill">
+      <div className="trace-pending-skill-head">
+        <span className="trace-skill-name">{skill.name}</span>
+        {onApprove && onReject ? (
+          <div className="trace-pending-skill-actions">
+            <button className="small-button" onClick={() => onApprove(skill.id)}>{t('trace.approve')}</button>
+            <button className="small-button" onClick={() => onReject(skill.id)}>{t('common.reject')}</button>
+          </div>
+        ) : (
+          skill.resolved_at ? (
+            <span className="trace-pending-skill-resolved">
+              {t('trace.rejectedSkillResolvedAt')} · {formatEpochSecs(skill.resolved_at)}
+            </span>
+          ) : null
+        )}
+      </div>
+      <div className="trace-pending-skill-meta">{t('trace.pendingSkillFromTask')} {skill.task_id}</div>
+
+      {skill.threat_scan_result && (
+        <div className="execution-threat trace-pending-skill-threat" role="alert">
+          {t('trace.threatScanLabel')}: {skill.threat_scan_result}
+        </div>
+      )}
+      {skill.reject_reason && (
+        <div className="trace-skill-error trace-pending-skill-reject-reason">
+          {t('trace.rejectReasonLabel')}: {skill.reject_reason}
+        </div>
+      )}
+
+      <details>
+        <summary>{t('trace.draftYamlSummary')}</summary>
+        <pre className="trace-context-val">{skill.draft_yaml}</pre>
+      </details>
+      <details>
+        <summary>{t('trace.trajectorySummary')}</summary>
+        <TrajectoryView raw={skill.trajectory} />
+      </details>
+    </div>
+  )
+}
+
 function ActivityRow({ ev }: { ev: ActivityEvent }): JSX.Element {
   const [icon] = KIND_META[ev.kind] ?? ['•', ev.kind]
   const visible = presentActivity(ev)
@@ -72,7 +200,7 @@ function Section({ title, count, children }: { title: string; count: number; chi
 export function TracePage(): JSX.Element {
   const [sessionID] = useState(resolveSessionID)
   const { activity, findings, tactics, context, skills, roles, refresh } = useTraceData(sessionID)
-  const { pending: pendingSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
+  const { pending: pendingSkills, rejected: rejectedSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
   const [skillError, setSkillError] = useState<string | null>(null)
 
   async function handleApproveSkill(id: string) {
@@ -153,24 +281,22 @@ export function TracePage(): JSX.Element {
 
         {/* Auto-skill-creation: curator-drafted skills awaiting operator review.
             Never auto-loaded — approve() writes to disk + hot-adds to the live
-            registry, reject() just marks the row. */}
+            registry, reject() just marks the row. Shows the full draft YAML,
+            the trajectory it was learned from, and any threat-scan/reject
+            metadata so an operator can judge it without leaving this page. */}
         <Section title={t('trace.sectionPendingSkills')} count={pendingSkills.length}>
           {skillError && <div className="trace-skill-error">{skillError}</div>}
           {pendingSkills.map(p => (
-            <div key={p.id} className="trace-skill trace-pending-skill">
-              <div className="trace-pending-skill-head">
-                <span className="trace-skill-name">{p.name}</span>
-                <div className="trace-pending-skill-actions">
-                  <button className="small-button" onClick={() => handleApproveSkill(p.id)}>{t('trace.approve')}</button>
-                  <button className="small-button" onClick={() => handleRejectSkill(p.id)}>{t('common.reject')}</button>
-                </div>
-              </div>
-              <details>
-                <summary>{t('trace.draftYamlSummary')}</summary>
-                <pre className="trace-context-val">{p.draft_yaml}</pre>
-              </details>
-            </div>
+            <PendingSkillCard key={p.id} skill={p} onApprove={handleApproveSkill} onReject={handleRejectSkill} />
           ))}
+        </Section>
+
+        {/* Read-only audit trail: drafts the curator or an operator rejected
+            (including auto-rejections from a failed threat scan, which never
+            reach the review queue above at all) — the record of WHY a draft
+            was refused, not just that it was. */}
+        <Section title={t('trace.sectionRejectedSkills')} count={rejectedSkills.length}>
+          {rejectedSkills.map(p => <PendingSkillCard key={p.id} skill={p} />)}
         </Section>
 
         {/* Sub-agent roles */}
