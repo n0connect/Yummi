@@ -35,7 +35,7 @@
   display: flex;
   gap: 2px;
   padding: 3px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--wash-soft);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -53,7 +53,7 @@
   cursor: pointer;
   transition: all var(--transition-fast);
 }
-.window-btn:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); box-shadow: none; }
+.window-btn:hover { color: var(--text-secondary); background: var(--wash-medium); box-shadow: none; }
 .window-btn.active {
   background: var(--accent-soft);
   color: var(--accent-hover);
