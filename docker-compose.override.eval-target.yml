@@ -1,0 +1,87 @@
+# ── Opt-in local benchmark target — NOT part of the default stack ───────────
+#
+# Only applied when explicitly requested via `-f docker-compose.override.eval-target.yml`
+# (see `make bench-target-up` / `make test-agent-benchmark` in the Makefile).
+#
+# Adds a deliberately outdated, intentionally vulnerable WordPress instance
+# (5.0, a version with well-known public CVEs) reachable from the sandbox
+# exactly the way a real external target would be: gated behind gateway's
+# fail-closed default — the benchmark harness must set egress mode to allow
+# and add a real temporary gateway allow rule for it before the agent can
+# reach it at all, same as scanning any other target. This exists so
+# agent.QualitySpec/QualityReport (backing `make test-agent-eval`) has
+# something to measure against with an actual, known, real vulnerability —
+# not just "did it run a command".
+#
+# eval_target_net uses an RFC 5737 TEST-NET range (203.0.113.0/24) —
+# deliberately NOT an RFC1918 private range (10/8, 172.16/12, 192.168/16).
+# gateway hardcodes those private ranges as ALWAYS-blocked, regardless of
+# egress mode or any explicit allow rule (see
+# gateway/src/network/nftables.rs's build_ruleset and the
+# test_always_blocks_* tests) — a deliberate anti-pivoting floor, not a bug.
+# Docker's default bridge-network IPAM would have landed this target on a
+# 172.x or 192.168.x address purely by chance, which the trust boundary would
+# then correctly (if confusingly, for benchmark purposes) refuse forever. A
+# TEST-NET address behaves like a real external target from gateway's point
+# of view — the whole point here — without ever being routable outside this
+# host's own Docker networking.
+#
+# The database sits on its own private network, unreachable from sandbox —
+# only the WordPress app itself is in scope, mirroring how a real engagement
+# would only put the web-facing target in scope, not its backend.
+services:
+  # gateway must itself be a member of eval_target_net to have any route to
+  # forward sandbox traffic onto — Compose merges this networks map into
+  # gateway's existing yummi_internal/yummi_external membership from
+  # docker-compose.yml, it doesn't replace it.
+  gateway:
+    networks:
+      eval_target_net: {}
+
+  eval-target-db:
+    image: mariadb:10.6
+    restart: "no"
+    environment:
+      MYSQL_ROOT_PASSWORD: eval-only-not-a-real-secret
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: eval-only-not-a-real-secret
+    networks:
+      - eval_target_db_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  eval-target:
+    image: wordpress:5.0-php7.2-apache
+    restart: "no"
+    depends_on:
+      eval-target-db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: eval-target-db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: eval-only-not-a-real-secret
+      WORDPRESS_DB_NAME: wordpress
+    networks:
+      eval_target_net:
+        ipv4_address: 203.0.113.10
+      eval_target_db_net:
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  eval_target_db_net:
+    name: yummi_eval_target_db_net
+  eval_target_net:
+    name: yummi_eval_target_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 203.0.113.0/24
+          gateway: 203.0.113.1
