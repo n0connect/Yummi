@@ -78,8 +78,20 @@ type streamWriter struct {
 
 func (w *streamWriter) Write(p []byte) (int, error) {
 	wasTruncated := w.truncated
+	keptBefore := w.buf.Len()
 	n, err := w.cappedBuffer.Write(p)
-	if w.onChunk != nil && !wasTruncated && len(p) > 0 {
+	// cappedBuffer.Write always reports n == len(p) (it silently drops the
+	// tail past the cap rather than erroring — see its own doc comment), so n
+	// cannot be used to learn how much of p actually landed in the buffer.
+	// keptBefore/keptAfter can: on the exact call that crosses the cap, only
+	// the accepted prefix should ever reach onChunk, or the live side-channel
+	// would transiently show bytes the persisted/final output never kept.
+	kept := w.buf.Len() - keptBefore
+	if kept > len(p) {
+		kept = len(p) // defensive: cappedBuffer never grows buf by more than len(p)
+	}
+	if w.onChunk != nil && !wasTruncated && kept > 0 {
+		p = p[:kept]
 		// os/exec's stdout/stderr copy goroutines reuse their read buffer
 		// across calls, so p's backing array is not ours to hold onto past
 		// this call — copy before handing it to the callback.
