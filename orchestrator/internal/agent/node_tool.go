@@ -85,8 +85,15 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 	s.emit(ActCommand, "Command dispatched", p.Rationale)
 
 	// Approval is mode-driven, not risk-driven: in ask_permission mode EVERY
-	// command gates on the operator; in auto mode none do.
-	if s.cfg.ApprovalMode == ModeAskPermission {
+	// command gates on the operator; in auto mode none do — with exactly one
+	// hard exception. ForceApprovalReason is set only for a small set of
+	// known irreversible/destructive command shapes (validator.go's
+	// destructiveFloor: rm -rf, dd to a device, mkfs, shred) that classifyRisk's
+	// shell-shape allowlist and the model's own risk_level both can miss.
+	// Auto mode exists so an operator can let ordinary risk run unattended —
+	// it was never meant to also mean "run a disk-wipe unsupervised because a
+	// small local model misjudged it as low risk."
+	if s.cfg.ApprovalMode == ModeAskPermission || p.ForceApprovalReason != "" {
 		s.pendingProposal = p
 		return edgeRequiresApproval, nil
 	}

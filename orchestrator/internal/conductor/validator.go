@@ -67,6 +67,13 @@ func (v *Validator) ValidateChatResponse(resp ChatResponse) ChatResponse {
 
 		risk := classifyRisk(cmd)
 		p.RiskLevel = maxRisk(p.RiskLevel, risk)
+
+		if destRisk, label := destructiveFloor(cmd); label != "" {
+			p.RiskLevel = maxRisk(p.RiskLevel, destRisk)
+			p.ForceApprovalReason = "destructive pattern detected: " + label
+			warnings = append(warnings, fmt.Sprintf("forced approval — %s: %s", p.ForceApprovalReason, tool))
+		}
+
 		p.RequiresApproval = requiresApproval(p.RiskLevel)
 
 		if isHighSeverity(p.RiskLevel) {
@@ -166,6 +173,42 @@ func classifyRisk(cmd string) string {
 		return "low"
 	}
 	return "critical"
+}
+
+// destructiveFloor is a second, independent risk floor for a gap
+// classifyRisk deliberately does not cover: its allowlist only judges shell
+// SHAPE safety (no chaining/redirection/substitution), not semantic danger —
+// so "rm -rf /" and "dd of=/dev/sda" pass its simple-shape check exactly
+// like "ls -la" does, since neither contains a shell metacharacter. This
+// floor catches a small, deliberately narrow set of genuinely irreversible
+// data/device-destroying command shapes and forces at least the given risk
+// level regardless of the model's own risk_level or classifyRisk's verdict.
+// This is NOT a general danger blacklist — everything else stays the
+// model's judgment call, matching classifyRisk's own allowlist-not-blacklist
+// philosophy; only clearly catastrophic, hard-to-undo actions are floored
+// here. Returns ("", "") when nothing matches.
+var (
+	rmTok         = regexp.MustCompile(`(?i)(^|\s)rm(\s|$)`)
+	recursiveFlag = regexp.MustCompile(`(?i)(^|\s)(-[a-z]*r[a-z]*|--recursive)(\s|$)`)
+	forceFlag     = regexp.MustCompile(`(?i)(^|\s)(-[a-z]*f[a-z]*|--force)(\s|$)`)
+	ddToDevice    = regexp.MustCompile(`(?i)(^|\s)dd(\s|$).*\bof=/dev/`)
+	mkfsToDevice  = regexp.MustCompile(`(?i)(^|\s)mkfs(\.\w+)?(\s|$).*/dev/`)
+	shredTok      = regexp.MustCompile(`(?i)(^|\s)shred(\s|$)`)
+)
+
+func destructiveFloor(cmd string) (risk, label string) {
+	switch {
+	case rmTok.MatchString(cmd) && recursiveFlag.MatchString(cmd) && forceFlag.MatchString(cmd):
+		return "high", "recursive force delete (rm -rf)"
+	case ddToDevice.MatchString(cmd):
+		return "critical", "raw write to a block device (dd of=/dev/...)"
+	case mkfsToDevice.MatchString(cmd):
+		return "critical", "filesystem creation on a device (mkfs)"
+	case shredTok.MatchString(cmd):
+		return "high", "secure erase (shred)"
+	default:
+		return "", ""
+	}
 }
 
 func requiresApproval(risk string) bool {
