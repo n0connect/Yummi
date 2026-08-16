@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -127,6 +128,38 @@ func (c *Client) ChatHistory(ctx context.Context, system string, history []Messa
 	msgs = append(msgs, Message{Role: "system", Content: c.prepareSystem(system)})
 	msgs = append(msgs, history...)
 	return c.do(ctx, msgs)
+}
+
+// ChatStream is Chat's streaming counterpart: it sends the same request with
+// Ollama's "stream": true and invokes onChunk with each incremental piece of
+// the assistant message as it arrives, in addition to returning the full,
+// accumulated response once the stream completes — so it composes cleanly
+// with every existing caller that only cares about the final string (e.g. a
+// JSON-parsing consumer like conductor.Engine). onChunk may be nil, in which
+// case ChatStream just accumulates silently and behaves like Chat over the
+// wire. Requesting Ollama's streamed NDJSON has no bearing on the semantics
+// of the accumulated result: it is byte-for-byte the same string Chat would
+// have returned for an identical prompt.
+func (c *Client) ChatStream(ctx context.Context, system, user string, onChunk func(chunk string)) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("ollama client not configured")
+	}
+	msgs := []Message{
+		{Role: "system", Content: c.prepareSystem(system)},
+		{Role: "user", Content: user},
+	}
+	return c.doStream(ctx, msgs, onChunk)
+}
+
+// ChatHistoryStream is ChatHistory's streaming counterpart — see ChatStream.
+func (c *Client) ChatHistoryStream(ctx context.Context, system string, history []Message, onChunk func(chunk string)) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("ollama client not configured")
+	}
+	msgs := make([]Message, 0, len(history)+1)
+	msgs = append(msgs, Message{Role: "system", Content: c.prepareSystem(system)})
+	msgs = append(msgs, history...)
+	return c.doStream(ctx, msgs, onChunk)
 }
 
 // Preload warms the model into VRAM by sending an empty prompt to /api/generate.
@@ -292,4 +325,96 @@ func (c *Client) do(ctx context.Context, messages []Message) (string, error) {
 		return "", fmt.Errorf("ollama returned an empty message")
 	}
 	return result.Message.Content, nil
+}
+
+// doStream is do's streaming counterpart. Ollama's streamed /api/chat
+// responses are newline-delimited JSON objects, each carrying the next
+// incremental fragment of message.content, until a final object with
+// done:true. onChunk (nilable) is invoked once per fragment as it is
+// decoded; the full accumulated content is returned once the stream ends,
+// under the same empty-message error policy as do().
+func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(chunk string)) (string, error) {
+	o := c.opts
+	payload := ollamaRequest{
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    true,
+		Format:    "json",
+		KeepAlive: c.keepAlive,
+		Think:     o.Think, // top-level: Ollama gates Qwen3 <think> tokens here
+		Options: ollamaOptions{
+			Temperature:   o.Temperature,
+			TopP:          o.TopP,
+			TopK:          o.TopK,
+			RepeatPenalty: o.RepeatPenalty,
+			NumCtx:        o.NumCtx,
+			NumGPU:        o.NumGPU,
+			NumThread:     o.NumThread,
+			MMap:          o.MMap,
+			MLock:         o.MLock,
+			F16KV:         o.F16KV,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ollama request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ollama http %d: %s", resp.StatusCode, string(b))
+	}
+
+	var full strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	// Each NDJSON line carries only one chunk's worth of content, but grow the
+	// buffer well past bufio's 64KB default in case a single line is unusually
+	// large (e.g. a large tool-call payload some model templates might emit).
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var chunk ollamaResponse
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			// A malformed line is a transport hiccup, not fatal to the overall
+			// stream — skip it and keep accumulating what follows.
+			continue
+		}
+		if chunk.Error != "" {
+			return "", fmt.Errorf("ollama: %s", chunk.Error)
+		}
+		if chunk.Message.Content != "" {
+			full.WriteString(chunk.Message.Content)
+			if onChunk != nil {
+				onChunk(chunk.Message.Content)
+			}
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read stream: %w", err)
+	}
+
+	result := full.String()
+	if strings.TrimSpace(result) == "" {
+		return "", fmt.Errorf("ollama returned an empty message")
+	}
+	return result, nil
 }

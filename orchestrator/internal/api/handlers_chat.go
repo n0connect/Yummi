@@ -320,7 +320,7 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 	}
 }
 
-func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator, curatorStore *skillcurator.Store) http.HandlerFunc {
+func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator, curatorStore *skillcurator.Store, assistant *conductor.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if executions == nil {
 			http.Error(w, "execution store unavailable", http.StatusServiceUnavailable)
@@ -391,6 +391,18 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 			if serr == nil {
 				skillEvents = ch
 				defer curatorStore.Unsubscribe(skillSubID)
+			}
+		}
+
+		// Chat display-token stream (see conductor/stream.go). A nil assistant
+		// (LLM unconfigured) simply means no stream channel — everything else
+		// on this websocket keeps working.
+		var streamEvents <-chan conductor.StreamEvent
+		if assistant != nil {
+			streamSubID, ch, cerr := assistant.SubscribeStream(64)
+			if cerr == nil {
+				streamEvents = ch
+				defer assistant.UnsubscribeStream(streamSubID)
 			}
 		}
 
@@ -474,6 +486,27 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 					"event":     evt.Type,
 					"timestamp": evt.Timestamp,
 					"data":      evt.Skill,
+				}
+				if err := conn.WriteJSON(payload); err != nil {
+					return
+				}
+			case evt, ok := <-streamEvents:
+				if !ok {
+					streamEvents = nil
+					continue
+				}
+				if sessionFilter != "" && evt.SessionID != sessionFilter {
+					continue
+				}
+				eventName := "chat.delta"
+				if evt.Done {
+					eventName = "chat.done"
+				}
+				payload := map[string]any{
+					"type":      "chat.stream",
+					"event":     eventName,
+					"timestamp": time.Now().Unix(),
+					"data":      evt,
 				}
 				if err := conn.WriteJSON(payload); err != nil {
 					return
