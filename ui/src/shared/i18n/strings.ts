@@ -21,6 +21,8 @@ const en = {
   'statusBar.nav.gateway': 'Gateway',
   'statusBar.nav.health': 'Health',
   'statusBar.navAriaLabel': 'Main navigation',
+  'statusBar.theme.switchToLight': 'Switch to light theme',
+  'statusBar.theme.switchToDark': 'Switch to dark theme',
 
   // ── SessionRail ─────────────────────────────────────────────────────────
   'sessionRail.toggleOpenTitle': 'Close conversation list',
@@ -373,6 +375,8 @@ const tr = {
   'statusBar.nav.gateway': 'Gateway',
   'statusBar.nav.health': 'Health',
   'statusBar.navAriaLabel': 'Ana gezinme',
+  'statusBar.theme.switchToLight': 'Açık temaya geç',
+  'statusBar.theme.switchToDark': 'Koyu temaya geç',
 
   // ── SessionRail ─────────────────────────────────────────────────────────
   'sessionRail.toggleOpenTitle': 'Sohbet listesini kapat',
