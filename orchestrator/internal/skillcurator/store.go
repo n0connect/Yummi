@@ -42,6 +42,65 @@ type Store struct {
 	mu   sync.RWMutex
 	rows map[string]PendingSkill
 	db   *sql.DB
+
+	subscribers map[int]chan Event
+	nextSubID   int
+}
+
+// Event is broadcast to subscribers whenever a pending skill draft is
+// created or its status changes (curator-drafted, approved, rejected, or
+// rolled back to pending after a failed activation). Mirrors
+// agent.Store.Event's "namespace.status" Type convention exactly, so
+// api.HandleEventsWS can forward it over /ws/events the same way it already
+// forwards task.* and execution.* events. Fired on every Put/Resolve/
+// ClaimActivation/CompleteActivation write so the UI never has to poll for
+// review-queue changes.
+type Event struct {
+	Type      string       `json:"type"` // "skill." + PendingSkill.Status, e.g. "skill.pending", "skill.rejected"
+	Timestamp int64        `json:"timestamp"`
+	Skill     PendingSkill `json:"skill"`
+}
+
+// Subscribe registers a new listener for pending-skill lifecycle events.
+func (s *Store) Subscribe(buffer int) (int, <-chan Event, error) {
+	if buffer <= 0 {
+		buffer = 32
+	}
+	ch := make(chan Event, buffer)
+	s.mu.Lock()
+	if s.subscribers == nil {
+		s.subscribers = make(map[int]chan Event)
+	}
+	id := s.nextSubID
+	s.nextSubID++
+	s.subscribers[id] = ch
+	s.mu.Unlock()
+	return id, ch, nil
+}
+
+// Unsubscribe removes a listener. The channel is intentionally not closed
+// (publish snapshots sinks outside the lock; see agent.Store for the same
+// pattern) — the caller simply stops reading from it.
+func (s *Store) Unsubscribe(id int) {
+	s.mu.Lock()
+	delete(s.subscribers, id)
+	s.mu.Unlock()
+}
+
+func (s *Store) publish(ps PendingSkill) {
+	evt := Event{Type: "skill." + ps.Status, Timestamp: time.Now().Unix(), Skill: ps}
+	s.mu.RLock()
+	sinks := make([]chan Event, 0, len(s.subscribers))
+	for _, ch := range s.subscribers {
+		sinks = append(sinks, ch)
+	}
+	s.mu.RUnlock()
+	for _, ch := range sinks {
+		select {
+		case ch <- evt:
+		default: // drop on slow consumer; state is queryable via REST
+		}
+	}
 }
 
 const schema = `
@@ -82,26 +141,35 @@ func NewStore(db *sql.DB) (*Store, error) {
 // must both succeed before CompleteActivation commits the final state.
 func (s *Store) ClaimActivation(ctx context.Context, id string) (PendingSkill, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	ps, ok := s.rows[id]
 	if !ok {
+		s.mu.Unlock()
 		return PendingSkill{}, fmt.Errorf("pending skill %s not found", id)
 	}
 	if ps.Status != "pending" {
+		s.mu.Unlock()
 		return PendingSkill{}, fmt.Errorf("pending skill %s cannot activate (status=%s)", id, ps.Status)
 	}
 	if s.db != nil {
 		res, err := s.db.ExecContext(ctx, `UPDATE pending_skills SET status='activating', reject_reason=NULL WHERE id=? AND status='pending'`, id)
 		if err != nil {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("claim skill activation: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("pending skill %s was claimed concurrently", id)
 		}
 	}
 	ps.Status = "activating"
 	ps.RejectReason = ""
 	s.rows[id] = ps
+	s.mu.Unlock()
+	// Deliberately NOT published: "activating" is a transient internal
+	// reservation state invisible to the pending-review list (which only
+	// ever queries status=pending), so a subscriber refetching in response
+	// would see no change. CompleteActivation publishes the resulting
+	// approved/pending state instead.
 	return ps, nil
 }
 
@@ -109,12 +177,13 @@ func (s *Store) ClaimActivation(ctx context.Context, id string) (PendingSkill, e
 // pending with an operator-visible error when persistence/activation failed.
 func (s *Store) CompleteActivation(ctx context.Context, id string, activationErr error) (PendingSkill, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	ps, ok := s.rows[id]
 	if !ok {
+		s.mu.Unlock()
 		return PendingSkill{}, fmt.Errorf("pending skill %s not found", id)
 	}
 	if ps.Status != "activating" {
+		s.mu.Unlock()
 		return PendingSkill{}, fmt.Errorf("pending skill %s is not activating (status=%s)", id, ps.Status)
 	}
 	if activationErr != nil {
@@ -131,13 +200,17 @@ func (s *Store) CompleteActivation(ctx context.Context, id string, activationErr
 			`UPDATE pending_skills SET status=?,reject_reason=?,resolved_at=? WHERE id=? AND status='activating'`,
 			ps.Status, nullStr(ps.RejectReason), nullInt(ps.ResolvedAt), id)
 		if err != nil {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("complete skill activation: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("pending skill %s activation state changed concurrently", id)
 		}
 	}
 	s.rows[id] = ps
+	s.mu.Unlock()
+	s.publish(ps)
 	return ps, nil
 }
 
@@ -165,6 +238,7 @@ func (s *Store) Put(ctx context.Context, ps PendingSkill) error {
 	s.mu.Lock()
 	s.rows[ps.ID] = ps
 	s.mu.Unlock()
+	s.publish(ps)
 	return nil
 }
 
@@ -237,13 +311,14 @@ func (s *Store) List(ctx context.Context, status string) ([]PendingSkill, error)
 // hot-add it to the live registry twice.
 func (s *Store) Resolve(ctx context.Context, id string, approved bool, reason string) (PendingSkill, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	ps, ok := s.rows[id]
 	if !ok {
+		s.mu.Unlock()
 		return PendingSkill{}, fmt.Errorf("pending skill %s not found", id)
 	}
 	if ps.Status != "pending" {
+		s.mu.Unlock()
 		return PendingSkill{}, fmt.Errorf("pending skill %s already resolved (status=%s)", id, ps.Status)
 	}
 	if approved {
@@ -259,17 +334,22 @@ func (s *Store) Resolve(ctx context.Context, id string, approved bool, reason st
 			`UPDATE pending_skills SET status=?, reject_reason=?, resolved_at=? WHERE id=? AND status='pending'`,
 			ps.Status, nullStr(ps.RejectReason), ps.ResolvedAt, id)
 		if err != nil {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("resolve pending skill: %w", err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("resolve pending skill: %w", err)
 		}
 		if n == 0 {
+			s.mu.Unlock()
 			return PendingSkill{}, fmt.Errorf("pending skill %s already resolved", id)
 		}
 	}
 	s.rows[id] = ps
+	s.mu.Unlock()
+	s.publish(ps)
 	return ps, nil
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { ActivityEvent, AgentTask, ExecutionRecord, GatewayRule } from '../../entities/types'
+import type { ActivityEvent, AgentTask, ExecutionRecord, GatewayRule, PendingSkill } from '../../entities/types'
 import { websocketURL } from '../../shared/api/runtime'
 
 type WsEvent =
@@ -7,28 +7,37 @@ type WsEvent =
   | { type: 'task.status'; data: AgentTask }
   | { type: 'gateway.status'; data: GatewayRule[] }
   | { type: 'agent.activity'; data: ActivityEvent }
+  | { type: 'skill.status'; event: string; data: PendingSkill }
 
 type Options = {
   onExecution?: (rec: ExecutionRecord) => void
   onTask?: (task: AgentTask) => void
   onGatewayRules?: (rules: GatewayRule[]) => void
   onActivity?: (ev: ActivityEvent) => void
+  // Fired whenever a curator-drafted skill is created or its status changes
+  // (approved/rejected/rolled back to pending after a failed activation).
+  // `event` is the backend's skillcurator.Event.Type ("skill." + status,
+  // e.g. "skill.pending", "skill.approved") — most consumers can ignore it
+  // and just treat any call as "the pending-skills list may have changed."
+  onSkillEvent?: (skill: PendingSkill, event: string) => void
 }
 
 /**
  * Opens a single /ws/events WebSocket and dispatches execution.status and
  * task.status events to the provided callbacks. Reconnects on close.
  */
-export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity }: Options): void {
+export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity, onSkillEvent }: Options): void {
   // Keep refs so the effect only opens once, but callbacks are always current.
   const onExecutionRef    = useRef(onExecution)
   const onTaskRef         = useRef(onTask)
   const onGatewayRulesRef = useRef(onGatewayRules)
   const onActivityRef     = useRef(onActivity)
+  const onSkillEventRef   = useRef(onSkillEvent)
   onExecutionRef.current    = onExecution
   onTaskRef.current         = onTask
   onGatewayRulesRef.current = onGatewayRules
   onActivityRef.current     = onActivity
+  onSkillEventRef.current   = onSkillEvent
 
   useEffect(() => {
     let retryTimer: number | undefined
@@ -60,6 +69,8 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity 
             onGatewayRulesRef.current?.(msg.data as GatewayRule[])
           } else if (msg.type === 'agent.activity' && msg.data) {
             onActivityRef.current?.(msg.data as ActivityEvent)
+          } else if (msg.type === 'skill.status' && msg.data) {
+            onSkillEventRef.current?.(msg.data, msg.event)
           }
         } catch {
           // ignore malformed payloads

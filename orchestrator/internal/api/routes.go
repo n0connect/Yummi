@@ -123,7 +123,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 
 	// WebSocket
 	r.Get("/ws/terminal", HandleTerminalWSBridge(bridge))
-	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg))
+	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg, curatorStore))
 
 	return r
 }

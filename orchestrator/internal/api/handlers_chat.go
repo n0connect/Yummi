@@ -17,6 +17,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/health"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
+	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // taskCreatorFunc creates an agent task from a chat start_task intent and
@@ -319,7 +320,7 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 	}
 }
 
-func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator) http.HandlerFunc {
+func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator, curatorStore *skillcurator.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if executions == nil {
 			http.Error(w, "execution store unavailable", http.StatusServiceUnavailable)
@@ -377,6 +378,19 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 			if gerr == nil {
 				gatewayEvents = ch
 				defer agg.UnsubscribeGateway(gwSubID)
+			}
+		}
+
+		// Pending-skill lifecycle events (auto-skill-creation review queue)
+		// share this websocket too, so the TRACE page's pending-drafts panel
+		// updates live instead of polling. A nil curatorStore simply means no
+		// skill channel.
+		var skillEvents <-chan skillcurator.Event
+		if curatorStore != nil {
+			skillSubID, ch, serr := curatorStore.Subscribe(32)
+			if serr == nil {
+				skillEvents = ch
+				defer curatorStore.Unsubscribe(skillSubID)
 			}
 		}
 
@@ -443,6 +457,23 @@ func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health
 					"event":     evt.Type,
 					"timestamp": evt.Timestamp,
 					"data":      evt.Rules,
+				}
+				if err := conn.WriteJSON(payload); err != nil {
+					return
+				}
+			case evt, ok := <-skillEvents:
+				if !ok {
+					skillEvents = nil
+					continue
+				}
+				if sessionFilter != "" && evt.Skill.SessionID != sessionFilter {
+					continue
+				}
+				payload := map[string]any{
+					"type":      "skill.status",
+					"event":     evt.Type,
+					"timestamp": evt.Timestamp,
+					"data":      evt.Skill,
 				}
 				if err := conn.WriteJSON(payload); err != nil {
 					return
