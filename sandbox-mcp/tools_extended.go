@@ -121,7 +121,11 @@ func wpscanHandler(ctx context.Context, _ *mcp.CallToolRequest, args wpscanArgs)
 	if url == "" {
 		return errResult("url is required")
 	}
-	return runCaptured(ctx, "wpscan", "--url", url)
+	// wpscan writes its vulnerability-database cache under $HOME/.cache before
+	// it does anything else — including just parsing --help — which aborts
+	// immediately under the sandbox's read-only root filesystem unless HOME
+	// points somewhere writable. /tmp is the sandbox's one writable mount.
+	return runCapturedEnv(ctx, []string{"HOME=/tmp"}, "wpscan", "--url", url)
 }
 
 type nucleiArgs struct {
