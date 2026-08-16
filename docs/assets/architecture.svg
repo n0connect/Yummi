@@ -15,7 +15,7 @@
   <!-- Operator -->
   <rect x="40" y="90" width="180" height="90" rx="10" fill="#111a2c" stroke="#3a4a63" stroke-width="1.5"/>
   <text x="130" y="128" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#e8edf5" font-weight="600">Operator</text>
-  <text x="130" y="150" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">Web UI · Desktop · TUI</text>
+  <text x="130" y="150" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">Web UI</text>
 
   <!-- Orchestrator -->
   <rect x="380" y="70" width="220" height="130" rx="10" fill="#111a2c" stroke="#3a4a63" stroke-width="1.5"/>

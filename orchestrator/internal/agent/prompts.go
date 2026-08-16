@@ -95,13 +95,10 @@ func stripThinkTokens(s string) string {
 var internalTagLinePattern = regexp.MustCompile(`(?m)^\s*\[(RUN_COMMAND|UPDATE_PLAN|FINISH|HANDOFF|REMEMBER|ASK_OPERATOR|SEND_FULL|CONTINUE|ABORT|STOP_TASK)\]\s*$`)
 
 // sanitizeAgentText is the chokepoint for model-authored free text that
-// becomes wire-visible on Task (Summary/Findings/Question, sent to every
-// client — web, Tauri, AND the TUI — via GET /api/v1/tasks/{id} and every
-// task.status websocket event). Unlike the chat/conductor path, agent-task
-// text has no per-client sanitizer to fall back on — internal/tui renders
-// Task.Summary/Findings/Question completely raw, so this must be the only
-// line of defense, applied once here rather than trusted to be re-implemented
-// per client. Strips <think> reasoning-model noise and any standalone
+// becomes wire-visible on Task (Summary/Findings/Question, sent via
+// GET /api/v1/tasks/{id} and every task.status websocket event). This must be
+// the only line of defense, applied once here rather than trusted to be
+// re-implemented client-side. Strips <think> reasoning-model noise and any standalone
 // protocol-tag line the model echoed from its own wire format.
 func sanitizeAgentText(s string) string {
 	s = stripThinkTokens(s)

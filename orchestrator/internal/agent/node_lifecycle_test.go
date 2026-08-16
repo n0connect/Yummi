@@ -90,13 +90,12 @@ func TestFinishNodeWarnsWhenFindingsReferenceAFailedTool(t *testing.T) {
 }
 
 // TestFinishNodeSanitizesSummaryAndFindings proves the fix for a confirmed
-// gap: Task.Summary/Findings/Question are wire-visible to EVERY client (web,
-// Tauri, AND internal/tui, which — unlike the React client's
-// sanitizeOperatorText — applies no client-side cleaning at all). A model's
-// own FINISH action is free text the model authored, which can carry
-// reasoning-model <think> noise or an echoed protocol-tag line; this must be
-// stripped server-side once, not left to a client that (as of internal/tui)
-// may not do it at all.
+// gap: Task.Summary/Findings/Question are wire-visible to any client, and a
+// server-side sanitizer must not depend on a client-side one (like the React
+// UI's sanitizeOperatorText) also being applied. A model's own FINISH action
+// is free text the model authored, which can carry reasoning-model <think>
+// noise or an echoed protocol-tag line; this must be stripped server-side
+// once, not left to a client to maybe do.
 func TestFinishNodeSanitizesSummaryAndFindings(t *testing.T) {
 	store, _ := NewStore(openTestDB(t))
 	task, err := store.Create("sess", "pentest 172.20.0.6", 15)

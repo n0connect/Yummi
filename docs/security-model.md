@@ -20,7 +20,6 @@ Yummi's threat model has an unusual property: **the thing it defends against is 
   - [Single-command chat output is held for operator review](#threatscan-single-command)
 - [Layer 3 — Audit: the tamper-evident chain](#layer-audit)
 - [Container isolation: docker-proxy and sandbox](#container-isolation)
-- [Desktop app isolation: the Tauri shell](#desktop-isolation)
 - [Fingerprint minimization (optional, off by default)](#fingerprint-masking)
 - [The watchdog](#watchdog)
 - [What this model does *not* claim](#honest-limits)
@@ -145,18 +144,6 @@ Every gateway decision worth reviewing later — a scope check, a rule added or 
 ## Container isolation: docker-proxy and sandbox <a id="container-isolation"></a>
 
 The Docker-level isolation that backs all of the above is covered in full in [Architecture § The five components](architecture.md#five-components) and [§ docker-proxy](architecture.md#docker-proxy) — the short version repeated here for completeness: orchestrator never gets `/var/run/docker.sock` mounted directly; it goes through `docker-proxy`, configured for container inspection/exec while lifecycle and other resource families are disabled. The sandbox uses a read-only rootfs and agent commands run as UID 1000. The container nevertheless has `NET_RAW` and `NET_ADMIN`, and Compose deliberately sets `no-new-privileges:false` so nmap's file capabilities work for that user. This is an explicit trade-off: container-root compromise is outside the claimed boundary.
-
----
-
-## Desktop app isolation: the Tauri shell <a id="desktop-isolation"></a>
-
-`desktop/` packages the same React console (see [Usage Guide § The desktop app](usage-guide.md#tab-agent)) in a Tauri window instead of a browser tab. The webview gets no native capability beyond talking to the loopback orchestrator — verified at the source, not just claimed in prose:
-
-- `desktop/src-tauri/capabilities/default.json` grants exactly `["core:default"]` — Tauri's baseline window/event permission set. No `shell:*`, `fs:*`, `http:*`, or dialog/process plugin permission is present, so there is nothing to accidentally over-grant.
-- `desktop/src-tauri/src/main.rs` registers **zero** Tauri plugins (`tauri::Builder::default()` with no `.plugin(...)` calls) — the fs/shell/http/dialog APIs aren't merely unpermitted, they're absent from the compiled binary.
-- `desktop/src-tauri/tauri.conf.json`'s CSP (`connect-src 'self' http://127.0.0.1:9080 ws://127.0.0.1:9080`) scopes the webview's own network access to the loopback orchestrator only, matching the same-origin assumption `ui/src/shared/api/runtime.ts`'s `apiURL`/`websocketURL` make when `isDesktopShell` is true.
-
-The practical consequence: even a fully compromised renderer (e.g. a prompt-injection-adjacent XSS in a rendered command output) has no path to `docker exec`, the host filesystem, or the gateway's control socket — those all stay behind the orchestrator's own REST API, which applies the same validation and approval gates regardless of which frontend (browser or desktop shell) called it. The desktop shell is a thinner client, not a wider trust boundary.
 
 ---
 
