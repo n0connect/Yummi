@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.0.0](https://github.com/n0connect/Yummi/compare/v1.0.0...v2.0.0) (2026-08-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove the Tauri desktop shell and terminal UI
+
+### Features
+
+* **chat:** stream display tokens for the single-command chat path ([f34dd60](https://github.com/n0connect/Yummi/commit/f34dd60430f22ca56fd279388fcd3de5da4b59b3))
+* **exec:** stream live command output alongside the existing heartbeat ([8d45db3](https://github.com/n0connect/Yummi/commit/8d45db34808b5babcc8d9b43546fff359eb45155))
+* **gateway:** add bounded retry to the IPC client's send path ([3b8ce56](https://github.com/n0connect/Yummi/commit/3b8ce5617354b223a2bb00d3a0eabadf6398d55e))
+* **skills:** push-update pending-skill review queue and surface audit trail ([546cc93](https://github.com/n0connect/Yummi/commit/546cc9321d2cf56d97c9cccd4b68a2ea82db40c7))
+* **ui:** accessibility pass across all six tabs ([914a06e](https://github.com/n0connect/Yummi/commit/914a06e50952a05b897dbf1c456b7caec520bc53))
+* **ui:** add a light theme with OS auto-detect and manual toggle ([b29da0d](https://github.com/n0connect/Yummi/commit/b29da0d6de94d21a566fee90c67d65766cab4a3e))
+* **ui:** severity-aware, filterable findings view in TRACE tab ([81fc797](https://github.com/n0connect/Yummi/commit/81fc797e35725cd25b5b7f6c8fdee30711372a4d))
+
+
+### Bug Fixes
+
+* **sandbox:** don't leak past-cap bytes to the live output stream ([53afec8](https://github.com/n0connect/Yummi/commit/53afec8076b1b6df364cc2b7aa1eac18477bd0fd))
+* **ui:** fix invisible light-theme washes in SessionRail and HealthPage ([59cd558](https://github.com/n0connect/Yummi/commit/59cd5587c4afe8e6064db2285333c0a08dac4414))
+
+
+### Code Refactoring
+
+* remove the Tauri desktop shell and terminal UI ([91c75da](https://github.com/n0connect/Yummi/commit/91c75da870b85c2ccf74235e81ffecc0db151c0f))
+
 ## 1.0.0 (2026-08-16)
 
 
