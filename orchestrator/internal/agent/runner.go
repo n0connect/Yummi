@@ -271,6 +271,31 @@ func (r *Runner) InterruptDelegation(id string) error {
 	return coordinator.Interrupt(id)
 }
 
+func (r *Runner) Capabilities() BackendCapabilities {
+	if r == nil {
+		return BackendCapabilities{Backend: "graph", ExecutionModel: "graph_state_machine", RecoveryModel: "durable_graph_checkpoint"}
+	}
+	r.mu.Lock()
+	cfg := r.cfg
+	r.mu.Unlock()
+	skillCount := 0
+	if cfg.Skills != nil {
+		skillCount = len(cfg.Skills.All())
+	}
+	retrieval := "disabled"
+	if cfg.Retrieval != nil {
+		retrieval = "configured"
+	}
+	return BackendCapabilities{
+		Backend: "graph", ExecutionModel: "graph_state_machine", RecoveryModel: "durable_graph_checkpoint",
+		Resumable: true, NativeToolCalling: false, ApprovalMode: cfg.ApprovalMode,
+		Roles: r.Roles(), MaxHandoffDepth: 1, MaxConcurrentSubAgents: cfg.MaxConcurrentSubAgents,
+		MemoryEnabled: cfg.Knowledge != nil && cfg.Retrieval != nil, RetrievalModel: retrieval,
+		SkillsEnabled: cfg.Skills != nil, SkillCount: skillCount,
+		SkillGovernance: "versioned_threat_scanned_operator_approved",
+	}
+}
+
 // Run executes a task synchronously, blocking until completion.
 // The task must already be in StatusPlanned or StatusPaused.
 func (r *Runner) Run(ctx context.Context, task *Task) error {
