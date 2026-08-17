@@ -21,9 +21,9 @@ import (
 )
 
 // Config mirrors agent.Config's shape for the fields this backend actually
-// uses. Retry-backoff tuning, the graph engine's stuck/duplicate/tool-thrash
-// loop-prevention heuristics, and checkpoint/crash-recovery remain graph-only
-// — they're tied to the graph's resumable, rebuilt-every-step state, not to
+// uses. Retry-backoff tuning and the graph engine's stuck/duplicate/tool-thrash
+// loop-prevention heuristics remain graph-only — they're tied to the graph's
+// rebuilt-every-step state, not to
 // "agent/memory/skill" capability; MaxIterations (wired from StepBudget,
 // below) is this backend's analogous safety net. Everything else — memory
 // retrieval, skill injection, sub-agent delegation, auto-skill-creation — has
@@ -93,8 +93,9 @@ type EinoRunner struct {
 	// necessarily restarts the conversation; this at least carries the
 	// question/answer forward instead of the model resuming with no idea it
 	// ever asked anything. Full mid-conversation resume would need Eino's own
-	// checkpoint/serialization support, which is out of scope here (grouped
-	// with the already-deferred checkpoint/crash-recovery gap).
+	// checkpoint/serialization support. Startup recovery is therefore
+	// reconstructive (durable goal/plan + explicit recovery guidance), not a
+	// claim that native token history was restored.
 	resumeMsg map[string]string
 }
 
@@ -274,14 +275,18 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	// and specifically avoids the model immediately re-asking the same
 	// question with no memory of having asked it.
 	initialGoal := t.Goal
-	if wasPaused && priorQuestion != "" {
+	if wasPaused {
 		answer := strings.TrimSpace(operatorAnswer)
 		if answer == "" {
 			answer = "(no additional guidance given; use your own judgment and continue)"
 		}
-		initialGoal = fmt.Sprintf(
-			"Resuming task toward the original goal: %s\n\nYou previously paused and asked the operator: %q\nOperator's answer: %s",
-			t.Goal, priorQuestion, answer)
+		if priorQuestion != "" {
+			initialGoal = fmt.Sprintf(
+				"Resuming task toward the original goal: %s\n\nYou previously paused and asked the operator: %q\nOperator's answer: %s",
+				t.Goal, priorQuestion, answer)
+		} else {
+			initialGoal = fmt.Sprintf("Resuming task toward the original goal: %s\n\nRecovery guidance: %s", t.Goal, answer)
+		}
 	}
 
 	runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: einoAgent})
@@ -336,6 +341,12 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	}
 	if err := r.store.Transition(task.ID, agent.StatusCompleted, func(t *agent.Task) {
 		t.Summary = summary
+		for i := range t.Plan {
+			if t.Plan[i].Status == agent.StepPending || t.Plan[i].Status == agent.StepRunning {
+				t.Plan[i].Status = agent.StepDone
+				t.Plan[i].Result = summary
+			}
+		}
 		if len(findings) > 0 {
 			t.Findings = findings
 		}
@@ -402,7 +413,14 @@ func (r *EinoRunner) CreateAndPlan(ctx context.Context, sessionID, goal string) 
 	if err != nil {
 		return agent.Task{}, err
 	}
-	if err := r.store.Transition(task.ID, agent.StatusPlanned, nil); err != nil {
+	if err := r.store.Transition(task.ID, agent.StatusPlanned, func(t *agent.Task) {
+		// The native loop does not need an up-front LLM plan, but Store startup
+		// recovery deliberately refuses active tasks with an empty durable plan.
+		// This anchor makes an interrupted Eino run reconstructively resumable.
+		t.Plan = []agent.PlanStep{{
+			ID: "native-loop", Description: "Continue the native tool-calling workflow and verify prior side effects", Status: agent.StepPending,
+		}}
+	}); err != nil {
 		return agent.Task{}, err
 	}
 	task, _ = r.store.Get(task.ID)
@@ -479,14 +497,30 @@ func (r *EinoRunner) SetApprovalMode(mode agent.ApprovalMode) error {
 	}
 	r.mu.Lock()
 	r.cfg.ApprovalMode = mode
+	subs := r.cfg.SubAgents
 	r.mu.Unlock()
+	for _, sub := range subs {
+		_ = sub.SetApprovalMode(mode)
+	}
 	return nil
 }
 
-// ResumeRecovered: this backend does not implement checkpoint restoration
-// (follow-up work) — recovered tasks stay StatusInterrupted, matching what
-// Store.recoverInterrupted() already does uniformly at startup.
-func (r *EinoRunner) ResumeRecovered() (int, error) { return 0, nil }
+// ResumeRecovered reconstructs a fresh native conversation from durable task
+// state. It cannot restore Eino's private token history, so the recovery
+// message explicitly requires side-effect verification before repetition.
+func (r *EinoRunner) ResumeRecovered() (int, error) {
+	if r == nil {
+		return 0, nil
+	}
+	started := 0
+	for _, task := range r.store.Recoverable() {
+		if err := r.Start(task.ID, "The orchestrator restarted. Reconstruct the workflow from the durable goal and plan; verify state before repeating side effects."); err != nil {
+			return started, err
+		}
+		started++
+	}
+	return started, nil
+}
 
 func (r *EinoRunner) Gate() *agent.Gate { return r.gate }
 
@@ -511,4 +545,29 @@ func (r *EinoRunner) InterruptDelegation(id string) error {
 		return fmt.Errorf("this backend has no sub-agents configured")
 	}
 	return r.cfg.Delegations.Interrupt(id)
+}
+
+func (r *EinoRunner) Capabilities() agent.BackendCapabilities {
+	if r == nil {
+		return agent.BackendCapabilities{Backend: "eino", ExecutionModel: "native_tool_loop", RecoveryModel: "reconstructive_checkpoint"}
+	}
+	r.mu.Lock()
+	cfg := r.cfg
+	r.mu.Unlock()
+	skillCount := 0
+	if cfg.Skills != nil {
+		skillCount = len(cfg.Skills.All())
+	}
+	retrieval := "disabled"
+	if cfg.Retrieval != nil {
+		retrieval = "configured"
+	}
+	return agent.BackendCapabilities{
+		Backend: "eino", ExecutionModel: "native_tool_loop", RecoveryModel: "reconstructive_checkpoint",
+		Resumable: true, NativeToolCalling: true, ApprovalMode: cfg.ApprovalMode,
+		Roles: r.Roles(), MaxHandoffDepth: 1, MaxConcurrentSubAgents: 3,
+		MemoryEnabled: cfg.Knowledge != nil && cfg.Retrieval != nil, RetrievalModel: retrieval,
+		SkillsEnabled: cfg.Skills != nil, SkillCount: skillCount,
+		SkillGovernance: "versioned_threat_scanned_operator_approved",
+	}
 }

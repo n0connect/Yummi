@@ -20,6 +20,78 @@ func TestEinoRunner_SatisfiesTaskRunner(t *testing.T) {
 	var _ agent.TaskRunner = (*EinoRunner)(nil)
 }
 
+func TestEinoRunner_CreateAndPlanPersistsRecoveryAnchor(t *testing.T) {
+	store, _ := agent.NewStore(nil)
+	r := NewEinoRunner(store, nil, nil, Config{})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "recoverable goal")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) == 0 || task.Plan[0].Status != agent.StepPending {
+		t.Fatalf("Eino task has no durable recovery anchor: %+v", task.Plan)
+	}
+}
+
+func TestEinoRunner_SetApprovalModePropagatesAndReportsCapabilities(t *testing.T) {
+	store, _ := agent.NewStore(nil)
+	sub := agent.NewRunner(store, nil, nil, nil, agent.Config{})
+	r := NewEinoRunner(store, nil, nil, Config{SubAgents: map[string]*agent.Runner{"web": sub}})
+	if err := r.SetApprovalMode(agent.ModeAuto); err != nil {
+		t.Fatal(err)
+	}
+	if sub.ApprovalMode() != agent.ModeAuto {
+		t.Fatalf("sub-agent mode = %s, want auto", sub.ApprovalMode())
+	}
+	caps := r.Capabilities()
+	if caps.Backend != "eino" || !caps.Resumable || !caps.NativeToolCalling || len(caps.Roles) != 1 {
+		t.Fatalf("unexpected capabilities: %+v", caps)
+	}
+}
+
+func TestEinoRunner_ResumeRecoveredReconstructsNativeRun(t *testing.T) {
+	srv := toolCallServer("finish", `{"summary":"recovered safely","findings":[]}`)
+	defer srv.Close()
+	db := openTestDB(t)
+	before, _ := agent.NewStore(db)
+	r1 := NewEinoRunner(before, nil, nil, Config{ModelBaseURL: srv.URL + "/v1", ModelName: "test"})
+	task, err := r1.CreateAndPlan(context.Background(), "recover-session", "finish after restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := before.Transition(task.ID, agent.StatusRunning, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := agent.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, _ := after.Get(task.ID)
+	if recovered.Status != agent.StatusPaused || !recovered.Checkpoint.ResumeAfterRestart {
+		t.Fatalf("task not recoverable: %+v", recovered)
+	}
+	r2 := NewEinoRunner(after, nil, nil, Config{ModelBaseURL: srv.URL + "/v1", ModelName: "test"})
+	count, err := r2.ResumeRecovered()
+	if err != nil || count != 1 {
+		t.Fatalf("ResumeRecovered count=%d err=%v", count, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		final, _ := after.Get(task.ID)
+		if final.Status == agent.StatusCompleted {
+			if final.Summary != "recovered safely" {
+				t.Fatalf("unexpected summary: %q", final.Summary)
+			}
+			return
+		}
+		if final.Status == agent.StatusFailed {
+			t.Fatalf("recovered task failed: %s", final.LastError)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for recovered Eino task")
+}
+
 // TestEinoRunner_Run_CallsFinishAndCompletesTask scripts a single-turn
 // tool-calling response (finish, with no other tool calls) against a real
 // httptest server shaped like Ollama's OpenAI-compatible endpoint — no mock

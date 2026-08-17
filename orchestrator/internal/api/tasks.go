@@ -129,6 +129,18 @@ func HandleListDelegations(runner agent.TaskRunner) http.HandlerFunc {
 	}
 }
 
+// HandleAgentCapabilities exposes the selected backend's real operational
+// contract (recovery, tool loop, delegation, memory and skill governance).
+func HandleAgentCapabilities(runner agent.TaskRunner) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if runner == nil {
+			writeError(w, http.StatusServiceUnavailable, "agent unavailable", errors.New("agent runner not configured"))
+			return
+		}
+		writeJSON(w, http.StatusOK, runner.Capabilities())
+	}
+}
+
 // HandleInterruptDelegation cancels one specialist while leaving its parent
 // and siblings running. POST /api/v1/agent/delegations/{id}/interrupt
 func HandleInterruptDelegation(runner agent.TaskRunner) http.HandlerFunc {

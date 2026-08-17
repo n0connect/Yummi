@@ -70,6 +70,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
 		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
 		r.Get("/agent/roles", HandleListRoles(taskRunner))
+		r.Get("/agent/capabilities", HandleAgentCapabilities(taskRunner))
 		r.Get("/agent/delegations", HandleListDelegations(taskRunner))
 		r.Post("/agent/delegations/{id}/interrupt", HandleInterruptDelegation(taskRunner))
 		r.Get("/sessions/{sessionID}/audit", HandleListAudit(sm))
