@@ -86,10 +86,12 @@ export function AssistantPanel({
   const [streamingText, setStreamingText] = useState<string | null>(null)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
-  // subTask tracks a sub-agent task delegated (via [HANDOFF]) from
-  // activeTask, when one exists. Handoff is synchronous and depth-capped at
-  // 1, so there is at most one outstanding sub-task per active task.
-  const [subTask, setSubTask] = useState<AgentTask | null>(null)
+  // subTasks tracks every currently-live sub-agent task delegated (via
+  // [HANDOFF]) from activeTask, keyed by task id. Handoff is depth-capped at
+  // 1 (a sub-agent cannot itself delegate further), but a SINGLE step can fan
+  // out to several specialists at once (MaxHandoffsPerStep, default 4) that
+  // run concurrently — so this must track a set, not a single slot.
+  const [subTasks, setSubTasks] = useState<Record<string, AgentTask>>({})
   // Keep snapshots independently of the currently-running task. A terminal
   // task remains a useful, inspectable part of the transcript instead of
   // vanishing the moment its final websocket event arrives.
@@ -147,7 +149,7 @@ export function AssistantPanel({
     // running an old command under the new session's id.
     setProposals([])
     setActiveTask(null)
-    setSubTask(null)
+    setSubTasks({})
     setTaskSnapshots({})
     setTaskActivities({})
     setEgressHolds([])
@@ -199,6 +201,15 @@ export function AssistantPanel({
         setMessages(
           [...rebuildMessages(rows ?? []), ...hydratedExecutions].slice(-120)
         )
+        // Re-derive the egress/threat approval bars from the same fetch —
+        // both are otherwise populated ONLY by live onExecution WS events
+        // (see below), so a command left holding at the gateway (Ask-mode
+        // egress) or the content scanner (threat hold) went invisible the
+        // moment the operator switched away and back to this session: the
+        // execution is still genuinely stuck fail-closed server-side, just
+        // with no way left on screen to resolve it.
+        setEgressHolds(executions.filter((r) => r.status === 'awaiting_egress_approval'))
+        setThreatHolds(executions.filter((r) => r.status === 'awaiting_threat_approval'))
         setTaskActivities(
           activities.reduce<Record<string, ActivityEvent[]>>(
             (byTask, event) => {
@@ -327,7 +338,7 @@ export function AssistantPanel({
     setMessages([freshWelcome()])
     setProposals([])
     setActiveTask(null)
-    setSubTask(null)
+    setSubTasks({})
     setTaskSnapshots({})
     setTaskActivities({})
     setEgressHolds([])
@@ -366,6 +377,67 @@ export function AssistantPanel({
   // paint its (now stale) result into whatever session is on screen.
   const sessionIDRef = useRef(sessionID)
   sessionIDRef.current = sessionID
+
+  // resyncActiveTask re-derives activeTask/subTasks/taskSnapshots for `sid`
+  // from GET /sessions/{sid}/tasks — the REST-backed counterpart to the
+  // WS-pushed onTask handler below. Necessary because task state is
+  // otherwise reconstructed PURELY from live WS events keyed off a task id
+  // the client already knows about (see onTask's `task.id !== active.id`
+  // guard, driven only by locally-created tasks): switching to a session
+  // with an in-progress task, or reconnecting after a dropped socket (every
+  // event on this ws is best-effort — see execution.Store.publish
+  // server-side), otherwise leaves the client with no way to learn that
+  // task exists at all, let alone its current status. Best-effort itself: a
+  // failed fetch here just means the next real WS event, if one arrives,
+  // still self-heals the same way it always did.
+  const resyncActiveTask = useCallback((sid: string) => {
+    if (sid === 'default') return
+    fetchJSON<AgentTask[]>(`/api/v1/sessions/${sid}/tasks`)
+      .then((tasks) => {
+        if (sessionIDRef.current !== sid) return
+        setTaskSnapshots((prev) => {
+          const next = { ...prev }
+          for (const task of tasks) next[task.id] = task
+          return next
+        })
+        const live = tasks.find((task) => !TERMINAL.has(task.status) && !task.parent_task_id)
+        setActiveTask(live ?? null)
+        const children = live
+          ? tasks.filter((task) => task.parent_task_id === live.id && !TERMINAL.has(task.status))
+          : []
+        setSubTasks(Object.fromEntries(children.map((c) => [c.id, c])))
+      })
+      .catch(() => {
+        /* best-effort resync; a later WS event, if any, still self-heals */
+      })
+  }, [])
+
+  // resyncExecutionHolds re-derives the egress/threat approval bars for
+  // `sid` from GET /sessions/{sid}/executions — the WS-reconnect
+  // counterpart to loadHistory's own fetch of the same endpoint (which
+  // already covers the session-switch case, see its .then above). Without
+  // this, a command left holding at the gateway or the content scanner
+  // across a dropped/reconnecting socket has no way back onto the operator's
+  // screen even though it is still genuinely stuck fail-closed server-side.
+  const resyncExecutionHolds = useCallback((sid: string) => {
+    if (sid === 'default') return
+    fetchJSON<ExecutionRecord[]>(`/api/v1/sessions/${sid}/executions?limit=100`)
+      .then((executions) => {
+        if (sessionIDRef.current !== sid) return
+        setEgressHolds(executions.filter((r) => r.status === 'awaiting_egress_approval'))
+        setThreatHolds(executions.filter((r) => r.status === 'awaiting_threat_approval'))
+      })
+      .catch(() => {
+        /* best-effort resync; a later WS event, if any, still self-heals */
+      })
+  }, [])
+
+  // Resync once per session load/switch — loadHistory's own effect only
+  // hydrates chat messages and activity, never task state (see above).
+  useEffect(() => {
+    resyncActiveTask(sessionID)
+  }, [sessionID, resyncActiveTask])
+
   // Counts consecutive auto-feedbacks since the last user message.
   // Capped at 3 to break infinite retry loops.
   const autoFeedbackCountRef = useRef(0)
@@ -524,11 +596,21 @@ export function AssistantPanel({
       const active = activeTaskRef.current
 
       // A sub-agent task delegated from the one we're watching: track it
-      // separately so its own pending approval can render nested under the
-      // parent's card, instead of being silently dropped (it has its own task
-      // ID the UI otherwise never learns about — see TaskTracker's subTask prop).
+      // (keyed by its own id, alongside any concurrent siblings from the same
+      // fan-out) so its pending approval can render nested under the
+      // parent's card, instead of being silently dropped — it has its own
+      // task ID the UI otherwise never learns about (see TaskTracker's
+      // subTasks prop), and a concurrent sibling must not overwrite it.
       if (active && task.parent_task_id === active.id) {
-        setSubTask(TERMINAL.has(task.status) ? null : task)
+        setSubTasks((prev) => {
+          if (TERMINAL.has(task.status)) {
+            if (!(task.id in prev)) return prev
+            const next = { ...prev }
+            delete next[task.id]
+            return next
+          }
+          return { ...prev, [task.id]: task }
+        })
         return
       }
 
@@ -553,7 +635,7 @@ export function AssistantPanel({
         if (lines.length > 0) {
           appendMessage({ role: 'assistant', content: lines.join('\n') })
         }
-        setSubTask(null)
+        setSubTasks({})
       }
 
       // When paused and there's a question, surface it.
@@ -594,7 +676,12 @@ export function AssistantPanel({
     [sessionID]
   )
 
-  useChatStream({ onExecution, onTask, onActivity, onChatStream })
+  const onReconnect = useCallback(() => {
+    resyncActiveTask(sessionIDRef.current)
+    resyncExecutionHolds(sessionIDRef.current)
+  }, [resyncActiveTask, resyncExecutionHolds])
+
+  useChatStream({ onExecution, onTask, onActivity, onChatStream, onReconnect })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -604,7 +691,7 @@ export function AssistantPanel({
       await fetchJSON(`/api/v1/tasks/${activeTask.id}/stop`, { method: 'POST' })
       appendMessage({ role: 'system', content: t('assistant.taskStopped') })
       setActiveTask(null)
-      setSubTask(null)
+      setSubTasks({})
     } catch {
       appendMessage({ role: 'system', content: t('assistant.taskStopFailed') })
     }
@@ -783,7 +870,7 @@ export function AssistantPanel({
           if (sessionIDRef.current !== sid) return
           setActiveTask(task)
           setTaskSnapshots((prev) => ({ ...prev, [task.id]: task }))
-          setSubTask(null) // a brand-new task can't have a stale sub-task from before
+          setSubTasks({}) // a brand-new task can't have a stale sub-task from before
           // Inject a task card message so it appears in the message thread.
           appendMessage({
             role: 'task',
@@ -1017,7 +1104,7 @@ export function AssistantPanel({
                       })
                       if (activeTask?.id === msg.taskID) {
                         setActiveTask(null)
-                        setSubTask(null)
+                        setSubTasks({})
                       }
                     }}
                     onApprove={(pid, approved) =>
@@ -1025,9 +1112,9 @@ export function AssistantPanel({
                     }
                     onStop={stopActiveTask}
                     onResume={(message) => resumeTask(msg.taskID!, message)}
-                    subTask={subTask}
-                    onApproveSub={(pid, approved) =>
-                      subTask && approveTaskGate(subTask.id, pid, approved)
+                    subTasks={Object.values(subTasks)}
+                    onApproveSub={(subTaskID, pid, approved) =>
+                      approveTaskGate(subTaskID, pid, approved)
                     }
                   />
                 )

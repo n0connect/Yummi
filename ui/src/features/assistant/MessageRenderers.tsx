@@ -22,7 +22,7 @@ export function TaskCardMessage({
   onApprove,
   onStop,
   onResume,
-  subTask,
+  subTasks,
   onApproveSub
 }: {
   task: AgentTask
@@ -31,8 +31,8 @@ export function TaskCardMessage({
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
   onResume: (message: string) => void
-  subTask?: AgentTask | null
-  onApproveSub?: (proposalID: string, approved: boolean) => void
+  subTasks?: AgentTask[]
+  onApproveSub?: (subTaskID: string, proposalID: string, approved: boolean) => void
 }): JSX.Element {
   return (
     <div className="msg-task-card">
@@ -42,7 +42,7 @@ export function TaskCardMessage({
         onApprove={onApprove}
         onStop={onStop}
         onResume={onResume}
-        subTask={subTask}
+        subTasks={subTasks}
         onApproveSub={onApproveSub}
         activities={activities}
       />

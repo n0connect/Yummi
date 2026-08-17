@@ -130,6 +130,38 @@ function LiveActivityFeed({
   )
 }
 
+// ApprovalGate renders one pending-command approval prompt — shared by the
+// task's own gate and a delegated sub-task's nested gate (Props.subTask),
+// which previously duplicated this JSX identically apart from the nested
+// badge and which callback the approve/deny buttons call.
+function ApprovalGate({
+  risk, command, onApprove, nested
+}: {
+  risk?: string
+  command?: string
+  onApprove: (approved: boolean) => void
+  nested?: boolean
+}): JSX.Element {
+  return (
+    <div className={`tt-gate ${nested ? 'tt-gate-nested' : ''}`} role="alert">
+      <div className="tt-gate-head">
+        {nested && <span className="tt-gate-nested-badge">{t('taskTracker.subTaskBadge')}</span>}
+        <span className={`tt-risk tt-risk-${risk}`}>{risk}</span>
+        <span className="tt-gate-title">{t('taskTracker.approvalRequired')}</span>
+      </div>
+      <code className="tt-gate-cmd">$ {command}</code>
+      <div className="tt-actions">
+        <button className="tt-btn tt-btn-approve" onClick={() => onApprove(true)}>
+          {t('taskTracker.approveAndRun')}
+        </button>
+        <button className="tt-btn tt-btn-deny" onClick={() => onApprove(false)}>
+          {t('taskTracker.deny')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 type Props = {
   liveTask: AgentTask
   onClose: () => void
@@ -140,14 +172,16 @@ type Props = {
   // empty message is a valid plain resume.
   onResume: (message: string) => void
   activities?: ActivityEvent[]
-  // subTask is set when this task delegated to a sub-agent (via [HANDOFF])
-  // and that sub-agent's own task is awaiting operator approval. Without
-  // this, a sub-task's pending approval was structurally invisible — it has
-  // its own task ID the UI never otherwise learns about, so the operator had
-  // no way to discover or act on it (fail-closed, but stuck forever from
-  // their point of view).
-  subTask?: AgentTask | null
-  onApproveSub?: (proposalID: string, approved: boolean) => void
+  // subTasks holds every currently-live sub-agent task delegated (via
+  // [HANDOFF]) from this one. A single HANDOFF can fan out to several
+  // specialists AT ONCE (MaxHandoffsPerStep, default 4) that run
+  // concurrently — without tracking all of them, a sub-task's pending
+  // approval was structurally invisible the moment a sibling's event
+  // overwrote it: each has its own task ID the UI never otherwise learns
+  // about, so the operator had no way to discover or act on it (fail-closed,
+  // but stuck forever from their point of view).
+  subTasks?: AgentTask[]
+  onApproveSub?: (subTaskID: string, proposalID: string, approved: boolean) => void
 }
 
 export function TaskTracker({
@@ -157,7 +191,7 @@ export function TaskTracker({
   onStop,
   onResume,
   activities = [],
-  subTask,
+  subTasks = [],
   onApproveSub
 }: Props): JSX.Element {
   const [replyText, setReplyText] = useState('')
@@ -212,64 +246,27 @@ export function TaskTracker({
 
       {/* Awaiting approval — inline gate */}
       {task.status === 'awaiting_approval' && task.pending_proposal_id && (
-        <div className="tt-gate" role="alert">
-          <div className="tt-gate-head">
-            <span className={`tt-risk tt-risk-${task.pending_risk}`}>
-              {task.pending_risk}
-            </span>
-            <span className="tt-gate-title">{t('taskTracker.approvalRequired')}</span>
-          </div>
-          <code className="tt-gate-cmd">$ {task.pending_command}</code>
-          <div className="tt-actions">
-            <button
-              className="tt-btn tt-btn-approve"
-              onClick={() => onApprove(task.pending_proposal_id!, true)}
-            >
-              {t('taskTracker.approveAndRun')}
-            </button>
-            <button
-              className="tt-btn tt-btn-deny"
-              onClick={() => onApprove(task.pending_proposal_id!, false)}
-            >
-              {t('taskTracker.deny')}
-            </button>
-          </div>
-        </div>
+        <ApprovalGate
+          risk={task.pending_risk}
+          command={task.pending_command}
+          onApprove={(approved) => onApprove(task.pending_proposal_id!, approved)}
+        />
       )}
 
-      {/* Sub-agent's own pending approval, nested under the parent it was
-          delegated from — see the Props.subTask doc comment above. */}
-      {subTask?.status === 'awaiting_approval' &&
-        subTask.pending_proposal_id && (
-          <div className="tt-gate tt-gate-nested" role="alert">
-            <div className="tt-gate-head">
-              <span className="tt-gate-nested-badge">{t('taskTracker.subTaskBadge')}</span>
-              <span className={`tt-risk tt-risk-${subTask.pending_risk}`}>
-                {subTask.pending_risk}
-              </span>
-              <span className="tt-gate-title">{t('taskTracker.approvalRequired')}</span>
-            </div>
-            <code className="tt-gate-cmd">$ {subTask.pending_command}</code>
-            <div className="tt-actions">
-              <button
-                className="tt-btn tt-btn-approve"
-                onClick={() =>
-                  onApproveSub?.(subTask.pending_proposal_id!, true)
-                }
-              >
-                {t('taskTracker.approveAndRun')}
-              </button>
-              <button
-                className="tt-btn tt-btn-deny"
-                onClick={() =>
-                  onApproveSub?.(subTask.pending_proposal_id!, false)
-                }
-              >
-                {t('taskTracker.deny')}
-              </button>
-            </div>
-          </div>
-        )}
+      {/* Every concurrently-delegated sub-agent's own pending approval,
+          nested under the parent it was delegated from — see the
+          Props.subTasks doc comment above. */}
+      {subTasks
+        .filter((sub) => sub.status === 'awaiting_approval' && sub.pending_proposal_id)
+        .map((sub) => (
+          <ApprovalGate
+            key={sub.id}
+            nested
+            risk={sub.pending_risk}
+            command={sub.pending_command}
+            onApprove={(approved) => onApproveSub?.(sub.id, sub.pending_proposal_id!, approved)}
+          />
+        ))}
 
       {/* Paused — question or error, with an inline reply so the operator can
           actually resume the loop (POST /tasks/{id}/start carries the answer;
