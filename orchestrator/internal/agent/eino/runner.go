@@ -33,6 +33,17 @@ type Config struct {
 	ApprovalMode agent.ApprovalMode
 	ModelBaseURL string // e.g. "http://localhost:11434/v1"
 	ModelName    string // e.g. "qwen3:14b"
+	// ModelTimeout bounds every individual outbound call to the model — see
+	// NewOllamaChatModel's doc comment for why this exists (its absence let a
+	// single stalled model call hang a task's goroutine forever, found via
+	// live long-form testing). <=0 falls back to a generous default.
+	ModelTimeout time.Duration
+	// ModelNumCtx is injected into every outbound call as Ollama's
+	// options.num_ctx — see NewOllamaChatModel's doc comment. Should be the
+	// same effective value conductor.NewEngineWithOverrides resolved for the
+	// configured tier/override, so both backends agree on context size.
+	// <=0 omits the field (server default, likely too small).
+	ModelNumCtx int
 	// Persona is the same document-driven agent.yaml identity/principles the
 	// graph backend renders via StepSystemPrompt (ORIENT/ACT/OBSERVE/CONCLUDE:
 	// NO FABRICATION, EVIDENCE, TRUTH, COMPLETE, ...). Previously this backend
@@ -177,7 +188,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		return err
 	}
 
-	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName)
+	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelTimeout, r.cfg.ModelNumCtx)
 	if err != nil {
 		_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = err.Error() })
 		return err
@@ -363,6 +374,25 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	if !called && lastMessage != nil {
 		summary = lastMessage.Content
 	}
+	// Fallback for real evidence with nothing to show it: found via live
+	// long-form testing — a task can complete every part of a multi-part
+	// goal (confirmed via the execution records) yet still call finish with
+	// an empty summary, even with the instruction above telling the model to
+	// call finish alone. That instruction reduces the failure but a 14B
+	// model won't always comply, and a completed task the operator can't see
+	// any result from is a worse experience than an obviously auto-generated
+	// one. Never fabricates: every line is a verbatim (compressed) result
+	// the task actually produced.
+	if strings.TrimSpace(summary) == "" {
+		if pairs := trace.pairs(); len(pairs) > 0 {
+			var b strings.Builder
+			b.WriteString("(auto-generated: the model completed the task but did not provide a summary)\n")
+			for _, p := range pairs {
+				fmt.Fprintf(&b, "- %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
+			}
+			summary = strings.TrimSpace(b.String())
+		}
+	}
 	if err := r.store.Transition(task.ID, agent.StatusCompleted, func(t *agent.Task) {
 		t.Summary = summary
 		for i := range t.Plan {
@@ -414,21 +444,44 @@ func (r *EinoRunner) instruction(goal string) string {
 	if principles := strings.TrimSpace(r.cfg.Persona.Principles); principles != "" {
 		instr += "\nREASONING PRINCIPLES:\n" + principles + "\n"
 	}
+	// Found via live long-form testing: a model reproducibly hallucinated a
+	// tool restriction that doesn't exist ("the provided functions do not
+	// support running standard system commands like ps") for an ordinary
+	// process-listing request, then reported the task complete anyway having
+	// run nothing at all. The prior wording here ("use run_command only for
+	// things that aren't pentest tools at all") reads as a narrow allowlist
+	// when it was only ever meant as a preference ordering — leading with
+	// run_command's actual scope (unrestricted, always available) instead of
+	// leaving it as the last, exception-shaped option removes that gap.
 	instr += "\nYour current goal: " + goal + "\n\n" +
-		"For nmap, whatweb, curl, gobuster, ffuf, or nikto, prefer the dedicated tool " +
-		"(nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan) over run_command — " +
-		"it gives you a real schema instead of a free-text string. "
+		"run_command executes ANY shell command in the sandbox and is always available for it — this " +
+		"includes ordinary system utilities (ps, free, df, cat, ls, find, awk, netstat, uptime, and " +
+		"everything else) that have no dedicated tool. It is never restricted to a specific list; when in " +
+		"doubt, just call it directly rather than concluding an action isn't possible. Prefer a dedicated " +
+		"tool only when one exists for that exact operation: nmap, whatweb, curl, gobuster, ffuf, and nikto " +
+		"each have one (nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan) — use " +
+		"those instead of run_command for those six, since they give you a real schema instead of a " +
+		"free-text string. "
 	if r.cfg.MCPList != nil {
-		instr += "For any other sandbox pentest tool (amass, hydra, sqlmap, wpscan, and more), call " +
-			"search_pentest_tools first to see what's available and its exact argument schema, then call " +
-			"run_pentest_tool with the tool name and matching args. Use run_command only for things that aren't " +
-			"pentest tools at all (git, find, awk, ...). "
-	} else {
-		instr += "Use run_command for everything else. "
+		instr += "For any other cataloged sandbox pentest tool (amass, hydra, sqlmap, wpscan, and more), " +
+			"call search_pentest_tools first to see what's available and its exact argument schema, then " +
+			"call run_pentest_tool with the tool name and matching args — but this is only relevant for " +
+			"tools actually in that catalog; use run_command directly for everything else. "
 	}
 	instr += "Use remember to persist durable facts. Use update_plan if your approach changes. Call finish with " +
 		"a concrete, factual summary once the goal is achieved — cite exact ports/versions/paths from tool " +
-		"output, never vague claims. Call ask_operator only when genuinely blocked."
+		"output, never vague claims. Call ask_operator only when genuinely blocked. " +
+		// Found via live long-form testing: finish was observed completing tasks
+		// with an EMPTY summary despite real evidence having been gathered in
+		// the same turn. Root cause: finish's arguments are drafted at
+		// generation time — if it's called in the same turn as another tool,
+		// it is written before that tool has actually run, so there is
+		// nothing real yet to summarize (an empty summary here is the
+		// anti-fabrication instinct working correctly, just at the wrong
+		// moment — the fix is timing, not honesty).
+		"IMPORTANT: never call finish in the same turn as another tool. Call finish alone, in its own " +
+		"turn, only after you have already seen a prior tool's actual result — that is the only way its " +
+		"summary can cite real evidence instead of being written blind."
 	if len(r.cfg.SubAgents) > 0 {
 		instr += " Use handoff to delegate a focused subtask to a specialist — call it more than once in the same " +
 			"turn to delegate to several specialists at once, they run concurrently."

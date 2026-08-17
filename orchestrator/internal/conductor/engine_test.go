@@ -552,6 +552,25 @@ func TestSystemPromptIncludesEvidenceDisciplineBoundaries(t *testing.T) {
 	}
 }
 
+// TestSystemPromptDistinguishesSuggestedFromExecutedCommands is a live-long-
+// form-testing-found regression test: a real 30+ turn conversation showed
+// the model repeatedly claiming to have "already seen" the output of
+// commands it had only ever suggested (suggest_command proposals the
+// operator never approved) — twice, for both a "whoami/id" proposal and a
+// later "php -v" proposal it had never actually run, describing invented
+// "command output" content with full confidence. Locks the corrected
+// suggested-vs-executed distinction into the rendered prompt.
+func TestSystemPromptDistinguishesSuggestedFromExecutedCommands(t *testing.T) {
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
+	if err != nil {
+		t.Fatalf("engine init: %v", err)
+	}
+	prompt := engine.buildSystemPrompt()
+	if !strings.Contains(prompt, "A command you SUGGESTED") {
+		t.Fatalf("system prompt does not distinguish a suggested command from an executed one:\n%s", prompt)
+	}
+}
+
 func TestSystemPromptIncludesStartTask(t *testing.T) {
 	engine, err := NewEngine("../../../persona/v0.1", "", "")
 	if err != nil {

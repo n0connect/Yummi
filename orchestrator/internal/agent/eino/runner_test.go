@@ -376,6 +376,108 @@ func TestEinoRunner_Run_ExceedsMaxIterations_FailsTask(t *testing.T) {
 	}
 }
 
+// TestEinoRunner_Instruction_RunCommandIsUnrestricted is a live-long-form-
+// testing-found regression test: a real model reproducibly (2/2 identical
+// prompts) hallucinated a tool restriction that doesn't exist — "the
+// provided functions do not support running standard system commands like
+// ps" — for an ordinary process-listing goal, then reported the task
+// complete having run nothing at all. The prior wording ("use run_command
+// only for things that aren't pentest tools at all") read as a narrow
+// allowlist rather than the preference-ordering it was meant to be. Locks
+// the corrected, unambiguous wording in place.
+func TestEinoRunner_Instruction_RunCommandIsUnrestricted(t *testing.T) {
+	r := &EinoRunner{cfg: Config{}}
+	instr := r.instruction("list running processes")
+	if !strings.Contains(instr, "run_command executes ANY shell command in the sandbox and is always available") {
+		t.Fatalf("instruction does not state run_command is unrestricted:\n%s", instr)
+	}
+	if strings.Contains(instr, "only for things that aren't") {
+		t.Fatalf("instruction still contains the ambiguous allowlist-shaped wording:\n%s", instr)
+	}
+}
+
+// TestEinoRunner_Run_EmptyFinishSummaryFallsBackToTraceEvidence is a live-
+// long-form-testing-found regression test: a real 3-part task completed
+// every part (confirmed via the execution records — find, nproc, getent
+// passwd all ran and returned real data) yet finish was still called with an
+// empty summary, even with the instruction telling the model to call finish
+// alone. Relying on instruction compliance alone isn't enough for a 14B
+// model — this proves the code-level fallback: when summary is empty but
+// real tool results were recorded, the task's persisted Summary is
+// synthesized from that evidence instead of being left blank.
+func TestEinoRunner_Run_EmptyFinishSummaryFallsBackToTraceEvidence(t *testing.T) {
+	var turn int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		var toolCall map[string]any
+		if turn == 1 {
+			toolCall = map[string]any{
+				"id": "call_1", "type": "function",
+				"function": map[string]any{
+					"name": "run_command", "arguments": `{"command":"nproc","rationale":"count cores","risk_level":"low"}`,
+				},
+			}
+		} else {
+			// Called alone, per instruction — but with an empty summary anyway.
+			toolCall = map[string]any{
+				"id": "call_2", "type": "function",
+				"function": map[string]any{"name": "finish", "arguments": `{"summary":"","findings":[]}`},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "", "tool_calls": []map[string]any{toolCall},
+			}, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, _ := agent.NewStore(nil)
+	exec := &fakeExecer{ran: make(chan string, 1), content: "2"}
+	r := NewEinoRunner(store, nil, exec, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "count cpu cores")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+	if strings.TrimSpace(final.Summary) == "" {
+		t.Fatal("Summary is empty despite real trace evidence — fallback did not fire")
+	}
+	if !strings.Contains(final.Summary, "2") {
+		t.Fatalf("Summary does not contain the actual tool result: %q", final.Summary)
+	}
+}
+
+// TestEinoRunner_Instruction_FinishMustBeCalledAlone is a live-long-form-
+// testing-found regression test: tasks were observed completing with an
+// EMPTY summary despite real evidence having just been gathered (~2 of 9
+// completed tasks in one testing session). Root cause: when the model
+// batches a data-gathering tool call and finish in the SAME turn, finish's
+// arguments are drafted before the other tool has actually run — so there is
+// nothing real yet to cite, and the anti-fabrication instinct correctly (but
+// unhelpfully) leaves the summary empty. Locks the corrected instruction
+// telling the model to call finish alone, in its own turn.
+func TestEinoRunner_Instruction_FinishMustBeCalledAlone(t *testing.T) {
+	r := &EinoRunner{cfg: Config{}}
+	instr := r.instruction("some goal")
+	if !strings.Contains(instr, "never call finish in the same turn as another tool") {
+		t.Fatalf("instruction does not tell the model to call finish alone:\n%s", instr)
+	}
+}
+
 // TestEinoRunner_Run_InstructionCarriesConfiguredPersona is a structural
 // regression test: unlike the graph backend (agent.Runner, which renders
 // AgentPersona via StepSystemPrompt), this backend previously had NO Persona
@@ -543,6 +645,63 @@ func TestEinoRunner_Run_SequentialToolDispatchAvoidsApprovalRace(t *testing.T) {
 	}
 	if len(ran) != 2 {
 		t.Fatalf("commands executed = %v, want both echo one and echo two to have run", ran)
+	}
+}
+
+// TestEinoRunner_Run_StalledModelCallFailsRatherThanHangingForever is a
+// live-long-form-testing-found regression test: NewOllamaChatModel's
+// underlying openai.ChatModelConfig left Timeout at its zero value, which
+// openai-ext turns into &http.Client{Timeout: 0} — Go's convention for NO
+// timeout at all. A live run reproduced a task stuck at status=running,
+// steps_used=0, for 10+ minutes with zero progress and no error, while
+// Ollama itself was reachable and responsive to other requests — the
+// model's own HTTP client had no bound, so a single stalled call hung the
+// task's goroutine indefinitely (runCtx is only ever cancelled by an
+// explicit Stop() or process shutdown). Proves a short configured
+// ModelTimeout turns that permanent hang into a bounded, visible task
+// failure instead.
+func TestEinoRunner_Run_StalledModelCallFailsRatherThanHangingForever(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // never respond — simulates a stalled/hung upstream call
+	}))
+	// Deliberately declared in this order: defers run LIFO, so close(block)
+	// (declared second, runs first) unblocks the handler goroutine BEFORE
+	// srv.Close() (declared first, runs last) tries to drain connections —
+	// otherwise Close() waits out its own internal grace period for the
+	// still-active connection, which looks like (but isn't) our ModelTimeout
+	// failing to fire.
+	defer srv.Close()
+	defer close(block)
+
+	store, _ := agent.NewStore(nil)
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+		ModelTimeout: 500 * time.Millisecond,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "test goal")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	runErr := r.Run(ctx, &task)
+	elapsed := time.Since(start)
+
+	if runErr == nil {
+		t.Fatal("Run: expected an error from the stalled model call, got nil")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("Run took %s to fail — ModelTimeout did not bound the stalled call", elapsed)
+	}
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusFailed {
+		t.Fatalf("status = %s, want failed", final.Status)
+	}
+	if final.LastError == "" {
+		t.Fatal("expected LastError to be set")
 	}
 }
 
