@@ -133,9 +133,14 @@ collect:
 	if !sawDone {
 		t.Fatal("never observed a terminal chat.stream done=true event over the websocket")
 	}
-	wantRaw := `{"intent":"explain","message":"streamed hello","confidence":0.9}`
-	if got.String() != wantRaw {
-		t.Fatalf("streamed deltas did not reassemble to the raw model output: got %q want %q", got.String(), wantRaw)
+	// The model's raw output is the whole {"intent":...,"message":"...",...}
+	// JSON object, not prose — the delta stream carries only the extracted
+	// "message" text (see conductor.extractMessagePreview), never the
+	// surrounding JSON structure, or an operator would briefly see raw JSON
+	// syntax in the live "typing" preview before the REST reply replaces it.
+	want := "streamed hello"
+	if got.String() != want {
+		t.Fatalf("streamed deltas did not reassemble to the extracted message: got %q want %q", got.String(), want)
 	}
 
 	// The REST response is the untouched source of truth for the parsed

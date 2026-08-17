@@ -361,6 +361,65 @@ func TestParseStructuredResponse(t *testing.T) {
 	}
 }
 
+// TestExtractMessagePreview_GrowsMonotonicallyAsBufferStreams is the
+// regression for the JSON-flash bug: chatWithLLMHistory used to publish
+// every raw chunk straight from the model, so the operator's live "typing"
+// preview briefly showed literal JSON syntax ({"intent":"...","message":"…)
+// before the REST reply replaced it with the parsed message. Simulates the
+// buffer growing one character at a time, as it would across many small
+// stream chunks, and asserts the extracted preview only ever grows and never
+// contains a stray brace/quote from the surrounding JSON structure.
+func TestExtractMessagePreview_GrowsMonotonicallyAsBufferStreams(t *testing.T) {
+	full := `{"intent":"suggest_command","message":"Hedefi taramak için nmap kullanabiliriz.","proposals":[]}`
+	var buf strings.Builder
+	prev := ""
+	for _, r := range full {
+		buf.WriteRune(r)
+		preview := extractMessagePreview(buf.String())
+		if len(preview) < len(prev) {
+			t.Fatalf("preview shrank: prev=%q now=%q", prev, preview)
+		}
+		if !strings.HasPrefix(preview, prev) {
+			t.Fatalf("preview %q is not an extension of prior preview %q", preview, prev)
+		}
+		if strings.ContainsAny(preview, "{}") {
+			t.Fatalf("preview leaked JSON structure: %q", preview)
+		}
+		prev = preview
+	}
+	want := "Hedefi taramak için nmap kullanabiliriz."
+	if prev != want {
+		t.Fatalf("final preview = %q, want %q", prev, want)
+	}
+}
+
+func TestExtractMessagePreview(t *testing.T) {
+	cases := []struct {
+		name string
+		buf  string
+		want string
+	}{
+		{"no message key yet", `{"intent":"suggest_command"`, ""},
+		{"key present, value not started", `{"intent":"x","message"`, ""},
+		{"key and colon, no quote yet", `{"intent":"x","message":`, ""},
+		{"partial value mid-string", `{"intent":"x","message":"Merha`, "Merha"},
+		{"complete value", `{"intent":"x","message":"Merhaba"}`, "Merhaba"},
+		{"escaped quote", `{"message":"She said \"hi\""`, `She said "hi"`},
+		{"escaped backslash", `{"message":"C:\\path"`, `C:\path`},
+		{"escaped newline", `{"message":"line1\nline2"`, "line1\nline2"},
+		{"dangling escape stops cleanly", `{"message":"abc\`, "abc"},
+		{"turkish characters pass through", `{"message":"İçinde şık çözüm var"`, "İçinde şık çözüm var"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractMessagePreview(tc.buf)
+			if got != tc.want {
+				t.Errorf("extractMessagePreview(%q) = %q, want %q", tc.buf, got, tc.want)
+			}
+		})
+	}
+}
+
 // Regression: the system prompt's only language instruction used to be the
 // hardcoded, one-directional "Match the operator's language exactly (Turkish
 // input → Turkish output)" — found live to plausibly bias the model toward
