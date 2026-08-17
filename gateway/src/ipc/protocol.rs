@@ -103,7 +103,17 @@ pub enum IpcResponse {
         kernel_warning: Option<String>,
     },
     /// Success response for rule removal.
-    RuleRemoved { rule_id: String },
+    RuleRemoved {
+        rule_id: String,
+        /// Set when the policy-engine rule was removed but the kernel-level
+        /// nftables revoke failed (remove_allowed_target error) — the rule
+        /// LOOKS gone to future check_scope calls, but sandbox may still be
+        /// able to reach the target until its original TTL naturally expires.
+        /// None when the kernel call succeeded or no live controller is
+        /// attached.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kernel_warning: Option<String>,
+    },
     /// Result of ListRules.
     RuleList { rules: Vec<RuleView> },
     /// Result of GetAuditLog.

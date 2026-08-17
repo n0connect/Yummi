@@ -394,15 +394,17 @@ impl PolicyEngine {
             .collect()
     }
 
-    /// Remove a rule by ID. Returns true if the rule was found and removed.
-    pub fn remove_rule(&self, rule_id: &str) -> bool {
+    /// Remove a rule by ID. Returns the removed rule (its `network` is what
+    /// the caller needs to also revoke the corresponding kernel-level
+    /// nftables element — this engine has no nftables handle of its own).
+    pub fn remove_rule(&self, rule_id: &str) -> Option<PolicyRule> {
         let mut state = self.state.write().unwrap();
         if let Some(pos) = state.allow_rules.iter().position(|r| r.id == rule_id) {
-            state.allow_rules.remove(pos);
+            let removed = state.allow_rules.remove(pos);
             tracing::info!(rule_id, "rule removed");
-            return true;
+            return Some(removed);
         }
-        false
+        None
     }
 
     /// Remove expired rules (called periodically by background task).
@@ -690,7 +692,8 @@ mod tests {
 
         assert!(engine.is_in_scope("8.8.8.8".parse().unwrap()));
 
-        assert!(engine.remove_rule(&rule_id));
+        let removed = engine.remove_rule(&rule_id).expect("rule should have been found");
+        assert_eq!(removed.network, "8.8.8.0/24".parse().unwrap());
         assert!(!engine.is_in_scope("8.8.8.8".parse().unwrap()));
     }
 

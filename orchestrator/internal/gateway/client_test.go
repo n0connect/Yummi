@@ -299,6 +299,46 @@ func TestClientAddTemporaryRuleNoWarningOnSuccess(t *testing.T) {
 	}
 }
 
+// TestClientRemoveRulePropagatesKernelWarning mirrors the Add-side coverage
+// above for the symmetric bug: a rule removal that succeeds at the policy
+// engine but fails to revoke the underlying nftables kernel element (leaving
+// the target reachable until its original TTL expires) must surface that as
+// a kernel warning, not silently report a clean removal.
+func TestClientRemoveRulePropagatesKernelWarning(t *testing.T) {
+	const warning = "policy rule removed but the nftables kernel revoke for 10.0.0.5/32 failed (no such device) — sandbox may still reach this target until its original TTL expires"
+	socket := StartTestServer(t, false, func(req Request) Response {
+		if req.Type != "remove_rule" || req.RuleID != "temp-1" {
+			return Response{Type: "error", Message: "unexpected request"}
+		}
+		return Response{Type: "rule_removed", RuleID: "temp-1", KernelWarning: warning}
+	})
+
+	c := NewClient(socket)
+	kernelWarning, err := c.RemoveRule("temp-1")
+	if err != nil {
+		t.Fatalf("remove rule: %v", err)
+	}
+	if kernelWarning != warning {
+		t.Fatalf("expected kernel warning to propagate, got %q", kernelWarning)
+	}
+}
+
+// A clean rule removal (no kernel failure) must leave kernelWarning empty.
+func TestClientRemoveRuleNoWarningOnSuccess(t *testing.T) {
+	socket := StartTestServer(t, false, func(req Request) Response {
+		return Response{Type: "rule_removed", RuleID: "temp-2"}
+	})
+
+	c := NewClient(socket)
+	kernelWarning, err := c.RemoveRule("temp-2")
+	if err != nil {
+		t.Fatalf("remove rule: %v", err)
+	}
+	if kernelWarning != "" {
+		t.Fatalf("expected no kernel warning, got %q", kernelWarning)
+	}
+}
+
 func TestClientGetFingerprintConfig(t *testing.T) {
 	ttl := uint8(64)
 	socket := StartTestServer(t, false, func(req Request) Response {
