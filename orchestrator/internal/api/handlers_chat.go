@@ -43,6 +43,11 @@ func applyStartTask(ctx context.Context, resp conductor.ChatResponse, sessionID 
 		return resp
 	}
 	resp.TaskID = taskID
+	// A start_task response may still contain the model's draft single-command
+	// proposals. The task runner owns execution from this point; surfacing the
+	// drafts would let auto mode execute them a second time outside the task.
+	resp.Proposals = nil
+	resp.Warnings = nil
 	return resp
 }
 
@@ -116,6 +121,9 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 				assistant.SeedHistory(sessionID, toLLMHistory(persisted))
 			}
 		}
+		if !req.FromFeedback {
+			appendLatestTerminalTaskOutcome(assistant, taskStore, sessionID)
+		}
 
 		// 90s budget covers qwen3:14b on CPU-constrained hosts; the server
 		// WriteTimeout (120s) leaves a 30s margin for response serialisation.
@@ -125,7 +133,11 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 		var resp conductor.ChatResponse
 		if sessionID != "" {
 			var turnErr error
-			resp, turnErr = assistant.ChatWithHistoryTurn(chatCtx, sessionID, req.TurnID, req.Message)
+			if req.FromFeedback {
+				resp, turnErr = assistant.ChatWithHistoryFeedbackTurn(chatCtx, sessionID, req.TurnID, req.Message)
+			} else {
+				resp, turnErr = assistant.ChatWithHistoryTurn(chatCtx, sessionID, req.TurnID, req.Message)
+			}
 			if turnErr != nil {
 				if errors.Is(turnErr, conductor.ErrTurnInProgress) {
 					writeError(w, http.StatusConflict, "turn in progress", turnErr)
@@ -202,6 +214,29 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			"data":                    resp,
 		})
 	}
+}
+
+func appendLatestTerminalTaskOutcome(assistant *conductor.Engine, store *agent.Store, sessionID string) {
+	if assistant == nil || store == nil || sessionID == "" {
+		return
+	}
+	task, ok := latestCompletedTask(store, sessionID)
+	if !ok {
+		return
+	}
+	assistant.AppendTaskOutcome(sessionID, task.ID, task.Summary, task.Findings)
+}
+
+func latestCompletedTask(store *agent.Store, sessionID string) (agent.Task, bool) {
+	if store == nil || sessionID == "" {
+		return agent.Task{}, false
+	}
+	for _, task := range store.ListBySession(sessionID, 10) {
+		if task.Status == agent.StatusCompleted {
+			return task, true
+		}
+	}
+	return agent.Task{}, false
 }
 
 // maxSeedMessages bounds how many persisted turns are pulled back into the

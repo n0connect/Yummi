@@ -6,6 +6,7 @@ import (
 )
 
 var explicitTargetPattern = regexp.MustCompile(`(?i)(https?://\S+|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b|\b[a-z0-9][a-z0-9.-]+\.[a-z]{2,}\b|(?:^|\s)(?:\./|/)[^\s]+|\b[a-z0-9_.-]+\.(?:zip|tar|gz|pcap|bin|exe|apk)\b)`)
+var explicitActionWordPattern = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(tara|scan|pentest|enumerate|crack)(?:$|[^\p{L}\p{N}_])`)
 
 // BoundaryDecision enforces deterministic safety/clarification invariants
 // before a probabilistic model is consulted. It intentionally covers only
@@ -43,10 +44,9 @@ func BoundaryDecision(message string) (ChatResponse, bool) {
 		return ChatResponse{}, false
 	}
 
-	needsTarget := false
+	needsTarget := explicitActionWordPattern.MatchString(lower)
 	for _, keyword := range []string{
-		"güvenlik açığı", "guvenlik acigi", "tara", "scan", "pentest", "enumerate",
-		"şifreli", "sifreli", "crack", "brute force", "bruteforce",
+		"güvenlik açığı", "guvenlik acigi", "şifreli", "sifreli", "brute force", "bruteforce",
 	} {
 		if strings.Contains(lower, keyword) {
 			needsTarget = true

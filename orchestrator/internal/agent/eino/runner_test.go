@@ -20,6 +20,30 @@ func TestEinoRunner_SatisfiesTaskRunner(t *testing.T) {
 	var _ agent.TaskRunner = (*EinoRunner)(nil)
 }
 
+func TestEinoRunner_StopClearsPendingApprovalFields(t *testing.T) {
+	store, _ := agent.NewStore(nil)
+	task, _ := store.Create("session-1", "stop pending task", 5)
+	_ = store.Transition(task.ID, agent.StatusPlanned, nil)
+	_ = store.Transition(task.ID, agent.StatusRunning, nil)
+	_ = store.Transition(task.ID, agent.StatusAwaitingApproval, func(tk *agent.Task) {
+		tk.PendingProposalID = "proposal-1"
+		tk.PendingCommand = "hostname"
+		tk.PendingRisk = "low"
+	})
+	r := NewEinoRunner(store, nil, nil, Config{})
+
+	if err := r.Stop(task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	got, _ := store.Get(task.ID)
+	if got.Status != agent.StatusStopped {
+		t.Fatalf("status = %s, want stopped", got.Status)
+	}
+	if got.PendingProposalID != "" || got.PendingCommand != "" || got.PendingRisk != "" {
+		t.Fatalf("stopped task retained pending approval state: %+v", got)
+	}
+}
+
 func TestEinoRunner_CreateAndPlanPersistsRecoveryAnchor(t *testing.T) {
 	store, _ := agent.NewStore(nil)
 	r := NewEinoRunner(store, nil, nil, Config{})
@@ -349,6 +373,176 @@ func TestEinoRunner_Run_ExceedsMaxIterations_FailsTask(t *testing.T) {
 	}
 	if final.LastError == "" {
 		t.Fatal("expected LastError to be set")
+	}
+}
+
+// TestEinoRunner_Run_InstructionCarriesConfiguredPersona is a structural
+// regression test: unlike the graph backend (agent.Runner, which renders
+// AgentPersona via StepSystemPrompt), this backend previously had NO Persona
+// field at all — instruction() was a hardcoded string covering only tool-
+// routing mechanics, so none of agent.yaml's ORIENT/ACT/OBSERVE/CONCLUDE
+// epistemic-discipline principles (NO FABRICATION, EVIDENCE, TRUTH, ...) ever
+// reached the model here. This is very plausibly why live E2E runs against
+// this backend saw failure modes the graph backend's own persona explicitly
+// guards against (accepting an unverified premise as fact, inventing tool
+// output, denying an actual hallucination). Proves the configured Persona's
+// identity/principles text actually appears in the outbound LLM request.
+func TestEinoRunner_Run_InstructionCarriesConfiguredPersona(t *testing.T) {
+	var reqBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		reqBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role": "assistant", "content": "",
+					"tool_calls": []map[string]any{{
+						"id": "call_1", "type": "function",
+						"function": map[string]any{"name": "finish", "arguments": `{"summary":"done","findings":[]}`},
+					}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	store, _ := agent.NewStore(nil)
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+		Persona: agent.AgentPersona{
+			Identity:   "You are Yummi, distinctive-identity-marker-xyz.",
+			Principles: "NO FABRICATION: distinctive-principle-marker-abc.",
+		},
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "test goal")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(reqBody, "distinctive-identity-marker-xyz") {
+		t.Fatalf("outbound request does not carry the configured Persona identity:\n%s", reqBody)
+	}
+	if !strings.Contains(reqBody, "distinctive-principle-marker-abc") {
+		t.Fatalf("outbound request does not carry the configured Persona principles:\n%s", reqBody)
+	}
+}
+
+// TestEinoRunner_Run_SequentialToolDispatchAvoidsApprovalRace is a live-E2E-
+// found regression test: eino's compose.ToolsNodeConfig defaults to running
+// every tool call in one model turn concurrently, but agent.Gate holds only
+// one pending approval per task. Two run_command calls emitted in the same
+// assistant turn used to race Gate.Request — whichever Request lost the race
+// had its verdict channel silently orphaned while the Task's persisted
+// PendingProposalID reflected only one of the two, so approving the exact
+// proposal/command pair the UI displayed could 404 with "no pending
+// approval". This proves ToolsNodeConfig.ExecuteSequentially keeps dispatch
+// (and therefore gating) one-at-a-time: an approver that resolves whatever is
+// currently pending, one at a time, never errors and both commands run.
+func TestEinoRunner_Run_SequentialToolDispatchAvoidsApprovalRace(t *testing.T) {
+	var mu sync.Mutex
+	reqN := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reqN++
+		n := reqN
+		mu.Unlock()
+
+		msg := map[string]any{
+			"role": "assistant", "content": "",
+			"tool_calls": []map[string]any{{
+				"id": "call_finish", "type": "function",
+				"function": map[string]any{"name": "finish", "arguments": `{"summary":"done","findings":[]}`},
+			}},
+		}
+		if n == 1 {
+			msg = map[string]any{
+				"role": "assistant", "content": "",
+				"tool_calls": []map[string]any{
+					{"id": "call_1", "type": "function", "function": map[string]any{
+						"name": "run_command", "arguments": `{"command":"echo one","rationale":"r1","risk_level":"low"}`,
+					}},
+					{"id": "call_2", "type": "function", "function": map[string]any{
+						"name": "run_command", "arguments": `{"command":"echo two","rationale":"r2","risk_level":"low"}`,
+					}},
+				},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": msg, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	exec := &fakeExecer{ran: make(chan string, 2)}
+	r := NewEinoRunner(store, nil, exec, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAskPermission,
+	})
+
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "test goal")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+
+	approveErrs := make(chan error, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(approveErrs)
+		seen := map[string]bool{}
+		deadline := time.Now().Add(4 * time.Second)
+		for len(seen) < 2 && time.Now().Before(deadline) {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			pending, ok := r.gate.Pending(task.ID)
+			if !ok || seen[pending.ProposalID] {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			seen[pending.ProposalID] = true
+			approveErrs <- r.Approve(task.ID, pending.ProposalID, true, "approved")
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runErr := r.Run(ctx, &task)
+	close(done)
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+
+	for aerr := range approveErrs {
+		if aerr != nil {
+			t.Fatalf("Approve: %v (this is exactly the live 404 \"no pending approval\" symptom)", aerr)
+		}
+	}
+
+	var ran []string
+	for range 2 {
+		select {
+		case cmd := <-exec.ran:
+			ran = append(ran, cmd)
+		default:
+		}
+	}
+	if len(ran) != 2 {
+		t.Fatalf("commands executed = %v, want both echo one and echo two to have run", ran)
 	}
 }
 
