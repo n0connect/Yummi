@@ -26,13 +26,21 @@ type Options = {
   // conductor.StreamEvent server-side. Purely cosmetic: the authoritative
   // reply still arrives over the normal /api/v1/chat REST response.
   onChatStream?: (ev: ChatStreamEvent) => void
+  // Fired once a NEW socket opens after a prior one was up and then lost —
+  // never on the very first connect of a session (the caller's own mount-time
+  // fetch already covers that). Every event kind on this socket is push-only
+  // and best-effort (execution.Store.publish and friends drop on a full
+  // subscriber buffer — see server-side store.go), so whatever happened while
+  // this client was disconnected is gone from the live feed for good unless
+  // the caller re-fetches current state from REST here.
+  onReconnect?: () => void
 }
 
 /**
  * Opens a single /ws/events WebSocket and dispatches execution.status and
  * task.status events to the provided callbacks. Reconnects on close.
  */
-export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity, onSkillEvent, onChatStream }: Options): void {
+export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity, onSkillEvent, onChatStream, onReconnect }: Options): void {
   // Keep refs so the effect only opens once, but callbacks are always current.
   const onExecutionRef    = useRef(onExecution)
   const onTaskRef         = useRef(onTask)
@@ -40,17 +48,20 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity,
   const onActivityRef     = useRef(onActivity)
   const onSkillEventRef   = useRef(onSkillEvent)
   const onChatStreamRef   = useRef(onChatStream)
+  const onReconnectRef    = useRef(onReconnect)
   onExecutionRef.current    = onExecution
   onTaskRef.current         = onTask
   onGatewayRulesRef.current = onGatewayRules
   onActivityRef.current     = onActivity
   onSkillEventRef.current   = onSkillEvent
   onChatStreamRef.current   = onChatStream
+  onReconnectRef.current    = onReconnect
 
   useEffect(() => {
     let retryTimer: number | undefined
     let socket: WebSocket | null = null
     let closed = false
+    let everConnected = false
 
     // Jittered exponential backoff: a healthy connection resets to baseDelay;
     // repeated failures grow geometrically up to maxDelay so a downed
@@ -65,6 +76,8 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity,
       socket = new WebSocket(websocketURL('/ws/events'))
       socket.onopen = () => {
         delay = baseDelay // reset the curve once connected
+        if (everConnected) onReconnectRef.current?.()
+        everConnected = true
       }
       socket.onmessage = evt => {
         try {

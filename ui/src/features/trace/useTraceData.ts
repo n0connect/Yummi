@@ -66,7 +66,13 @@ export function useTraceData(sessionID: string): TraceData {
     }
   }, [sessionID])
 
-  useChatStream({ onActivity })
+  // A dropped/reconnecting socket loses whatever activity happened in the
+  // gap for good (every event on this ws is best-effort — see
+  // execution.Store.publish and friends server-side), and with it the
+  // targeted refetches above that only fire off a live event. A full
+  // refresh() on reconnect is the simplest correct fix: it already covers
+  // every panel this hook owns in one call.
+  useChatStream({ onActivity, onReconnect: refresh })
 
   return { activity, findings, targets, tactics, context, skills, roles, refresh }
 }

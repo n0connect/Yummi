@@ -97,3 +97,64 @@ describe('TaskTracker paused resume', () => {
     expect(onResume).toHaveBeenCalledWith('')
   })
 })
+
+describe('TaskTracker concurrent sub-agent approvals', () => {
+  it('renders every concurrently-delegated sub-task awaiting approval, not just one', () => {
+    const task: AgentTask = {
+      id: 'parent-1',
+      session_id: 'session-1',
+      goal: 'Assess target',
+      status: 'running',
+      steps_used: 2,
+      step_budget: 10
+    }
+    // A single [HANDOFF] fan-out to two specialists at once — both awaiting
+    // approval simultaneously (MaxHandoffsPerStep defaults to 4 server-side).
+    const subA: AgentTask = {
+      id: 'sub-a',
+      session_id: 'session-1',
+      parent_task_id: 'parent-1',
+      goal: 'Recon subgoal',
+      status: 'awaiting_approval',
+      pending_proposal_id: 'prop-a',
+      pending_command: 'nmap -sV target-a',
+      pending_risk: 'medium',
+      steps_used: 1,
+      step_budget: 10
+    }
+    const subB: AgentTask = {
+      id: 'sub-b',
+      session_id: 'session-1',
+      parent_task_id: 'parent-1',
+      goal: 'Web subgoal',
+      status: 'awaiting_approval',
+      pending_proposal_id: 'prop-b',
+      pending_command: 'gobuster dir -u target-b',
+      pending_risk: 'low',
+      steps_used: 1,
+      step_budget: 10
+    }
+    const onApproveSub = vi.fn()
+
+    render(
+      <TaskTracker
+        liveTask={task}
+        onClose={() => {}}
+        onApprove={() => {}}
+        onStop={() => {}}
+        onResume={() => {}}
+        subTasks={[subA, subB]}
+        onApproveSub={onApproveSub}
+      />
+    )
+
+    // Both commands are visible at once — neither was overwritten/dropped.
+    expect(screen.getByText('$ nmap -sV target-a')).toBeTruthy()
+    expect(screen.getByText('$ gobuster dir -u target-b')).toBeTruthy()
+
+    const approveButtons = screen.getAllByText('✓ Onayla & Çalıştır')
+    expect(approveButtons).toHaveLength(2)
+    fireEvent.click(approveButtons[1])
+    expect(onApproveSub).toHaveBeenCalledWith('sub-b', 'prop-b', true)
+  })
+})
