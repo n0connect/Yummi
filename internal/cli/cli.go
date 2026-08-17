@@ -334,17 +334,20 @@ func checkCommand(name string) checkResult {
 	return checkResult{Name: name, OK: true, Details: "found"}
 }
 
+// checkDockerCompose and checkDockerDaemon wrap checkDockerComposeErr/
+// checkDockerDaemonErr (below) into a doctor-report checkResult, so the
+// underlying `docker compose version` / `docker info` invocations exist in
+// exactly one place each — ui_launch.go's preflight check calls the Err
+// forms directly for its own plain-error handling.
 func checkDockerCompose() checkResult {
-	cmd := exec.Command("docker", "compose", "version")
-	if err := cmd.Run(); err != nil {
+	if err := checkDockerComposeErr(); err != nil {
 		return checkResult{Name: "docker compose", OK: false, Details: "unavailable"}
 	}
 	return checkResult{Name: "docker compose", OK: true, Details: "available"}
 }
 
 func checkDockerDaemon() checkResult {
-	cmd := exec.Command("docker", "info")
-	if err := cmd.Run(); err != nil {
+	if err := checkDockerDaemonErr(); err != nil {
 		return checkResult{Name: "docker daemon", OK: false, Details: "not reachable"}
 	}
 	return checkResult{Name: "docker daemon", OK: true, Details: "reachable"}

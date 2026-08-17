@@ -238,19 +238,7 @@ func (s *Store) Enqueue(sessionID, proposalID, command, mode string) (Record, er
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-
-	s.mu.Lock()
-	s.items[rec.ID] = rec
-	s.mu.Unlock()
-	s.publish(Event{
-		Type:      "execution.queued",
-		Timestamp: rec.UpdatedAt,
-		Record:    rec,
-	})
-	s.dbPersist(rec)
-
-	go s.process(rec.ID)
-	return rec, nil
+	return s.enqueueRecord(rec), nil
 }
 
 // EnqueueMCP queues an MCP tool call — the structured-argument sibling of
@@ -292,7 +280,14 @@ func (s *Store) EnqueueMCP(sessionID, proposalID, tool string, args map[string]a
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
+	return s.enqueueRecord(rec), nil
+}
 
+// enqueueRecord stores a freshly built queued record, publishes the
+// "execution.queued" event, persists it, and starts background processing.
+// Shared by Enqueue and EnqueueMCP, whose only difference is how the Record
+// itself is populated.
+func (s *Store) enqueueRecord(rec Record) Record {
 	s.mu.Lock()
 	s.items[rec.ID] = rec
 	s.mu.Unlock()
@@ -304,7 +299,7 @@ func (s *Store) EnqueueMCP(sessionID, proposalID, tool string, args map[string]a
 	s.dbPersist(rec)
 
 	go s.process(rec.ID)
-	return rec, nil
+	return rec
 }
 
 // Cancel requests cancellation for a queued/running execution.
@@ -579,35 +574,10 @@ func (s *Store) process(id string) {
 				}
 				return
 			}
-			errText := err.Error()
-			failed, ok := s.finishOrHoldForThreat(id, StatusFailed, output, errText)
-			if ok {
-				eventType := "execution.failed"
-				if failed.Status == StatusAwaitingThreatApproval {
-					eventType = "execution.awaiting_threat_approval"
-				}
-				s.publish(Event{
-					Type:      eventType,
-					Timestamp: failed.UpdatedAt,
-					Record:    failed,
-				})
-				s.dbPersist(failed)
-			}
+			s.finishAndPublish(id, StatusFailed, "execution.failed", output, err.Error())
 			return
 		}
-		completed, ok := s.finishOrHoldForThreat(id, StatusCompleted, output, "")
-		if ok {
-			eventType := "execution.completed"
-			if completed.Status == StatusAwaitingThreatApproval {
-				eventType = "execution.awaiting_threat_approval"
-			}
-			s.publish(Event{
-				Type:      eventType,
-				Timestamp: completed.UpdatedAt,
-				Record:    completed,
-			})
-			s.dbPersist(completed)
-		}
+		s.finishAndPublish(id, StatusCompleted, "execution.completed", output, "")
 		return
 	}
 
@@ -707,6 +677,25 @@ func (s *Store) publishOutputChunk(id, source, chunk string) {
 		Timestamp: time.Now().Unix(),
 		Record:    rec,
 	})
+}
+
+// finishAndPublish settles a running execution into its terminal status,
+// then publishes and persists the result. If the outcome's target-controlled
+// output trips the content scanner, finishOrHoldForThreat reroutes the record
+// into StatusAwaitingThreatApproval instead — in which case terminalEvent is
+// swapped for the matching "execution.awaiting_threat_approval" event, the
+// one difference between the completed and failed call sites in process().
+func (s *Store) finishAndPublish(id, terminalStatus, terminalEvent, output, errText string) {
+	rec, ok := s.finishOrHoldForThreat(id, terminalStatus, output, errText)
+	if !ok {
+		return
+	}
+	eventType := terminalEvent
+	if rec.Status == StatusAwaitingThreatApproval {
+		eventType = "execution.awaiting_threat_approval"
+	}
+	s.publish(Event{Type: eventType, Timestamp: rec.UpdatedAt, Record: rec})
+	s.dbPersist(rec)
 }
 
 // finishOrHoldForThreat records an execution result and pauses the

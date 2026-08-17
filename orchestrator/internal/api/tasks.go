@@ -27,11 +27,8 @@ func HandleCreateTask(runner agent.TaskRunner) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid request", errors.New("goal is required"))
 			return
 		}
-		if req.SessionID != "" && req.SessionID != "default" {
-			if !isValidSessionID(req.SessionID) {
-				writeError(w, http.StatusBadRequest, "invalid session id format", nil)
-				return
-			}
+		if !checkOptionalSessionID(w, req.SessionID) {
+			return
 		}
 		if len(req.Goal) > 10000 {
 			writeError(w, http.StatusBadRequest, "goal cannot exceed 10000 characters", nil)

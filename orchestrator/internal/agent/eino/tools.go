@@ -8,7 +8,6 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"github.com/google/uuid"
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
@@ -74,80 +73,13 @@ func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		defer func() { rc.deps.trace.record(args.Command, result) }()
 	}
 
-	proposal := conductor.Proposal{
-		ID: uuid.NewString(), Command: args.Command,
-		Rationale: args.Rationale, RiskLevel: args.RiskLevel,
-	}
-	validated := rc.validate(proposal)
-	if len(validated.Proposals) == 0 {
-		reason := strings.Join(validated.Warnings, "; ")
-		if reason == "" {
-			reason = "command rejected by validator"
-		}
-		return "COMMAND_BLOCKED: " + reason, nil
-	}
-	p := validated.Proposals[0]
-
-	// Approval is mode-driven, exactly matching graph.go's toolNode: in
-	// ask_permission mode EVERY command gates on the operator; in auto mode
-	// none do.
-	if rc.deps.approvalMode() == agent.ModeAskPermission {
-		verdictCh := rc.deps.gate.Request(rc.deps.taskID, p.ID, p.Command, p.RiskLevel)
-		// Surface the pending gate on the Task itself — mirrors
-		// graph.go's approvalNode. Without this, GET /api/v1/tasks/{id}
-		// (and therefore the UI) has no way to discover that the task
-		// is silently blocked on operator approval: the gate blocks
-		// correctly either way (fail-closed), but invisibly.
-		if rc.deps.store != nil {
-			_ = rc.deps.store.Transition(rc.deps.taskID, agent.StatusAwaitingApproval, func(t *agent.Task) {
-				t.PendingProposalID = p.ID
-				t.PendingCommand = p.Command
-				t.PendingRisk = p.RiskLevel
-			})
-		}
-		v := <-verdictCh
-		if rc.deps.store != nil {
-			_ = rc.deps.store.Transition(rc.deps.taskID, agent.StatusRunning, func(t *agent.Task) {
-				t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
-			})
-		}
-		if !v.Approved {
-			reason := v.Reason
-			if reason == "" {
-				reason = "no reason given"
-			}
-			return fmt.Sprintf("APPROVAL_DENIED: %s — reason: %s. Propose an alternative or call finish.", p.Command, reason), nil
-		}
-	}
-
-	execResult, execErr := rc.deps.exec.Run(ctx, rc.deps.sessionID, p.Command)
-	if execErr != nil {
-		return "", fmt.Errorf("eino run_command: exec: %w", execErr)
-	}
-	execResult.Content = threatscan.StripANSI(execResult.Content)
-	outcome, reason := agent.Verify(execResult)
-	switch outcome {
-	case agent.OutcomeBlocked:
-		return "COMMAND_BLOCKED: " + reason, nil
-	case agent.OutcomeFailure:
-		return fmt.Sprintf("TOOL_FAILED: %s\nreason: %s\n%s", p.Command, reason, execResult.Content), nil
-	}
-	if banner := threatscan.Banner(execResult.Content); banner != "" {
-		// Content-layer fail-closed, mirroring graph.go's observeResult: flag
-		// the banner alongside the output rather than silently trusting it.
-		return banner + "\n\n" + execResult.Content, nil
-	}
-	return execResult.Content, nil
-}
-
-// validate mirrors graph.go's GraphState.validate — a nil validator allows
-// the proposal through unchanged (used in tests / when scope filtering is
-// intentionally disabled).
-func (rc *runCommandTool) validate(p conductor.Proposal) conductor.ChatResponse {
-	if rc.deps.validator == nil {
-		return conductor.ChatResponse{Intent: "suggest_command", Proposals: []conductor.Proposal{p}}
-	}
-	return rc.deps.validator.ValidateChatResponse(conductor.ChatResponse{Intent: "suggest_command", Proposals: []conductor.Proposal{p}})
+	return runToolPipeline(ctx, toolPipelineDeps{
+		store: rc.deps.store, gate: rc.deps.gate, validator: rc.deps.validator,
+		taskID: rc.deps.taskID, approvalMode: rc.deps.approvalMode,
+	}, args.Command, args.Rationale, args.RiskLevel, "eino run_command: exec",
+		func(ctx context.Context, command string) (agent.ToolResult, error) {
+			return rc.deps.exec.Run(ctx, rc.deps.sessionID, command)
+		})
 }
 
 // ── remember ─────────────────────────────────────────────────────────────
