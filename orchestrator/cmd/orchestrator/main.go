@@ -84,6 +84,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Resolved once here so the Eino backend (below) can inject the identical
+	// effective num_ctx as an outbound-request option — conductor.Engine
+	// resolves and applies its own copy of this internally but doesn't expose
+	// it, and Eino's OpenAI-compatible model calls need their own explicit
+	// value (see eino.NewOllamaChatModel's doc comment).
+	resolvedTier := conductor.DefaultTierRegistry().Resolve(cfg.OllamaModel)
+	resolvedNumCtx := resolvedTier.NumCtx
+	if cfg.OllamaNumCtx > 0 {
+		resolvedNumCtx = cfg.OllamaNumCtx
+	}
+
 	assistant, err := conductor.NewEngineWithOverrides(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel, conductor.TierOverrides{
 		NumCtx:   cfg.OllamaNumCtx,
 		Thinking: cfg.OllamaThinking,
@@ -296,6 +307,7 @@ func main() {
 						ApprovalMode:  agent.ModeAskPermission,
 						ModelBaseURL:  strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
 						ModelName:     cfg.OllamaModel,
+						ModelNumCtx:   resolvedNumCtx,
 						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),

@@ -49,6 +49,29 @@ func (t *runTrace) snapshot() (observations []string, tools []string) {
 	return observations, tools
 }
 
+// pairs returns (tool, result) for every recorded tool call, in call order.
+// Unlike snapshot's deduplicated tool list, this preserves the positional
+// correspondence record() maintains between observations and tools — needed
+// to build a fallback summary that correctly labels each result.
+func (t *runTrace) pairs() []tracePair {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]tracePair, len(t.observations))
+	for i, obs := range t.observations {
+		tool := "command"
+		if i < len(t.tools) {
+			tool = t.tools[i]
+		}
+		out[i] = tracePair{Tool: tool, Result: obs}
+	}
+	return out
+}
+
+type tracePair struct{ Tool, Result string }
+
 func firstToken(s string) string {
 	for i, r := range s {
 		if r == ' ' || r == '\t' {
