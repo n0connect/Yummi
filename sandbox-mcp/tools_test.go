@@ -131,3 +131,67 @@ func TestNiktoScan_EmptyHost(t *testing.T) {
 		t.Fatal("expected IsError for empty host")
 	}
 }
+
+func TestRejectIfFlagLike(t *testing.T) {
+	cases := []struct {
+		value   string
+		wantErr bool
+	}{
+		{"10.0.0.1", false},
+		{"example.com", false},
+		{"http://example.com/path", false},
+		{"--script=/tmp/evil.nse", true},
+		{"-oN /tmp/out.txt", true},
+		{"-K /tmp/curlrc", true},
+		{"-", true}, // no legitimate target/url is a bare dash either
+	}
+	for _, tc := range cases {
+		err := rejectIfFlagLike("target", tc.value)
+		if tc.wantErr && err == nil {
+			t.Errorf("rejectIfFlagLike(%q): expected an error, got nil", tc.value)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("rejectIfFlagLike(%q): unexpected error: %v", tc.value, err)
+		}
+	}
+}
+
+// TestNmapScan_RejectsFlagInjectionInTarget proves a target that would be
+// parsed as a flag (not a positional host) by nmap itself is refused before
+// ever reaching exec.Command — nmap's target is passed bare, with nothing
+// preceding it in argv to claim it as an argument, so a model steered by
+// hostile scanned content (the class of attack internal/security/threatscan
+// defends against on the way back INTO the model) could otherwise redirect
+// nmap's own behavior via --script, -oN, -iL, etc.
+func TestNmapScan_RejectsFlagInjectionInTarget(t *testing.T) {
+	session := newTestServer(t)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "nmap_scan",
+		Arguments: map[string]any{"target": "--script=/tmp/evil.nse"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError for a flag-shaped target")
+	}
+}
+
+// TestCurlProbe_RejectsFlagInjectionInURL is the highest-value case in this
+// family: curl's -K <file> flag lets an injected value re-point curl at an
+// attacker-chosen config file, indirectly controlling essentially any other
+// curl option (headers, output path, protocols including file://) — far
+// beyond "fetch this URL".
+func TestCurlProbe_RejectsFlagInjectionInURL(t *testing.T) {
+	session := newTestServer(t)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "curl_probe",
+		Arguments: map[string]any{"url": "-K /tmp/evil.curlrc"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError for a flag-shaped url")
+	}
+}

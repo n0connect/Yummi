@@ -10,6 +10,25 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// rejectIfFlagLike errors when value would be parsed as a command-line flag
+// rather than positional data by the receiving binary — e.g. a "target" of
+// "--script=/tmp/x" reaching nmap bare (nothing precedes it in argv to claim
+// it as an argument) lets a value the model supplies — possibly steered by
+// hostile scanned content, exactly the class of attack internal/security/
+// threatscan defends against on the way back INTO the model — redirect the
+// tool's own behavior far beyond "scan this target": arbitrary NSE scripts,
+// alternate output paths, etc. Every handler below checks this ONLY for
+// fields it passes as a bare positional argument (no immediately-preceding
+// flag of its own); a value passed as "-u", url is already safe regardless
+// of its contents, since "-u" claims the next argv slot as its literal value
+// no matter what it looks like.
+func rejectIfFlagLike(field, value string) error {
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%s %q looks like a command-line flag, not a value — refusing to pass it through", field, value)
+	}
+	return nil
+}
+
 type nmapArgs struct {
 	Target           string `json:"target" jsonschema:"IP address, hostname, or CIDR range to scan"`
 	Ports            string `json:"ports,omitempty" jsonschema:"optional port range or list, e.g. 1-1000 or 80,443"`
@@ -21,6 +40,9 @@ func nmapHandler(ctx context.Context, _ *mcp.CallToolRequest, args nmapArgs) (*m
 	target := strings.TrimSpace(args.Target)
 	if target == "" {
 		return errResult("target is required")
+	}
+	if err := rejectIfFlagLike("target", target); err != nil {
+		return errResult(err.Error())
 	}
 	var argv []string
 	if args.ServiceDetection {
@@ -76,6 +98,9 @@ func whatwebHandler(ctx context.Context, _ *mcp.CallToolRequest, args whatwebArg
 	if url == "" {
 		return errResult("url is required")
 	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
+	}
 	return runCaptured(ctx, "whatweb", url)
 }
 
@@ -89,6 +114,9 @@ func curlHandler(ctx context.Context, _ *mcp.CallToolRequest, args curlArgs) (*m
 	url := strings.TrimSpace(args.URL)
 	if url == "" {
 		return errResult("url is required")
+	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
 	}
 	argv := []string{"-s"}
 	if args.HeadersOnly {
