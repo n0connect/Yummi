@@ -303,6 +303,8 @@ force-restart: _check-deps _check-network-mode
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
 	@$(call log_info,memory,Killing ollama to free VRAM...)
 	@-killall -9 ollama 2>/dev/null || true
+	@$(call log_info,memory,Killing orphaned ollama model runners...)
+	@-killall -9 llama-server 2>/dev/null || true
 	@$(call log_info,memory,Killing lingering yummi processes...)
 	@-killall -9 yummi yummi-orchestrator 2>/dev/null || true
 	@$(MAKE) _ollama-ensure
@@ -321,6 +323,8 @@ close:
 	@brew services stop ollama 2>/dev/null || true
 	@-killall -9 ollama 2>/dev/null || true
 	@-killall -9 Ollama 2>/dev/null || true
+	@$(call log_info,memory,Killing orphaned ollama model runners...)
+	@-killall -9 llama-server 2>/dev/null || true
 	@$(call log_info,memory,Killing lingering yummi processes...)
 	@-killall -9 yummi yummi-orchestrator 2>/dev/null || true
 	@$(call log_pass,close,All processes and models successfully stopped.)
