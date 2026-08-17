@@ -127,6 +127,21 @@ func isValidSessionID(id string) bool {
 	return sessionIDPattern.MatchString(id)
 }
 
+// checkOptionalSessionID validates a request-supplied session id that is
+// allowed to be absent (writes nothing, returns true) or the "default"
+// sentinel (also true) — only a non-empty, non-default value must match
+// isValidSessionID. On a bad format it writes the standard 400 response and
+// returns false, so callers can `if !checkOptionalSessionID(...) { return }`.
+// Three handlers (HandleChat, HandleChatApprove, tasks.go's create handler)
+// duplicated this exact three-line guard before this extraction.
+func checkOptionalSessionID(w http.ResponseWriter, sessionID string) bool {
+	if sessionID != "" && sessionID != "default" && !isValidSessionID(sessionID) {
+		writeError(w, http.StatusBadRequest, "invalid session id format", nil)
+		return false
+	}
+	return true
+}
+
 func isValidName(name string) bool {
 	return namePattern.MatchString(name)
 }

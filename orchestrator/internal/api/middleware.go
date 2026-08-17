@@ -17,7 +17,8 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(ww, r)
 
-		// UI üzerindeki system/status, system/logs veya healthz gibi sürekli atılan polling isteklerini loglama
+		// Don't log high-frequency polling requests from the UI (system/status,
+		// system/logs, healthz) — they'd drown out real request logs.
 		path := r.URL.Path
 		if path == "/healthz" || path == "/api/v1/system/status" || path == "/api/v1/system/logs" || path == "/ws/events" || path == "/ws/terminal" {
 			return

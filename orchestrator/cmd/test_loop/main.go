@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -270,7 +271,7 @@ func runScenario(eng *conductor.Engine, bridge *sandbox.Bridge, sc loopScenario)
 	// Araç kontrolü
 	if len(sc.wantTools) > 0 && len(phase1.Proposals) > 0 {
 		tool := firstToken(phase1.Proposals[0].Command)
-		if !contains(sc.wantTools, tool) {
+		if !slices.Contains(sc.wantTools, tool) {
 			failReasons = append(failReasons,
 				fmt.Sprintf("Phase1: yanlış araç `%s` (beklenen: %s)",
 					tool, strings.Join(sc.wantTools, " | ")))
@@ -371,10 +372,10 @@ func buildReport(results []result, model, tier string, total time.Duration) stri
 	}
 
 	sb.WriteString("# Yummi — LLM + Execution Feedback Loop Test Raporu\n\n")
-	sb.WriteString(fmt.Sprintf("**Model:** `%s`  \n", model))
-	sb.WriteString(fmt.Sprintf("**Tier:** `%s`  \n", tier))
-	sb.WriteString(fmt.Sprintf("**Tarih:** %s  \n", time.Now().Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("**Toplam süre:** %s  \n\n", total.Round(time.Second)))
+	fmt.Fprintf(&sb, "**Model:** `%s`  \n", model)
+	fmt.Fprintf(&sb, "**Tier:** `%s`  \n", tier)
+	fmt.Fprintf(&sb, "**Tarih:** %s  \n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&sb, "**Toplam süre:** %s  \n\n", total.Round(time.Second))
 	sb.WriteString("> Her senaryo 3 aşamalı: (1) LLM önerir → (2) sandbox Kali'de çalışır → ")
 	sb.WriteString("(3) çıktı history'e beslenir, LLM analiz eder.\n\n---\n\n")
 
@@ -383,8 +384,8 @@ func buildReport(results []result, model, tier string, total time.Duration) stri
 		if !r.pass {
 			status = "❌ FAIL"
 		}
-		sb.WriteString(fmt.Sprintf("## [%s] %s · %s · _%s_\n\n",
-			r.id, r.category, status, r.elapsed.Round(time.Millisecond)))
+		fmt.Fprintf(&sb, "## [%s] %s · %s · _%s_\n\n",
+			r.id, r.category, status, r.elapsed.Round(time.Millisecond))
 		if len(r.reasons) > 0 {
 			sb.WriteString("**Başarısızlık nedenleri:**\n")
 			for _, re := range r.reasons {
@@ -401,11 +402,11 @@ func buildReport(results []result, model, tier string, total time.Duration) stri
 
 	sb.WriteString("## Özet\n\n")
 	sb.WriteString("| Metrik | Değer |\n|--------|-------|\n")
-	sb.WriteString(fmt.Sprintf("| Toplam | %d |\n", len(results)))
-	sb.WriteString(fmt.Sprintf("| ✅ Geçti | %d |\n", passed))
-	sb.WriteString(fmt.Sprintf("| ❌ Kaldı | %d |\n", len(results)-passed))
-	sb.WriteString(fmt.Sprintf("| Başarı | %.0f%% |\n", float64(passed)/float64(len(results))*100))
-	sb.WriteString(fmt.Sprintf("| Toplam süre | %s |\n", total.Round(time.Second)))
+	fmt.Fprintf(&sb, "| Toplam | %d |\n", len(results))
+	fmt.Fprintf(&sb, "| ✅ Geçti | %d |\n", passed)
+	fmt.Fprintf(&sb, "| ❌ Kaldı | %d |\n", len(results)-passed)
+	fmt.Fprintf(&sb, "| Başarı | %.0f%% |\n", float64(passed)/float64(len(results))*100)
+	fmt.Fprintf(&sb, "| Toplam süre | %s |\n", total.Round(time.Second))
 
 	return sb.String()
 }
@@ -420,25 +421,9 @@ func firstToken(cmd string) string {
 	return strings.ToLower(strings.Fields(cmd)[0])
 }
 
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

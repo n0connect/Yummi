@@ -243,9 +243,12 @@ func HandleSystemStatus(bridge *sandbox.Bridge, pc *gateway.Client, dockerSocket
 			conductorMod.Details = "LLM backend connected"
 			conductorMod.Meta = map[string]any{"backend": "ollama", "model": model}
 		} else {
+			// No rule-based fallback exists (see conductor.Engine's doc comment):
+			// without Ollama configured, Chat/ChatWithHistory decline every
+			// request rather than degrading to a simpler engine.
 			conductorMod.Status = "degraded"
-			conductorMod.Details = "rule engine only (Ollama not configured)"
-			conductorMod.Meta = map[string]any{"backend": "rules", "persona": engine.PersonaVersion()}
+			conductorMod.Details = "declining all requests (Ollama not configured)"
+			conductorMod.Meta = map[string]any{"backend": "none", "persona": engine.PersonaVersion()}
 		}
 		modules = append(modules, conductorMod)
 

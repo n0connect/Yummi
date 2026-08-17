@@ -260,11 +260,11 @@ export function TracePage(): JSX.Element {
 
         {/* Procedural memory */}
         <Section title={t('trace.sectionTactics')} count={tactics.length}>
-          {tactics.map(t => (
-            <div key={t.id} className="trace-tactic">
-              <code className="trace-cmd">{t.command_pattern}</code>
-              <span className={outcomeClass(t.outcome)}>{t.outcome}</span>
-              <span className="trace-hits">{t.hit_count}×</span>
+          {tactics.map(tac => (
+            <div key={tac.id} className="trace-tactic">
+              <code className="trace-cmd">{tac.command_pattern}</code>
+              <span className={outcomeClass(tac.outcome)}>{tac.outcome}</span>
+              <span className="trace-hits">{tac.hit_count}×</span>
             </div>
           ))}
         </Section>

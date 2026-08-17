@@ -32,6 +32,17 @@ type Engine struct {
 // maxHistoryPerSession caps stored turns to bound memory usage.
 const maxHistoryPerSession = 20
 
+// capHistory trims msgs to the most recent maxHistoryPerSession turns (the
+// tail). Shared by every write path that appends to a session's in-memory
+// history (ChatWithHistory, SeedHistory, AppendObservation) so the cap is
+// enforced identically everywhere.
+func capHistory(msgs []llm.Message) []llm.Message {
+	if len(msgs) > maxHistoryPerSession {
+		return msgs[len(msgs)-maxHistoryPerSession:]
+	}
+	return msgs
+}
+
 // TierOverrides lets an operator override the numeric knobs a resolved tier
 // profile would otherwise apply. Most useful for a custom model tag (see
 // TierRegistry.Resolve) that isn't one of the four named tiers: it's wrapped
@@ -182,11 +193,7 @@ func (e *Engine) ChatWithHistory(ctx context.Context, sessionID, message string)
 	}
 
 	e.histMu.Lock()
-	msgs := e.history[sessionID]
-	msgs = append(msgs, llm.Message{Role: "user", Content: text})
-	if len(msgs) > maxHistoryPerSession {
-		msgs = msgs[len(msgs)-maxHistoryPerSession:]
-	}
+	msgs := capHistory(append(e.history[sessionID], llm.Message{Role: "user", Content: text}))
 	e.history[sessionID] = msgs
 	e.histMu.Unlock()
 
@@ -226,10 +233,7 @@ func (e *Engine) SeedHistory(sessionID string, msgs []llm.Message) {
 	if len(e.history[sessionID]) > 0 {
 		return // live history already present — don't double-seed
 	}
-	if len(msgs) > maxHistoryPerSession {
-		msgs = msgs[len(msgs)-maxHistoryPerSession:]
-	}
-	e.history[sessionID] = append([]llm.Message(nil), msgs...)
+	e.history[sessionID] = capHistory(append([]llm.Message(nil), msgs...))
 }
 
 // ── LLM helpers ──────────────────────────────────────────────────────────────
@@ -538,11 +542,6 @@ func (e *Engine) AppendObservation(sessionID, command, output, execErr string) {
 	b.WriteString("[END RESULT]\n\nBased on this output, suggest the next step or summarize findings if the goal is achieved.")
 
 	e.histMu.Lock()
-	msgs := e.history[sessionID]
-	msgs = append(msgs, llm.Message{Role: "user", Content: b.String()})
-	if len(msgs) > maxHistoryPerSession {
-		msgs = msgs[len(msgs)-maxHistoryPerSession:]
-	}
-	e.history[sessionID] = msgs
+	e.history[sessionID] = capHistory(append(e.history[sessionID], llm.Message{Role: "user", Content: b.String()}))
 	e.histMu.Unlock()
 }

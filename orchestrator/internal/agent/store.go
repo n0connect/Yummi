@@ -411,6 +411,9 @@ func (s *Store) ListActivity(sessionID string, limit int) []ActivityEvent {
 		e.Kind = ActivityKind(kind)
 		out = append(out, e)
 	}
+	if err := rows.Err(); err != nil {
+		slog.Error("agent: list activity row iteration", "error", err)
+	}
 	return out
 }
 

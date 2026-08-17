@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
@@ -40,6 +41,52 @@ func retryNode(ctx context.Context, s *GraphState) (string, error) {
 	return edgeRetryAgain, nil
 }
 
+// awaitGateVerdict runs the operator-approval wait skeleton shared
+// byte-for-byte by approvalNode and threatHoldNode: register the pending
+// approval, transition the task to StatusAwaitingApproval, then block on ctx
+// cancellation, the approval timeout, or a real verdict.
+//
+// On cancellation, a Transition error, or a timeout, the terminal outcome is
+// already fully resolved (task transitioned, pendingAct/gate cleared as
+// needed) — the caller must return (edge, err) exactly as given, without
+// further handling. On a real verdict, the task is transitioned back to
+// StatusRunning and (verdict, "", nil, true) is returned for the caller to
+// interpret (approved vs denied) itself, since that handling differs between
+// the two callers.
+func awaitGateVerdict(ctx context.Context, s *GraphState, cmdLabel string, p conductor.Proposal, timeoutMsg string) (verdict Verdict, edge string, err error, ok bool) {
+	verdictCh := s.gate.Request(s.taskID, p.ID, cmdLabel, p.RiskLevel)
+	if terr := s.store.Transition(s.taskID, StatusAwaitingApproval, func(t *Task) {
+		t.PendingProposalID = p.ID
+		t.PendingCommand = cmdLabel
+		t.PendingRisk = p.RiskLevel
+	}); terr != nil {
+		return Verdict{}, "", terr, false
+	}
+
+	select {
+	case <-ctx.Done():
+		return Verdict{}, "", ctx.Err(), false
+
+	case <-time.After(s.cfg.ApprovalTimeout):
+		s.gate.Clear(s.taskID)
+		// Operator-facing pause message (plain text, not a protocol tag).
+		_ = s.store.Transition(s.taskID, StatusPaused, func(t *Task) {
+			t.Question = timeoutMsg
+			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
+		})
+		s.pendingAct = Action{Question: timeoutMsg}
+		return Verdict{}, edgeGiveUp, nil, false
+
+	case v := <-verdictCh:
+		if terr := s.store.Transition(s.taskID, StatusRunning, func(t *Task) {
+			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
+		}); terr != nil {
+			return Verdict{}, "", terr, false
+		}
+		return v, "", nil, true
+	}
+}
+
 // approvalNode blocks on the operator gate for medium+ risk commands.
 func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 	p := s.pendingProposal
@@ -48,59 +95,33 @@ func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 		return "", ErrTaskNotFound
 	}
 
-	verdictCh := s.gate.Request(s.taskID, p.ID, p.Command, p.RiskLevel)
-	if err := s.store.Transition(s.taskID, StatusAwaitingApproval, func(t *Task) {
-		t.PendingProposalID = p.ID
-		t.PendingCommand = p.Command
-		t.PendingRisk = p.RiskLevel
-	}); err != nil {
-		return "", err
+	v, edge, err, gotVerdict := awaitGateVerdict(ctx, s, p.Command, p, "Approval timed out for: "+p.Command)
+	if !gotVerdict {
+		return edge, err
 	}
 
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-
-	case <-time.After(s.cfg.ApprovalTimeout):
-		s.gate.Clear(s.taskID)
-		// Operator-facing pause message (plain text, not a protocol tag).
-		timeout := "Approval timed out for: " + p.Command
-		_ = s.store.Transition(s.taskID, StatusPaused, func(t *Task) {
-			t.Question = timeout
-			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
-		})
-		s.pendingAct = Action{Question: timeout}
-		return edgeGiveUp, nil
-
-	case v := <-verdictCh:
-		if err := s.store.Transition(s.taskID, StatusRunning, func(t *Task) {
-			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
-		}); err != nil {
-			return "", err
+	if !v.Approved {
+		reason := v.Reason
+		if reason == "" {
+			reason = "no reason given"
 		}
-		if !v.Approved {
-			reason := v.Reason
-			if reason == "" {
-				reason = "no reason given"
-			}
-			obs := Wrap("APPROVAL_DENIED", p.Command+" — reason: "+reason+"\nPropose an alternative or finish.")
-			s.memCtx.AddObservation(obs)
-			s.lastObs = obs
-			return edgeDenied, nil
-		}
-		// Execute the approved command and observe it like any other.
-		s.pendingCommand = p.Command
-		result, err := s.exec.Run(ctx, task.SessionID, p.Command)
-		if err != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			return "", fmt.Errorf("exec (post-approval): %w", err)
-		}
-		s.executedCmds = append(s.executedCmds, p.Command)
-		_ = observeResult(s, result)
-		return edgeApproved, nil
+		obs := Wrap("APPROVAL_DENIED", p.Command+" — reason: "+reason+"\nPropose an alternative or finish.")
+		s.memCtx.AddObservation(obs)
+		s.lastObs = obs
+		return edgeDenied, nil
 	}
+	// Execute the approved command and observe it like any other.
+	s.pendingCommand = p.Command
+	result, err := s.exec.Run(ctx, task.SessionID, p.Command)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("exec (post-approval): %w", err)
+	}
+	s.executedCmds = append(s.executedCmds, p.Command)
+	_ = observeResult(s, result)
+	return edgeApproved, nil
 }
 
 // summarizeNode compresses observation history into a running summary when the
