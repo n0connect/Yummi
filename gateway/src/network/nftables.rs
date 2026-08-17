@@ -202,16 +202,11 @@ impl NftablesController {
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    /// Dynamically add a target CIDR to the allowed_targets set with TTL.
-    ///
-    /// Uses `nft add element` which is atomic and does not flush existing rules.
-    /// The set has `flags interval, timeout` so both host IPs and subnets work.
-    pub fn add_allowed_target(
-        &self,
-        net: &ipnet::IpNet,
-        ttl_secs: u64,
-    ) -> Result<(), NetworkError> {
-        let (element, set_name) = match net {
+    /// Renders the nft set element string and the target set's name for a
+    /// CIDR/host — shared by add_allowed_target and remove_allowed_target so
+    /// the two can never derive different element text for the same input.
+    fn target_element(net: &ipnet::IpNet) -> (String, &'static str) {
+        match net {
             ipnet::IpNet::V4(n) => {
                 let el = if n.prefix_len() == 32 {
                     n.addr().to_string()
@@ -228,7 +223,19 @@ impl NftablesController {
                 };
                 (el, "allowed_targets_v6")
             }
-        };
+        }
+    }
+
+    /// Dynamically add a target CIDR to the allowed_targets set with TTL.
+    ///
+    /// Uses `nft add element` which is atomic and does not flush existing rules.
+    /// The set has `flags interval, timeout` so both host IPs and subnets work.
+    pub fn add_allowed_target(
+        &self,
+        net: &ipnet::IpNet,
+        ttl_secs: u64,
+    ) -> Result<(), NetworkError> {
+        let (element, set_name) = Self::target_element(net);
 
         let cmd = format!(
             "add element inet {} {} {{ {} timeout {}s }}",
@@ -248,6 +255,50 @@ impl NftablesController {
         }
 
         tracing::info!(target = %element, ttl_secs, "nftables: target added to allowed_targets");
+        Ok(())
+    }
+
+    /// Revoke a previously-added target immediately, rather than waiting for
+    /// its `timeout` to elapse on its own. Without this, an operator's
+    /// explicit "remove rule" action only updated the policy engine's own
+    /// bookkeeping — the corresponding kernel-level `allowed_targets`/
+    /// `allowed_targets_v6` set element (installed by add_allowed_target)
+    /// stayed live until its ORIGINAL ttl_secs naturally expired (up to 24h,
+    /// the IPC layer's max), so the target remained reachable from sandbox
+    /// well after the operator believed it was revoked.
+    ///
+    /// `nft delete element` targets a set element by its key alone — the
+    /// `timeout` clause used at insertion time is not part of the key and
+    /// must not be repeated here.
+    pub fn remove_allowed_target(&self, net: &ipnet::IpNet) -> Result<(), NetworkError> {
+        let (element, set_name) = Self::target_element(net);
+
+        let cmd = format!(
+            "delete element inet {} {} {{ {} }}",
+            self.table_name, set_name, element,
+        );
+
+        let out = Command::new(NFT_BIN)
+            .args(["-e", &cmd])
+            .output()
+            .map_err(|e| NetworkError::InstallFailed(format!("nft delete element: {e}")))?;
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // "no such file or directory" is nft's error for a missing element —
+            // e.g. the element already expired naturally between the operator's
+            // click and this call. Not a real failure: the end state (target not
+            // reachable) is exactly what was requested.
+            if stderr.contains("No such file or directory") {
+                tracing::debug!(target = %element, "nftables: target already absent from allowed_targets");
+                return Ok(());
+            }
+            return Err(NetworkError::InstallFailed(format!(
+                "nft delete element failed: {stderr}"
+            )));
+        }
+
+        tracing::info!(target = %element, "nftables: target removed from allowed_targets");
         Ok(())
     }
 
@@ -556,6 +607,31 @@ mod tests {
     fn test_format_mac_produces_colon_separated_hex() {
         let formatted = format_mac([0x02, 0xAB, 0x00, 0x11, 0xFF, 0x9c]);
         assert_eq!(formatted, "02:ab:00:11:ff:9c");
+    }
+
+    // target_element is the shared basis for both add_allowed_target and
+    // remove_allowed_target's `nft` element text — a mismatch here would mean
+    // remove_allowed_target could silently target the WRONG set element and
+    // never actually revoke what add_allowed_target installed. The real `nft`
+    // invocation itself isn't unit-tested (needs root + CAP_NET_ADMIN + a real
+    // nftables-capable kernel — see docs/installation.md's Docker Desktop VM
+    // networking callout), only verified live via `make start`.
+    #[test]
+    fn test_target_element_v4_host_vs_subnet() {
+        let (el, set) = NftablesController::target_element(&"1.2.3.4/32".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("1.2.3.4", "allowed_targets"));
+
+        let (el, set) = NftablesController::target_element(&"10.0.0.0/24".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("10.0.0.0/24", "allowed_targets"));
+    }
+
+    #[test]
+    fn test_target_element_v6_host_vs_subnet() {
+        let (el, set) = NftablesController::target_element(&"2001:db8::1/128".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("2001:db8::1", "allowed_targets_v6"));
+
+        let (el, set) = NftablesController::target_element(&"2001:db8::/32".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("2001:db8::/32", "allowed_targets_v6"));
     }
 
     #[test]

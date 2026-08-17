@@ -211,19 +211,23 @@ func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description st
 	return resp.RuleID, resp.ExpiresAt, resp.KernelWarning, nil
 }
 
-// RemoveRule removes a rule by ID.
-func (c *Client) RemoveRule(ruleID string) error {
+// RemoveRule removes a rule by ID. The returned kernelWarning is non-empty
+// when the gateway's policy engine removed the rule but its nftables
+// kernel-level revoke failed — the call still succeeds (the policy state is
+// consistent), but the caller should surface the warning since sandbox may
+// still be able to reach the target until its original TTL expires.
+func (c *Client) RemoveRule(ruleID string) (kernelWarning string, err error) {
 	resp, err := c.send(Request{
 		Type:   "remove_rule",
 		RuleID: ruleID,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	if resp.Type != "rule_removed" {
-		return fmt.Errorf("unexpected response: %s", resp.Type)
+		return "", fmt.Errorf("unexpected response: %s", resp.Type)
 	}
-	return nil
+	return resp.KernelWarning, nil
 }
 
 // ListRules returns all currently active policy rules.
