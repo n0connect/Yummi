@@ -147,23 +147,12 @@ func main() {
 	}
 
 	// Wire real command execution: sandbox bridge + gateway scope check.
-	// The processor is wrapped so that every completed execution feeds its
-	// output back into the conductor's session history. This closes the
-	// agentic loop: LLM proposes → user approves → command runs → LLM sees
-	// the result on the next turn → LLM proposes the next step.
+	// Single-command output enters conductor history only through the UI's
+	// typed from_feedback turn after execution threat review. Appending raw
+	// processor output here would both duplicate feedback and bypass that hold.
 	exec := executor.New(bridge, gatewayClient, ks, sandboxMCPClient)
 	baseProcessor := exec.ProcessFunc()
-	executionStore.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
-		output, err := baseProcessor(ctx, rec)
-		if assistant != nil && rec.SessionID != "" {
-			var errText string
-			if err != nil {
-				errText = err.Error()
-			}
-			assistant.AppendObservation(rec.SessionID, rec.Command, output, errText)
-		}
-		return output, err
-	})
+	executionStore.SetProcessor(baseProcessor)
 
 	// Agentic task loop: store + runner over the same execution pipeline.
 	// Commands run by the loop flow through executionStore, so they get gateway
@@ -307,6 +296,7 @@ func main() {
 						ApprovalMode:  agent.ModeAskPermission,
 						ModelBaseURL:  strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
 						ModelName:     cfg.OllamaModel,
+						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
 						MCPList:       sandboxMCPClient,

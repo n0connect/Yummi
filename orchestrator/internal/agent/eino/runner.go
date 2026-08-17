@@ -33,7 +33,19 @@ type Config struct {
 	ApprovalMode agent.ApprovalMode
 	ModelBaseURL string // e.g. "http://localhost:11434/v1"
 	ModelName    string // e.g. "qwen3:14b"
-	Knowledge    *knowledge.Store
+	// Persona is the same document-driven agent.yaml identity/principles the
+	// graph backend renders via StepSystemPrompt (ORIENT/ACT/OBSERVE/CONCLUDE:
+	// NO FABRICATION, EVIDENCE, TRUTH, COMPLETE, ...). Previously this backend
+	// had no equivalent at all — instruction() was a hardcoded string covering
+	// only tool-routing mechanics, so none of agent.yaml's epistemic-discipline
+	// guardrails ever reached the model here, live-model-only failure modes
+	// (accepting an unverified operator premise as fact, inventing command
+	// output that never ran, denying an actual hallucination) that the graph
+	// backend's own persona explicitly guards against. Zero-value Persona
+	// falls back to a minimal identity line so existing tests that don't set
+	// it keep working.
+	Persona   agent.AgentPersona
+	Knowledge *knowledge.Store
 	// MCPExec runs the six cataloged pentest tools via the sandbox-resident
 	// MCP server. nil disables those tools (main.go always wires a real one
 	// today; kept optional so tests can omit it).
@@ -241,7 +253,19 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		// for.
 		MaxIterations: r.cfg.StepBudget,
 		ToolsConfig: adk.ToolsConfig{
-			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools},
+			// ExecuteSequentially: eino's default runs every tool call in a
+			// model turn concurrently. agent.Gate is single-slot per task
+			// (see its doc comment: "one pending approval per task, the loop
+			// is sequential") — two concurrent ask_permission gates on the
+			// same task race Gate.Request, silently orphaning the loser's
+			// verdict channel while the Task's persisted PendingProposalID
+			// reflects whichever store.Transition happened to land last, so
+			// POST /tasks/{id}/approve can 404 with "no pending approval"
+			// even when the operator is approving exactly the proposal the
+			// UI just showed them. Sequential dispatch keeps tool execution
+			// (and therefore gating) one-at-a-time, honoring Gate's existing
+			// invariant instead of turning it into a multi-slot structure.
+			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools, ExecuteSequentially: true},
 			// finish/ask_operator are terminal control signals, not tools whose
 			// result should be fed back for another model turn — without this,
 			// the loop only stops once the model itself decides not to call
@@ -378,8 +402,19 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 }
 
 func (r *EinoRunner) instruction(goal string) string {
-	instr := "You are Yummi, an autonomous penetration-testing operator assistant. " +
-		"Your current goal: " + goal + "\n\n" +
+	// identity/principles come from the same agent.yaml document the graph
+	// backend's StepSystemPrompt renders — see Config.Persona's doc comment.
+	// A zero-value Persona (tests that don't set it) falls back to a minimal
+	// identity line rather than an empty prefix.
+	identity := strings.TrimSpace(r.cfg.Persona.Identity)
+	if identity == "" {
+		identity = "You are Yummi, an autonomous penetration-testing operator assistant."
+	}
+	instr := identity + "\n"
+	if principles := strings.TrimSpace(r.cfg.Persona.Principles); principles != "" {
+		instr += "\nREASONING PRINCIPLES:\n" + principles + "\n"
+	}
+	instr += "\nYour current goal: " + goal + "\n\n" +
 		"For nmap, whatweb, curl, gobuster, ffuf, or nikto, prefer the dedicated tool " +
 		"(nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan) over run_command — " +
 		"it gives you a real schema instead of a free-text string. "
@@ -463,7 +498,11 @@ func (r *EinoRunner) Stop(taskID string) error {
 	if task.Status.Terminal() {
 		return nil
 	}
-	return r.store.Transition(taskID, agent.StatusStopped, nil)
+	return r.store.Transition(taskID, agent.StatusStopped, func(t *agent.Task) {
+		t.PendingProposalID = ""
+		t.PendingCommand = ""
+		t.PendingRisk = ""
+	})
 }
 
 // Approve resolves a pending gate request, checking this runner's own gate

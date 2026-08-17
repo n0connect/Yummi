@@ -49,6 +49,16 @@ func TestSeedHistoryRestoresButDoesNotClobber(t *testing.T) {
 	}
 }
 
+func TestCapHistoryRetainsFiftyMessageConversation(t *testing.T) {
+	msgs := make([]llm.Message, 50)
+	for i := range msgs {
+		msgs[i] = llm.Message{Role: "user", Content: "turn"}
+	}
+	if got := len(capHistory(msgs)); got != 50 {
+		t.Fatalf("50-message conversation was truncated to %d messages", got)
+	}
+}
+
 // TestAppendObservationFeedsHistory verifies that AppendObservation injects a
 // well-formed tool-result message into the session's chat history.
 func TestAppendObservationFeedsHistory(t *testing.T) {
@@ -105,6 +115,64 @@ func TestAppendObservationNoOps(t *testing.T) {
 	e.AppendObservation("s1", "", "", "")
 	if len(e.history) != 0 {
 		t.Errorf("expected empty history, got %v", e.history)
+	}
+}
+
+// TestFeedbackTurnBypassesOperatorBoundaryAndEntersHistoryOnce reproduces the
+// live UI failure where a getent result containing the local user "pentester"
+// was intercepted as a targetless pentest request before reaching the model.
+func TestFeedbackTurnBypassesOperatorBoundaryAndEntersHistoryOnce(t *testing.T) {
+	srv := newNDJSONOllamaServer(t, `{"intent":"explain","message":"pentester is a local account","confidence":0.9}`)
+	e, err := NewEngine("", srv.URL, "test-model")
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	feedback := "[COMMAND DONE] getent passwd\nOutput:\npentester:x:1000:1000::/home/pentester:/bin/bash"
+	resp, err := e.ChatWithHistoryFeedbackTurn(context.Background(), "s1", "turn-feedback", feedback)
+	if err != nil {
+		t.Fatalf("feedback turn: %v", err)
+	}
+	if resp.Intent != "explain" || resp.Message != "pentester is a local account" {
+		t.Fatalf("feedback was intercepted before the model: %+v", resp)
+	}
+
+	userEntries := 0
+	for _, msg := range e.history["s1"] {
+		if msg.Role == "user" && msg.Content == feedback {
+			userEntries++
+		}
+	}
+	if userEntries != 1 {
+		t.Fatalf("feedback history entries = %d, want exactly 1: %+v", userEntries, e.history["s1"])
+	}
+}
+
+func TestAppendTaskOutcomeAddsOneServerContextEntry(t *testing.T) {
+	e := &Engine{history: map[string][]llm.Message{}}
+	findings := []string{"Hostname: sandbox-1 (from hostname)", "Python: 3.14.6 (from python3 --version)"}
+
+	e.AppendTaskOutcome("s1", "task-1", "Collected verified system metadata.", findings)
+	e.AppendTaskOutcome("s1", "task-1", "Collected verified system metadata.", findings)
+
+	msgs := e.history["s1"]
+	if len(msgs) != 1 {
+		t.Fatalf("task outcome entries = %d, want exactly 1: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "system" {
+		t.Fatalf("task outcome role = %q, want system", msgs[0].Role)
+	}
+	for _, want := range []string{"task-1", "Collected verified system metadata.", "Hostname: sandbox-1", "Python: 3.14.6"} {
+		if !strings.Contains(msgs[0].Content, want) {
+			t.Errorf("task outcome missing %q: %s", want, msgs[0].Content)
+		}
+	}
+
+	e.history["s1"] = append(e.history["s1"], llm.Message{Role: "user", Content: "later turn"})
+	e.AppendTaskOutcome("s1", "task-1", "Collected verified system metadata.", findings)
+	msgs = e.history["s1"]
+	if len(msgs) != 2 || msgs[len(msgs)-1].Role != "system" {
+		t.Fatalf("task outcome was not refreshed at the history tail: %+v", msgs)
 	}
 }
 
@@ -440,6 +508,47 @@ func TestSystemPromptUsesPersonaLanguageParity(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "English input") {
 		t.Fatal("system prompt's language rule does not explicitly cover the English direction")
+	}
+}
+
+// TestSystemPromptStatesHostnameBlockPrecedenceCorrectly is a live-E2E-found
+// regression test: a run against the real model found it stating gateway
+// precedence backwards with high confidence (claiming egress mode "allow"
+// overrides a configured hostname block, when the actual precedence — see
+// gateway/src/policy/hostname.rs — is the opposite: hostname_block always
+// wins). This locks the corrected fact into the checked-in prompt.
+func TestSystemPromptStatesHostnameBlockPrecedenceCorrectly(t *testing.T) {
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
+	if err != nil {
+		t.Fatalf("engine init: %v", err)
+	}
+	prompt := engine.buildSystemPrompt()
+	if !strings.Contains(prompt, "hostname_block match is a hard deny that wins even when egress mode is \"allow\"") {
+		t.Fatalf("system prompt does not state correct hostname/egress-mode precedence:\n%s", prompt)
+	}
+}
+
+// TestSystemPromptIncludesEvidenceDisciplineBoundaries is a live-E2E-found
+// regression test: chat answers (intent: explain) were observed inventing
+// command output that never ran (a fabricated hostnamectl result) and
+// restating an operator's unverified assumption ("assume Ubuntu 99") as the
+// model's own confirmed finding. safety_boundaries.yaml now carries explicit
+// rules against both; this locks their presence in the rendered prompt.
+func TestSystemPromptIncludesEvidenceDisciplineBoundaries(t *testing.T) {
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
+	if err != nil {
+		t.Fatalf("engine init: %v", err)
+	}
+	prompt := engine.buildSystemPrompt()
+	for _, want := range []string{
+		"Never state or imply that a specific command ran",
+		"Never echo it back as your own confirmed finding",
+		"Never propose, describe, or imply having done the forbidden thing",
+		"do not reflexively deny it",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt missing evidence-discipline boundary %q:\n%s", want, prompt)
+		}
 	}
 }
 

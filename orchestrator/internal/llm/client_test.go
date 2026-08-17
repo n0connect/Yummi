@@ -152,6 +152,7 @@ func TestClientPreload(t *testing.T) {
 		Prompt    string          `json:"prompt"`
 		Stream    bool            `json:"stream"`
 		KeepAlive json.RawMessage `json:"keep_alive"`
+		Options   ollamaOptions   `json:"options"`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +189,9 @@ func TestClientPreload(t *testing.T) {
 	// Ollama's duration parser rejects bare "-1" without a unit suffix.
 	if string(capturedBody.KeepAlive) != "-1" {
 		t.Errorf("expected keep_alive=-1 (integer), got %s", capturedBody.KeepAlive)
+	}
+	if capturedBody.Options.NumCtx != 16384 {
+		t.Errorf("expected preload num_ctx=16384, got %d", capturedBody.Options.NumCtx)
 	}
 }
 

@@ -171,16 +171,26 @@ func (c *Client) Preload(ctx context.Context) error {
 		return fmt.Errorf("ollama client not configured")
 	}
 	type preloadReq struct {
-		Model     string `json:"model"`
-		Prompt    string `json:"prompt"`
-		Stream    bool   `json:"stream"`
-		KeepAlive any    `json:"keep_alive"`
+		Model     string        `json:"model"`
+		Prompt    string        `json:"prompt"`
+		Stream    bool          `json:"stream"`
+		KeepAlive any           `json:"keep_alive"`
+		Options   ollamaOptions `json:"options"`
 	}
+	o := c.opts
 	body, err := json.Marshal(preloadReq{
 		Model:     c.model,
 		Prompt:    "", // empty prompt: load model, generate nothing
 		Stream:    false,
 		KeepAlive: c.keepAlive,
+		Options: ollamaOptions{
+			NumCtx:    o.NumCtx,
+			NumGPU:    o.NumGPU,
+			NumThread: o.NumThread,
+			MMap:      o.MMap,
+			MLock:     o.MLock,
+			F16KV:     o.F16KV,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("marshal preload request: %w", err)
