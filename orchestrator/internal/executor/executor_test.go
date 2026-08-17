@@ -181,13 +181,9 @@ func TestRunScopedCommandFailsClosedWhenGatewayUnreachable(t *testing.T) {
 	}
 }
 
-// TestRunScopedCommandSurfacesGatewayKernelWarning is a regression test: the
-// gateway can accept a temporary-rule request (policy state updated) while
-// its own internal nftables kernel-level unlock silently fails. Before this
-// fix that failure was visible only in the gateway's own logs — the
-// orchestrator believed the unlock fully succeeded. RunScopedCommand must
-// carry the gateway's kernel_warning into the sandbox.Result the operator/API
-// actually sees.
+// TestRunScopedCommandSurfacesGatewayKernelWarning preserves mixed-version
+// compatibility: if an older gateway reports a partial-commit warning, the
+// executor must still carry it into the operator-visible sandbox result.
 func TestRunScopedCommandSurfacesGatewayKernelWarning(t *testing.T) {
 	const warning = "policy rule added but the nftables kernel unlock for 10.0.0.5/32 failed (no such device) — sandbox traffic to this target is still dropped"
 	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {

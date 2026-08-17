@@ -215,10 +215,12 @@ fn now_ns() -> i64 {
 macro_rules! require_write_auth {
     ($peer_uid:expr, $allowed_uids:expr, $op:literal) => {
         if !is_write_authorized($peer_uid, $allowed_uids) {
-            warn!(peer_uid = $peer_uid, concat!($op, " denied: UID not allowlisted"));
+            warn!(
+                peer_uid = $peer_uid,
+                concat!($op, " denied: UID not allowlisted")
+            );
             return IpcResponse::Error {
-                message: "permission denied: UID not allowlisted for write operations"
-                    .to_string(),
+                message: "permission denied: UID not allowlisted for write operations".to_string(),
             };
         }
     };
@@ -297,11 +299,20 @@ fn process_request(
         // startup if `install_rules()` fails, so by the time the IPC socket
         // is even listening, the fail-closed FORWARD rules are installed.
         // `uptime_secs` is real elapsed process time, not a stub.
-        IpcRequest::GetStatus => IpcResponse::Status {
-            level: 0,
-            rules_active: true,
-            uptime_secs: started_at.elapsed().as_secs(),
-        },
+        IpcRequest::GetStatus => {
+            let enforcement = ctrl.map(|c| c.enforcement_status(policy.egress_mode()));
+            IpcResponse::Status {
+                level: 0,
+                rules_active: enforcement.as_ref().map(|s| s.rules_active).unwrap_or(true),
+                uptime_secs: started_at.elapsed().as_secs(),
+                policy_kernel_consistent: enforcement
+                    .as_ref()
+                    .map(|s| s.policy_kernel_consistent)
+                    .unwrap_or(true),
+                enforcement_generation: enforcement.as_ref().map(|s| s.generation).unwrap_or(0),
+                last_reconcile_error: enforcement.and_then(|s| s.last_error),
+            }
+        }
         IpcRequest::Ping => IpcResponse::Pong,
 
         IpcRequest::ListRules => {
@@ -410,19 +421,19 @@ fn process_request(
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
                     let desc = description.unwrap_or_else(|| format!("Temporary rule: {network}"));
-                    let (rule_id, expires_at) =
-                        policy.add_temporary_allow(net, ttl_secs, desc.clone());
-
-                    // Also unlock at the nftables kernel level so sandbox's packets actually reach the target.
-                    let mut kernel_warning = None;
+                    // Kernel first, policy commit second. A failed nftables
+                    // mutation must not publish an allow decision that the
+                    // packet filter did not actually install.
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
-                            warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
-                            kernel_warning = Some(format!(
-                                "policy rule added but the nftables kernel unlock for {network} failed ({e}) — sandbox traffic to this target is still dropped"
-                            ));
+                            warn!(network = %network, error = %e, "nftables target unlock failed; policy change aborted");
+                            return IpcResponse::Error {
+                                message: format!("nftables rejected target unlock for {network}; policy was not changed: {e}"),
+                            };
                         }
                     }
+                    let (rule_id, expires_at) =
+                        policy.add_temporary_allow(net, ttl_secs, desc.clone());
 
                     let now_ns = now_ns();
                     if let Err(e) = audit.record_rule_event(
@@ -437,7 +448,7 @@ fn process_request(
                     IpcResponse::RuleAdded {
                         rule_id,
                         expires_at,
-                        kernel_warning,
+                        kernel_warning: None,
                     }
                 }
                 Err(_) => IpcResponse::Error {
@@ -452,21 +463,28 @@ fn process_request(
                     message: "rule_id exceeds maximum limit (64)".to_string(),
                 };
             }
-            if let Some(removed) = policy.remove_rule(&rule_id) {
-                // Also revoke at the nftables kernel level — without this the
-                // target stays reachable from sandbox until its original TTL
-                // naturally expires, silently outliving the operator's
-                // explicit removal. See NftablesController::remove_allowed_target.
-                let mut kernel_warning = None;
+            if let Some(candidate) = policy.list_rules().into_iter().find(|r| {
+                r.id == rule_id && r.action == RuleAction::Allow && r.source != RuleSource::Config
+            }) {
+                // Revoke in the kernel before committing the policy removal.
+                // If another active rule shares the same set element, retain
+                // it; the kernel key represents the network, not the rule ID.
+                let shared_network = policy.list_rules().iter().any(|r| {
+                    r.id != rule_id
+                        && r.action == RuleAction::Allow
+                        && r.network == candidate.network
+                });
                 if let Some(c) = ctrl {
-                    if let Err(e) = c.remove_allowed_target(&removed.network) {
-                        warn!(network = %removed.network, error = %e, "nftables target revoke failed (policy removed, kernel element still live)");
-                        kernel_warning = Some(format!(
-                            "policy rule removed but the nftables kernel revoke for {} failed ({e}) — sandbox may still reach this target until its original TTL expires",
-                            removed.network
-                        ));
+                    if !shared_network {
+                        if let Err(e) = c.remove_allowed_target(&candidate.network) {
+                            warn!(network = %candidate.network, error = %e, "nftables target revoke failed; policy removal aborted");
+                            return IpcResponse::Error {
+                                message: format!("nftables rejected rule revocation; policy was not changed: {e}"),
+                            };
+                        }
                     }
                 }
+                let _ = policy.remove_rule(&rule_id);
 
                 let now_ns = now_ns();
                 if let Err(e) =
@@ -474,7 +492,10 @@ fn process_request(
                 {
                     warn!(error = %e, "failed to audit rule removal (removal itself succeeded)");
                 }
-                IpcResponse::RuleRemoved { rule_id, kernel_warning }
+                IpcResponse::RuleRemoved {
+                    rule_id,
+                    kernel_warning: None,
+                }
             } else {
                 IpcResponse::Error {
                     message: format!("rule not found: {rule_id}"),
@@ -511,17 +532,16 @@ fn process_request(
             }
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
-                    let (rule_id, expires_at) =
-                        policy.add_manual_allow(net, ttl_secs, reason.clone());
-                    let mut kernel_warning = None;
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
-                            warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
-                            kernel_warning = Some(format!(
-                                "policy rule added but the nftables kernel unlock for {network} failed ({e}) — sandbox traffic to this target is still dropped"
-                            ));
+                            warn!(network = %network, error = %e, "nftables manual unlock failed; policy change aborted");
+                            return IpcResponse::Error {
+                                message: format!("nftables rejected manual target unlock for {network}; policy was not changed: {e}"),
+                            };
                         }
                     }
+                    let (rule_id, expires_at) =
+                        policy.add_manual_allow(net, ttl_secs, reason.clone());
                     let now_ns = now_ns();
                     if let Err(e) = audit.record_rule_event(
                         now_ns,
@@ -534,7 +554,7 @@ fn process_request(
                     IpcResponse::RuleAdded {
                         rule_id,
                         expires_at,
-                        kernel_warning,
+                        kernel_warning: None,
                     }
                 }
                 Err(_) => IpcResponse::Error {
@@ -559,16 +579,19 @@ fn process_request(
                     };
                 }
             };
-            // Update the policy engine first, then re-apply the kernel ruleset so
-            // the controller's own copy stays in sync with PolicyEngine. The
-            // controller keeps its OWN egress-mode copy purely for ruleset
-            // generation — keeping both setters in lock-step here is what keeps
-            // them consistent.
-            policy.set_egress_mode(m);
+            // Apply and preflight the complete kernel candidate first. Only a
+            // committed nft transaction is allowed to publish the new policy.
             if let Some(c) = ctrl {
-                if let Err(e) = c.set_egress_mode(m) {
-                    warn!(mode = %mode, error = %e, "nftables egress-mode re-apply failed (policy updated, kernel ruleset NOT re-applied)");
+                if let Err(e) = policy.set_egress_mode_after(m, || c.set_egress_mode(m)) {
+                    warn!(mode = %mode, error = %e, "nftables egress-mode candidate rejected; policy unchanged");
+                    return IpcResponse::Error {
+                        message: format!(
+                            "nftables rejected egress mode {mode}; policy was not changed: {e}"
+                        ),
+                    };
                 }
+            } else {
+                policy.set_egress_mode(m);
             }
             let now_ns = now_ns();
             if let Err(e) = audit.record_rule_event(
@@ -1121,7 +1144,10 @@ mod tests {
                 kernel_warning,
             } => {
                 assert_eq!(removed_id, rule_id);
-                assert!(kernel_warning.is_none(), "no controller attached — no kernel warning expected");
+                assert!(
+                    kernel_warning.is_none(),
+                    "no controller attached — no kernel warning expected"
+                );
             }
             other => panic!("expected RuleRemoved, got {other:?}"),
         }
