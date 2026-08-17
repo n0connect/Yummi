@@ -73,6 +73,9 @@ func dnsenumHandler(ctx context.Context, _ *mcp.CallToolRequest, args dnsenumArg
 	if domain == "" {
 		return errResult("domain is required")
 	}
+	if err := rejectIfFlagLike("domain", domain); err != nil {
+		return errResult(err.Error())
+	}
 	return runCaptured(ctx, "dnsenum", domain)
 }
 
@@ -84,6 +87,11 @@ func enum4linuxHandler(ctx context.Context, _ *mcp.CallToolRequest, args enum4li
 	target := strings.TrimSpace(args.Target)
 	if target == "" {
 		return errResult("target is required")
+	}
+	// "-a" is a standalone boolean flag here — it does not claim target as
+	// its own value, so target still reaches enum4linux as a bare positional.
+	if err := rejectIfFlagLike("target", target); err != nil {
+		return errResult(err.Error())
 	}
 	return runCaptured(ctx, "enum4linux", "-a", target)
 }
@@ -97,6 +105,9 @@ func onesixtyoneHandler(ctx context.Context, _ *mcp.CallToolRequest, args onesix
 	if target == "" {
 		return errResult("target is required")
 	}
+	if err := rejectIfFlagLike("target", target); err != nil {
+		return errResult(err.Error())
+	}
 	return runCaptured(ctx, "onesixtyone", target)
 }
 
@@ -108,6 +119,9 @@ func wafw00fHandler(ctx context.Context, _ *mcp.CallToolRequest, args wafw00fArg
 	url := strings.TrimSpace(args.URL)
 	if url == "" {
 		return errResult("url is required")
+	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
 	}
 	return runCaptured(ctx, "wafw00f", url)
 }
@@ -165,6 +179,14 @@ func hydraHandler(ctx context.Context, _ *mcp.CallToolRequest, args hydraArgs) (
 	service := strings.TrimSpace(args.Service)
 	if target == "" || service == "" {
 		return errResult("target and service are required")
+	}
+	// Both reach hydra as bare trailing positionals ("hydra [options] server
+	// service") — neither has a preceding flag of its own to claim it.
+	if err := rejectIfFlagLike("target", target); err != nil {
+		return errResult(err.Error())
+	}
+	if err := rejectIfFlagLike("service", service); err != nil {
+		return errResult(err.Error())
 	}
 	var argv []string
 	switch {
@@ -234,12 +256,18 @@ func snmpwalkHandler(ctx context.Context, _ *mcp.CallToolRequest, args snmpwalkA
 	if target == "" {
 		return errResult("target is required")
 	}
+	if err := rejectIfFlagLike("target", target); err != nil {
+		return errResult(err.Error())
+	}
 	community := args.Community
 	if community == "" {
 		community = "public"
 	}
 	argv := []string{"-v2c", "-c", community, target}
 	if oid := strings.TrimSpace(args.OID); oid != "" {
+		if err := rejectIfFlagLike("oid", oid); err != nil {
+			return errResult(err.Error())
+		}
 		argv = append(argv, oid)
 	}
 	return runCaptured(ctx, "snmpwalk", argv...)
@@ -254,6 +282,9 @@ func dirbHandler(ctx context.Context, _ *mcp.CallToolRequest, args dirbArgs) (*m
 	url := strings.TrimSpace(args.URL)
 	if url == "" {
 		return errResult("url is required")
+	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
 	}
 	argv := []string{url}
 	if args.Wordlist != "" {
