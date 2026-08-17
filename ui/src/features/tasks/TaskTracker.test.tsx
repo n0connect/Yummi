@@ -158,3 +158,15 @@ describe('TaskTracker concurrent sub-agent approvals', () => {
     expect(onApproveSub).toHaveBeenCalledWith('sub-b', 'prop-b', true)
   })
 })
+
+describe('TaskTracker persistent task tree', () => {
+  it('keeps terminal and running specialist branches visible together', () => {
+    const parent: AgentTask = { id: 'p', session_id: 's', goal: 'Assess target', status: 'running', steps_used: 1, step_budget: 5 }
+    const completed: AgentTask = { id: 'c1', parent_task_id: 'p', session_id: 's', goal: 'Map services', status: 'completed', steps_used: 2, step_budget: 2 }
+    const running: AgentTask = { id: 'c2', parent_task_id: 'p', session_id: 's', goal: 'Review web app', status: 'running', steps_used: 1, step_budget: 3 }
+    render(<TaskTracker liveTask={parent} subTasks={[completed, running]} onClose={() => {}} onApprove={() => {}} onStop={() => {}} onResume={() => {}} />)
+    expect(screen.getByText('GÖREV AĞACI')).toBeTruthy()
+    expect(screen.getByText('Map services')).toBeTruthy()
+    expect(screen.getByText('Review web app')).toBeTruthy()
+  })
+})

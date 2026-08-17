@@ -41,11 +41,8 @@ export function usePendingSkills(): PendingSkillsData {
   // simple at this data volume, and avoids reasoning about partial merges
   // for a store whose rows move between exactly two fetched views.
   const onSkillEvent = useCallback(() => { refresh() }, [refresh])
-  // A dropped/reconnecting socket can silently miss a skill.status push
-  // (best-effort delivery — see execution.Store.publish's server-side
-  // sibling for skillcurator.Store), leaving a draft's true state stale
-  // here until another change happens to occur. Reconnect gets the same
-  // treatment as any other invalidation: just refresh().
+  // Ordinary disconnects use event replay; a process restart or replay-window
+  // loss triggers this REST refresh through the explicit resync signal.
   useChatStream({ onSkillEvent, onReconnect: refresh })
 
   const approve = useCallback(async (id: string, reason = '') => {

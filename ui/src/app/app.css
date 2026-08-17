@@ -80,6 +80,7 @@
 
   --text-xs: 11px; --text-sm: 13px; --text-md: 14px; --text-lg: 16px; --text-xl: 20px;
   --tracking-label: 0.08em;
+  --app-chrome-height: 88px;
 
   /* ── Elevation ───────────────────────────────────────────────────────── */
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
@@ -284,12 +285,21 @@ body::before {
 
 .route-loading {
   display: grid;
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-chrome-height));
   place-items: center;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
 }
+
+.route-content { height: calc(100vh - var(--app-chrome-height)); min-height: 0; }
+.skip-link {
+  position: fixed; left: var(--space-md); top: -60px; z-index: 100;
+  padding: var(--space-sm) var(--space-md); border-radius: var(--radius-sm);
+  background: var(--accent); color: var(--accent-ink); font-weight: 700;
+}
+.skip-link:focus { top: var(--space-sm); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -301,6 +311,20 @@ body::before {
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.20); background-clip: content-box; }
 ::selection { background: var(--accent-soft); color: var(--accent-hover); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .trust-rail { padding-inline: var(--space-md); gap: var(--space-sm); }
+  .trust-rail-grow { flex: 0 0 auto; }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    TOP BAR
@@ -318,6 +342,43 @@ body::before {
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
+
+.trust-rail {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 0 var(--space-xl);
+  overflow-x: auto;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--bg-base) 86%, transparent);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.trust-rail-state, .trust-rail-item { display: inline-flex; align-items: center; gap: 6px; }
+.trust-rail-state { font-weight: 700; letter-spacing: .06em; }
+.trust-rail-beacon { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+.trust-trusted .trust-rail-state { color: var(--green); }
+.trust-recovering .trust-rail-state { color: var(--cyan); }
+.trust-attention .trust-rail-state { color: var(--orange); }
+.trust-offline .trust-rail-state { color: var(--red); }
+.trust-rail-divider { width: 1px; height: 14px; background: var(--border); }
+.trust-rail-key { color: var(--text-muted); letter-spacing: .07em; }
+.trust-rail-link { color: inherit; text-decoration: none; border-radius: 4px; }
+.trust-rail-link:hover { color: var(--accent-hover); }
+.trust-rail-grow { flex: 1; }
+
+.trace-capability-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-sm);
+  padding: var(--space-md);
+}
+.trace-capability-grid > div { padding: var(--space-sm); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--wash-faint); }
+.trace-capability-grid dt { color: var(--text-muted); font: 10px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
+.trace-capability-grid dd { margin-top: 4px; color: var(--text-secondary); font-family: var(--font-mono); overflow-wrap: anywhere; }
 
 .left { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; flex: 1; overflow: hidden; }
 .right { display: flex; align-items: center; gap: var(--space-md); flex-shrink: 0; }
@@ -403,7 +464,7 @@ body::before {
   display: grid;
   grid-template-columns: 420px 1fr;
   gap: var(--space-lg);
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-chrome-height));
   padding: var(--space-lg);
   background: transparent;
   overflow: hidden;
@@ -494,7 +555,7 @@ body::before {
    ═══════════════════════════════════════════════════════════════════════════ */
 .chat-page {
   position: relative; /* anchors the absolutely-positioned session rail + toggle */
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-chrome-height));
   display: flex;
   justify-content: center;
   overflow: hidden;
@@ -543,7 +604,7 @@ body::before {
 /* ═══════════════════════════════════════════════════════════════════════════
    FULL-PAGE VIEWS (Bash, Logs)
    ═══════════════════════════════════════════════════════════════════════════ */
-.page-wrap { height: calc(100vh - 56px); padding: var(--space-lg); }
+.page-wrap { height: calc(100vh - var(--app-chrome-height)); padding: var(--space-lg); }
 .page-card {
   height: 100%;
   background: var(--bg-secondary);

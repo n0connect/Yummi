@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
-  ActivityEvent, Finding, PersistentContext, SkillInfo, Tactic, Target,
+  ActivityEvent, AgentCapabilities, Finding, PersistentContext, SkillInfo, Tactic, Target,
 } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
@@ -23,6 +23,7 @@ export type TraceData = {
   context: PersistentContext[]
   skills: SkillInfo[]
   roles: string[]
+  capabilities: AgentCapabilities | null
   refresh: () => void
 }
 
@@ -36,6 +37,7 @@ export function useTraceData(sessionID: string): TraceData {
   const [context, setContext]   = useState<PersistentContext[]>([])
   const [skills, setSkills]     = useState<SkillInfo[]>([])
   const [roles, setRoles]       = useState<string[]>([])
+  const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null)
 
   const refresh = useCallback(() => {
     const sid = sessionID || 'default'
@@ -46,6 +48,7 @@ export function useTraceData(sessionID: string): TraceData {
     fetchJSON<PersistentContext[]>(`/api/v1/sessions/${sid}/context`).then(d => setContext(d ?? [])).catch(() => {})
     fetchJSON<SkillInfo[]>(`/api/v1/skills`).then(d => setSkills(d ?? [])).catch(() => {})
     fetchJSON<string[]>(`/api/v1/agent/roles`).then(d => setRoles(d ?? [])).catch(() => {})
+    fetchJSON<AgentCapabilities>(`/api/v1/agent/capabilities`).then(setCapabilities).catch(() => setCapabilities(null))
   }, [sessionID])
 
   useEffect(() => { refresh() }, [refresh])
@@ -66,13 +69,9 @@ export function useTraceData(sessionID: string): TraceData {
     }
   }, [sessionID])
 
-  // A dropped/reconnecting socket loses whatever activity happened in the
-  // gap for good (every event on this ws is best-effort — see
-  // execution.Store.publish and friends server-side), and with it the
-  // targeted refetches above that only fire off a live event. A full
-  // refresh() on reconnect is the simplest correct fix: it already covers
-  // every panel this hook owns in one call.
-  useChatStream({ onActivity, onReconnect: refresh })
+  // Ordered replay covers ordinary reconnects. refresh() is reserved for the
+  // explicit resync signal emitted when the bounded server window was lost.
+  useChatStream({ sessionID: sessionID || 'default', onActivity, onReconnect: refresh })
 
-  return { activity, findings, targets, tactics, context, skills, roles, refresh }
+  return { activity, findings, targets, tactics, context, skills, roles, capabilities, refresh }
 }

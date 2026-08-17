@@ -355,8 +355,47 @@ const en = {
   'activity.summary.default': 'Task status updated.',
 
   // ── App / operatorText fallback ────────────────────────────────────────
+  'app.skipToContent': 'Skip to operator workspace',
   'app.routeLoading': 'Preparing screen…',
   'operatorText.fallback': 'Task status updated.',
+
+  // ── Operator trust rail ────────────────────────────────────────────────
+  'trustRail.ariaLabel': 'Control-plane trust status',
+  'trustRail.state.trusted': 'CONTROL PLANE VERIFIED',
+  'trustRail.state.recovering': 'RECOVERING EVENT LINK',
+  'trustRail.state.attention': 'ENFORCEMENT ATTENTION',
+  'trustRail.state.offline': 'CONTROL PLANE OFFLINE',
+  'trustRail.events': 'EVENTS',
+  'trustRail.events.connecting': 'connecting',
+  'trustRail.events.live': 'live + replayable',
+  'trustRail.events.recovering': 'replaying',
+  'trustRail.events.stale': 'stale',
+  'trustRail.agent': 'AGENT',
+  'trustRail.gateway': 'KERNEL',
+  'trustRail.knowledge': 'KNOWLEDGE',
+  'trustRail.subAgents': 'SUB-AGENTS',
+  'trustRail.synced': 'policy synced',
+  'trustRail.notSynced': 'not reconciled',
+  'trustRail.memoryOn': 'memory on',
+  'trustRail.memoryOff': 'memory off',
+  'trustRail.skills': 'skills',
+  'trustRail.unavailable': 'unavailable',
+
+  'gateway.enforcementTitle': 'Kernel enforcement',
+  'gateway.policyKernelSynced': 'Policy and nftables are reconciled',
+  'gateway.policyKernelMismatch': 'Policy and nftables are not reconciled',
+  'gateway.generation': 'Generation',
+  'gateway.rulesActive': 'Rules active',
+  'gateway.lastReconcileError': 'Last reconciliation error',
+
+  'taskTracker.taskTreeTitle': 'TASK TREE',
+  'taskTracker.childCountSuffix': 'specialists',
+
+  'trace.sectionCapabilities': 'Agent runtime contract',
+  'trace.capabilityBackend': 'Backend',
+  'trace.capabilityRecovery': 'Recovery',
+  'trace.capabilityMemory': 'Memory retrieval',
+  'trace.capabilityGovernance': 'Skill governance',
 }
 
 const tr = {
@@ -711,8 +750,47 @@ const tr = {
   'activity.summary.default': 'Çalışma durumu güncellendi.',
 
   // ── App / operatorText fallback ────────────────────────────────────────
+  'app.skipToContent': 'Operatör çalışma alanına geç',
   'app.routeLoading': 'Ekran hazırlanıyor…',
   'operatorText.fallback': 'İşlem durumu güncellendi.',
+
+  // ── Operator trust rail ────────────────────────────────────────────────
+  'trustRail.ariaLabel': 'Kontrol düzlemi güven durumu',
+  'trustRail.state.trusted': 'KONTROL DÜZLEMİ DOĞRULANDI',
+  'trustRail.state.recovering': 'OLAY BAĞLANTISI KURTARILIYOR',
+  'trustRail.state.attention': 'ENFORCEMENT İNCELEMESİ',
+  'trustRail.state.offline': 'KONTROL DÜZLEMİ ÇEVRİMDIŞI',
+  'trustRail.events': 'OLAYLAR',
+  'trustRail.events.connecting': 'bağlanıyor',
+  'trustRail.events.live': 'canlı + replay',
+  'trustRail.events.recovering': 'yeniden oynatılıyor',
+  'trustRail.events.stale': 'güncel değil',
+  'trustRail.agent': 'AJAN',
+  'trustRail.gateway': 'KERNEL',
+  'trustRail.knowledge': 'BİLGİ',
+  'trustRail.subAgents': 'ALT AJANLAR',
+  'trustRail.synced': 'policy eşleşti',
+  'trustRail.notSynced': 'uzlaştırılmadı',
+  'trustRail.memoryOn': 'memory açık',
+  'trustRail.memoryOff': 'memory kapalı',
+  'trustRail.skills': 'skill',
+  'trustRail.unavailable': 'kullanılamıyor',
+
+  'gateway.enforcementTitle': 'Çekirdek ağ yaptırımı',
+  'gateway.policyKernelSynced': 'Policy ve nftables uzlaştırıldı',
+  'gateway.policyKernelMismatch': 'Policy ve nftables eşleşmiyor',
+  'gateway.generation': 'Nesil',
+  'gateway.rulesActive': 'Kurallar etkin',
+  'gateway.lastReconcileError': 'Son uzlaştırma hatası',
+
+  'taskTracker.taskTreeTitle': 'GÖREV AĞACI',
+  'taskTracker.childCountSuffix': 'uzman',
+
+  'trace.sectionCapabilities': 'Ajan çalışma sözleşmesi',
+  'trace.capabilityBackend': 'Backend',
+  'trace.capabilityRecovery': 'Kurtarma',
+  'trace.capabilityMemory': 'Memory erişimi',
+  'trace.capabilityGovernance': 'Skill yönetişimi',
 } satisfies Record<keyof typeof en, string>
 
 export type Lang = 'en' | 'tr'

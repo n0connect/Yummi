@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, type HostnameList } from '../../features/gateway/useGatewayData'
+import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, useGatewayStatus, type HostnameList } from '../../features/gateway/useGatewayData'
 import type { GatewayEgressMode } from '../../entities/types'
 import { apiURL } from '../../shared/api/runtime'
 import { t } from '../../shared/i18n/strings'
@@ -43,6 +43,7 @@ export function GatewayPage(): JSX.Element {
   const { rules, status, refresh: refreshRules } = useGatewayRules()
   const { rows, chainVerified } = useGatewayAudit(50)
   const { mode: egressMode, status: egressStatus, setMode: setEgress } = useEgressMode()
+  const { gateway } = useGatewayStatus()
   const hostnamePolicy = useHostnamePolicy()
   const [hnPattern, setHnPattern] = useState('')
   const [hnList, setHnList] = useState<HostnameList>('block')
@@ -140,6 +141,28 @@ export function GatewayPage(): JSX.Element {
         <h2 className="gateway-title">{t('gateway.title')}</h2>
         <span className={`gateway-status-badge ${status}`} role="status" aria-live="polite">{status}</span>
       </div>
+
+      {gateway && (
+        <section className={`gateway-card gateway-enforcement-card ${gateway.policy_kernel_consistent ? '' : 'mismatch'}`} aria-labelledby="gateway-enforcement-title">
+          <div className="gateway-enforcement-state">
+            <h3 id="gateway-enforcement-title">{t('gateway.enforcementTitle')}</h3>
+            <strong>{gateway.policy_kernel_consistent ? t('gateway.policyKernelSynced') : t('gateway.policyKernelMismatch')}</strong>
+          </div>
+          <div className="gateway-enforcement-metric">
+            <span>{t('gateway.generation')}</span>
+            <strong>{gateway.enforcement_generation}</strong>
+          </div>
+          <div className="gateway-enforcement-metric">
+            <span>{t('gateway.rulesActive')}</span>
+            <strong>{gateway.rules_active ? t('gateway.on') : t('gateway.off')}</strong>
+          </div>
+          {gateway.last_reconcile_error && (
+            <div className="gateway-reconcile-error" role="alert">
+              {t('gateway.lastReconcileError')}: {gateway.last_reconcile_error}
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="gateway-card gateway-egress-card">
         <h3>{t('gateway.egressModeTitle')}</h3>
