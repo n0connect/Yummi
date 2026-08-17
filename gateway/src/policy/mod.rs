@@ -194,6 +194,31 @@ impl PolicyEngine {
         tracing::info!(mode = %mode, "egress mode set");
     }
 
+    /// Hold the policy write lock while an external enforcement candidate is
+    /// applied, then publish the mode only after that apply succeeds. Readers
+    /// cannot observe a policy verdict that the kernel has not committed.
+    pub fn set_egress_mode_after<E, F>(&self, mode: EgressMode, apply: F) -> Result<(), E>
+    where
+        F: FnOnce() -> Result<(), E>,
+    {
+        let mut state = self.state.write().unwrap();
+        apply()?;
+        state.egress_mode = mode;
+        tracing::info!(mode = %mode, "egress mode committed after enforcement apply");
+        Ok(())
+    }
+
+    /// Re-apply the currently committed mode while excluding concurrent mode
+    /// transitions. This is the reconciliation counterpart of
+    /// `set_egress_mode_after`.
+    pub fn apply_current_egress_mode<E, F>(&self, apply: F) -> Result<(), E>
+    where
+        F: FnOnce(EgressMode) -> Result<(), E>,
+    {
+        let state = self.state.write().unwrap();
+        apply(state.egress_mode)
+    }
+
     /// Egress-mode-aware destination check — the entry point the IPC
     /// `CheckScope` handler uses. The always-blocked floor is checked first in
     /// **every** mode (Allow does not override it). Then:
@@ -446,6 +471,15 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_enforcement_candidate_does_not_publish_mode() {
+        let engine = PolicyEngine::new(&test_scope());
+        let result: Result<(), &'static str> =
+            engine.set_egress_mode_after(EgressMode::Allow, || Err("kernel rejected"));
+        assert_eq!(result, Err("kernel rejected"));
+        assert_eq!(engine.egress_mode(), EgressMode::Block);
+    }
+
+    #[test]
     fn test_allow_in_scope() {
         let engine = PolicyEngine::new(&test_scope());
         let (decision, _) = engine.evaluate("10.0.0.5".parse().unwrap());
@@ -692,7 +726,9 @@ mod tests {
 
         assert!(engine.is_in_scope("8.8.8.8".parse().unwrap()));
 
-        let removed = engine.remove_rule(&rule_id).expect("rule should have been found");
+        let removed = engine
+            .remove_rule(&rule_id)
+            .expect("rule should have been found");
         assert_eq!(removed.network, "8.8.8.0/24".parse().unwrap());
         assert!(!engine.is_in_scope("8.8.8.8".parse().unwrap()));
     }

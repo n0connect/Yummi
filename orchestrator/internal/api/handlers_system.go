@@ -18,9 +18,11 @@ func HandleGatewayStatus(pc *gateway.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if pc == nil {
 			writeJSON(w, http.StatusOK, map[string]any{
-				"level":        0,
-				"rules_active": false,
-				"status":       "not_configured",
+				"level":                    0,
+				"rules_active":             false,
+				"policy_kernel_consistent": false,
+				"enforcement_generation":   0,
+				"status":                   "not_configured",
 			})
 			return
 		}
@@ -28,19 +30,24 @@ func HandleGatewayStatus(pc *gateway.Client) http.HandlerFunc {
 		status, err := pc.GetStatus()
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
-				"level":        0,
-				"rules_active": false,
-				"status":       "disconnected",
-				"error":        err.Error(),
+				"level":                    0,
+				"rules_active":             false,
+				"policy_kernel_consistent": false,
+				"enforcement_generation":   0,
+				"status":                   "disconnected",
+				"error":                    err.Error(),
 			})
 			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"level":        status.Level,
-			"rules_active": status.RulesActive,
-			"uptime_secs":  status.UptimeSecs,
-			"status":       "connected",
+			"level":                    status.Level,
+			"rules_active":             status.RulesActive,
+			"uptime_secs":              status.UptimeSecs,
+			"policy_kernel_consistent": status.PolicyKernelConsistent,
+			"enforcement_generation":   status.EnforcementGeneration,
+			"last_reconcile_error":     status.LastReconcileError,
+			"status":                   "connected",
 		})
 	}
 }

@@ -171,9 +171,12 @@ func (c *Client) GetStatus() (*StatusResponse, error) {
 		return nil, err
 	}
 	return &StatusResponse{
-		Level:       resp.Level,
-		RulesActive: resp.RulesActive,
-		UptimeSecs:  resp.UptimeSecs,
+		Level:                  resp.Level,
+		RulesActive:            resp.RulesActive,
+		UptimeSecs:             resp.UptimeSecs,
+		PolicyKernelConsistent: resp.PolicyKernelConsistent,
+		EnforcementGeneration:  resp.EnforcementGeneration,
+		LastReconcileError:     resp.LastReconcileError,
 	}, nil
 }
 
@@ -189,11 +192,9 @@ func (c *Client) Ping() error {
 	return nil
 }
 
-// AddTemporaryRule adds a temporary allow rule with TTL. The returned
-// kernelWarning is non-empty when the gateway's policy engine accepted the
-// rule but its nftables kernel-level unlock failed — the call still succeeds
-// (the policy state is consistent), but the caller should surface the
-// warning since sandbox traffic to the target is still actually dropped.
+// AddTemporaryRule adds a temporary allow rule with TTL. Current gateways
+// return an error unless nftables and policy both commit. kernelWarning is
+// retained only so this client can surface legacy gateway responses.
 func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description string) (ruleID string, expiresAt int64, kernelWarning string, err error) {
 	desc := &description
 	resp, err := c.send(Request{
@@ -211,11 +212,9 @@ func (c *Client) AddTemporaryRule(network string, ttlSecs uint64, description st
 	return resp.RuleID, resp.ExpiresAt, resp.KernelWarning, nil
 }
 
-// RemoveRule removes a rule by ID. The returned kernelWarning is non-empty
-// when the gateway's policy engine removed the rule but its nftables
-// kernel-level revoke failed — the call still succeeds (the policy state is
-// consistent), but the caller should surface the warning since sandbox may
-// still be able to reach the target until its original TTL expires.
+// RemoveRule removes a rule by ID. Current gateways return an error unless
+// nftables and policy both commit. kernelWarning is retained only so this
+// client can surface legacy gateway responses.
 func (c *Client) RemoveRule(ruleID string) (kernelWarning string, err error) {
 	resp, err := c.send(Request{
 		Type:   "remove_rule",

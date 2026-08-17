@@ -11,10 +11,12 @@ func TestClientGetStatus(t *testing.T) {
 			return Response{Type: "error", Message: "unexpected request type"}
 		}
 		return Response{
-			Type:        "status",
-			Level:       2,
-			RulesActive: true,
-			UptimeSecs:  77,
+			Type:                   "status",
+			Level:                  2,
+			RulesActive:            true,
+			UptimeSecs:             77,
+			PolicyKernelConsistent: true,
+			EnforcementGeneration:  9,
 		}
 	})
 
@@ -23,7 +25,8 @@ func TestClientGetStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status: %v", err)
 	}
-	if status.Level != 2 || !status.RulesActive || status.UptimeSecs != 77 {
+	if status.Level != 2 || !status.RulesActive || status.UptimeSecs != 77 ||
+		!status.PolicyKernelConsistent || status.EnforcementGeneration != 9 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 }
@@ -255,12 +258,10 @@ func TestClientAddManualRule(t *testing.T) {
 	}
 }
 
-// TestClientAddTemporaryRulePropagatesKernelWarning is a regression test: the
-// gateway's policy engine can accept a rule while its OWN internal nftables
-// kernel-level unlock silently fails — that used to be visible only in the
-// gateway's logs. AddTemporaryRule must surface it to the Go caller (which
-// the executor turns into an operator-visible execution warning) rather than
-// reporting a bare, unqualified success.
+// TestClientAddTemporaryRulePropagatesKernelWarning preserves compatibility
+// with an older gateway that could return a partial-commit warning. Current
+// gateways return Error before committing policy, but mixed-version upgrades
+// must still surface the legacy warning rather than hide it.
 func TestClientAddTemporaryRulePropagatesKernelWarning(t *testing.T) {
 	const warning = "policy rule added but the nftables kernel unlock for 10.0.0.5/32 failed (no such device) — sandbox traffic to this target is still dropped"
 	socket := StartTestServer(t, false, func(req Request) Response {
