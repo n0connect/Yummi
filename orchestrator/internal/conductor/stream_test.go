@@ -156,14 +156,20 @@ func newNDJSONOllamaServer(t *testing.T, chunks ...string) *httptest.Server {
 }
 
 // TestChatWithHistoryPublishesStreamDeltas proves the actual wiring asked
-// for by this feature: ChatWithHistory's internal LLM call streams, and each
-// fragment is published on the session's chat.stream channel as it arrives,
-// followed by a terminal done=true event — all while the returned
-// ChatResponse is parsed from the fully-accumulated text exactly as before
-// (this test's JSON payload matches what TestParseStructuredResponse-style
-// fixtures expect elsewhere in this package).
+// for by this feature: ChatWithHistory's internal LLM call streams, and the
+// extracted "message" field text is published on the session's chat.stream
+// channel as it becomes available, followed by a terminal done=true event —
+// all while the returned ChatResponse is parsed from the fully-accumulated
+// RAW text exactly as before. The model's raw output is the WHOLE
+// {"intent":...,"message":"...",...} JSON object, not prose — streaming it
+// verbatim let the operator's live "typing" preview briefly show raw JSON
+// syntax before the REST reply replaced it with the parsed message (see
+// extractMessagePreview). The message VALUE is deliberately split across
+// both raw chunks here (chunk 1 ends mid-string) so this also proves genuine
+// incremental delivery of the message text itself, not just "reveal it all
+// once the field closes".
 func TestChatWithHistoryPublishesStreamDeltas(t *testing.T) {
-	srv := newNDJSONOllamaServer(t, `{"intent":"expl`, `ain","message":"hi there","confidence":0.9}`)
+	srv := newNDJSONOllamaServer(t, `{"intent":"explain","message":"hi `, `there","confidence":0.9}`)
 
 	e, err := NewEngine("", srv.URL, "test-model")
 	if err != nil {
@@ -209,10 +215,15 @@ collect:
 	if len(deltas) != 2 {
 		t.Fatalf("expected 2 delta events, got %d: %+v", len(deltas), deltas)
 	}
+	for _, d := range deltas {
+		if strings.ContainsAny(d, "{}") {
+			t.Fatalf("delta leaked raw JSON structure: %+v", deltas)
+		}
+	}
 	got := strings.Join(deltas, "")
-	want := `{"intent":"explain","message":"hi there","confidence":0.9}`
+	want := "hi there"
 	if got != want {
-		t.Fatalf("streamed deltas did not reassemble to the raw model output: got %q want %q", got, want)
+		t.Fatalf("streamed deltas did not reassemble to the extracted message: got %q want %q", got, want)
 	}
 }
 

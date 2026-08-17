@@ -295,8 +295,14 @@ func (e *Engine) SeedHistory(sessionID string, msgs []llm.Message) {
 
 func (e *Engine) chatWithLLMHistory(ctx context.Context, sessionID, turnID string, history []llm.Message) (ChatResponse, error) {
 	system := e.buildSystemPrompt()
+	var buf strings.Builder
+	sent := 0
 	raw, err := e.llmClient.ChatHistoryStream(ctx, system, history, func(chunk string) {
-		e.publishStream(sessionID, turnID, chunk, false)
+		buf.WriteString(chunk)
+		if preview := extractMessagePreview(buf.String()); len(preview) > sent {
+			e.publishStream(sessionID, turnID, preview[sent:], false)
+			sent = len(preview)
+		}
 	})
 	e.publishStream(sessionID, turnID, "", true)
 	if err != nil {
@@ -324,8 +330,14 @@ func (e *Engine) chatWithLLMHistory(ctx context.Context, sessionID, turnID strin
 // far less than keeping the diff (and risk surface) small.
 func (e *Engine) chatWithLLM(ctx context.Context, sessionID, message string) (ChatResponse, error) {
 	system := e.buildSystemPrompt()
+	var buf strings.Builder
+	sent := 0
 	raw, err := e.llmClient.ChatStream(ctx, system, message, func(chunk string) {
-		e.publishStream(sessionID, "", chunk, false)
+		buf.WriteString(chunk)
+		if preview := extractMessagePreview(buf.String()); len(preview) > sent {
+			e.publishStream(sessionID, "", preview[sent:], false)
+			sent = len(preview)
+		}
 	})
 	e.publishStream(sessionID, "", "", true)
 	if err != nil {
@@ -384,6 +396,63 @@ func looksActionable(msg string) bool {
 		}
 	}
 	return true
+}
+
+// extractMessagePreview returns the best-effort, escape-decoded prefix of
+// the JSON "message" field's string value from buf — the raw text
+// accumulated so far from the model's structured
+// {"intent":...,"message":"...",...} chat response (see
+// parseStructuredResponse). The model streams the WHOLE JSON object token by
+// token, not just prose: without this, publishStream's live "typing"
+// preview showed the raw JSON syntax (field names, braces, quotes) as the
+// object was built, self-correcting only once the final REST response
+// replaced it with the parsed message — a visible flash of JSON before the
+// real reply. Best-effort and forgiving: returns "" until the "message" key
+// and its opening quote have both arrived, and stops at an escape sequence
+// that hasn't fully arrived yet rather than guessing, so the next call （with
+// more of the buffer) picks up cleanly. \uXXXX escapes are not decoded
+// (models emit raw UTF-8 for non-ASCII in practice) and pass through
+// literally rather than risk misparsing a partial one.
+func extractMessagePreview(buf string) string {
+	const key = `"message"`
+	idx := strings.Index(buf, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimLeft(buf[idx+len(key):], " \t\r\n")
+	rest, ok := strings.CutPrefix(rest, ":")
+	if !ok {
+		return ""
+	}
+	rest, ok = strings.CutPrefix(strings.TrimLeft(rest, " \t\r\n"), `"`)
+	if !ok {
+		return ""
+	}
+	var out strings.Builder
+	for i := 0; i < len(rest); i++ {
+		switch c := rest[i]; c {
+		case '\\':
+			if i+1 >= len(rest) {
+				return out.String() // escape not fully arrived yet
+			}
+			switch rest[i+1] {
+			case 'n':
+				out.WriteByte('\n')
+			case 't':
+				out.WriteByte('\t')
+			case 'r':
+				out.WriteByte('\r')
+			default: // '"', '\\', '/', or anything else — pass the escaped byte through
+				out.WriteByte(rest[i+1])
+			}
+			i++
+		case '"':
+			return out.String() // closing quote — end of the JSON string value
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
 }
 
 // parseStructuredResponse tries to unmarshal a ChatResponse from raw text.
