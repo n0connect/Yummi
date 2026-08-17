@@ -109,6 +109,8 @@ function formatEpochSecs(secs: number): string {
   return new Date(secs * 1000).toLocaleString()
 }
 
+const readableCapability = (value: string): string => value.replace(/_/g, ' ')
+
 // PendingSkillCard renders one curator-drafted skill: the operator-review
 // case (actions + no resolution metadata) and the read-only audit case
 // (already resolved — surfaces threat_scan_result/reject_reason/resolved_at,
@@ -209,7 +211,7 @@ function Section({
 
 export function TracePage(): JSX.Element {
   const [sessionID] = useState(resolveSessionID)
-  const { activity, findings, targets, tactics, context, skills, roles, refresh } = useTraceData(sessionID)
+  const { activity, findings, targets, tactics, context, skills, roles, capabilities, refresh } = useTraceData(sessionID)
   const { pending: pendingSkills, rejected: rejectedSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
   const [skillError, setSkillError] = useState<string | null>(null)
 
@@ -239,6 +241,16 @@ export function TracePage(): JSX.Element {
       </div>
 
       <div className="trace-grid">
+        {capabilities && (
+          <Section title={t('trace.sectionCapabilities')} count={1}>
+            <dl className="trace-capability-grid">
+              <div><dt>{t('trace.capabilityBackend')}</dt><dd>{capabilities.backend} · {readableCapability(capabilities.execution_model)}</dd></div>
+              <div><dt>{t('trace.capabilityRecovery')}</dt><dd>{capabilities.resumable ? readableCapability(capabilities.recovery_model) : '—'}</dd></div>
+              <div><dt>{t('trace.capabilityMemory')}</dt><dd>{capabilities.memory_enabled ? capabilities.retrieval_model : t('trustRail.memoryOff')}</dd></div>
+              <div><dt>{t('trace.capabilityGovernance')}</dt><dd>{readableCapability(capabilities.skill_governance)} · {capabilities.skill_count}</dd></div>
+            </dl>
+          </Section>
+        )}
         {/* Live trace */}
         <Section title={t('trace.sectionActivity')} count={activity.length} live>
           <div className="trace-list">

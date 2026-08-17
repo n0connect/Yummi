@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
 import './app.css'
 import { StatusBar } from '../features/statusbar/StatusBar'
+import { OperatorTrustRail } from '../features/operator/OperatorTrustRail'
 import { ChatPage } from '../pages/chat/ChatPage'
 import { t } from '../shared/i18n/strings'
 
@@ -14,9 +15,11 @@ const HealthPage = lazy(() => import('../pages/health/HealthPage').then(module =
 function Layout() {
   return (
     <>
+      <a className="skip-link" href="#main-content">{t('app.skipToContent')}</a>
       <StatusBar />
+      <OperatorTrustRail />
       <Suspense fallback={<div className="route-loading" role="status" aria-live="polite">{t('app.routeLoading')}</div>}>
-        <Outlet />
+        <div id="main-content" className="route-content" tabIndex={-1}><Outlet /></div>
       </Suspense>
     </>
   )

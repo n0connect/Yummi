@@ -130,6 +130,34 @@ function LiveActivityFeed({
   )
 }
 
+function SubTaskTree({ tasks }: { tasks: AgentTask[] }): JSX.Element | null {
+  if (tasks.length === 0) return null
+  return (
+    <section className="tt-task-tree" aria-labelledby="tt-task-tree-title">
+      <div className="tt-task-tree-head">
+        <span id="tt-task-tree-title">{t('taskTracker.taskTreeTitle')}</span>
+        <span>{tasks.length} {t('taskTracker.childCountSuffix')}</span>
+      </div>
+      <ol>
+        {tasks
+          .slice()
+          .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))
+          .map((child) => (
+            <li key={child.id} className={`tt-task-node tt-task-node-${child.status}`}>
+              <span className="tt-task-branch" aria-hidden="true">└</span>
+              <span className="tt-task-node-copy">
+                <span>{sanitizeOperatorText(child.goal, t('taskTracker.defaultGoal'))}</span>
+                <span className="tt-task-node-meta">
+                  {STATUS_LABEL[child.status] ?? child.status} · {child.steps_used}/{child.step_budget}
+                </span>
+              </span>
+            </li>
+          ))}
+      </ol>
+    </section>
+  )
+}
+
 // ApprovalGate renders one pending-command approval prompt — shared by the
 // task's own gate and a delegated sub-task's nested gate (Props.subTask),
 // which previously duplicated this JSX identically apart from the nested
@@ -243,6 +271,8 @@ export function TaskTracker({
       {task.plan && task.plan.length > 0 && <PlanTimeline plan={task.plan} />}
 
       <LiveActivityFeed activities={activities} />
+
+      <SubTaskTree tasks={subTasks} />
 
       {/* Awaiting approval — inline gate */}
       {task.status === 'awaiting_approval' && task.pending_proposal_id && (

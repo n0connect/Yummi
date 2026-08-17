@@ -10,6 +10,7 @@ import type {
 } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
+import { acceptsTurnStream } from '../chat/turns'
 import { ContextBar, type ApprovalMode } from './ContextBar'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 import { t } from '../../shared/i18n/strings'
@@ -40,6 +41,7 @@ import {
 type ChatResponse = {
   reply?: string
   session_id?: string
+  turn_id?: string
   approval_required_count?: number
   data?: {
     intent?: string
@@ -84,6 +86,7 @@ export function AssistantPanel({
   // the REST response resolves — that response, not this WS-driven text, is
   // the authoritative source for the final message.
   const [streamingText, setStreamingText] = useState<string | null>(null)
+  const activeTurnIDRef = useRef<string | null>(null)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
   // subTasks tracks every currently-live sub-agent task delegated (via
@@ -164,6 +167,7 @@ export function AssistantPanel({
     // are about to start being filtered out by the new sessionID anyway (see
     // onChatStream), but the stale partial text must not linger on screen.
     setStreamingText(null)
+    activeTurnIDRef.current = null
     autoFeedbackCountRef.current = 0
     analyzedExecutionIDsRef.current = new Set()
     if (sid === 'default') {
@@ -403,7 +407,7 @@ export function AssistantPanel({
         const live = tasks.find((task) => !TERMINAL.has(task.status) && !task.parent_task_id)
         setActiveTask(live ?? null)
         const children = live
-          ? tasks.filter((task) => task.parent_task_id === live.id && !TERMINAL.has(task.status))
+          ? tasks.filter((task) => task.parent_task_id === live.id)
           : []
         setSubTasks(Object.fromEntries(children.map((c) => [c.id, c])))
       })
@@ -487,13 +491,20 @@ export function AssistantPanel({
       }
 
       const sid = sessionID
+      const turnID = crypto.randomUUID()
+      activeTurnIDRef.current = turnID
       setIsLoading(true)
       setStreamingText('') // this call streams too — see onChatStream
       try {
         const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: feedback, session_id: sid })
+          body: JSON.stringify({
+            message: feedback,
+            session_id: sid,
+            turn_id: turnID,
+            from_feedback: true
+          })
         })
         // The operator may have switched to a different conversation while this
         // was in flight — its (now-stale) reply/proposals belong to `sid`, not
@@ -512,6 +523,7 @@ export function AssistantPanel({
         if (sessionIDRef.current === sid) {
           setIsLoading(false)
           setStreamingText(null)
+          if (activeTurnIDRef.current === turnID) activeTurnIDRef.current = null
         }
       }
     },
@@ -594,6 +606,7 @@ export function AssistantPanel({
   const onTask = useCallback(
     (task: AgentTask) => {
       const active = activeTaskRef.current
+      setTaskSnapshots((prev) => ({ ...prev, [task.id]: task }))
 
       // A sub-agent task delegated from the one we're watching: track it
       // (keyed by its own id, alongside any concurrent siblings from the same
@@ -602,22 +615,13 @@ export function AssistantPanel({
       // task ID the UI otherwise never learns about (see TaskTracker's
       // subTasks prop), and a concurrent sibling must not overwrite it.
       if (active && task.parent_task_id === active.id) {
-        setSubTasks((prev) => {
-          if (TERMINAL.has(task.status)) {
-            if (!(task.id in prev)) return prev
-            const next = { ...prev }
-            delete next[task.id]
-            return next
-          }
-          return { ...prev, [task.id]: task }
-        })
+        setSubTasks((prev) => ({ ...prev, [task.id]: task }))
         return
       }
 
       if (!active || task.id !== active.id) return
 
       setActiveTask(task)
-      setTaskSnapshots((prev) => ({ ...prev, [task.id]: task }))
 
       // When task completes or fails, inject a summary message and clear active.
       if (TERMINAL.has(task.status)) {
@@ -635,7 +639,6 @@ export function AssistantPanel({
         if (lines.length > 0) {
           appendMessage({ role: 'assistant', content: lines.join('\n') })
         }
-        setSubTasks({})
       }
 
       // When paused and there's a question, surface it.
@@ -669,7 +672,7 @@ export function AssistantPanel({
   // stops growing and gets replaced wholesale once the REST reply lands.
   const onChatStream = useCallback(
     (ev: ChatStreamEvent) => {
-      if (ev.session_id !== sessionID || ev.done) return
+      if (!acceptsTurnStream(ev, sessionID, activeTurnIDRef.current) || ev.done) return
       if (!ev.delta) return
       setStreamingText((prev) => (prev ?? '') + ev.delta)
     },
@@ -681,7 +684,7 @@ export function AssistantPanel({
     resyncExecutionHolds(sessionIDRef.current)
   }, [resyncActiveTask, resyncExecutionHolds])
 
-  useChatStream({ onExecution, onTask, onActivity, onChatStream, onReconnect })
+  useChatStream({ sessionID, onExecution, onTask, onActivity, onChatStream, onReconnect })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -818,6 +821,8 @@ export function AssistantPanel({
     if (!text || isLoading) return
 
     const sid = sessionID // the conversation this turn actually belongs to
+    const turnID = crypto.randomUUID()
+    activeTurnIDRef.current = turnID
     autoFeedbackCountRef.current = 0 // reset retry counter on new user message
     setInput('')
     appendMessage({ role: 'user', content: text })
@@ -846,7 +851,7 @@ export function AssistantPanel({
       const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session_id: sid })
+        body: JSON.stringify({ message: text, session_id: sid, turn_id: turnID })
       })
 
       // The operator may have switched to a different conversation while this
@@ -902,6 +907,7 @@ export function AssistantPanel({
         // bubble's job ends here regardless of whether any/all/no deltas
         // ever arrived over the websocket.
         setStreamingText(null)
+        if (activeTurnIDRef.current === turnID) activeTurnIDRef.current = null
         inputRef.current?.focus()
       }
     }
@@ -1112,7 +1118,7 @@ export function AssistantPanel({
                     }
                     onStop={stopActiveTask}
                     onResume={(message) => resumeTask(msg.taskID!, message)}
-                    subTasks={Object.values(subTasks)}
+                    subTasks={Object.values(taskSnapshots).filter(task => task.parent_task_id === msg.taskID)}
                     onApproveSub={(subTaskID, pid, approved) =>
                       approveTaskGate(subTaskID, pid, approved)
                     }

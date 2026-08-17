@@ -14,6 +14,7 @@ export type ChatProposal = {
 // authoritative reply is still the normal /api/v1/chat REST response.
 export type ChatStreamEvent = {
   session_id: string
+  turn_id: string
   delta?: string
   done: boolean
 }
@@ -166,6 +167,31 @@ export type AgentTask = {
   updated_at?: number
 }
 
+export type AgentCapabilities = {
+  backend: 'graph' | 'eino' | string
+  execution_model: string
+  recovery_model: string
+  resumable: boolean
+  native_tool_calling: boolean
+  approval_mode: 'ask_permission' | 'auto' | string
+  roles: string[]
+  max_handoff_depth: number
+  max_concurrent_sub_agents: number
+  memory_enabled: boolean
+  retrieval_model: string
+  skills_enabled: boolean
+  skill_count: number
+  skill_governance: string
+}
+
+export type AgentDelegationRun = {
+  id: string
+  parent_task_id: string
+  task_id?: string
+  role: string
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | string
+}
+
 // ─── TRACE / observability types ─────────────────────────────────────────────
 
 export type ActivityKind =
@@ -293,6 +319,10 @@ export type GatewayAuditRow = {
 export type GatewayStatus = {
   level: number
   rules_active: boolean
+  uptime_secs?: number
+  policy_kernel_consistent: boolean
+  enforcement_generation: number
+  last_reconcile_error?: string
   status: 'connected' | 'disconnected' | 'not_configured'
 }
 

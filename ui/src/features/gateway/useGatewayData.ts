@@ -4,6 +4,20 @@ import { apiURL } from '../../shared/api/runtime'
 
 const POLL_MS = 5_000
 
+export function useGatewayStatus() {
+  const [gateway, setGateway] = useState<GatewayStatus | null>(null)
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(apiURL('/api/v1/gateway/status'))
+      if (res.ok) setGateway(await res.json() as GatewayStatus)
+    } catch {
+      setGateway({ status: 'disconnected', level: 0, rules_active: false, policy_kernel_consistent: false, enforcement_generation: 0 })
+    }
+  }, [])
+  usePolling(refresh)
+  return { gateway, refresh }
+}
+
 // usePolling runs refresh once, then every intervalMs, cleaning up on
 // unmount — the exact "call refresh + setInterval + clearInterval" shape
 // every hook below previously duplicated.
