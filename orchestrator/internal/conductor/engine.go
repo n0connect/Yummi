@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,13 +22,30 @@ type Engine struct {
 	llmClient *llm.Client
 	tier      TierConfig
 
-	histMu  sync.Mutex
-	history map[string][]llm.Message // keyed by session ID
+	histMu      sync.Mutex
+	history     map[string][]llm.Message // keyed by session ID
+	turnMu      sync.Mutex
+	activeTurns map[string]string
 
 	// stream fans out raw display-token deltas (see stream.go) while a chat
 	// call is in flight. Zero-value-usable — no constructor wiring needed.
 	stream streamBroker
 }
+
+var ErrTurnInProgress = errors.New("turn already in progress for session")
+
+// TurnInProgressError identifies the active turn that owns a session's LLM
+// history lease. The API maps this to HTTP 409 without mutating history.
+type TurnInProgressError struct {
+	SessionID    string
+	ActiveTurnID string
+}
+
+func (e *TurnInProgressError) Error() string {
+	return fmt.Sprintf("%s: session=%s active_turn_id=%s", ErrTurnInProgress, e.SessionID, e.ActiveTurnID)
+}
+
+func (e *TurnInProgressError) Is(target error) bool { return target == ErrTurnInProgress }
 
 // maxHistoryPerSession caps stored turns to bound memory usage.
 const maxHistoryPerSession = 20
@@ -98,12 +116,34 @@ func NewEngineWithOverrides(personaDir, ollamaURL, ollamaModel string, overrides
 	}
 
 	return &Engine{
-		persona:   persona,
-		validator: NewValidator(),
-		llmClient: client,
-		tier:      tier,
-		history:   make(map[string][]llm.Message),
+		persona:     persona,
+		validator:   NewValidator(),
+		llmClient:   client,
+		tier:        tier,
+		history:     make(map[string][]llm.Message),
+		activeTurns: make(map[string]string),
 	}, nil
+}
+
+func (e *Engine) acquireTurn(sessionID, turnID string) error {
+	e.turnMu.Lock()
+	defer e.turnMu.Unlock()
+	if e.activeTurns == nil {
+		e.activeTurns = make(map[string]string)
+	}
+	if active, ok := e.activeTurns[sessionID]; ok {
+		return &TurnInProgressError{SessionID: sessionID, ActiveTurnID: active}
+	}
+	e.activeTurns[sessionID] = turnID
+	return nil
+}
+
+func (e *Engine) releaseTurn(sessionID, turnID string) {
+	e.turnMu.Lock()
+	defer e.turnMu.Unlock()
+	if e.activeTurns[sessionID] == turnID {
+		delete(e.activeTurns, sessionID)
+	}
 }
 
 // Tier returns the resolved model tier configuration.
@@ -183,31 +223,46 @@ func (e *Engine) Chat(ctx context.Context, message string) ChatResponse {
 
 // ChatWithHistory is like Chat but maintains per-session conversation context.
 func (e *Engine) ChatWithHistory(ctx context.Context, sessionID, message string) ChatResponse {
+	resp, err := e.ChatWithHistoryTurn(ctx, sessionID, "", message)
+	if err != nil {
+		return e.finalize(ChatResponse{Intent: "decline", Message: err.Error(), Confidence: 1})
+	}
+	return resp
+}
+
+// ChatWithHistoryTurn serializes LLM history mutation per session and tags
+// every cosmetic stream event with the caller's turn ID. Different sessions
+// remain fully concurrent.
+func (e *Engine) ChatWithHistoryTurn(ctx context.Context, sessionID, turnID, message string) (ChatResponse, error) {
 	text := strings.TrimSpace(message)
 	if decision, ok := BoundaryDecision(text); ok {
-		return e.finalize(decision)
+		return e.finalize(decision), nil
 	}
 
 	if e.llmClient == nil || sessionID == "" {
-		return e.Chat(ctx, text)
+		return e.Chat(ctx, text), nil
 	}
+	if err := e.acquireTurn(sessionID, turnID); err != nil {
+		return ChatResponse{}, err
+	}
+	defer e.releaseTurn(sessionID, turnID)
 
 	e.histMu.Lock()
 	msgs := capHistory(append(e.history[sessionID], llm.Message{Role: "user", Content: text}))
 	e.history[sessionID] = msgs
 	e.histMu.Unlock()
 
-	resp, err := e.chatWithLLMHistory(ctx, sessionID, msgs)
+	resp, err := e.chatWithLLMHistory(ctx, sessionID, turnID, msgs)
 	if err != nil {
 		slog.Warn("ollama history chat failed", "error", err, "session", sessionID)
-		return e.Chat(ctx, text)
+		return e.Chat(ctx, text), nil
 	}
 
 	e.histMu.Lock()
 	e.history[sessionID] = append(e.history[sessionID], llm.Message{Role: "assistant", Content: resp.Message})
 	e.histMu.Unlock()
 
-	return resp
+	return resp, nil
 }
 
 // ClearHistory removes the conversation history for a session.
@@ -238,12 +293,12 @@ func (e *Engine) SeedHistory(sessionID string, msgs []llm.Message) {
 
 // ── LLM helpers ──────────────────────────────────────────────────────────────
 
-func (e *Engine) chatWithLLMHistory(ctx context.Context, sessionID string, history []llm.Message) (ChatResponse, error) {
+func (e *Engine) chatWithLLMHistory(ctx context.Context, sessionID, turnID string, history []llm.Message) (ChatResponse, error) {
 	system := e.buildSystemPrompt()
 	raw, err := e.llmClient.ChatHistoryStream(ctx, system, history, func(chunk string) {
-		e.publishStream(sessionID, chunk, false)
+		e.publishStream(sessionID, turnID, chunk, false)
 	})
-	e.publishStream(sessionID, "", true)
+	e.publishStream(sessionID, turnID, "", true)
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -270,9 +325,9 @@ func (e *Engine) chatWithLLMHistory(ctx context.Context, sessionID string, histo
 func (e *Engine) chatWithLLM(ctx context.Context, sessionID, message string) (ChatResponse, error) {
 	system := e.buildSystemPrompt()
 	raw, err := e.llmClient.ChatStream(ctx, system, message, func(chunk string) {
-		e.publishStream(sessionID, chunk, false)
+		e.publishStream(sessionID, "", chunk, false)
 	})
-	e.publishStream(sessionID, "", true)
+	e.publishStream(sessionID, "", "", true)
 	if err != nil {
 		return ChatResponse{}, err
 	}

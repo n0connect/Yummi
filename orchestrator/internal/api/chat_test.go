@@ -44,6 +44,32 @@ func TestHandleChatAllowsDefaultSessionSentinel(t *testing.T) {
 	}
 }
 
+func TestHandleChatEchoesClientTurnID(t *testing.T) {
+	engine, err := conductor.NewEngine(t.TempDir(), "", "")
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	h := HandleChat(engine, conductor.NewApprovalStore(0), nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(
+		`{"message":"status","session_id":"default","turn_id":"f47ac10b-58cc-4372-a567-0e02b2c3d479"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TurnID != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
+		t.Fatalf("turn_id = %q", resp.TurnID)
+	}
+}
+
 // TestChatPersistsTurnsAndMessagesEndpointReplaysThem proves the durable
 // chat-history round-trip: a chat against a real session writes the operator's
 // message and the assistant's reply to chat_messages, and GET

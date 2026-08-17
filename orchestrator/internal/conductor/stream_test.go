@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,53 @@ import (
 	"testing"
 	"time"
 )
+
+func TestChatWithHistoryTurnRejectsConcurrentTurnAndCorrelatesStream(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"intent\":\"explain\",\"message\":\"ok\",\"confidence\":0.9}"},"done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":""},"done":true}` + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+
+	e, err := NewEngine("", srv.URL, "test-model")
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	_, stream, err := e.SubscribeStream(8)
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, runErr := e.ChatWithHistoryTurn(context.Background(), "sess-1", "turn-1", "first")
+		firstDone <- runErr
+	}()
+	<-started
+
+	if _, err := e.ChatWithHistoryTurn(context.Background(), "sess-1", "turn-2", "second"); !errors.Is(err, ErrTurnInProgress) {
+		t.Fatalf("second same-session turn error = %v, want ErrTurnInProgress", err)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	for {
+		evt := <-stream
+		if evt.TurnID != "turn-1" {
+			t.Fatalf("stream turn_id = %q, want turn-1", evt.TurnID)
+		}
+		if evt.Done {
+			break
+		}
+	}
+}
 
 // TestStreamBrokerSubscribePublishUnsubscribe exercises the broker directly:
 // a subscriber receives published events, and stops receiving (channel
@@ -78,8 +126,8 @@ func TestEngineSubscribeStreamNilSafe(t *testing.T) {
 	if _, ok := <-ch; ok {
 		t.Fatal("expected an already-closed channel from a nil engine")
 	}
-	e.UnsubscribeStream(1)                // must not panic
-	e.publishStream("s1", "delta", false) // must not panic
+	e.UnsubscribeStream(1)                          // must not panic
+	e.publishStream("s1", "turn-1", "delta", false) // must not panic
 }
 
 // newNDJSONOllamaServer is a real httptest.Server (not a mock) answering
