@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -150,6 +151,80 @@ func ParsePlan(raw string) ([]PlanStep, error) {
 		}
 	}
 	return out.Steps, nil
+}
+
+var enumMarkerRe = regexp.MustCompile(`(?:^|[\s(])(\d{1,2})[).]`)
+
+// countEnumeratedParts returns how many distinct parts an operator's goal
+// EXPLICITLY enumerates via "1) ... 2) ... 3) ..." or "1. ... 2. ..." markers,
+// but only when they form a consecutive run starting at 1 (so "python 3.14"
+// or "top 3 files" never register). Returns 0 for any goal that is a single
+// free-form instruction — in that case the model's own decomposition is the
+// only signal and is left untouched.
+//
+// This exists because the planner LLM was observed collapsing a clearly
+// three-part goal ("1) ... 2) ... 3) ...") into a SINGLE plan step — parts 2
+// and 3 evaporated at planning time, before execution, and the per-step
+// ledger downstream could only ever track the one step it was given. A
+// deterministic floor on the enumerated-parts case catches that class of
+// under-decomposition without touching genuinely single-intent goals.
+func countEnumeratedParts(goal string) int {
+	seen := map[int]bool{}
+	for _, m := range enumMarkerRe.FindAllStringSubmatch(goal, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			seen[n] = true
+		}
+	}
+	count := 0
+	for i := 1; seen[i]; i++ {
+		count = i
+	}
+	if count >= 2 {
+		return count
+	}
+	return 0
+}
+
+// splitEnumeratedParts returns the operator's own text for each explicitly
+// enumerated part of the goal ("1) ... 2) ... 3) ..."), or nil when the goal
+// isn't a consecutive enumeration of >=2 parts (same gate as
+// countEnumeratedParts). This is the deterministic decomposition used when the
+// planner LLM under-decomposes: re-asking the model was proven insufficient
+// (it stubbornly re-collapsed a 3-part goal to 1 step even when explicitly
+// told to produce one step per part), so the split is done in code from the
+// operator's own markers — no model judgment involved.
+func splitEnumeratedParts(goal string) []string {
+	want := countEnumeratedParts(goal)
+	if want < 2 {
+		return nil
+	}
+	contentStart := map[int]int{} // index just AFTER the "N)" / "N." marker
+	markerStart := map[int]int{}  // index of the "N" digit itself
+	for _, loc := range enumMarkerRe.FindAllStringSubmatchIndex(goal, -1) {
+		n, err := strconv.Atoi(goal[loc[2]:loc[3]])
+		if err != nil {
+			continue
+		}
+		if _, seen := contentStart[n]; !seen {
+			contentStart[n] = loc[1]
+			markerStart[n] = loc[2]
+		}
+	}
+	var parts []string
+	for i := 1; i <= want; i++ {
+		start := contentStart[i]
+		end := len(goal)
+		if ms, ok := markerStart[i+1]; ok {
+			end = ms
+		}
+		if part := strings.Trim(strings.TrimSpace(goal[start:end]), " ,;.\t\n"); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) < 2 {
+		return nil
+	}
+	return parts
 }
 
 // BuildPlanPrompt returns system and user prompts for the planning call.

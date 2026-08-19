@@ -366,8 +366,44 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 		_ = r.store.Transition(task.ID, StatusFailed, func(t *Task) { t.LastError = perr.Error() })
 		return Task{}, perr
 	}
-	if limit := selectedPlanStepLimit(selectedSkills); limit > 0 && len(steps) > limit {
-		steps = steps[:limit]
+	// Deterministic under-decomposition guard: when the operator's goal
+	// explicitly enumerates N parts ("1) ... 2) ... 3) ...") but the model
+	// produced fewer steps than that, it collapsed multiple requested parts
+	// into one — the exact failure that makes "give it two tasks and it does
+	// one" happen, and it happens at PLANNING time, before the per-step
+	// ledger can help. Re-asking the model was proven insufficient (it
+	// re-collapsed a 3-part goal to 1 step even when explicitly told one step
+	// per part), so decompose deterministically from the operator's own
+	// enumeration markers instead — no model judgment involved. Only fires on
+	// explicitly enumerated goals; a single free-form instruction is never
+	// touched (splitEnumeratedParts returns nil).
+	enumParts := splitEnumeratedParts(goal)
+	if len(enumParts) > len(steps) {
+		synthesized := make([]PlanStep, len(enumParts))
+		for i, part := range enumParts {
+			synthesized[i] = PlanStep{ID: fmt.Sprintf("s%d", i+1), Description: part, Status: StepPending}
+		}
+		steps = synthesized
+		r.store.RecordActivity(ActivityEvent{
+			SessionID: task.SessionID, TaskID: task.ID, ParentTaskID: parentTaskID,
+			Kind: ActPlan, Summary: fmt.Sprintf("decomposed %d enumerated parts (model gave fewer)", len(enumParts)),
+		})
+	}
+	if limit := selectedPlanStepLimit(selectedSkills); limit > 0 {
+		// A single-technique skill's step cap (e.g. largest-files' plan_step_limit:1)
+		// is meant to keep ONE focused technique from ballooning — it must not
+		// clamp an operator's EXPLICIT multi-part enumeration down below the
+		// number of parts they asked for. Found live: "1) find largest files
+		// 2) count CPUs 3) list users" selected the largest-files skill, whose
+		// limit of 1 silently truncated the correctly-decomposed 3-step plan
+		// back to 1, re-hiding parts 2 and 3. The enumeration count is a hard
+		// floor the skill cap cannot cut beneath.
+		if len(enumParts) > limit {
+			limit = len(enumParts)
+		}
+		if len(steps) > limit {
+			steps = steps[:limit]
+		}
 	}
 	if err := r.store.Transition(task.ID, StatusPlanned, func(t *Task) { t.Plan = steps }); err != nil {
 		return Task{}, err

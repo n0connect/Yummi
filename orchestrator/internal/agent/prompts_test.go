@@ -70,3 +70,34 @@ func TestStepSystemPromptIncludesProtocol(t *testing.T) {
 		}
 	}
 }
+
+// TestCountEnumeratedParts locks the deterministic under-decomposition guard:
+// the exact live-confirmed failure was the planner collapsing a clearly
+// three-part goal into one plan step. This is the pure, deterministic signal
+// that catches it — verified here without any model call.
+func TestCountEnumeratedParts(t *testing.T) {
+	cases := []struct {
+		goal string
+		want int
+	}{
+		// The exact live-failing goal.
+		{"Uc sey yap: 1) diskte /var altinda en buyuk 3 dosyayi bul, 2) kac tane CPU cekirdegi oldugunu soyle, 3) sandbox'ta hangi kullanicilar var listele.", 3},
+		{"1. do X 2. do Y", 2},
+		{"do these: 1) alpha 2) beta 3) gamma 4) delta", 4},
+		// Single free-form instruction — must NOT fire.
+		{"find the largest file under /var", 0},
+		{"list running processes", 0},
+		// Numbers that are not enumeration markers — must NOT fire.
+		{"check python 3.14 and top 3 files", 0},
+		{"scan ports 1 through 3", 0},
+		// A lone "1." is not a multi-part enumeration.
+		{"step 1. do the thing", 0},
+		// Non-consecutive / not starting at 1 — must NOT fire.
+		{"see item 2) and item 5)", 0},
+	}
+	for _, c := range cases {
+		if got := countEnumeratedParts(c.goal); got != c.want {
+			t.Errorf("countEnumeratedParts(%q) = %d, want %d", c.goal, got, c.want)
+		}
+	}
+}
