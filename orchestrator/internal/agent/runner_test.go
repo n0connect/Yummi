@@ -369,3 +369,117 @@ func TestResumeAfterAskOperatorInjectsMessageAndContinues(t *testing.T) {
 		t.Fatalf("operator's resume message never reached the model's prompt:\n%s", capturedPrompts[2])
 	}
 }
+
+// TestCreateAndPlan_EnumeratedGoalDeterministicallyDecomposed proves the
+// under-decomposition guard: even when the planner LLM collapses an
+// explicitly 3-part goal into ONE step (the live-confirmed failure — the
+// model re-collapses it no matter how it is asked), the guard splits the
+// operator's own enumeration markers in code into one plan step per part.
+func TestCreateAndPlan_EnumeratedGoalDeterministicallyDecomposed(t *testing.T) {
+	store, err := NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	// The model stubbornly returns a single step, regardless of the goal.
+	oneStep := `{"steps":[{"id":"s1","description":"find largest files in /var"}]}`
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	goal := "Uc sey yap: 1) /var altinda en buyuk 3 dosya, 2) CPU cekirdek sayisi, 3) /etc/passwd kullanicilari"
+	task, err := r.CreateAndPlan(context.Background(), "sess", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 3 {
+		t.Fatalf("plan has %d steps, want 3 (deterministic split of a 3-part goal): %+v", len(task.Plan), task.Plan)
+	}
+	// Each step must carry the operator's own text for that part.
+	wants := []string{"/var altinda en buyuk 3 dosya", "CPU cekirdek sayisi", "/etc/passwd kullanicilari"}
+	for i, w := range wants {
+		if task.Plan[i].Description != w {
+			t.Errorf("step %d description = %q, want %q", i+1, task.Plan[i].Description, w)
+		}
+	}
+}
+
+// TestCreateAndPlan_FreeFormGoalNotTouched is the negative control: a single
+// free-form instruction (no enumeration markers) must keep exactly the plan
+// the model produced — the deterministic split must never fire on it.
+func TestCreateAndPlan_FreeFormGoalNotTouched(t *testing.T) {
+	store, _ := NewStore(nil)
+	oneStep := `{"steps":[{"id":"s1","description":"find the largest file under /var"}]}`
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "find the largest file under /var and report its size")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 1 {
+		t.Fatalf("plan has %d steps, want 1 — split must not fire on a free-form goal: %+v", len(task.Plan), task.Plan)
+	}
+}
+
+// TestCreateAndPlan_EnumeratedGoalAdequatePlanKept proves the guard does not
+// override a model plan that already covered every part — it only fires when
+// the model produced FEWER steps than the enumeration.
+func TestCreateAndPlan_EnumeratedGoalAdequatePlanKept(t *testing.T) {
+	store, _ := NewStore(nil)
+	threeStep := `{"steps":[{"id":"s1","description":"model step one, nicely phrased"},{"id":"s2","description":"model step two"},{"id":"s3","description":"model step three"}]}`
+	r := NewRunner(store, newFakeOllama(t, threeStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "1) a 2) b 3) c")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 3 || task.Plan[0].Description != "model step one, nicely phrased" {
+		t.Fatalf("guard overrode an already-adequate model plan: %+v", task.Plan)
+	}
+}
+
+// TestSplitEnumeratedParts is the pure, deterministic unit test of the split.
+func TestSplitEnumeratedParts(t *testing.T) {
+	got := splitEnumeratedParts("Uc sey yap: 1) diskte /var altinda en buyuk 3 dosyayi bul, 2) kac tane CPU cekirdegi oldugunu soyle, 3) sandbox'ta hangi kullanicilar var listele.")
+	want := []string{
+		"diskte /var altinda en buyuk 3 dosyayi bul",
+		"kac tane CPU cekirdegi oldugunu soyle",
+		"sandbox'ta hangi kullanicilar var listele",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d parts, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("part %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// Non-enumerated → nil.
+	if p := splitEnumeratedParts("just find the biggest file"); p != nil {
+		t.Errorf("free-form goal split to %#v, want nil", p)
+	}
+}
+
+// TestCreateAndPlan_SkillStepLimitDoesNotClampEnumeration is the live-found
+// regression: an enumerated multi-part goal whose FIRST part triggers a
+// single-technique skill (largest-files, plan_step_limit:1) had its correctly
+// decomposed 3-step plan truncated back to 1 by that skill cap — re-hiding
+// parts 2 and 3. The enumeration count must be a hard floor the skill cap
+// cannot cut beneath.
+func TestCreateAndPlan_SkillStepLimitDoesNotClampEnumeration(t *testing.T) {
+	store, _ := NewStore(nil)
+	oneStep := `{"steps":[{"id":"s1","description":"find largest files in /var"}]}`
+	reg, err := skill.LoadDir("../../../persona/v0.1/skills")
+	if err != nil {
+		t.Fatalf("load skills: %v", err)
+	}
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil,
+		Config{Persona: testPersona, StepBudget: 15, Skills: reg})
+
+	// Part 1 mentions "en buyuk dosya" to trigger the largest-files skill.
+	goal := "Uc sey yap: 1) /var altinda en buyuk dosyalari bul, 2) CPU cekirdek sayisi, 3) /etc/passwd kullanicilari"
+	task, err := r.CreateAndPlan(context.Background(), "sess", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 3 {
+		t.Fatalf("plan has %d steps, want 3 — a single-technique skill cap clamped an explicit 3-part enumeration: %+v", len(task.Plan), task.Plan)
+	}
+}
