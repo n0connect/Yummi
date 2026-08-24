@@ -52,7 +52,9 @@ COMPOSE          := $(CONTAINER_ENGINE) compose
 # YUMMI_NETWORK_MODE: secure (default) or insecure-bridge.
 # insecure-bridge removes yummi_internal's `internal: true` flag — a real
 # security-relevant trade-off, not a default, and gated behind an explicit
-# interactive confirmation in `_check-network-mode` below. Only reach for
+# interactive confirmation in `_check-network-mode` below — asked once, when
+# `make conf` actually sets the mode, not re-asked on every later command
+# that just reuses the already-confirmed, already-persisted choice. Only reach for
 # this if you're stuck on an engine affected by the networking bugs
 # documented in docs/installation.md and can't switch to OrbStack.
 # Usage: make start YUMMI_NETWORK_MODE=insecure-bridge  (or `make conf`)
@@ -273,7 +275,7 @@ build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _buil
 ##         UI is served at http://localhost:3000 — Yummi is web-managed only.
 ##         Engine: CONTAINER_ENGINE=docker|podman (default docker).
 ##         Network trade-off: YUMMI_NETWORK_MODE=secure|insecure-bridge (default secure).
-start: _check-deps _check-network-mode _ollama-ensure
+start: _check-deps _ollama-ensure
 	@$(call log_section,Starting Services)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Building images...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
@@ -299,7 +301,7 @@ start: _check-deps _check-network-mode _ollama-ensure
 ##         processes (unlike `close`) — reach for `make clean` or
 ##         `docker system prune` yourself if you actually need a
 ##         from-scratch rebuild.
-rebase: _check-deps _check-network-mode _ollama-ensure
+rebase: _check-deps _ollama-ensure
 	@$(call log_section,Rebase — fast clean restart)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping containers (image cache untouched)...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
@@ -329,7 +331,7 @@ clean:
 	@$(call log_pass,clean,Workspace is tidy.)
 
 ## force-restart  Stop services, kill memory hogs (ollama), and restart
-force-restart: _check-deps _check-network-mode
+force-restart: _check-deps
 	@$(call log_section,Force Restart)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping all services and removing orphans...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
