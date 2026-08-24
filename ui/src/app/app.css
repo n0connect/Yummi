@@ -344,6 +344,7 @@ body::before {
 }
 
 .trust-rail {
+  position: relative;
   height: 32px;
   display: flex;
   align-items: center;
@@ -356,6 +357,23 @@ body::before {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 10px;
+}
+/* Live status (gateway sync, skill count, sub-agent count) can overflow this
+   rail on narrower viewports — overflow-x: auto makes it scrollable, but a
+   thin status strip gives no other hint that anything is cut off, so an
+   operator can silently lose real status information off-screen. A fixed
+   fade at the trailing edge is a cheap, JS-free "there's more here" cue;
+   pointer-events: none keeps it from blocking clicks on the content beneath. */
+.trust-rail::after {
+  content: '';
+  position: sticky;
+  inset-block: 0;
+  right: 0;
+  margin-left: calc(-1 * var(--space-xl));
+  width: var(--space-xl);
+  flex-shrink: 0;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--bg-base) 92%, transparent) 70%);
 }
 .trust-rail-state, .trust-rail-item { display: inline-flex; align-items: center; gap: 6px; }
 .trust-rail-state { font-weight: 700; letter-spacing: .06em; }
@@ -380,8 +398,16 @@ body::before {
 .trace-capability-grid dt { color: var(--text-muted); font: 10px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
 .trace-capability-grid dd { margin-top: 4px; color: var(--text-secondary); font-family: var(--font-mono); overflow-wrap: anywhere; }
 
-.left { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; flex: 1; overflow: hidden; }
-.right { display: flex; align-items: center; gap: var(--space-md); flex-shrink: 0; }
+/* min-width: max-content (not 0) is deliberate: .logo already opts out of
+   shrinking (flex-shrink: 0 below), but that alone doesn't stop THIS flex
+   item's own box from being squeezed narrower than its content by the
+   sibling nav segment — with overflow: hidden that silently hard-clipped
+   "YUMMI" down to "YUM" on any viewport too narrow to fit both the full logo
+   and all six nav labels (worse once nav labels localize to longer Turkish
+   text). Never shrinking below the logo's natural width is the fix; .right
+   gives the nav segment room to scroll instead when space is genuinely tight. */
+.left { display: flex; align-items: center; gap: var(--space-sm); min-width: max-content; flex: 0 0 auto; }
+.right { display: flex; align-items: center; gap: var(--space-md); flex-shrink: 1; min-width: 0; }
 
 .logo {
   font-family: var(--font-sans);
@@ -412,7 +438,12 @@ body::before {
   background: var(--wash-soft);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  /* Scrolls internally rather than forcing the logo to clip (see .left's
+     comment) once six nav labels no longer fit the available width. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.nav-seg::-webkit-scrollbar { display: none; }
 .status-nav-link {
   cursor: pointer;
   text-decoration: none;
@@ -425,6 +456,8 @@ body::before {
   padding: 6px 14px;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .status-nav-link:hover { color: var(--text-secondary); background: var(--wash-medium); }
 .status-nav-link.active {
@@ -1159,7 +1192,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 /* ═══════════════════════════════════════════════════════════════════════════
    TRACE PAGE — agent observability
    ═══════════════════════════════════════════════════════════════════════════ */
-.trace-page { padding: var(--space-lg, 24px); max-width: 1100px; margin: 0 auto; }
+.trace-page {
+  height: calc(100vh - var(--app-chrome-height));
+  overflow-y: auto;
+  padding: var(--space-lg, 24px);
+  max-width: 1100px;
+  margin: 0 auto;
+}
 .trace-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: var(--space-lg, 24px); }
 .trace-page-title { font-family: var(--font-mono, monospace); font-size: 18px; letter-spacing: 0.08em; color: var(--accent); }
 .trace-page-sub { font-size: 13px; color: var(--text-muted); flex: 1; }
