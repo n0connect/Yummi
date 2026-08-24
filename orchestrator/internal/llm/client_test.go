@@ -70,6 +70,52 @@ func TestClientChatEmptyMessageIsError(t *testing.T) {
 	}
 }
 
+// TestClientChatFallsBackToThinkingWhenContentEmpty is the regression test
+// for a live-observed gpt-oss-via-Ollama failure: the model's real answer
+// landed entirely in the "thinking" field with content left empty, and the
+// conductor hard-failed every chat/intent call with a generic connection-
+// error message even though Ollama responded successfully. Content empty +
+// Thinking populated must recover the Thinking text instead of erroring.
+func TestClientChatFallsBackToThinkingWhenContentEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := ollamaResponse{
+			Message: Message{Role: "assistant", Content: "", Thinking: "the real answer landed here"},
+			Done:    true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model")
+	got, err := client.Chat(context.Background(), "system", "user")
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got != "the real answer landed here" {
+		t.Fatalf("got %q, want the Thinking field's text", got)
+	}
+}
+
+// TestClientChatEmptyContentAndThinkingIsStillAnError proves the fallback
+// doesn't mask a genuinely empty response — both fields empty must still
+// error, same as before this fallback existed.
+func TestClientChatEmptyContentAndThinkingIsStillAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := ollamaResponse{
+			Message: Message{Role: "assistant", Content: "", Thinking: "  "},
+			Done:    true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model")
+	_, err := client.Chat(context.Background(), "system", "user")
+	if err == nil || !strings.Contains(err.Error(), "empty message") {
+		t.Fatalf("expected empty-message error when both fields are blank, got: %v", err)
+	}
+}
+
 func TestClientChatHistory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ollamaRequest
@@ -376,6 +422,29 @@ func TestClientChatStreamSkipsMalformedLine(t *testing.T) {
 	}
 	if full != "good" {
 		t.Errorf("expected 'good', got %q", full)
+	}
+}
+
+// TestClientChatStreamFallsBackToThinkingWhenContentEmpty is ChatStream's
+// counterpart to TestClientChatFallsBackToThinkingWhenContentEmpty — the
+// streaming path accumulates content and thinking separately per NDJSON
+// chunk, so it needs its own regression coverage for the same fallback.
+func TestClientChatStreamFallsBackToThinkingWhenContentEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"","thinking":"the "}}` + "\n"))
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"","thinking":"real answer"}}` + "\n"))
+		doneLine, _ := json.Marshal(ollamaResponse{Done: true})
+		_, _ = w.Write(append(doneLine, '\n'))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL, "test-model")
+	full, err := client.ChatStream(context.Background(), "sys", "user", nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if full != "the real answer" {
+		t.Fatalf("got %q, want the accumulated Thinking text", full)
 	}
 }
 
