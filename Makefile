@@ -32,6 +32,14 @@ export YUMMI_OLLAMA_MODEL := $(OLLAMA_MODEL)
 export YUMMI_OLLAMA_NUM_CTX
 export YUMMI_OLLAMA_THINKING
 export YUMMI_DATA_RETENTION_DAYS
+# Optional: point only the Eino agent backend at a different OpenAI-compatible
+# server/model than Ollama (e.g. a local LM Studio instance) — see
+# docker-compose.yml's orchestrator env block and config.Config's doc
+# comments. All blank by default: no effect unless set in the environment or
+# .yummi.conf.
+export YUMMI_EINO_MODEL_BASE_URL
+export YUMMI_EINO_MODEL_NAME
+export YUMMI_EINO_MODEL_NUM_CTX
 
 # ── Container engine selection ────────────────────────────────────────────────
 # CONTAINER_ENGINE: docker (default) or podman. Both speak the same `compose`
@@ -118,7 +126,7 @@ endef
 
 # ── Phony declarations ────────────────────────────────────────────────────────
 .PHONY: help conf \
-	build start stop clean force-restart close \
+	build start rebase stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
 	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
@@ -272,6 +280,34 @@ build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _buil
 start: _check-deps _check-network-mode _ollama-ensure
 	@$(call log_section,Starting Services)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Building images...)
+	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
+	@$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.)
+	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
+	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
+	@$(call log_pass,services,Running — UI on http://localhost:3000)
+
+## rebase  Fast clean restart: down, rebuild images, up — Docker's OWN layer
+##         cache does the work (go mod download / npm install layers are
+##         skipped when go.sum/package-lock.json haven't changed), so a
+##         source-only change rebuilds in seconds instead of minutes. Use
+##         this instead of `make stop && make close && make clean && make
+##         build && make start`: `make build` compiles native binaries to
+##         ./bin and ui/dist that the Docker images never consume at all —
+##         running it before `make start` is pure duplicate work, since
+##         `make start` builds the images from source independently — and
+##         neither `clean` nor `close` touch Docker's cache/images/volumes
+##         in the first place, so that whole sequence buys nothing over this
+##         one command except redoing the native build for no reason.
+##         Never prunes Docker's build cache, images, or volumes (that's
+##         what makes it fast) and never touches Ollama/local model
+##         processes (unlike `close`) — reach for `make clean` or
+##         `docker system prune` yourself if you actually need a
+##         from-scratch rebuild.
+rebase: _check-deps _check-network-mode _ollama-ensure
+	@$(call log_section,Rebase — fast clean restart)
+	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping containers (image cache untouched)...)
+	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
+	@$(call log_info,$(CONTAINER_ENGINE) compose,Rebuilding images (Docker layer cache reused)...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
 	@$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
@@ -590,6 +626,7 @@ help:
 	@printf "  $(CYAN)make conf$(RESET)        Pick your container engine setup once (interactive, persists to .yummi.conf)\n"
 	@printf "  $(CYAN)make build$(RESET)       Build native binaries and UI (CLI + orchestrator + gateway + UI)\n"
 	@printf "  $(CYAN)make start$(RESET)       Start runtime services — UI on http://localhost:3000\n"
+	@printf "  $(CYAN)make rebase$(RESET)      Fast clean restart after a source change — Docker's own layer cache is reused\n"
 	@printf "  $(CYAN)make app$(RESET)         Alias for 'start'\n"
 	@printf "  $(CYAN)make stop$(RESET)        Stop runtime services\n"
 	@printf "  $(CYAN)make clean$(RESET)       Remove all build artifacts\n"
@@ -602,6 +639,8 @@ help:
 	@printf "    isolation as an engine-bug workaround, and requires typing a confirmation. Prefer OrbStack instead.$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_LANG=en|tr$(RESET)  $(DIM)default en — build-time UI language, baked into the UI at build time (no runtime switch)$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_AGENT_BACKEND=graph|eino$(RESET)  $(DIM)default graph — which agentic engine to run (no rebuild needed to change)$(RESET)\n"
+	@printf "  $(CYAN)YUMMI_EINO_MODEL_BASE_URL/_NAME/_NUM_CTX$(RESET)  $(DIM)optional — point ONLY the eino backend's ReAct loop at a\n"
+	@printf "    different OpenAI-compatible server/model (e.g. a local LM Studio instance), independent of the conductor's Ollama config$(RESET)\n"
 	@printf "\n$(BOLD)  Developer commands$(RESET)\n"
 	@printf "  $(CYAN)make test$(RESET)        Run all test suites\n"
 	@printf "  $(CYAN)make test-agent-live$(RESET) Agentic loop e2e vs. real model + sandbox\n"
