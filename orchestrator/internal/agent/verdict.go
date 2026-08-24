@@ -102,11 +102,11 @@ func buildFindingRecords(details []FindingDetail, currentStepID, liveContent str
 // the same as disproving it. Only a step that itself failed/never completed
 // earns the stronger Unsupported verdict.
 func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, plan []PlanStep) FindingRecord {
-	title := sanitizeAgentText(d.Title)
+	title := SanitizeAgentText(d.Title)
 	if title == "" {
-		title = sanitizeAgentText(d.Description)
+		title = SanitizeAgentText(d.Description)
 	}
-	evidence := sanitizeAgentText(d.Evidence)
+	evidence := SanitizeAgentText(d.Evidence)
 	stepID := strings.TrimSpace(d.StepID)
 	if stepID == "" {
 		stepID = currentStepID
