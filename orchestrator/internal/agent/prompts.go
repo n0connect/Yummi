@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,25 +96,40 @@ func stripThinkTokens(s string) string {
 // separation note) and each protects its own wire-visible text.
 var internalTagLinePattern = regexp.MustCompile(`(?m)^\s*\[(RUN_COMMAND|UPDATE_PLAN|FINISH|HANDOFF|REMEMBER|ASK_OPERATOR|SEND_FULL|CONTINUE|ABORT|STOP_TASK)\]\s*$`)
 
-// sanitizeAgentText is the chokepoint for model-authored free text that
+// specialTokenPattern strips OpenAI-style "<|...|>" special/control tokens
+// (e.g. gpt-oss's Harmony format: <|channel|>, <|message|>, <|constrain|>).
+// Live-observed via the Eino backend against gpt-oss-20b served through
+// LM Studio: when a turn's "finish" call isn't cleanly routed into a
+// tool_calls entry, Eino falls back to the raw assistant message content —
+// and that content can be the model's own unparsed Harmony-channel text,
+// putting literal control tokens straight into a wire-visible Task.Summary.
+// This is a generic net (any vendor using this delimiter convention), not a
+// gpt-oss special case; it only removes the token markers, it does not (and
+// cannot, without vendor-specific channel semantics) reconstruct which part
+// of the surrounding text was the intended "final" answer.
+var specialTokenPattern = regexp.MustCompile(`<\|[a-zA-Z0-9_]+\|>`)
+
+// SanitizeAgentText is the chokepoint for model-authored free text that
 // becomes wire-visible on Task (Summary/Findings/Question, sent via
 // GET /api/v1/tasks/{id} and every task.status websocket event). This must be
 // the only line of defense, applied once here rather than trusted to be
-// re-implemented client-side. Strips <think> reasoning-model noise and any standalone
-// protocol-tag line the model echoed from its own wire format.
-func sanitizeAgentText(s string) string {
+// re-implemented client-side. Strips <think> reasoning-model noise, any
+// standalone protocol-tag line the model echoed from its own wire format,
+// and any raw "<|...|>" special/control token that leaked through unparsed.
+func SanitizeAgentText(s string) string {
 	s = stripThinkTokens(s)
 	s = internalTagLinePattern.ReplaceAllString(s, "")
+	s = specialTokenPattern.ReplaceAllString(s, "")
 	return strings.TrimSpace(s)
 }
 
-// sanitizeFindings applies sanitizeAgentText to every finding string, and
+// SanitizeFindings applies SanitizeAgentText to every finding string, and
 // drops the now-empty ones the same way filterEmpty does — mirrors the
 // existing empty-string reject used elsewhere in this package (graph.go).
-func sanitizeFindings(findings []string) []string {
+func SanitizeFindings(findings []string) []string {
 	out := make([]string, 0, len(findings))
 	for _, f := range findings {
-		if clean := sanitizeAgentText(f); clean != "" {
+		if clean := SanitizeAgentText(f); clean != "" {
 			out = append(out, clean)
 		}
 	}
@@ -155,7 +171,11 @@ func ParsePlan(raw string) ([]PlanStep, error) {
 
 var enumMarkerRe = regexp.MustCompile(`(?:^|[\s(])(\d{1,2})[).]`)
 
-// countEnumeratedParts returns how many distinct parts an operator's goal
+// leadingNumberMarkerRe strips a leading "1. " / "1) " the model added to a
+// single audited line despite AuditGoalParts explicitly asking for none.
+var leadingNumberMarkerRe = regexp.MustCompile(`^\d{1,2}[).]\s*`)
+
+// CountEnumeratedParts returns how many distinct parts an operator's goal
 // EXPLICITLY enumerates via "1) ... 2) ... 3) ..." or "1. ... 2. ..." markers,
 // but only when they form a consecutive run starting at 1 (so "python 3.14"
 // or "top 3 files" never register). Returns 0 for any goal that is a single
@@ -168,7 +188,7 @@ var enumMarkerRe = regexp.MustCompile(`(?:^|[\s(])(\d{1,2})[).]`)
 // ledger downstream could only ever track the one step it was given. A
 // deterministic floor on the enumerated-parts case catches that class of
 // under-decomposition without touching genuinely single-intent goals.
-func countEnumeratedParts(goal string) int {
+func CountEnumeratedParts(goal string) int {
 	seen := map[int]bool{}
 	for _, m := range enumMarkerRe.FindAllStringSubmatch(goal, -1) {
 		if n, err := strconv.Atoi(m[1]); err == nil {
@@ -185,16 +205,16 @@ func countEnumeratedParts(goal string) int {
 	return 0
 }
 
-// splitEnumeratedParts returns the operator's own text for each explicitly
+// SplitEnumeratedParts returns the operator's own text for each explicitly
 // enumerated part of the goal ("1) ... 2) ... 3) ..."), or nil when the goal
 // isn't a consecutive enumeration of >=2 parts (same gate as
-// countEnumeratedParts). This is the deterministic decomposition used when the
+// CountEnumeratedParts). This is the deterministic decomposition used when the
 // planner LLM under-decomposes: re-asking the model was proven insufficient
 // (it stubbornly re-collapsed a 3-part goal to 1 step even when explicitly
 // told to produce one step per part), so the split is done in code from the
 // operator's own markers — no model judgment involved.
-func splitEnumeratedParts(goal string) []string {
-	want := countEnumeratedParts(goal)
+func SplitEnumeratedParts(goal string) []string {
+	want := CountEnumeratedParts(goal)
 	if want < 2 {
 		return nil
 	}
@@ -219,6 +239,85 @@ func splitEnumeratedParts(goal string) []string {
 		}
 		if part := strings.Trim(strings.TrimSpace(goal[start:end]), " ,;.\t\n"); part != "" {
 			parts = append(parts, part)
+		}
+	}
+	if len(parts) < 2 {
+		return nil
+	}
+	return parts
+}
+
+// LikelyMultiPart is a cheap, deterministic pre-filter for whether a goal is
+// worth spending an AuditGoalParts LLM call on at all. Without it, the audit
+// would fire on EVERY non-numbered goal — the overwhelming majority in real
+// usage — costing an extra model round-trip on plainly single-intent goals
+// ("scan 10.0.0.1 for open ports") for zero benefit, and, worse, risking a
+// spurious split if the model's audit reply doesn't perfectly follow the
+// "one line for a single request" instruction. This only looks for the
+// coordinating language that actually signals multiple distinct asks
+// (English/Turkish conjunctions, sequencing words, list punctuation) — a
+// false positive just costs one harmless audit call that AuditGoalParts'
+// own single-line/no-signal cases absorb; a false negative (a genuinely
+// multi-part goal with none of these cues) is rare and, same as
+// CountEnumeratedParts, is accepted as out of scope rather than reached for
+// with a fragile full-NLU heuristic.
+func LikelyMultiPart(goal string) bool {
+	lower := strings.ToLower(goal)
+	for _, cue := range []string{" and ", " ve ", " ayrıca ", " also ", " then ", " sonra ", ", ", "; "} {
+		if strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return false
+}
+
+// AuditGoalParts asks the model, in a narrow single-purpose call kept
+// entirely separate from planning, to enumerate the distinct
+// separately-actionable requests in a goal. CountEnumeratedParts/
+// SplitEnumeratedParts only catch goals with explicit "1) ... 2) ..."
+// markers — real operator phrasing is far more often natural-language
+// coordination with no numbers at all ("scan X and also tell me Y", "X'i
+// tara ve Y'yi kontrol et"), which the marker regex cannot see and which the
+// SAME planner LLM call that already proved unreliable at this (see
+// SplitEnumeratedParts's doc comment: it re-collapsed a 3-part goal to 1
+// step even when explicitly told to produce one step per part) has no
+// independent check against. Splitting "what does this goal ask for" from
+// "how do we accomplish it" into two separate, narrower calls is the fix:
+// judging whether a plan covers a goal is a substantially easier task than
+// producing the plan, so a model unreliable at the latter can still be
+// reliable at the former. Best-effort: any LLM error, empty result, or
+// pathological output (more than maxAuditedParts lines — almost certainly a
+// parsing failure or the model rambling, not a real goal with that many
+// distinct asks) returns nil so callers can safely fall back to treating the
+// goal as single-part.
+func AuditGoalParts(ctx context.Context, llm LLM, goal string) []string {
+	if llm == nil || strings.TrimSpace(goal) == "" {
+		return nil
+	}
+	system := "You audit operator goals for a penetration-testing agent. You do not plan or execute anything."
+	user := "GOAL: " + goal + "\n\n" +
+		"List each distinct, separately-actionable request in this goal, one per line, in terse language " +
+		"close to the goal's own wording. A single recon action against one or more targets is ONE request " +
+		"even if it covers multiple hosts — only split when the goal asks for genuinely different kinds of " +
+		"work. If the goal is a single request, output exactly one line and nothing else. No numbering, no " +
+		"bullets, no commentary."
+	raw, err := llm.Chat(ctx, system, user)
+	if err != nil {
+		return nil
+	}
+	const maxAuditedParts = 8
+	var parts []string
+	for line := range strings.SplitSeq(raw, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimLeft(line, "-*• \t")
+		line = leadingNumberMarkerRe.ReplaceAllString(line, "")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts = append(parts, line)
+		if len(parts) > maxAuditedParts {
+			return nil
 		}
 	}
 	if len(parts) < 2 {
@@ -342,6 +441,18 @@ func BuildStepPrompt(task Task, lastObservation, summary, preamble string) strin
 			fmt.Fprintf(&b, "\n    └─ result: %s", res)
 		}
 		b.WriteString("\n")
+	}
+
+	// Explicit remaining-goals pressure: the ○/✓ plan view above is easy for a
+	// model to under-weight after answering the first part of a multi-part
+	// goal, so restate what is still open and that FINISH is not yet valid.
+	// stepNode enforces this deterministically too (premature-FINISH guard);
+	// this block just makes the guard fire less often.
+	if !planTerminal(task.Plan) {
+		if pending := pendingStepDescriptions(task.Plan); len(pending) > 0 {
+			fmt.Fprintf(&b, "\nGOAL PARTS STILL OPEN — do NOT FINISH until each is done (✓) or explicitly skipped:\n%s\n",
+				strings.Join(pending, "\n"))
+		}
 	}
 
 	if lastObservation != "" {
