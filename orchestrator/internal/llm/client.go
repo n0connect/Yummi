@@ -16,6 +16,11 @@ import (
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Thinking carries Ollama's native reasoning-channel output (present for
+	// gpt-oss and other "thinking"-capable models even with Options.Think
+	// disabled) — see do()'s doc comment on why this is captured and used
+	// as a fallback rather than just decoded and discarded.
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // Options controls inference behaviour for the Ollama request.
@@ -328,13 +333,27 @@ func (c *Client) do(ctx context.Context, messages []Message) (string, error) {
 	if result.Error != "" {
 		return "", fmt.Errorf("ollama: %s", result.Error)
 	}
-	// An empty/whitespace-only message is a model or transport hiccup, not a
-	// usable reply. Surface it as an error so callers retry (with backoff) rather
-	// than feeding an empty string into a downstream parser.
-	if strings.TrimSpace(result.Message.Content) == "" {
+	content := result.Message.Content
+	// Live-observed against gpt-oss served via Ollama's native /api/chat: the
+	// model's actual answer sometimes lands entirely in the "thinking"
+	// channel with content left empty — the same class of channel-routing
+	// inconsistency found (and worked around) in the Eino backend's own
+	// handling of this model family, just via a different serving protocol.
+	// Falling back to Thinking recovers a usable reply instead of hard-
+	// failing a call that, from the model's own perspective, actually
+	// succeeded — it just wrote its answer to the field this client wasn't
+	// reading.
+	if strings.TrimSpace(content) == "" {
+		content = result.Message.Thinking
+	}
+	// An empty/whitespace-only message (in EITHER field) is a model or
+	// transport hiccup, not a usable reply. Surface it as an error so callers
+	// retry (with backoff) rather than feeding an empty string into a
+	// downstream parser.
+	if strings.TrimSpace(content) == "" {
 		return "", fmt.Errorf("ollama returned an empty message")
 	}
-	return result.Message.Content, nil
+	return content, nil
 }
 
 // doStream is do's streaming counterpart. Ollama's streamed /api/chat
@@ -388,7 +407,7 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 		return "", fmt.Errorf("ollama http %d: %s", resp.StatusCode, string(b))
 	}
 
-	var full strings.Builder
+	var full, thinking strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	// Each NDJSON line carries only one chunk's worth of content, but grow the
 	// buffer well past bufio's 64KB default in case a single line is unusually
@@ -414,6 +433,7 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 				onChunk(chunk.Message.Content)
 			}
 		}
+		thinking.WriteString(chunk.Message.Thinking)
 		if chunk.Done {
 			break
 		}
@@ -423,6 +443,11 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 	}
 
 	result := full.String()
+	// See do()'s identical fallback: some models (gpt-oss observed live) can
+	// stream their real answer entirely on the thinking channel.
+	if strings.TrimSpace(result) == "" {
+		result = thinking.String()
+	}
 	if strings.TrimSpace(result) == "" {
 		return "", fmt.Errorf("ollama returned an empty message")
 	}
