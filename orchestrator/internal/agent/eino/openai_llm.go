@@ -94,7 +94,7 @@ func (c *OpenAIChatClient) Chat(ctx context.Context, system, user string) (strin
 	if err != nil {
 		return "", fmt.Errorf("openai chat: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("openai chat: http %d", resp.StatusCode)
 	}
