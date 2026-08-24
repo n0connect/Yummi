@@ -326,6 +326,48 @@ func AuditGoalParts(ctx context.Context, llm LLM, goal string) []string {
 	return parts
 }
 
+// ScaledStepBudget returns the step-budget ceiling a goal actually needs,
+// given how many distinct parts it was detected to have (SplitEnumeratedParts
+// or AuditGoalParts — 0 or 1 means single-intent). Never returns less than
+// configured. Shared by both agent backends (graph's stepNode budget check,
+// eino's MaxIterations) so a scaling change only needs to happen once.
+//
+// A multi-part goal ("1) ... 2) ... 3) ..." or "scan X and also check Y")
+// reproducibly needs MUCH more real headroom than a flat default provides,
+// proven live against a real target with real cataloged pentest tools: three
+// separate runs either exhausted the entire step budget or came within one
+// step of it — including a run with only TWO requested parts (gobuster +
+// nikto) that never even reached the second part, because ONE tool hitting
+// real-world friction (a missing wordlist, in that case) was enough to burn
+// the whole budget on its own. A flat higher default doesn't fit either: a
+// genuinely single-intent goal ("what OS is this") finishes correctly in a
+// handful of real steps today and gains nothing from a bigger ceiling except
+// a weaker runaway-loop backstop. Scaling with the goal's OWN detected
+// complexity is the proportionate fix: budget grows only when there's real
+// reason to expect it's needed.
+func ScaledStepBudget(configured, numParts int) int {
+	if numParts < 2 {
+		return configured
+	}
+	// baseOverhead covers the model's own opening orientation and its final
+	// finish/report turn, independent of how many parts there are. perPart is
+	// deliberately generous — a single friction-prone tool alone has been
+	// observed to consume close to a full flat-15 budget across multiple
+	// runs, so "a few steps per part" would just reproduce the exact
+	// shortfall this exists to fix. Capped at maxScaledBudget as a sanity
+	// backstop, not an expected ceiling — the budget must still mean
+	// something as a runaway-loop guard.
+	const baseOverhead, perPart, maxScaledBudget = 6, 12, 80
+	scaled := baseOverhead + perPart*numParts
+	if scaled > maxScaledBudget {
+		scaled = maxScaledBudget
+	}
+	if scaled > configured {
+		return scaled
+	}
+	return configured
+}
+
 // BuildPlanPrompt returns system and user prompts for the planning call.
 // Network scope is no longer surfaced here — gateway is the sole authority and
 // enforces scope transparently at execution time.

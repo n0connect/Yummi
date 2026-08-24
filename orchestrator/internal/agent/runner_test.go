@@ -511,3 +511,68 @@ func TestCreateAndPlan_NaturalLanguageMultiPartGoalAudited(t *testing.T) {
 			len(task.Plan), task.Plan)
 	}
 }
+
+// TestCreateAndPlan_ScalesStepBudgetForEnumeratedGoal is the graph backend's
+// regression test for the same live-observed failure the eino backend fixed:
+// a flat StepBudget doesn't fit a goal with real detected complexity. A
+// 3-part enumerated goal configured with the flat default (15) must come out
+// of planning with StepBudget already raised to ScaledStepBudget(15, 3) = 42,
+// so stepNode's very first budget check (task.StepsUsed >= task.StepBudget)
+// sees the real ceiling, not the stale flat one.
+func TestCreateAndPlan_ScalesStepBudgetForEnumeratedGoal(t *testing.T) {
+	store, _ := NewStore(nil)
+	threeStep := `{"steps":[{"id":"s1","description":"a"},{"id":"s2","description":"b"},{"id":"s3","description":"c"}]}`
+	r := NewRunner(store, newFakeOllama(t, threeStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "1) a 2) b 3) c")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	want := ScaledStepBudget(15, 3)
+	if task.StepBudget != want {
+		t.Fatalf("StepBudget = %d, want %d (scaled for 3 enumerated parts, not left at the flat configured 15)", task.StepBudget, want)
+	}
+}
+
+// TestCreateAndPlan_DoesNotScaleSingleIntentGoal is the negative control: a
+// free-form single-intent goal must keep the exact configured StepBudget —
+// scaling only when there's real detected reason to expect more work is what
+// keeps the budget meaningful as a runaway-loop backstop.
+func TestCreateAndPlan_DoesNotScaleSingleIntentGoal(t *testing.T) {
+	store, _ := NewStore(nil)
+	oneStep := `{"steps":[{"id":"s1","description":"find the largest file under /var"}]}`
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "find the largest file under /var")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if task.StepBudget != 15 {
+		t.Fatalf("StepBudget = %d, want unchanged at the configured 15 for a single-intent goal", task.StepBudget)
+	}
+}
+
+// TestScaledStepBudget is the pure unit test of the shared formula: floors at
+// the configured value, scales linearly per part, caps at 80.
+func TestScaledStepBudget(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int
+		numParts   int
+		want       int
+	}{
+		{"single-intent unchanged", 15, 0, 15},
+		{"one part unchanged", 15, 1, 15},
+		{"two parts scale above flat default", 15, 2, 30},
+		{"three parts", 15, 3, 42},
+		{"never scales below configured", 50, 2, 50},
+		{"caps at 80", 15, 20, 80},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ScaledStepBudget(tc.configured, tc.numParts); got != tc.want {
+				t.Errorf("ScaledStepBudget(%d, %d) = %d, want %d", tc.configured, tc.numParts, got, tc.want)
+			}
+		})
+	}
+}

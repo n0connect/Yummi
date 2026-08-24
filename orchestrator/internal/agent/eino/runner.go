@@ -294,26 +294,10 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 			enumParts = audited
 		}
 	}
-	effectiveStepBudget := r.cfg.StepBudget
-	if len(enumParts) >= 2 {
-		// baseOverhead covers the model's own opening orientation and its
-		// final finish/report turn, independent of how many parts there
-		// are. perPart is deliberately generous — live-observed, a single
-		// friction-prone tool (gobuster's wordlist resolution) alone
-		// consumed something close to a full 15-step budget across
-		// multiple runs, so "a few steps per part" would just reproduce the
-		// exact shortfall this exists to fix. Capped at maxScaledBudget as
-		// a sanity backstop, not a expected ceiling — MaxIterations must
-		// still mean something as a runaway-loop guard.
-		const baseOverhead, perPart, maxScaledBudget = 6, 12, 80
-		scaled := baseOverhead + perPart*len(enumParts)
-		if scaled > maxScaledBudget {
-			scaled = maxScaledBudget
-		}
-		if scaled > effectiveStepBudget {
-			effectiveStepBudget = scaled
-		}
-	}
+	// See agent.ScaledStepBudget's own doc comment for the formula and the
+	// live evidence behind it — shared with the graph backend so a scaling
+	// change only needs to happen once.
+	effectiveStepBudget := agent.ScaledStepBudget(r.cfg.StepBudget, len(enumParts))
 	if effectiveStepBudget != task.StepBudget {
 		_ = r.store.Update(task.ID, func(t *agent.Task) { t.StepBudget = effectiveStepBudget })
 	}

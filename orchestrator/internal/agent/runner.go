@@ -421,7 +421,16 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 			steps = steps[:limit]
 		}
 	}
-	if err := r.store.Transition(task.ID, StatusPlanned, func(t *Task) { t.Plan = steps }); err != nil {
+	// See agent.ScaledStepBudget's own doc comment for the formula and the
+	// live evidence behind it — shared with the eino backend so a scaling
+	// change only needs to happen once. Folded into the same Transition call
+	// below so stepNode's task.StepBudget is correct from the very first
+	// real step, not just from the second onward.
+	effectiveStepBudget := ScaledStepBudget(r.cfg.StepBudget, len(enumParts))
+	if err := r.store.Transition(task.ID, StatusPlanned, func(t *Task) {
+		t.Plan = steps
+		t.StepBudget = effectiveStepBudget
+	}); err != nil {
 		return Task{}, err
 	}
 	task, _ = r.store.Get(task.ID)
