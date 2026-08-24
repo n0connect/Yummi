@@ -11,6 +11,8 @@ The agent's task loop is implemented as an explicit graph state machine in `orch
 - [The routing table](#routing-table)
 - [Walking one real turn](#one-turn)
 - [Stuck, thrash, and duplicate detection](#stuck-detection)
+- [The premature-FINISH guard](#premature-finish)
+- [Step budget: flat default vs. scaled to goal complexity](#step-budget)
 - [Failure escalation](#failure-escalation)
 - [Context compaction: how `summarize` actually works](#summarize-detail)
 - [Checkpointing and crash recovery](#checkpointing)
@@ -134,6 +136,16 @@ Small local models occasionally get stuck — re-running the same command, or cy
 - **Whitespace-normalized hashing** (`commandHash`): formatting jitter (a model re-emitting the same logical command with different spacing) still collapses to the same hash, so trivial cosmetic variation doesn't defeat exact-repeat detection.
 
 Both signals route to `consult` — a lighter-weight "let's talk about this before I escalate you to a human" step, not an immediate hard stop.
+
+## The premature-FINISH guard <a id="premature-finish"></a>
+
+A multi-part goal that correctly decomposed into several plan steps can still fail at the finish line: a model — regardless of size — frequently answers the *first* part of a goal and emits `FINISH` anyway, and nothing downstream re-opens the loop on its own. `stepNode` catches this deterministically: if `FINISH` arrives while `pendingStepDescriptions(task.Plan)` is non-empty (steps still `pending`/`running`) and at least two steps of budget remain, it's bounced back as an `[INCOMPLETE_GOALS]` observation listing exactly which parts are unaddressed, routed to `edgeUpdatePlan` instead of `edgeFinish`. This fires **at most once** per task (`maxIncompleteFinishNudges = 1`) — a remaining part that's genuinely unreachable must not wedge the loop in a bounce cycle, so after one forced reconsideration the model's decision is trusted. `BuildStepPrompt` also restates the same open-parts list every turn (independent of whether a bounce has happened yet), which makes the guard fire less often in practice — most of its value is the standing reminder, not the correction.
+
+## Step budget: flat default vs. scaled to goal complexity <a id="step-budget"></a>
+
+`StepBudget` is not always the flat configured default (15). `createAndPlan` computes `ScaledStepBudget(configured, numParts)` (`orchestrator/internal/agent/prompts.go`, shared with the Eino backend) from however many distinct parts `SplitEnumeratedParts`/`AuditGoalParts` detected in the goal, and persists the result onto the task in the same `Transition` call that stores the plan — so `stepNode`'s very first budget check (`task.StepsUsed >= task.StepBudget`) already sees the real ceiling, not the stale flat one. A single-intent goal (0 or 1 detected parts) is left untouched at the configured value.
+
+The formula (`baseOverhead=6, perPart=12`, capped at `maxScaledBudget=80`) exists because a flat budget is a poor proxy for real work: live-observed against a real target with real cataloged pentest tools, a goal with only **two** requested parts (gobuster + nikto) never even reached the second part, because one tool hitting real-world friction (a missing wordlist) alone was enough to burn the entire flat-15 budget. A comprehensive 5-part recon+vuln workflow (nmap → directory enumeration → fingerprinting → nikto → summary) against a real target scaled to 66 and completed using 59 of them — the old flat default would have failed this exact task at step 15, discarding nmap's already-completed results along with everything else. `BuildStepPrompt` also renders ratio-based `BUDGET LOW`/`BUDGET CRITICAL` guidance once the remaining fraction crosses a threshold, so the model has explicit signal to converge rather than just a bare, easy-to-under-weight step count — see [Tag Protocol § not every recurring signal is a tag](tag-protocol.md).
 
 ## Failure escalation <a id="failure-escalation"></a>
 

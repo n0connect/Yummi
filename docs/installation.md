@@ -369,6 +369,16 @@ Or interactively: `make conf` → model choice → **Custom** → type the exact
 
 2. **Backend choice matters more for a custom model than for the qwen3 tiers.** The **Eino backend** (`YUMMI_AGENT_BACKEND=eino`, or `make conf`'s backend question) doesn't wrap the model in any tier profile at all — no context cap, no thinking-mode toggle from Yummi's side — it just talks to whatever `YUMMI_OLLAMA_MODEL` names via Ollama's OpenAI-compatible endpoint, so a big model's own context window (set via its Modelfile's `PARAMETER num_ctx`, or Ollama's own `OLLAMA_CONTEXT_LENGTH` env var) applies unmodified. Eino was specifically built for larger models with **native, reliable tool-calling** (see [Agent Overview § Two engines](agent/overview.md#two-engines)) — if the model you're bringing supports function-calling well, Eino is very likely the better fit over the graph engine's tag-protocol design, which targets smaller/weaker models that can't be trusted with structured tool-calling output.
 
+3. **Pointing the Eino loop at a server that isn't Ollama at all.** `YUMMI_EINO_MODEL_BASE_URL`/`YUMMI_EINO_MODEL_NAME`/`YUMMI_EINO_MODEL_NUM_CTX` are a separate override from the two points above — they redirect *only* the Eino ReAct loop to any OpenAI-compatible `/v1/chat/completions` server (e.g. a local LM Studio instance serving a model Ollama doesn't have), independent of `YUMMI_OLLAMA_MODEL`:
+   ```bash
+   YUMMI_AGENT_BACKEND=eino \
+   YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1 \
+   YUMMI_EINO_MODEL_NAME=openai/gpt-oss-20b \
+   YUMMI_EINO_MODEL_NUM_CTX=32768 \
+   make start
+   ```
+   All three are blank by default (falling back to the same URL/model/context the conductor already resolves) — zero effect unless you set them. The conductor's own chat/intent classification is untouched either way; it always stays on Ollama regardless of this override, so a task can run on the overridden model while ordinary chat keeps working normally.
+
 ---
 
 ## Running the full stack (Docker Compose) <a id="full-stack"></a>

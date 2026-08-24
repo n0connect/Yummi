@@ -27,7 +27,7 @@ If you take away one sentence from this whole page, take this one: **the model p
                          └──────────┬───────────┘
                                     │ /api, /ws (proxied)
                          ┌──────────▼───────────┐
-        CLI ──────▶│  orchestrator (Go)   │  :9080 (127.0.0.1 only)
+        CLI ────────────▶│  orchestrator (Go)   │  :9080 (127.0.0.1 only)
                          │  conductor + agent    │
                          └─────┬────────┬────────┘
                                 │        │
