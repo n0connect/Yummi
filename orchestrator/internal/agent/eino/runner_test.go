@@ -831,11 +831,11 @@ func TestShouldNudgeIncompleteGoals(t *testing.T) {
 	twoParts := []string{"scan ports", "grab banner"}
 	threeParts := []string{"a", "b", "c"}
 	cases := []struct {
-		name         string
-		parts        []string
-		covered      int
+		name          string
+		parts         []string
+		covered       int
 		alreadyNudged bool
-		want         bool
+		want          bool
 	}{
 		{"two parts, one covered -> nudge", twoParts, 1, false, true},
 		{"two parts, both covered -> no nudge", twoParts, 2, false, false},

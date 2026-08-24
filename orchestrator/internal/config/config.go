@@ -54,8 +54,8 @@ type Config struct {
 	EinoModelBaseURL string
 	EinoModelName    string
 	EinoModelNumCtx  int
-	TLSDir              string // directory holding mTLS certificates for orchestrator ↔ gateway
-	GatewayTLS          bool   // opt-in until the Rust gateway IPC server supports TLS framing
+	TLSDir           string // directory holding mTLS certificates for orchestrator ↔ gateway
+	GatewayTLS       bool   // opt-in until the Rust gateway IPC server supports TLS framing
 	// DataRetentionDays enables internal/retention's background pruning of
 	// old chat_messages/agent_activity/executions rows when > 0. 0 (the
 	// default) disables it entirely — see internal/retention's package doc

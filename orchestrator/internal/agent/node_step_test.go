@@ -92,7 +92,7 @@ func TestStepNodeTracksRealPromptSizeNotJustObservationBytes(t *testing.T) {
 	s := &GraphState{
 		taskID: task.ID, store: store, cfg: cfg,
 		memCtx: MemoryContext{TokenBudget: 100000}, // large budget: NeedsCompression must not gate this run
-		llm: newFakeOllama(t, "[RUN_COMMAND]\n"+`{"command":"whoami","step_id":"s1","risk_level":"low"}`),
+		llm:    newFakeOllama(t, "[RUN_COMMAND]\n"+`{"command":"whoami","step_id":"s1","risk_level":"low"}`),
 	}
 
 	if s.memCtx.TokensUsed != 0 {
