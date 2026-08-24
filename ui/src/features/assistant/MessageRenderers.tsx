@@ -136,7 +136,8 @@ function formatOutputForDisplay(text: string): {
 export function ExecutionMessage({
   content,
   execution,
-  liveOutput
+  liveOutput,
+  onCancel
 }: {
   content: string
   execution: ExecutionRecord
@@ -145,6 +146,11 @@ export function ExecutionMessage({
   // undefined/empty until the first chunk arrives; always superseded by
   // execution.output once the record reaches a terminal status.
   liveOutput?: string
+  // Cancels this specific execution (POST /executions/{id}/cancel) — the
+  // only stop affordance a bare command dispatched outside an agent task
+  // has, since the composer's Stop button is wired to activeTask and stays
+  // hidden when there's no task, ever (see AssistantPanel's cancelExecution).
+  onCancel?: (executionID: string) => void
 }): JSX.Element {
   const status = execution.status
   const isActive = ['queued', 'running'].includes(status)
@@ -214,6 +220,16 @@ export function ExecutionMessage({
                   ? `${t('assistant.runningWithElapsedBefore')}${formatElapsed(execution.elapsed_secs)}${t('assistant.runningWithElapsedAfter')}`
                   : t('assistant.runningNoElapsed')}
             </span>
+            {onCancel && (
+              <button
+                type="button"
+                className="btn-execution-cancel"
+                title={t('assistant.cancelExecutionTitle')}
+                onClick={() => onCancel(execution.id)}
+              >
+                {t('assistant.cancelExecutionButton')}
+              </button>
+            )}
           </div>
         )}
         {execution.security_banner && (
