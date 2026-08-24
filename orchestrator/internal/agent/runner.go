@@ -376,8 +376,24 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 	// per part), so decompose deterministically from the operator's own
 	// enumeration markers instead — no model judgment involved. Only fires on
 	// explicitly enumerated goals; a single free-form instruction is never
-	// touched (splitEnumeratedParts returns nil).
-	enumParts := splitEnumeratedParts(goal)
+	// touched (SplitEnumeratedParts returns nil).
+	enumParts := SplitEnumeratedParts(goal)
+	if len(enumParts) < 2 && LikelyMultiPart(goal) {
+		// No explicit "1) ... 2) ..." markers — this is the common case in
+		// real operator phrasing ("scan X and also check Y", "X'i tara ve
+		// Y'yi kontrol et"), which the marker regex above cannot see at all.
+		// A narrow, separately-scoped audit call catches the same
+		// under-decomposition failure for natural-language multi-part goals
+		// instead of leaving them with zero protection. Gated by
+		// LikelyMultiPart so this extra round-trip is only spent when the
+		// goal actually contains coordinating language — most real goals are
+		// single-intent and must not pay for an audit call that can only
+		// ever come back negative. Best-effort: nil on any failure, so a
+		// single-intent goal (or an LLM hiccup) never adds spurious steps.
+		if audited := AuditGoalParts(ctx, r.llm, goal); len(audited) >= 2 {
+			enumParts = audited
+		}
+	}
 	if len(enumParts) > len(steps) {
 		synthesized := make([]PlanStep, len(enumParts))
 		for i, part := range enumParts {

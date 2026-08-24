@@ -437,7 +437,7 @@ func TestCreateAndPlan_EnumeratedGoalAdequatePlanKept(t *testing.T) {
 
 // TestSplitEnumeratedParts is the pure, deterministic unit test of the split.
 func TestSplitEnumeratedParts(t *testing.T) {
-	got := splitEnumeratedParts("Uc sey yap: 1) diskte /var altinda en buyuk 3 dosyayi bul, 2) kac tane CPU cekirdegi oldugunu soyle, 3) sandbox'ta hangi kullanicilar var listele.")
+	got := SplitEnumeratedParts("Uc sey yap: 1) diskte /var altinda en buyuk 3 dosyayi bul, 2) kac tane CPU cekirdegi oldugunu soyle, 3) sandbox'ta hangi kullanicilar var listele.")
 	want := []string{
 		"diskte /var altinda en buyuk 3 dosyayi bul",
 		"kac tane CPU cekirdegi oldugunu soyle",
@@ -452,7 +452,7 @@ func TestSplitEnumeratedParts(t *testing.T) {
 		}
 	}
 	// Non-enumerated → nil.
-	if p := splitEnumeratedParts("just find the biggest file"); p != nil {
+	if p := SplitEnumeratedParts("just find the biggest file"); p != nil {
 		t.Errorf("free-form goal split to %#v, want nil", p)
 	}
 }
@@ -481,5 +481,33 @@ func TestCreateAndPlan_SkillStepLimitDoesNotClampEnumeration(t *testing.T) {
 	}
 	if len(task.Plan) != 3 {
 		t.Fatalf("plan has %d steps, want 3 — a single-technique skill cap clamped an explicit 3-part enumeration: %+v", len(task.Plan), task.Plan)
+	}
+}
+
+// TestCreateAndPlan_NaturalLanguageMultiPartGoalAudited proves the natural-
+// language fallback: a goal with NO numbered markers ("check the OS and
+// list the open ports" — real operator phrasing, not "1) ... 2) ...") whose
+// planner call still under-decomposes to one step must be caught by the
+// AuditGoalParts fallback, not silently accepted the way
+// TestCreateAndPlan_FreeFormGoalNotTouched's genuinely single-intent goal
+// correctly is. The fake LLM serves the plan call's single-step response
+// first, then the audit call's two-line enumeration second.
+func TestCreateAndPlan_NaturalLanguageMultiPartGoalAudited(t *testing.T) {
+	store, err := NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	oneStep := `{"steps":[{"id":"s1","description":"check what OS is running"}]}`
+	auditResponse := "check what OS is running\nlist the open ports"
+	r := NewRunner(store, newFakeOllama(t, oneStep, auditResponse), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	goal := "check what OS is running and also list the open ports"
+	task, err := r.CreateAndPlan(context.Background(), "sess", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 2 {
+		t.Fatalf("plan has %d steps, want 2 (audit-driven decomposition of an unmarked multi-part goal): %+v",
+			len(task.Plan), task.Plan)
 	}
 }

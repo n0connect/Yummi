@@ -46,6 +46,7 @@ var Registry = []Tag{
 	{"APPROVAL_TIMEOUT", AgentToLLM, "Approval timed out.", "command"},
 	{"PLAN_UPDATED", AgentToLLM, "Your plan update was accepted.", "reason"},
 	{"BUDGET_WARNING", AgentToLLM, "Few steps remain. Converge toward finishing.", "steps used/remaining"},
+	{"INCOMPLETE_GOALS", AgentToLLM, "You tried to FINISH while parts of the goal are still unaddressed. Complete each remaining part, or mark it unreachable via [UPDATE_PLAN], before finishing.", "open goal parts"},
 	{"UNKNOWN", AgentToLLM, "The agent could not classify this situation. Raw content follows. HIGHEST PRIORITY — you decide what to do.", "raw content"},
 	{"OPERATOR_ANSWER", AgentToLLM, "The operator's reply to your [ASK_OPERATOR] question. Use it to decide your next action.", "operator's message"},
 

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -96,8 +98,88 @@ func TestCountEnumeratedParts(t *testing.T) {
 		{"see item 2) and item 5)", 0},
 	}
 	for _, c := range cases {
-		if got := countEnumeratedParts(c.goal); got != c.want {
-			t.Errorf("countEnumeratedParts(%q) = %d, want %d", c.goal, got, c.want)
+		if got := CountEnumeratedParts(c.goal); got != c.want {
+			t.Errorf("CountEnumeratedParts(%q) = %d, want %d", c.goal, got, c.want)
 		}
+	}
+}
+
+func TestAuditGoalParts_ParsesMultiLineResponse(t *testing.T) {
+	llm := newFakeOllama(t, "check what OS is running\nlist the open ports")
+	parts := AuditGoalParts(context.Background(), llm, "check the OS and list open ports")
+	if len(parts) != 2 {
+		t.Fatalf("parts = %v, want 2 entries", parts)
+	}
+	if parts[0] != "check what OS is running" || parts[1] != "list the open ports" {
+		t.Fatalf("parts = %v, unexpected content", parts)
+	}
+}
+
+func TestAuditGoalParts_SingleLineReturnsNil(t *testing.T) {
+	llm := newFakeOllama(t, "scan 10.0.0.1 for open ports")
+	parts := AuditGoalParts(context.Background(), llm, "scan 10.0.0.1 for open ports")
+	if parts != nil {
+		t.Fatalf("parts = %v, want nil for a single-intent goal", parts)
+	}
+}
+
+func TestAuditGoalParts_StripsBulletsAndNumberMarkers(t *testing.T) {
+	llm := newFakeOllama(t, "1. check the OS\n2) list open ports")
+	parts := AuditGoalParts(context.Background(), llm, "check the OS and list open ports")
+	if len(parts) != 2 {
+		t.Fatalf("parts = %v, want 2 entries", parts)
+	}
+	if parts[0] != "check the OS" || parts[1] != "list open ports" {
+		t.Fatalf("parts = %v, markers/bullets not stripped cleanly", parts)
+	}
+}
+
+func TestAuditGoalParts_TooManyLinesReturnsNil(t *testing.T) {
+	var lines []string
+	for i := range 12 {
+		lines = append(lines, fmt.Sprintf("part %d", i))
+	}
+	llm := newFakeOllama(t, strings.Join(lines, "\n"))
+	parts := AuditGoalParts(context.Background(), llm, "do a lot of things")
+	if parts != nil {
+		t.Fatalf("parts = %v, want nil for pathological line count", parts)
+	}
+}
+
+func TestAuditGoalParts_NilLLMReturnsNil(t *testing.T) {
+	if parts := AuditGoalParts(context.Background(), nil, "scan the host"); parts != nil {
+		t.Fatalf("parts = %v, want nil with no LLM configured", parts)
+	}
+}
+
+func TestLikelyMultiPart(t *testing.T) {
+	cases := []struct {
+		goal string
+		want bool
+	}{
+		{"check the OS and list open ports", true},
+		{"X'i tara ve Y'yi kontrol et", true},
+		{"scan the host, then check the banner", true},
+		{"scan the host; also check the banner", true},
+		{"recon", false},
+		{"go", false},
+		{"delegate to two specialists", false},
+		{"scan 10.0.0.1 for open ports", false},
+	}
+	for _, c := range cases {
+		if got := LikelyMultiPart(c.goal); got != c.want {
+			t.Errorf("LikelyMultiPart(%q) = %v, want %v", c.goal, got, c.want)
+		}
+	}
+}
+
+func TestSanitizeAgentText_StripsSpecialTokens(t *testing.T) {
+	in := "<|channel|>final <|constrain|>finish<|channel|>commentary json<|message|>the OS is Linux"
+	got := SanitizeAgentText(in)
+	if strings.Contains(got, "<|") {
+		t.Fatalf("special tokens not stripped: %q", got)
+	}
+	if !strings.Contains(got, "the OS is Linux") {
+		t.Fatalf("real content lost: %q", got)
 	}
 }
