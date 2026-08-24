@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -524,14 +526,16 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		// to catch. Both cases mean the same thing operationally: this run
 		// produced its last action, decide now whether that was premature.
 		believesFinished := called || lastMessage != nil
-		if believesFinished && shouldNudgeIncompleteGoals(enumParts, len(trace.pairs()), nudged) {
-			nudged = true
-			openingMessage = buildIncompleteGoalsMessage(t.Goal, enumParts, trace)
-			r.store.RecordActivity(agent.ActivityEvent{
-				SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
-				Summary: fmt.Sprintf("finish reached with %d/%d goal parts covered — continuing", len(trace.pairs()), len(enumParts)),
-			})
-			continue
+		if believesFinished && !nudged && len(enumParts) >= 2 && r.cfg.PlanLLM != nil {
+			if uncovered := auditFinishCoverage(ctx, r.cfg.PlanLLM, enumParts, summary, trace); len(uncovered) > 0 {
+				nudged = true
+				openingMessage = buildIncompleteGoalsMessage(t.Goal, uncovered, trace)
+				r.store.RecordActivity(agent.ActivityEvent{
+					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+					Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing", len(uncovered), len(enumParts)),
+				})
+				continue
+			}
 		}
 		break
 	}
@@ -650,23 +654,98 @@ func (r *EinoRunner) instruction(goal string) string {
 	return instr
 }
 
-// shouldNudgeIncompleteGoals decides whether a finish should be bounced once so
-// the model completes an under-covered multi-part goal. It fires only for an
-// enumerated goal with >= 2 parts, only when fewer distinct tool results were
-// produced than the goal has parts (the "answered part 1, called it done"
-// signature), and never more than once — a model that finishes again after the
-// checklist re-run is obeyed. Kept as a pure predicate so the guard's decision
-// is unit-testable without a live model.
-func shouldNudgeIncompleteGoals(parts []string, coveredResults int, alreadyNudged bool) bool {
-	return !alreadyNudged && len(parts) >= 2 && coveredResults < len(parts)
+// leadingIntRe extracts the first integer in an audit-reply line ("3", "3)",
+// "- 3", "part 3", ...) — auditFinishCoverage's only parsing need.
+var leadingIntRe = regexp.MustCompile(`\d{1,2}`)
+
+// auditFinishCoverage asks a narrow, single-purpose LLM call whether a
+// finish attempt actually addressed every part of a multi-part goal, and
+// returns the text of any part it did not. This replaces a previous
+// heuristic that compared total tool-call count against part count — which
+// stopped firing the moment a task made more tool calls than it had parts,
+// near-universal in any real multi-step task since real-world friction means
+// a single part often needs several calls on its own. Live-observed: an
+// 8-part goal reached FINISH at 58 real tool calls with one entire
+// requested part (a hydra credential check) never attempted at all, and the
+// old comparison (58 >= 8) never caught it because it measured volume, not
+// coverage. Judging whether a summary/trace covers a goal is the same class
+// of narrower, easier task AuditGoalParts already leans on being more
+// reliable than the main loop at (see that function's own doc comment) —
+// the same principle applied at the other end of the task instead of the
+// start. Best-effort: any LLM error, empty reply, or an "ALL COVERED" answer
+// returns nil so an audit-call failure never blocks a genuine finish.
+func auditFinishCoverage(ctx context.Context, llm agent.LLM, parts []string, summary string, trace *runTrace) []string {
+	if llm == nil || len(parts) < 2 {
+		return nil
+	}
+	var goalParts strings.Builder
+	for i, p := range parts {
+		fmt.Fprintf(&goalParts, "%d) %s\n", i+1, strings.TrimSpace(p))
+	}
+	var work strings.Builder
+	if pairs := trace.pairs(); len(pairs) > 0 {
+		for _, p := range pairs {
+			fmt.Fprintf(&work, "- %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
+		}
+	} else {
+		work.WriteString("(no tool calls recorded)\n")
+	}
+	system := "You audit a penetration-testing agent's finished work against the original goal. You do not plan or execute anything."
+	user := fmt.Sprintf(
+		"GOAL PARTS:\n%s\nWORK ACTUALLY DONE (tool calls and their results):\n%s\nFINISH SUMMARY:\n%s\n\n"+
+			"List the number of each goal part above that was NOT genuinely attempted by the work done, one number per line. "+
+			"A part counts as attempted if a real command targeting it was run and produced a result, even a failure or an empty "+
+			"result — only flag a part with NO corresponding attempt at all. If every part was attempted, reply with exactly: ALL COVERED",
+		goalParts.String(), work.String(), strings.TrimSpace(summary))
+	raw, err := llm.Chat(ctx, system, user)
+	if err != nil {
+		return nil
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(strings.ToUpper(raw), "ALL COVERED") {
+		return nil
+	}
+	var uncovered []string
+	seen := make(map[int]bool, len(parts))
+	for line := range strings.SplitSeq(raw, "\n") {
+		m := leadingIntRe.FindString(line)
+		if m == "" {
+			continue
+		}
+		n, convErr := strconv.Atoi(m)
+		if convErr != nil || n < 1 || n > len(parts) || seen[n] {
+			continue
+		}
+		seen[n] = true
+		uncovered = append(uncovered, parts[n-1])
+	}
+	return uncovered
 }
 
 // buildIncompleteGoalsMessage is the opening message for the single bounded
 // re-run the premature-FINISH guard triggers. Like the paused-resume message,
-// it starts a fresh conversation, so it must carry both the goal's parts and
-// the work already done — otherwise the model would redo part 1 instead of
-// advancing to the untouched parts. It never fabricates: the "already done"
-// lines are verbatim (compressed) results the task actually produced.
+// it starts a fresh conversation, so it must carry both the uncovered parts
+// and the work already done — otherwise the model would redo covered parts
+// instead of advancing to the untouched ones. It never fabricates: the
+// "already done" lines are verbatim (compressed) results the task actually
+// produced.
+func buildIncompleteGoalsMessage(goal string, uncoveredParts []string, trace *runTrace) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Continuing the original multi-part goal: %s\n\n", goal)
+	b.WriteString("You called finish, but these parts were NOT genuinely attempted:\n")
+	for i, p := range uncoveredParts {
+		fmt.Fprintf(&b, "  %d) %s\n", i+1, strings.TrimSpace(p))
+	}
+	if pairs := trace.pairs(); len(pairs) > 0 {
+		b.WriteString("\nWork already completed (do NOT repeat these):\n")
+		for _, p := range pairs {
+			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
+		}
+	}
+	b.WriteString("\nRun a real command/tool for each part listed above, then call finish again once every part is genuinely done.")
+	return b.String()
+}
+
 // tryParseEmbeddedFinishJSON looks for a {"summary":...} object embedded
 // anywhere in raw fallback content and parses it as finishArgs. ok is false
 // when no valid finishArgs-shaped object is found (no braces at all, invalid
@@ -724,25 +803,6 @@ func buildRetryAfterErrorMessage(goal string, trace *runTrace) string {
 		}
 	}
 	b.WriteString("\nContinue from here toward the goal.")
-	return b.String()
-}
-
-func buildIncompleteGoalsMessage(goal string, parts []string, trace *runTrace) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Continuing the original multi-part goal: %s\n\n", goal)
-	b.WriteString("The goal has these distinct parts:\n")
-	for i, p := range parts {
-		fmt.Fprintf(&b, "  %d) %s\n", i+1, strings.TrimSpace(p))
-	}
-	if pairs := trace.pairs(); len(pairs) > 0 {
-		b.WriteString("\nWork already completed (do NOT repeat these):\n")
-		for _, p := range pairs {
-			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
-		}
-	}
-	b.WriteString("\nYou called finish, but not every part above has been addressed yet. " +
-		"Work through each part that still has no result — run a real command/tool for it — " +
-		"and only call finish once every part is genuinely done.")
 	return b.String()
 }
 

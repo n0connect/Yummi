@@ -3,6 +3,7 @@ package eino
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
+	"github.com/n0connect/yummi/orchestrator/internal/llm"
 )
 
 func TestEinoRunner_SatisfiesTaskRunner(t *testing.T) {
@@ -827,30 +829,65 @@ func TestEinoRunner_Approve_ResolvesSubAgentGate(t *testing.T) {
 	}
 }
 
-func TestShouldNudgeIncompleteGoals(t *testing.T) {
-	twoParts := []string{"scan ports", "grab banner"}
-	threeParts := []string{"a", "b", "c"}
-	cases := []struct {
-		name          string
-		parts         []string
-		covered       int
-		alreadyNudged bool
-		want          bool
-	}{
-		{"two parts, one covered -> nudge", twoParts, 1, false, true},
-		{"two parts, both covered -> no nudge", twoParts, 2, false, false},
-		{"two parts, one covered but already nudged -> no", twoParts, 1, true, false},
-		{"three parts, two covered -> nudge", threeParts, 2, false, true},
-		{"single-intent goal -> never nudge", []string{"just scan it"}, 0, false, false},
-		{"no parts -> never nudge", nil, 0, false, false},
+// TestAuditFinishCoverage_ParsesUncoveredPartNumbers is the regression test
+// for the exact live-observed gap: an 8-part goal reached finish at 58 real
+// tool calls with one part (a hydra credential check) never attempted — the
+// old "tool-call count >= part count" heuristic couldn't catch this, since
+// volume had long since exceeded the part count. auditFinishCoverage instead
+// asks the model directly and trusts its judgment, parsed from a
+// newline-separated list of part numbers.
+func TestAuditFinishCoverage_ParsesUncoveredPartNumbers(t *testing.T) {
+	parts := []string{"scan ports", "grab banner", "check credentials"}
+	llm := scriptedOllama(t, "2\n3")
+	tr := &runTrace{}
+	tr.record("nmap -sV 10.0.0.1", "22/tcp open ssh")
+
+	got := auditFinishCoverage(context.Background(), llm, parts, "found ssh open", tr)
+	want := []string{"grab banner", "check credentials"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := shouldNudgeIncompleteGoals(c.parts, c.covered, c.alreadyNudged); got != c.want {
-				t.Fatalf("shouldNudgeIncompleteGoals(%v, %d, %v) = %v, want %v",
-					c.parts, c.covered, c.alreadyNudged, got, c.want)
-			}
-		})
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("uncovered[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestAuditFinishCoverage_AllCoveredReturnsNil proves the positive case: the
+// model reporting full coverage must not trigger a spurious nudge.
+func TestAuditFinishCoverage_AllCoveredReturnsNil(t *testing.T) {
+	parts := []string{"scan ports", "grab banner"}
+	llm := scriptedOllama(t, "ALL COVERED")
+	if got := auditFinishCoverage(context.Background(), llm, parts, "done", &runTrace{}); got != nil {
+		t.Fatalf("got %v, want nil for a fully-covered report", got)
+	}
+}
+
+// TestAuditFinishCoverage_SingleIntentGoalNeverAudited proves the guard
+// never spends an LLM call on a goal with fewer than 2 detected parts.
+func TestAuditFinishCoverage_SingleIntentGoalNeverAudited(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		fmt.Fprint(w, `{"message":{"role":"assistant","content":"1"},"done":true}`)
+	}))
+	defer srv.Close()
+	client := llm.NewClient(srv.URL, "test-model")
+
+	if got := auditFinishCoverage(context.Background(), client, []string{"just scan it"}, "done", &runTrace{}); got != nil {
+		t.Fatalf("got %v, want nil for a single-part goal", got)
+	}
+	if calls != 0 {
+		t.Fatalf("LLM called %d times, want 0 — single-intent goals must not pay for an audit call", calls)
+	}
+}
+
+// TestAuditFinishCoverage_NilLLMReturnsNil mirrors AuditGoalParts' own
+// nil-safety: no PlanLLM configured must never panic or block a real finish.
+func TestAuditFinishCoverage_NilLLMReturnsNil(t *testing.T) {
+	if got := auditFinishCoverage(context.Background(), nil, []string{"a", "b"}, "done", &runTrace{}); got != nil {
+		t.Fatalf("got %v, want nil with no LLM configured", got)
 	}
 }
 
@@ -884,7 +921,12 @@ func TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged(t *testing
 	}
 	r := NewEinoRunner(store, nil, nil, Config{
 		ModelBaseURL: reactSrv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
-		PlanLLM: scriptedOllama(t, "check what OS is running\nlist the open ports"),
+		// Two scripted PlanLLM replies in order: the first decomposes the
+		// unmarked goal into two parts (AuditGoalParts, at Run() start); the
+		// second is auditFinishCoverage's coverage judgment once the model
+		// immediately calls finish with zero tool calls made — both parts are
+		// genuinely uncovered, so "1\n2" is the honest answer here.
+		PlanLLM: scriptedOllama(t, "check what OS is running\nlist the open ports", "1\n2"),
 	})
 
 	task, err := r.CreateAndPlan(context.Background(), "session-1", "check what OS is running and also list the open ports")
@@ -905,7 +947,7 @@ func TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged(t *testing
 
 	nudged := false
 	for _, ev := range store.ListActivity(task.SessionID, 50) {
-		if strings.Contains(ev.Summary, "goal parts covered") {
+		if strings.Contains(ev.Summary, "goal parts uncovered") {
 			nudged = true
 		}
 	}
@@ -1083,7 +1125,12 @@ func TestEinoRunner_Run_NudgesWhenModelStopsWithoutCallingFinish(t *testing.T) {
 	exec := &fakeExecer{ran: make(chan string, 4), content: "pentester"}
 	r := NewEinoRunner(store, nil, exec, Config{
 		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
-		PlanLLM: scriptedOllama(t, "check who we are\nfind out how many CPU cores"),
+		// Two scripted PlanLLM replies: the first decomposes the goal
+		// (AuditGoalParts); the second is auditFinishCoverage's judgment at
+		// turn 2, when the model stopped after only "whoami" — part 1 (who we
+		// are) is covered, part 2 (CPU cores) genuinely is not, so "2" is the
+		// honest answer.
+		PlanLLM: scriptedOllama(t, "check who we are\nfind out how many CPU cores", "2"),
 	})
 	task, err := r.CreateAndPlan(context.Background(), "session-1", "check who we are and also find out how many CPU cores we have")
 	if err != nil {
@@ -1102,7 +1149,7 @@ func TestEinoRunner_Run_NudgesWhenModelStopsWithoutCallingFinish(t *testing.T) {
 
 	nudged := false
 	for _, ev := range store.ListActivity(task.SessionID, 50) {
-		if strings.Contains(ev.Summary, "goal parts covered") {
+		if strings.Contains(ev.Summary, "goal parts uncovered") {
 			nudged = true
 		}
 	}
