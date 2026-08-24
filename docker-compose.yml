@@ -153,6 +153,21 @@ services:
       # (no override; a custom model still gets Pro's fixed 16K context/
       # no-thinking profile unless set here).
       YUMMI_OLLAMA_NUM_CTX: "${YUMMI_OLLAMA_NUM_CTX:-}"
+      # Optional: point ONLY the Eino agent backend's ReAct loop at a
+      # different OpenAI-compatible server/model than Ollama — e.g. a local
+      # LM Studio instance running a larger tool-calling model on the same
+      # host. All three blank by default, in which case the orchestrator
+      # derives the exact same target it always has (Ollama's own
+      # OpenAI-compat endpoint above) — purely additive, no behavior change
+      # until set. The host.docker.internal extra_hosts entry below already
+      # covers reaching a host-run server on any port, so no new networking
+      # is needed — just set the port your server actually listens on, e.g.
+      # YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1. The
+      # conductor (chat/intent classification) is unaffected either way; it
+      # always uses YUMMI_OLLAMA_URL/MODEL above regardless of this override.
+      YUMMI_EINO_MODEL_BASE_URL: "${YUMMI_EINO_MODEL_BASE_URL:-}"
+      YUMMI_EINO_MODEL_NAME: "${YUMMI_EINO_MODEL_NAME:-}"
+      YUMMI_EINO_MODEL_NUM_CTX: "${YUMMI_EINO_MODEL_NUM_CTX:-}"
       YUMMI_OLLAMA_THINKING: "${YUMMI_OLLAMA_THINKING:-}"
       YUMMI_AGENT_BACKEND: "${YUMMI_AGENT_BACKEND:-graph}"
       # Background pruning of old chat_messages/agent_activity/executions

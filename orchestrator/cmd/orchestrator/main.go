@@ -129,7 +129,35 @@ func main() {
 	// dispatch path (processMCP) regardless of which agent backend is active;
 	// only the Eino backend currently issues MCP tool calls.
 	sandboxMCPClient := sandboxmcp.NewClient(cfg.SandboxContainer)
-	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel)
+	// preloadNumCtx is the larger of the conductor's own resolved context and
+	// any explicit Eino override THAT TARGETS THE SAME OLLAMA INSTANCE (an
+	// unset EinoModelBaseURL, or one explicitly equal to the derived Ollama
+	// OpenAI-compat URL — when Eino points at a genuinely different server,
+	// e.g. LM Studio, its num_ctx is irrelevant to this Ollama client and
+	// must not inflate its preload for no reason). Applied via
+	// WithOptions below instead of NewClient's DefaultQwen3Options hardcoded
+	// 16384. Without this, Preload() — which runs at startup, before any
+	// real chat request — could be the first call to touch a not-yet-loaded
+	// model, permanently fixing its context window: Ollama allocates a
+	// model's KV cache once, sized by whichever request loads it, and every
+	// later request asking for a different num_ctx (the conductor's own
+	// resolved value, OR Eino's explicit override) is silently served
+	// against that already-fixed size instead of getting what it asked for.
+	// Live-observed twice: once with Preload's old hardcoded 16384 beating a
+	// differently-resolved tier value, and again with Preload's (correctly
+	// resolved but smaller) value beating Eino's own larger explicit
+	// EinoModelNumCtx.
+	preloadNumCtx := resolvedNumCtx
+	einoTargetsSameOllama := cfg.EinoModelBaseURL == "" ||
+		cfg.EinoModelBaseURL == strings.TrimSuffix(cfg.OllamaURL, "/")+"/v1"
+	if einoTargetsSameOllama && cfg.EinoModelNumCtx > preloadNumCtx {
+		preloadNumCtx = cfg.EinoModelNumCtx
+	}
+	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel).WithOptions(func() llm.Options {
+		o := llm.DefaultQwen3Options()
+		o.NumCtx = preloadNumCtx
+		return o
+	}())
 
 	// Semantic retrieval: an optional local embedding model (separate Ollama
 	// pull from the chat model) lets procedural memory rank by similarity
@@ -282,6 +310,17 @@ func main() {
 						// parent's SubAgentTimeout bump below, which is the actual
 						// wall-clock ceiling this step budget runs against.
 						StepBudget: 40,
+						// TokenBudget scales with the model's actual configured
+						// context window (resolvedNumCtx) instead of the
+						// package's hardcoded 6000 fallback, which was sized for
+						// nothing in particular and identical across lite/pro/
+						// expert tiers regardless of their real 8192/16384/32768
+						// windows. Half the window is reserved as compression
+						// headroom for persona/skills/plan overhead and model
+						// output; the other half is the raw-observation budget
+						// NeedsCompression watches. A higher step budget (40 vs
+						// 15) makes this even more load-bearing for sub-agents.
+						TokenBudget: resolvedNumCtx / 2,
 					},
 				)
 			}
@@ -296,6 +335,32 @@ func main() {
 			// build tag, so operators can switch by restarting the
 			// container, not rebuilding it; make conf's YUMMI_AGENT_BACKEND
 			// question just pre-seeds this for convenience.
+			//
+			// Eino's own model target defaults to mirroring the conductor's
+			// Ollama config exactly as before (same URL rewritten to its
+			// OpenAI-compat path, same model, same resolved context window)
+			// — zero behavior change for anyone who hasn't set the three
+			// EinoModel* overrides. An operator CAN point only the agent
+			// loop at a different OpenAI-compatible server/model (e.g. a
+			// local LM Studio instance running a larger tool-calling model)
+			// via YUMMI_EINO_MODEL_BASE_URL/YUMMI_EINO_MODEL_NAME/
+			// YUMMI_EINO_MODEL_NUM_CTX — see config.Config's doc comments.
+			// The conductor keeps using Ollama regardless of this setting:
+			// chat/intent classification never goes through the agent
+			// backend, so it has no dependency on which model drives tasks.
+			einoModelBaseURL := cfg.EinoModelBaseURL
+			if einoModelBaseURL == "" {
+				einoModelBaseURL = strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1"
+			}
+			einoModelName := cfg.EinoModelName
+			if einoModelName == "" {
+				einoModelName = cfg.OllamaModel
+			}
+			einoModelNumCtx := cfg.EinoModelNumCtx
+			if einoModelNumCtx <= 0 {
+				einoModelNumCtx = resolvedNumCtx
+			}
+
 			switch backend := strings.ToLower(os.Getenv("YUMMI_AGENT_BACKEND")); backend {
 			case "eino":
 				taskRunner = eino.NewEinoRunner(
@@ -303,11 +368,17 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					eino.Config{
-						StepBudget:    15,
-						ApprovalMode:  agent.ModeAskPermission,
-						ModelBaseURL:  strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
-						ModelName:     cfg.OllamaModel,
-						ModelNumCtx:   resolvedNumCtx,
+						StepBudget:   15,
+						ApprovalMode: agent.ModeAskPermission,
+						ModelBaseURL: einoModelBaseURL,
+						ModelName:    einoModelName,
+						ModelNumCtx:  einoModelNumCtx,
+						// Built from the SAME target as the ReAct loop above
+						// (not the conductor's agentLLM) so the goal-part
+						// audit call runs on whichever model is actually
+						// driving this task, self-consistent regardless of
+						// whether that's Ollama or an override.
+						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, einoModelNumCtx, 0),
 						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
@@ -324,7 +395,7 @@ func main() {
 						SubAgentTimeout: 20 * time.Minute,
 					},
 				)
-				slog.Info("agent backend: eino", "model", cfg.OllamaModel)
+				slog.Info("agent backend: eino", "model", einoModelName, "base_url", einoModelBaseURL)
 			default:
 				taskRunner = agent.NewRunner(
 					taskStore,
@@ -345,6 +416,19 @@ func main() {
 						// a larger budget needs proportionally more wall clock or the
 						// timeout, not the step count, becomes the real limiter.
 						SubAgentTimeout: 20 * time.Minute,
+						// Same resolvedNumCtx-scaled TokenBudget as the sub-agent
+						// Config above — see that field's comment. Previously this
+						// was left unset (defaulting to a flat 6000 regardless of
+						// tier), the single biggest reason long multi-step tasks
+						// degraded unpredictably: on lite (8192 ctx) 6000 raw-
+						// observation tokens plus untracked persona/plan/skills
+						// overhead could already be past the real window; on
+						// expert (32768 ctx) the same 6000 triggered lossy
+						// LLM-resummarization passes far earlier than necessary,
+						// discarding specific technical detail (exact versions,
+						// paths, header values) for no reason — a real quality
+						// cost paid on every long session regardless of backend.
+						TokenBudget: resolvedNumCtx / 2,
 					},
 				)
 				slog.Info("agent backend: graph")
