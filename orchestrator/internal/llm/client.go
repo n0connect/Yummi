@@ -266,11 +266,22 @@ type ollamaRequest struct {
 	Model     string    `json:"model"`
 	Messages  []Message `json:"messages"`
 	Stream    bool      `json:"stream"`
-	Format    string    `json:"format,omitempty"`
 	KeepAlive any       `json:"keep_alive,omitempty"`
 	// Think controls Qwen3 extended thinking mode. Must be top-level, NOT inside
 	// options — Ollama's template renderer reads it here and gates <think> tokens.
 	// false = fast responses (no hidden reasoning chain); true = deeper but slower.
+	//
+	// Deliberately no "format":"json" here even for JSON-expecting callers
+	// (BuildPlanPrompt, conductor's structured chat replies) — live-observed
+	// against gpt-oss:20b: combined with Think=false, Ollama's forced-JSON
+	// grammar constraint made the model return a fully empty message (no
+	// content AND no thinking, despite eval_count showing real tokens
+	// generated) for any non-trivial system prompt, not just a slow response.
+	// Every JSON-expecting caller already instructs "reply with ONLY this
+	// JSON" in its own prompt text and has its own parse-failure handling
+	// (e.g. ParsePlan's one-retry-with-reminder), so the Ollama-level
+	// constraint was redundant defense that turned out to actively break the
+	// model it was meant to help.
 	Think   *bool         `json:"think,omitempty"`
 	Options ollamaOptions `json:"options"`
 }
@@ -287,7 +298,6 @@ func (c *Client) do(ctx context.Context, messages []Message) (string, error) {
 		Model:     c.model,
 		Messages:  messages,
 		Stream:    false,
-		Format:    "json",
 		KeepAlive: c.keepAlive,
 		Think:     o.Think, // top-level: Ollama gates Qwen3 <think> tokens here
 		Options: ollamaOptions{
@@ -368,7 +378,6 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 		Model:     c.model,
 		Messages:  messages,
 		Stream:    true,
-		Format:    "json",
 		KeepAlive: c.keepAlive,
 		Think:     o.Think, // top-level: Ollama gates Qwen3 <think> tokens here
 		Options: ollamaOptions{

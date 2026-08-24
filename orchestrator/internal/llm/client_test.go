@@ -24,9 +24,6 @@ func TestClientChat(t *testing.T) {
 		if req.Model == "" {
 			t.Error("expected model in request")
 		}
-		if req.Format != "json" {
-			t.Errorf("expected format=json, got %q", req.Format)
-		}
 		// System message should be first
 		if len(req.Messages) < 2 || req.Messages[0].Role != "system" {
 			t.Error("expected first message to be system")
@@ -113,6 +110,34 @@ func TestClientChatEmptyContentAndThinkingIsStillAnError(t *testing.T) {
 	_, err := client.Chat(context.Background(), "system", "user")
 	if err == nil || !strings.Contains(err.Error(), "empty message") {
 		t.Fatalf("expected empty-message error when both fields are blank, got: %v", err)
+	}
+}
+
+// TestClientChatNeverSendsFormatJSON is the regression test for a real,
+// live-reproduced gpt-oss:20b failure: "format":"json" combined with
+// Think=false made Ollama return a fully empty message — no content AND no
+// thinking, despite the response showing real tokens were generated — for
+// any non-trivial system prompt. Confirmed by isolating the variable via
+// direct requests against a running Ollama instance: identical prompt with
+// "format" omitted returned clean, valid JSON content every time. Every
+// JSON-expecting caller already instructs the model in its own prompt text
+// and has its own parse-failure handling, so the Ollama-level constraint was
+// redundant even before it turned out to be actively harmful.
+func TestClientChatNeverSendsFormatJSON(t *testing.T) {
+	var raw map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		resp := ollamaResponse{Message: Message{Role: "assistant", Content: "ok"}, Done: true}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model")
+	if _, err := client.Chat(context.Background(), "system", "user"); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, ok := raw["format"]; ok {
+		t.Fatalf("request body included \"format\": %v, want the field omitted entirely", raw["format"])
 	}
 }
 
@@ -348,9 +373,6 @@ func TestClientChatStreamAccumulatesAndInvokesOnChunk(t *testing.T) {
 	req := getReq()
 	if !req.Stream {
 		t.Error("expected stream=true in request body")
-	}
-	if req.Format != "json" {
-		t.Errorf("expected format=json, got %q", req.Format)
 	}
 	if len(req.Messages) < 2 || req.Messages[0].Role != "system" {
 		t.Error("expected first message to be system")
