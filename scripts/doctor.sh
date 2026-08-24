@@ -50,7 +50,7 @@ done
 
 # ── Ollama single-model checks ────────────────────────────────────────────────
 OLLAMA_URL="${YUMMI_OLLAMA_URL:-http://localhost:11434}"
-OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:14b}"
+OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-gpt-oss:20b}"
 
 if curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
   echo "[ok] ollama reachable at ${OLLAMA_URL}"

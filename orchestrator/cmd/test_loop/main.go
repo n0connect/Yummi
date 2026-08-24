@@ -6,7 +6,7 @@
 //
 // Çalıştır:
 //
-//	YUMMI_OLLAMA_MODEL=qwen3:8b go run ./cmd/test_loop/
+//	YUMMI_OLLAMA_MODEL=gpt-oss:20b go run ./cmd/test_loop/
 package main
 
 import (
@@ -184,7 +184,7 @@ var scenarios = []loopScenario{
 
 func main() {
 	ollamaURL := getEnv("YUMMI_OLLAMA_URL", "http://127.0.0.1:11434")
-	ollamaModel := getEnv("YUMMI_OLLAMA_MODEL", "qwen3:8b")
+	ollamaModel := getEnv("YUMMI_OLLAMA_MODEL", "gpt-oss:20b")
 	personaDir := getEnv("YUMMI_PERSONA_DIR", "../../persona/v0.1")
 	sandboxContainer := getEnv("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox")
 	outPath := getEnv("YUMMI_LOOP_REPORT", "orchestrator/cmd/test_loop/results.md")

@@ -147,10 +147,10 @@ services:
       YUMMI_AUTO_SKILL_DIR: "/var/lib/yummi/orchestrator/skills"
       YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"
       YUMMI_OLLAMA_MODEL: "${YUMMI_OLLAMA_MODEL:-}"
-      YUMMI_OLLAMA_TIER: "${YUMMI_OLLAMA_TIER:-pro}"
+      YUMMI_OLLAMA_TIER: "${YUMMI_OLLAMA_TIER:-standard}"
       # Overrides for a custom YUMMI_OLLAMA_MODEL tag that isn't one of the
-      # four named tiers — see conductor.TierOverrides. Both blank by default
-      # (no override; a custom model still gets Pro's fixed 16K context/
+      # two named tiers — see conductor.TierOverrides. Both blank by default
+      # (no override; a custom model still gets Standard's fixed 32K context/
       # no-thinking profile unless set here).
       YUMMI_OLLAMA_NUM_CTX: "${YUMMI_OLLAMA_NUM_CTX:-}"
       # Optional: point ONLY the Eino agent backend's ReAct loop at a

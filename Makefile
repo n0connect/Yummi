@@ -25,7 +25,7 @@ UI_DIST_DIR      := $(UI_DIR)/dist
 # very next `make start`.
 -include .yummi.conf
 
-OLLAMA_MODEL    ?= $(if $(YUMMI_OLLAMA_MODEL),$(YUMMI_OLLAMA_MODEL),$(if $(filter lite,$(YUMMI_OLLAMA_TIER)),qwen3:4b,$(if $(filter standard,$(YUMMI_OLLAMA_TIER)),qwen3:8b,$(if $(filter expert,$(YUMMI_OLLAMA_TIER)),qwen3:32b,qwen3:14b))))
+OLLAMA_MODEL    ?= $(if $(YUMMI_OLLAMA_MODEL),$(YUMMI_OLLAMA_MODEL),$(if $(filter expert,$(YUMMI_OLLAMA_TIER)),gpt-oss:120b,gpt-oss:20b))
 LIVE_TEST_MODEL ?= qwen3:8b
 OLLAMA_URL      := http://localhost:11434
 export YUMMI_OLLAMA_MODEL := $(OLLAMA_MODEL)
@@ -232,26 +232,22 @@ conf:
 		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
 	esac; \
 	printf "\n$(BOLD)Which model?$(RESET) $(DIM)(sets the Ollama model tag — change any time by re-running 'make conf', no rebuild needed)$(RESET)\n\n"; \
-	printf "  $(CYAN)1)$(RESET) Lite      $(DIM)— qwen3:4b, minimal RAM footprint$(RESET)\n"; \
-	printf "  $(CYAN)2)$(RESET) Standard  $(DIM)— qwen3:8b, balanced quality/latency$(RESET)\n"; \
-	printf "  $(CYAN)3)$(RESET) Pro       $(DIM)— qwen3:14b, recommended default$(RESET)\n"; \
-	printf "  $(CYAN)4)$(RESET) Expert    $(DIM)— qwen3:32b, workstation-grade hardware$(RESET)\n"; \
-	printf "  $(CYAN)5)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
-	printf "$(BOLD)Choice [1-5]: $(RESET)"; \
+	printf "  $(CYAN)1)$(RESET) Standard  $(DIM)— gpt-oss:20b, recommended default, runs on 16GB+ RAM without a dedicated GPU$(RESET)\n"; \
+	printf "  $(CYAN)2)$(RESET) Expert    $(DIM)— gpt-oss:120b, same family at ~6x the parameters, workstation-grade hardware (80GB GPU or 64GB+ Mac)$(RESET)\n"; \
+	printf "  $(CYAN)3)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
+	printf "$(BOLD)Choice [1-3]: $(RESET)"; \
 	read modelchoice; \
 	numctx=""; \
 	case "$$modelchoice" in \
-		1) model=qwen3:4b ;; \
-		2) model=qwen3:8b ;; \
-		3) model=qwen3:14b ;; \
-		4) model=qwen3:32b ;; \
-		5) printf "\n$(BOLD)Exact Ollama model tag$(RESET) $(DIM)(e.g. kimi-k2:latest, deepseek-r1:671b — must already be pulled, or 'make start' will pull it)$(RESET): "; \
+		1) model=gpt-oss:20b ;; \
+		2) model=gpt-oss:120b ;; \
+		3) printf "\n$(BOLD)Exact Ollama model tag$(RESET) $(DIM)(e.g. kimi-k2:latest, deepseek-r1:671b — must already be pulled, or 'make start' will pull it)$(RESET): "; \
 		   read model; \
 		   if [ -z "$$model" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model tag cannot be empty.$(RESET)\n"; exit 1; fi; \
-		   printf "\n$(BOLD)Context window override in tokens?$(RESET) $(DIM)(optional — a custom model otherwise gets a fixed 16K context; a larger model with more headroom may want more, e.g. 131072. Press Enter to skip.)$(RESET)\n"; \
-		   printf "Context tokens [blank = 16K default]: "; \
+		   printf "\n$(BOLD)Context window override in tokens?$(RESET) $(DIM)(optional — a custom model otherwise gets a fixed 32K context; a larger model with more headroom may want more, e.g. 131072. Press Enter to skip.)$(RESET)\n"; \
+		   printf "Context tokens [blank = 32K default]: "; \
 		   read numctx ;; \
-		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-5.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
+		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
 	esac; \
 	printf "CONTAINER_ENGINE=%s\n" "$$engine" > .yummi.conf; \
 	printf "YUMMI_NETWORK_MODE=%s\n" "$$mode" >> .yummi.conf; \

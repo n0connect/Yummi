@@ -125,8 +125,9 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			appendLatestTerminalTaskOutcome(assistant, taskStore, sessionID)
 		}
 
-		// 90s budget covers qwen3:14b on CPU-constrained hosts; the server
-		// WriteTimeout (120s) leaves a 30s margin for response serialisation.
+		// 90s budget covers the default gpt-oss:20b on CPU-constrained hosts;
+		// the server WriteTimeout (120s) leaves a 30s margin for response
+		// serialisation.
 		chatCtx, chatCancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer chatCancel()
 

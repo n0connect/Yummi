@@ -6,8 +6,11 @@ name: weekly-agent-eval
 # push would be far too slow. That leaves it running only when a developer
 # remembers to invoke it locally, which in practice means close to never.
 # This workflow gives it a real, scheduled, CI-enforced cadence instead —
-# a small model (qwen3:4b, the "lite" tier) on a plain GitHub-hosted runner,
-# CPU-only inference, so no self-hosted/GPU infrastructure is required.
+# a small model (qwen3:4b — deliberately NOT the app's own default gpt-oss:20b,
+# which needs 16GB+ RAM the free ubuntu-latest runner doesn't have) on a plain
+# GitHub-hosted runner, CPU-only inference, so no self-hosted/GPU
+# infrastructure is required. LIVE_TEST_MODEL is a raw model tag independent
+# of orchestrator/internal/conductor/tier.go's tier registry either way.
 on:
   schedule:
     # Sunday 03:00 UTC — low-traffic slot, well clear of any release cutting.

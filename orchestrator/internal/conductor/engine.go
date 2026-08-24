@@ -65,11 +65,11 @@ func capHistory(msgs []llm.Message) []llm.Message {
 
 // TierOverrides lets an operator override the numeric knobs a resolved tier
 // profile would otherwise apply. Most useful for a custom model tag (see
-// TierRegistry.Resolve) that isn't one of the four named tiers: it's wrapped
-// under Pro's fixed 16K-context/no-thinking profile by default, which
+// TierRegistry.Resolve) that isn't one of the two named tiers: it's wrapped
+// under Standard's fixed 32K-context/no-thinking profile by default, which
 // under-serves a large-context model (e.g. an operator with the hardware for
 // a big MoE model wanting its full context window instead of being capped at
-// Pro's). Zero/nil fields mean "use the resolved tier's own value" — this is
+// Standard's). Zero/nil fields mean "use the resolved tier's own value" — this is
 // additive, never a replacement for the tier system. Deliberately excludes
 // MaxTokens: TierConfig.MaxTokens isn't wired into any actual request
 // parameter anywhere in internal/llm today (a pre-existing gap, not

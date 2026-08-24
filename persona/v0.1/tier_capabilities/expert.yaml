@@ -5,33 +5,36 @@
 # nothing at runtime.
 version: "0.1"
 tier: "expert"
-model: "qwen3:32b"
+model: "gpt-oss:120b"
 
 description: >
-  Expert tier for maximum reasoning depth on high-stakes engagements.
-  Enables extended thinking for adversarial planning and complex scenarios.
+  OpenAI's larger open-weight model — same MXFP4-quantized MoE family and
+  architecture as the standard tier's gpt-oss:20b, at roughly 6x the total
+  parameter count. Workstation-grade hardware only: a single 80GB GPU, or a
+  64GB+ unified-memory Mac with offload. Not yet exercised by Yummi's own
+  live quality suite (make test-agent-eval/-benchmark have only run against
+  gpt-oss:20b and, historically, the qwen3 family) — the strengths below are
+  extrapolated from the shared architecture and OpenAI's own published specs,
+  not independently confirmed against Yummi's agent loop the way the
+  standard tier has been.
 
 capabilities:
   context_window: 32768
-  thinking_mode: true
+  thinking_mode: false
   strengths:
-    - "Extended chain-of-thought reasoning (thinking mode enabled)"
-    - "Highest accuracy for complex, ambiguous scenarios"
-    - "Strong adversarial perspective modeling"
-    - "Excellent handling of edge cases and unusual constraints"
-    - "Reliable across very long engagement contexts"
+    - "Same native tool-calling reliability as gpt-oss:20b, at a larger parameter budget"
+    - "Higher expected accuracy on ambiguous or adversarial-planning scenarios"
+    - "Fits a single 80GB GPU at MXFP4 — no multi-GPU setup required"
   limitations:
-    - "Requires significant VRAM (~20GB+)"
-    - "Higher latency due to thinking pass"
-    - "Workstation-grade hardware recommended"
+    - "Workstation-grade hardware required (80GB GPU, or 64GB+ Mac with offload)"
+    - "Meaningfully higher inference latency than the 20b tier"
+    - "Not yet validated against Yummi's own live scenarios — treat early results with more scrutiny than the standard tier"
 
 behavior_adjustments:
-  - "Thinking mode is active — responses may include internal reasoning before JSON output"
-  - "Use for scenarios where reasoning quality outweighs speed"
-  - "Suitable for red team exercise planning and complex attack chain design"
+  - "Same Eino-backend pairing as standard — no protocol differences, only the underlying model changes"
+  - "Worth a fresh make test-agent-benchmark run before relying on it for a real engagement"
 
 recommended_for:
-  - "Critical infrastructure assessments"
-  - "Adversarial simulation and red team exercises"
+  - "Critical infrastructure assessments where the extra hardware cost is justified"
   - "Complex multi-stage attack planning"
-  - "High-stakes engagements requiring maximum judgment quality"
+  - "Operators with workstation-grade hardware wanting the largest model in the same family as the default"
