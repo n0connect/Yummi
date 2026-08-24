@@ -320,22 +320,20 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 ### Picking a tier for your hardware
 
-`YUMMI_OLLAMA_TIER` selects a preset (model + context window + thinking mode) from `orchestrator/internal/conductor/tier.go`. These are the **only four presets that exist** — there's no config file to tune this beyond what's below. If both variables are set, the more specific `YUMMI_OLLAMA_MODEL` override wins.
+`YUMMI_OLLAMA_TIER` selects a preset (model + context window + thinking mode) from `orchestrator/internal/conductor/tier.go`. These are the **only two presets that exist** — OpenAI's gpt-oss family only ships in two real sizes on Ollama, unlike the four-rung ladder a single dense model family (e.g. qwen3's 4b/8b/14b/32b) can offer. There's no config file to tune this beyond what's below. If both variables are set, the more specific `YUMMI_OLLAMA_MODEL` override wins.
 
 | Tier | Model | Context window | Thinking mode | Approximate download size¹ | Rough RAM/VRAM needed¹ | Good fit for |
 |---|---|---|---|---|---|---|
-| `lite` | `qwen3:4b` | 8,192 tokens | off | ~2.5 GB | ~4–6 GB | Laptops, low-RAM VMs, quick smoke-testing |
-| `standard` | `qwen3:8b` | 16,384 tokens | off | ~5.2 GB | ~8–10 GB | The lightweight default for `make test-agent-live` (`LIVE_TEST_MODEL`) |
-| `pro` | `qwen3:14b` | 16,384 tokens | off | ~9 GB | ~14–16 GB | **`docker-compose.yml`'s own default for the full stack** — described in-repo as "recommended default for most hardware" |
-| `expert` | `qwen3:32b` | 32,768 tokens | **on** (extended reasoning) | ~20 GB | ~24–32 GB+ | Workstation-class GPUs; genuinely deeper multi-step reasoning at real latency cost |
+| `standard` | `gpt-oss:20b` | 32,768 tokens | off | ~13 GB (MXFP4) | 16 GB+ | **The registry, Compose, and install default** — native reliable tool-calling, pairs with the Eino backend; runs without a dedicated GPU |
+| `expert` | `gpt-oss:120b` | 32,768 tokens | off | ~65 GB (MXFP4) | 80 GB GPU, or 64 GB+ Mac with offload | Workstation-class hardware; same architecture and tool-calling reliability at ~6x the parameters |
 
-¹ *Sizes and RAM figures are approximate, based on Ollama's default quantization for each tag at the time of writing — always let `ollama pull` and your own `ollama ps`/Activity Monitor be the source of truth for your actual hardware, not this table.*
+¹ *Sizes and RAM figures are approximate, based on Ollama's default MXFP4 quantization for each tag at the time of writing — always let `ollama pull` and your own `ollama ps`/Activity Monitor be the source of truth for your actual hardware, not this table.*
 
-**The install and runtime defaults are intentionally the same:** `make install`, `make start`, Compose, and `scripts/doctor.sh` all use `qwen3:14b` unless `YUMMI_OLLAMA_MODEL`/`OLLAMA_MODEL` overrides it. The only smaller default is the opt-in live agent test: `make test-agent-live` uses `LIVE_TEST_MODEL=qwen3:8b` so a development smoke test does not require the full runtime model.
+**The install and runtime defaults are intentionally the same:** `make install`, `make start`, Compose, and `scripts/doctor.sh` all use `gpt-oss:20b` unless `YUMMI_OLLAMA_MODEL`/`OLLAMA_MODEL` overrides it. The opt-in live agent test (`make test-agent-live`) still defaults `LIVE_TEST_MODEL` to a smaller qwen3 tag, deliberately independent of this tier registry — see that Makefile target's own comment for why.
 
 Set a tier by exporting the env var before `make start`, or editing `docker-compose.yml`'s `orchestrator.environment.YUMMI_OLLAMA_TIER` directly:
 ```bash
-YUMMI_OLLAMA_TIER=lite make start
+YUMMI_OLLAMA_TIER=expert make start
 ```
 
 **Keep exactly one model loaded at a time.** `scripts/doctor.sh` checks this and warns if it isn't set:
@@ -350,7 +348,7 @@ Without this, pulling/using a second model (e.g. the embedding model alongside y
 
 ### Bringing your own model <a id="custom-model"></a>
 
-The four tiers above are presets for convenience, not a whitelist — **`YUMMI_OLLAMA_MODEL` accepts any Ollama model tag you have pulled (or will pull).** If your hardware can run something bigger or different than `qwen3` — a large open-weight MoE model like Kimi K2 or DeepSeek-V3, a Llama 3.1 405B quant, a fine-tune, whatever `ollama pull <tag>` accepts — point Yummi at it directly:
+The two tiers above are presets for convenience, not a whitelist — **`YUMMI_OLLAMA_MODEL` accepts any Ollama model tag you have pulled (or will pull).** If your hardware can run something bigger or different than `gpt-oss` — a large open-weight MoE model like Kimi K2 or DeepSeek-V3, a Llama 3.1 405B quant, a fine-tune, whatever `ollama pull <tag>` accepts — point Yummi at it directly:
 
 ```bash
 ollama pull <your-model-tag>       # check the exact tag at https://ollama.com/library
@@ -361,13 +359,13 @@ Or interactively: `make conf` → model choice → **Custom** → type the exact
 
 **Two things worth knowing before you do this:**
 
-1. **Context window.** A model tag that isn't one of the four named tiers is treated as a **custom tag wrapped under the Pro profile** (`orchestrator/internal/conductor/tier.go`'s `TierRegistry.Resolve`) — 16,384 tokens of context, thinking mode off — regardless of how much context the model itself actually supports. If you're running something with real long-context headroom and want Yummi to use more of it, set:
+1. **Context window.** A model tag that isn't one of the two named tiers is treated as a **custom tag wrapped under the Standard profile** (`orchestrator/internal/conductor/tier.go`'s `TierRegistry.Resolve`) — 32,768 tokens of context, thinking mode off — regardless of how much context the model itself actually supports. If you're running something with real long-context headroom and want Yummi to use more of it, set:
    ```bash
    YUMMI_OLLAMA_NUM_CTX=131072 YUMMI_OLLAMA_MODEL=<your-model-tag> make start
    ```
    (or the equivalent prompt in `make conf`'s custom-model step). `YUMMI_OLLAMA_THINKING=true` similarly opts a custom model into thinking-mode request options if it supports one. This only affects the **graph backend** — see the next point.
 
-2. **Backend choice matters more for a custom model than for the qwen3 tiers.** The **Eino backend** (`YUMMI_AGENT_BACKEND=eino`, or `make conf`'s backend question) doesn't wrap the model in any tier profile at all — no context cap, no thinking-mode toggle from Yummi's side — it just talks to whatever `YUMMI_OLLAMA_MODEL` names via Ollama's OpenAI-compatible endpoint, so a big model's own context window (set via its Modelfile's `PARAMETER num_ctx`, or Ollama's own `OLLAMA_CONTEXT_LENGTH` env var) applies unmodified. Eino was specifically built for larger models with **native, reliable tool-calling** (see [Agent Overview § Two engines](agent/overview.md#two-engines)) — if the model you're bringing supports function-calling well, Eino is very likely the better fit over the graph engine's tag-protocol design, which targets smaller/weaker models that can't be trusted with structured tool-calling output.
+2. **Backend choice matters more for a custom model than for the gpt-oss tiers.** The **Eino backend** (`YUMMI_AGENT_BACKEND=eino`, or `make conf`'s backend question) doesn't wrap the model in any tier profile at all — no context cap, no thinking-mode toggle from Yummi's side — it just talks to whatever `YUMMI_OLLAMA_MODEL` names via Ollama's OpenAI-compatible endpoint, so a big model's own context window (set via its Modelfile's `PARAMETER num_ctx`, or Ollama's own `OLLAMA_CONTEXT_LENGTH` env var) applies unmodified. Eino was specifically built for larger models with **native, reliable tool-calling** (see [Agent Overview § Two engines](agent/overview.md#two-engines)) — if the model you're bringing supports function-calling well, Eino is very likely the better fit over the graph engine's tag-protocol design, which targets smaller/weaker models that can't be trusted with structured tool-calling output.
 
 3. **Pointing the Eino loop at a server that isn't Ollama at all.** `YUMMI_EINO_MODEL_BASE_URL`/`YUMMI_EINO_MODEL_NAME`/`YUMMI_EINO_MODEL_NUM_CTX` are a separate override from the two points above — they redirect *only* the Eino ReAct loop to any OpenAI-compatible `/v1/chat/completions` server (e.g. a local LM Studio instance serving a model Ollama doesn't have), independent of `YUMMI_OLLAMA_MODEL`:
    ```bash

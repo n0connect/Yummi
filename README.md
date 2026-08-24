@@ -66,7 +66,7 @@ make start     # start the full stack — UI at http://localhost:3000
 ```
 
 Yummi is managed entirely from that web UI. First run pulls the default model
-(`qwen3:14b` for the full stack, ~9 GB) — see
+(`gpt-oss:20b` for the full stack, ~13 GB) — see
 **[Installation →](docs/installation.md)** for OS/architecture-specific setup
 (Linux/macOS/Windows, x86_64/ARM64), the exact hardware sizing per model tier,
 and the specific first-run errors people actually hit.

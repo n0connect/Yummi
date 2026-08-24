@@ -260,8 +260,8 @@ func TestEngineOllamaModelReporting(t *testing.T) {
 
 // TestNewEngineWithOverrides_CustomModelGetsPlainNewEngineDefaults proves
 // NewEngine (used by every existing caller) is unaffected by adding the
-// overrides mechanism — a custom model tag still resolves to Pro's fixed
-// 16K-context, no-thinking profile when no overrides are given.
+// overrides mechanism — a custom model tag still resolves to Standard's fixed
+// 32K-context, no-thinking profile when no overrides are given.
 func TestNewEngineWithOverrides_CustomModelGetsPlainNewEngineDefaults(t *testing.T) {
 	e, err := NewEngine("", "http://127.0.0.1:11434", "kimi-k2:latest")
 	if err != nil {
@@ -271,18 +271,18 @@ func TestNewEngineWithOverrides_CustomModelGetsPlainNewEngineDefaults(t *testing
 	if tier.Model != "kimi-k2:latest" {
 		t.Fatalf("Model = %q, want the custom tag preserved", tier.Model)
 	}
-	if tier.NumCtx != 16384 {
-		t.Fatalf("NumCtx = %d, want Pro's default 16384 with no override", tier.NumCtx)
+	if tier.NumCtx != 32768 {
+		t.Fatalf("NumCtx = %d, want Standard's default 32768 with no override", tier.NumCtx)
 	}
 	if tier.Thinking {
-		t.Fatal("Thinking = true, want Pro's default false with no override")
+		t.Fatal("Thinking = true, want Standard's default false with no override")
 	}
 }
 
 // TestNewEngineWithOverrides_CustomModelHonorsExplicitOverrides is the
 // actual point of TierOverrides: an operator plugging in a large-context
 // custom model (e.g. someone with the hardware for Kimi K2 or similar) isn't
-// stuck at Pro's fixed 16K ceiling — YUMMI_OLLAMA_NUM_CTX/_THINKING flow
+// stuck at Standard's fixed 32K ceiling — YUMMI_OLLAMA_NUM_CTX/_THINKING flow
 // through config.Config into exactly this override path (see main.go).
 func TestNewEngineWithOverrides_CustomModelHonorsExplicitOverrides(t *testing.T) {
 	thinking := true
@@ -305,12 +305,12 @@ func TestNewEngineWithOverrides_CustomModelHonorsExplicitOverrides(t *testing.T)
 // (not a custom tag) is unaffected by a zero-value TierOverrides — overrides
 // are additive, never a silent replacement for the tier system.
 func TestNewEngineWithOverrides_ZeroOverridesLeaveTierAlone(t *testing.T) {
-	e, err := NewEngineWithOverrides("", "http://127.0.0.1:11434", "lite", TierOverrides{})
+	e, err := NewEngineWithOverrides("", "http://127.0.0.1:11434", "expert", TierOverrides{})
 	if err != nil {
 		t.Fatalf("NewEngineWithOverrides: %v", err)
 	}
-	if got := e.Tier().NumCtx; got != 8192 {
-		t.Fatalf("NumCtx = %d, want lite tier's own 8192", got)
+	if got := e.Tier().NumCtx; got != 32768 {
+		t.Fatalf("NumCtx = %d, want expert tier's own 32768", got)
 	}
 }
 

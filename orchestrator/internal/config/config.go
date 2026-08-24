@@ -90,7 +90,7 @@ func Load() *Config {
 		AutoSkillDir:        envOr("YUMMI_AUTO_SKILL_DIR", filepath.Join(home, "skills")),
 		DockerSocket:        envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
 		OllamaURL:           os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
-		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "qwen3:14b"),
+		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "gpt-oss:20b"),
 		OllamaTier:          strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
 		OllamaNumCtx:        parseIntOr(os.Getenv("YUMMI_OLLAMA_NUM_CTX"), 0),
 		OllamaThinking:      parseOptionalBool(os.Getenv("YUMMI_OLLAMA_THINKING")),
@@ -105,7 +105,7 @@ func Load() *Config {
 	}
 
 	// A directly configured model is the most specific choice. Otherwise an
-	// explicit tier selects its model; with neither set, qwen3:14b is the default.
+	// explicit tier selects its model; with neither set, gpt-oss:20b is the default.
 	if explicitOllamaModel == "" && cfg.OllamaTier != "" {
 		if model, ok := tierToModel(cfg.OllamaTier); ok {
 			cfg.OllamaModel = model
@@ -119,14 +119,10 @@ func Load() *Config {
 // conductor package. Keep this in sync with conductor/tier.go.
 func tierToModel(tier string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
-	case "lite":
-		return "qwen3:4b", true
 	case "standard":
-		return "qwen3:8b", true
-	case "pro":
-		return "qwen3:14b", true
+		return "gpt-oss:20b", true
 	case "expert":
-		return "qwen3:32b", true
+		return "gpt-oss:120b", true
 	default:
 		return "", false
 	}

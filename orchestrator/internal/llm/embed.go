@@ -20,7 +20,7 @@ type ollamaEmbedResponse struct {
 
 // WithEmbedModel returns a copy of the client configured to call Ollama's
 // /api/embeddings endpoint with the given model tag. This is a separate model
-// from the chat model (c.model) — e.g. "nomic-embed-text" vs "qwen3:8b".
+// from the chat model (c.model) — e.g. "nomic-embed-text" vs "gpt-oss:20b".
 func (c *Client) WithEmbedModel(model string) *Client {
 	cp := *c
 	cp.embedModel = model

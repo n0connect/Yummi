@@ -16,7 +16,7 @@ v0.1/
   skills/                  Declarative playbooks loaded by the skill registry
   subagents/               Specialist roles available to HANDOFF
   tier_capabilities/       Reference docs for each tier's profile (NOT loaded by Go — see note below)
-    lite.yaml / standard.yaml / pro.yaml / expert.yaml
+    standard.yaml / expert.yaml
   golden_tests/            Regression fixtures — input → expected intent
     *.yaml
 ```
@@ -27,10 +27,10 @@ Tiers are selected via `YUMMI_OLLAMA_TIER`. The actual model/context/thinking-mo
 
 | Tier | Model | Context window |
 |---|---|---|
-| `lite` | qwen3:4b | 8192 |
-| `standard` (registry default) | qwen3:8b | 16384 |
-| `pro` (Compose/install default) | qwen3:14b | 16384 |
-| `expert` | qwen3:32b | 32768 (extended thinking mode) |
+| `standard` (registry + install default) | gpt-oss:20b | 32768 |
+| `expert` | gpt-oss:120b | 32768 |
+
+Only two tiers exist because gpt-oss only ships in two real sizes on Ollama — a third or fourth name would just alias one of these two models under a different label.
 
 Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Without an explicit model, `YUMMI_OLLAMA_TIER` selects the matching preset.
 

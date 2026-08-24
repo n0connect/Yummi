@@ -458,10 +458,10 @@ func main() {
 		Handler: router,
 		// ReadTimeout covers header + body read; 30s is generous for any request.
 		ReadTimeout: 30 * time.Second,
-		// WriteTimeout must accommodate LLM inference latency. qwen3:8b can take
-		// 20-45 seconds on CPU-heavy loads. Setting to 120s gives headroom while
-		// still bounding runaway connections. Per-route tighter timeouts (chat
-		// handler uses a 90s context) enforce the actual LLM budget.
+		// WriteTimeout must accommodate LLM inference latency, which can run
+		// 20-45+ seconds on CPU-heavy loads. Setting to 120s gives headroom
+		// while still bounding runaway connections. Per-route tighter timeouts
+		// (chat handler uses a 90s context) enforce the actual LLM budget.
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  90 * time.Second,
 	}
