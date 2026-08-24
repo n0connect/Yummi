@@ -334,6 +334,29 @@ export function AssistantPanel({
     })
   }, [])
 
+  // cancelExecution stops a single in-flight command dispatched outside an
+  // agent task (the plain chat-proposal path — approve a suggested command,
+  // no plan, no activeTask). stopActiveTask below only ever had a task to
+  // stop; a bare running/queued execution had no cancel affordance in the UI
+  // at all even though the backend has always supported it (POST
+  // /api/v1/executions/{id}/cancel, execution.Store.Cancel). The returned
+  // record is pushed straight through upsertExecutionMessage, same as any
+  // other execution lifecycle update from the WS stream.
+  const cancelExecution = useCallback(
+    async (executionID: string) => {
+      try {
+        const record = await fetchJSON<ExecutionRecord>(
+          `/api/v1/executions/${executionID}/cancel`,
+          { method: 'POST' }
+        )
+        upsertExecutionMessage(record)
+      } catch {
+        appendMessage({ role: 'system', content: t('assistant.executionCancelFailed') })
+      }
+    },
+    [upsertExecutionMessage, appendMessage]
+  )
+
   // newChat starts a fresh, server-persisted conversation. It creates a real
   // session (so its turns are durable and it appears in the rail) and lets the
   // first operator message auto-title it. Falls back to the ad-hoc "default"
@@ -1150,6 +1173,7 @@ export function AssistantPanel({
                     content={msg.content}
                     execution={msg.execution}
                     liveOutput={liveOutputs[msg.execution.id]}
+                    onCancel={cancelExecution}
                   />
                 )
               }
