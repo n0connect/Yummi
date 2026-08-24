@@ -67,6 +67,27 @@ func wordlistDir() string {
 	return "/wordlists"
 }
 
+// commonWordlistFallback is dirb's own bundled default wordlist, already
+// present in the Kali-based sandbox image independent of the operator-
+// populated /wordlists mount (docker-compose.yml: "${HOME}/.yummi/wordlists
+// — place your own here", empty by default on a fresh install). Used ONLY
+// as a fallback for the literal "common.txt" name — every tool schema in
+// this package that takes a wordlist argument suggests exactly that
+// filename as its example ("wordlist filename under /wordlists, e.g.
+// common.txt"), so a fresh install where the operator hasn't populated
+// anything yet makes that example fail outright. Live-observed: with no
+// fallback, gobuster_dir was unusable on a fresh install, and the model
+// spent 5-9 real step-budget turns rediscovering this exact same system
+// path by trial and error (ls/find across candidate directories) on two
+// separate live runs — once exhausting the entire step budget before
+// finishing. Deliberately a single hardcoded path, not a general search
+// across system wordlist directories for an arbitrary operator-supplied
+// name — that would reopen exactly the kind of file-existence oracle the
+// traversal rejection below exists to prevent.
+// var, not const: overridden in tests, since the real path only exists
+// inside the Kali-based sandbox image, not a bare `go test` environment.
+var commonWordlistFallback = "/usr/share/dirb/wordlists/common.txt"
+
 // resolveWordlist rejects anything that is not a clean relative path under
 // wordlistDir() — a model cannot smuggle "../../etc/passwd" as a "wordlist".
 func resolveWordlist(name string) (string, error) {
@@ -84,6 +105,11 @@ func resolveWordlist(name string) (string, error) {
 		return "", fmt.Errorf("invalid wordlist path %q", name)
 	}
 	if _, err := os.Stat(full); err != nil {
+		if clean == "common.txt" {
+			if _, fbErr := os.Stat(commonWordlistFallback); fbErr == nil {
+				return commonWordlistFallback, nil
+			}
+		}
 		return "", fmt.Errorf("wordlist %q not found under %s", name, dir)
 	}
 	return full, nil
