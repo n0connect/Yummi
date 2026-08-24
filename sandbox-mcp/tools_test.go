@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -193,5 +194,58 @@ func TestCurlProbe_RejectsFlagInjectionInURL(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatal("expected IsError for a flag-shaped url")
+	}
+}
+
+// TestResolveWordlist_FallsBackToCommonTxtWhenMountEmpty is the regression
+// test for a live-observed friction point: on a fresh install, the operator-
+// populated /wordlists mount is empty by design (see docker-compose.yml's
+// comment), so "common.txt" — the exact example every wordlist-taking tool
+// schema in this package suggests — failed outright. The model spent 5-9
+// real step-budget turns rediscovering dirb's own bundled common.txt by
+// trial and error across two separate live runs, once exhausting the whole
+// step budget before finishing. This proves the fallback recovers it.
+func TestResolveWordlist_FallsBackToCommonTxtWhenMountEmpty(t *testing.T) {
+	emptyDir := t.TempDir()
+	t.Setenv("YUMMI_WORDLIST_DIR", emptyDir)
+
+	fallback := filepath.Join(t.TempDir(), "common.txt")
+	if err := os.WriteFile(fallback, []byte("admin\nlogin\n"), 0o644); err != nil {
+		t.Fatalf("write fallback fixture: %v", err)
+	}
+	origFallback := commonWordlistFallback
+	commonWordlistFallback = fallback
+	t.Cleanup(func() { commonWordlistFallback = origFallback })
+
+	got, err := resolveWordlist("common.txt")
+	if err != nil {
+		t.Fatalf("resolveWordlist: %v", err)
+	}
+	if got != fallback {
+		t.Fatalf("got %q, want the fallback path %q", got, fallback)
+	}
+}
+
+// TestResolveWordlist_NoFallbackForOtherNames proves the fallback is scoped
+// to the literal "common.txt" name only — a different, still-missing
+// filename must still error normally, not silently substitute a different
+// wordlist the operator didn't ask for.
+func TestResolveWordlist_NoFallbackForOtherNames(t *testing.T) {
+	t.Setenv("YUMMI_WORDLIST_DIR", t.TempDir())
+
+	if _, err := resolveWordlist("rockyou.txt"); err == nil {
+		t.Fatal("expected an error for a missing non-common.txt wordlist, got nil")
+	}
+}
+
+// TestResolveWordlist_FallbackDoesNotBypassTraversalRejection proves the
+// existing path-traversal guard still runs before the fallback is ever
+// considered — a name can't smuggle traversal by disguising itself near
+// "common.txt".
+func TestResolveWordlist_FallbackDoesNotBypassTraversalRejection(t *testing.T) {
+	t.Setenv("YUMMI_WORDLIST_DIR", t.TempDir())
+
+	if _, err := resolveWordlist("../common.txt"); err == nil {
+		t.Fatal("expected traversal rejection, got nil")
 	}
 }
