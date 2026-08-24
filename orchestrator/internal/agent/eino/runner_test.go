@@ -826,3 +826,538 @@ func TestEinoRunner_Approve_ResolvesSubAgentGate(t *testing.T) {
 		t.Fatalf("orchestrator task not completed: %s (lastErr=%q)", final.Status, final.LastError)
 	}
 }
+
+func TestShouldNudgeIncompleteGoals(t *testing.T) {
+	twoParts := []string{"scan ports", "grab banner"}
+	threeParts := []string{"a", "b", "c"}
+	cases := []struct {
+		name         string
+		parts        []string
+		covered      int
+		alreadyNudged bool
+		want         bool
+	}{
+		{"two parts, one covered -> nudge", twoParts, 1, false, true},
+		{"two parts, both covered -> no nudge", twoParts, 2, false, false},
+		{"two parts, one covered but already nudged -> no", twoParts, 1, true, false},
+		{"three parts, two covered -> nudge", threeParts, 2, false, true},
+		{"single-intent goal -> never nudge", []string{"just scan it"}, 0, false, false},
+		{"no parts -> never nudge", nil, 0, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := shouldNudgeIncompleteGoals(c.parts, c.covered, c.alreadyNudged); got != c.want {
+				t.Fatalf("shouldNudgeIncompleteGoals(%v, %d, %v) = %v, want %v",
+					c.parts, c.covered, c.alreadyNudged, got, c.want)
+			}
+		})
+	}
+}
+
+func TestBuildIncompleteGoalsMessage_CarriesPartsAndWorkForward(t *testing.T) {
+	tr := &runTrace{}
+	tr.record("nmap -sV 10.0.0.1", "22/tcp open ssh")
+	parts := []string{"scan the ports", "grab the http banner"}
+	msg := buildIncompleteGoalsMessage("1) scan the ports 2) grab the http banner", parts, tr)
+
+	for _, want := range []string{"scan the ports", "grab the http banner", "nmap", "22/tcp open ssh", "finish"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("re-run message missing %q\n---\n%s", want, msg)
+		}
+	}
+}
+
+// TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged proves the
+// AuditGoalParts fallback wired via PlanLLM: a goal with NO numbered markers
+// ("check the OS ... and also list the open ports" — real operator phrasing)
+// must still be recognized as multi-part and trigger the premature-FINISH
+// bounce when finish is reached with no tool results at all. Without PlanLLM,
+// agent.SplitEnumeratedParts alone would see zero parts for this goal and the
+// guard would never fire — this is the regression test for that gap.
+func TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged(t *testing.T) {
+	reactSrv := toolCallServer("finish", `{"summary":"the OS is Linux","findings":["Linux kernel 5.x"]}`)
+	defer reactSrv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: reactSrv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+		PlanLLM: scriptedOllama(t, "check what OS is running\nlist the open ports"),
+	})
+
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "check what OS is running and also list the open ports")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed (task should still finish after one bounce)", final.Status)
+	}
+
+	nudged := false
+	for _, ev := range store.ListActivity(task.SessionID, 50) {
+		if strings.Contains(ev.Summary, "goal parts covered") {
+			nudged = true
+		}
+	}
+	if !nudged {
+		t.Fatalf("expected the incomplete-goals nudge activity — PlanLLM's audit fallback did not populate enumParts for an unmarked multi-part goal")
+	}
+}
+
+// TestEinoRunner_Run_SanitizesRawSpecialTokensInFallbackSummary is the
+// regression test for a live-observed leak: when a model's "finish" intent
+// isn't cleanly routed into a tool_calls entry, Run() falls back to the raw
+// assistant message content (lastMessage.Content). Found running gpt-oss-20b
+// through LM Studio — that fallback content was, verbatim, the model's own
+// unparsed Harmony-format control tokens ("<|channel|>final <|message|>...")
+// wrapping the real answer, and it went straight into the wire-visible
+// Task.Summary unsanitized. The graph backend has sanitized every
+// model-authored string since day one (agent.SanitizeAgentText); this
+// backend never did until now.
+func TestEinoRunner_Run_SanitizesRawSpecialTokensInFallbackSummary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role": "assistant",
+					"content": "<|channel|>final <|constrain|>finish<|channel|>commentary json<|message|>" +
+						`{"summary":"the host has 2 CPU cores","findings":[]}`,
+				},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	store, _ := agent.NewStore(nil)
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "count cpu cores")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if strings.Contains(final.Summary, "<|") {
+		t.Fatalf("summary still contains raw special tokens: %q", final.Summary)
+	}
+	if !strings.Contains(final.Summary, "2 CPU cores") {
+		t.Fatalf("summary lost the real content while sanitizing: %q", final.Summary)
+	}
+}
+
+// TestEinoRunner_Run_RecoversEmbeddedFinishJSONWithoutPipeTokens locks in the
+// SECOND leak shape observed live: gpt-oss-20b via LM Studio sometimes emits
+// its channel-routing preamble WITHOUT the "<|...|>" pipe delimiters at all
+// ("final to=functions.finishjson{...}" as bare text) — a shape
+// SanitizeAgentText's token stripper cannot recognize since there's no
+// delimiter to match. tryParseEmbeddedFinishJSON must recover the real
+// summary/findings from the embedded JSON object regardless.
+func TestEinoRunner_Run_RecoversEmbeddedFinishJSONWithoutPipeTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role": "assistant",
+					"content": `final to=functions.finishjson{"findings":["Current user is pentester"],` +
+						`"summary":"The sandbox runs under the user pentester and has two CPU cores available."}`,
+				},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	store, _ := agent.NewStore(nil)
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "who are we and how many cores")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Summary != "The sandbox runs under the user pentester and has two CPU cores available." {
+		t.Fatalf("summary not cleanly recovered from embedded JSON: %q", final.Summary)
+	}
+	if len(final.Findings) != 1 || final.Findings[0] != "Current user is pentester" {
+		t.Fatalf("findings not cleanly recovered from embedded JSON: %v", final.Findings)
+	}
+}
+
+// TestEinoRunner_Run_NudgesWhenModelStopsWithoutCallingFinish is the
+// regression test for the gap found live against gpt-oss-20b: a model can
+// end its ReAct turn WITHOUT ever calling the finish tool — just a plain
+// assistant message and no more tool calls — which the original guard
+// (gated on capture.called) completely missed, since nothing marked the
+// model as "believing it's done". A multi-part goal answered only 1/2 ways
+// this way must still get bounced once.
+func TestEinoRunner_Run_NudgesWhenModelStopsWithoutCallingFinish(t *testing.T) {
+	var turn int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		w.Header().Set("Content-Type", "application/json")
+		if turn == 1 {
+			// One tool call (covers part 1), then a plain "I'm done" message
+			// with no finish tool call at all — the exact gap this test locks.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "1", "object": "chat.completion", "model": "test",
+				"choices": []map[string]any{{"index": 0, "message": map[string]any{
+					"role": "assistant", "content": "",
+					"tool_calls": []map[string]any{{
+						"id": "call_1", "type": "function",
+						"function": map[string]any{"name": "run_command", "arguments": `{"command":"whoami"}`},
+					}},
+				}, "finish_reason": "tool_calls"}},
+			})
+			return
+		}
+		if turn == 2 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "1", "object": "chat.completion", "model": "test",
+				"choices": []map[string]any{{"index": 0, "message": map[string]any{
+					"role": "assistant", "content": "The user is pentester.",
+				}, "finish_reason": "stop"}},
+			})
+			return
+		}
+		// After the nudge's re-run: cover part 2 for real, then finish properly.
+		if turn == 3 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "1", "object": "chat.completion", "model": "test",
+				"choices": []map[string]any{{"index": 0, "message": map[string]any{
+					"role": "assistant", "content": "",
+					"tool_calls": []map[string]any{{
+						"id": "call_2", "type": "function",
+						"function": map[string]any{"name": "run_command", "arguments": `{"command":"nproc"}`},
+					}},
+				}, "finish_reason": "tool_calls"}},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "",
+				"tool_calls": []map[string]any{{
+					"id": "call_3", "type": "function",
+					"function": map[string]any{"name": "finish", "arguments": `{"summary":"user is pentester, 2 cores","findings":[]}`},
+				}},
+			}, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	exec := &fakeExecer{ran: make(chan string, 4), content: "pentester"}
+	r := NewEinoRunner(store, nil, exec, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+		PlanLLM: scriptedOllama(t, "check who we are\nfind out how many CPU cores"),
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "check who we are and also find out how many CPU cores we have")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+
+	nudged := false
+	for _, ev := range store.ListActivity(task.SessionID, 50) {
+		if strings.Contains(ev.Summary, "goal parts covered") {
+			nudged = true
+		}
+	}
+	if !nudged {
+		t.Fatalf("expected the nudge to fire when the model stopped without calling finish, but it never did")
+	}
+}
+
+// TestEinoRunner_Run_RetriesTransientToolCallError proves the bounded retry:
+// a "error parsing tool call: ... unexpected end of JSON input" failure
+// (live-observed against Ollama-served gpt-oss:20b — a truncated tool-call
+// arguments JSON) must NOT fail the task outright. The first attempt errors,
+// the second (identical setup) succeeds, and the task must end up completed.
+func TestEinoRunner_Run_RetriesTransientToolCallError(t *testing.T) {
+	var attempt int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		if attempt == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`error parsing tool call: raw='{"command":"ls -l /var/spool` +
+				`","rationale":"check","risk', err=unexpected end of JSON input`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "",
+				"tool_calls": []map[string]any{{
+					"id": "call_1", "type": "function",
+					"function": map[string]any{"name": "finish", "arguments": `{"summary":"recovered","findings":[]}`},
+				}},
+			}, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "check the spool directory")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v (expected the transient error to be retried and recovered)", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+	if final.Summary != "recovered" {
+		t.Fatalf("summary = %q, want %q", final.Summary, "recovered")
+	}
+	if attempt != 2 {
+		t.Fatalf("expected exactly 2 attempts (1 fail + 1 retry), got %d", attempt)
+	}
+}
+
+// TestEinoRunner_Run_GivesUpAfterRepeatedTransientToolCallErrors proves the
+// retry is bounded: a persistent (not one-off) tool-call error must still
+// fail the task rather than retry forever.
+func TestEinoRunner_Run_GivesUpAfterRepeatedTransientToolCallErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`error parsing tool call: raw='{"broken` + `', err=unexpected end of JSON input`))
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "check the spool directory")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err == nil {
+		t.Fatal("expected Run to fail after exhausting the retry budget, got nil error")
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusFailed {
+		t.Fatalf("status = %s, want failed", final.Status)
+	}
+}
+
+// TestEinoRunner_Run_StepsUsedMatchesRealChatModelTurns is the replacement
+// coverage for the old per-tool-call StepsUsed test (moved out of
+// runToolPipeline — see TestPentestTool_InvokeDoesNotItselfIncrementStepsUsed).
+// Live-observed bug: steps_used was only bumped inside runToolPipeline, so a
+// turn whose tool call never reached that pipeline still consumed a real
+// Eino ReAct iteration invisibly — an operator saw e.g. "9/15" while Eino's
+// own MaxIterations had already hit 15 and failed the task, with no way to
+// see the real ceiling approaching. This script has THREE real ChatModel
+// turns (two tool calls + finish), all reaching runToolPipeline normally, so
+// StepsUsed must land on exactly 3 — proving the new choke point (Run()'s
+// own event loop) counts real turns accurately, not just successfully-
+// dispatched tool calls.
+func TestEinoRunner_Run_StepsUsedMatchesRealChatModelTurns(t *testing.T) {
+	var turn int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		var toolCall map[string]any
+		switch turn {
+		case 1:
+			toolCall = map[string]any{
+				"id": "call_1", "type": "function",
+				"function": map[string]any{"name": "run_command", "arguments": `{"command":"whoami"}`},
+			}
+		case 2:
+			toolCall = map[string]any{
+				"id": "call_2", "type": "function",
+				"function": map[string]any{"name": "run_command", "arguments": `{"command":"nproc"}`},
+			}
+		default:
+			toolCall = map[string]any{
+				"id": "call_3", "type": "function",
+				"function": map[string]any{"name": "finish", "arguments": `{"summary":"done","findings":[]}`},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "", "tool_calls": []map[string]any{toolCall},
+			}, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	exec := &fakeExecer{ran: make(chan string, 4), content: "ok"}
+	r := NewEinoRunner(store, nil, exec, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "check who we are and how many cores")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+	if final.StepsUsed != 3 {
+		t.Fatalf("StepsUsed = %d, want 3 (one per real ChatModel turn: 2 tool calls + finish)", final.StepsUsed)
+	}
+}
+
+// TestEinoRunner_Run_ScalesStepBudgetForMultiPartGoals is the regression
+// test for the fix that followed three separate LIVE runs against a real
+// target with real cataloged pentest tools: a multi-part goal repeatedly
+// exhausted the flat 15-step default — once with only TWO requested parts —
+// because real-world tool friction (a missing wordlist) alone consumed
+// nearly the whole budget before the goal's second part was ever reached.
+// Configured StepBudget is deliberately tiny (2) here so that WITHOUT
+// scaling this task would fail at iteration 2 — with a 4-part enumerated
+// goal, scaling must give it enough real room (6 + 12*4 = 54) to finish a
+// script that takes 6 real iterations.
+func TestEinoRunner_Run_ScalesStepBudgetForMultiPartGoals(t *testing.T) {
+	var turn int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		var toolCall map[string]any
+		if turn <= 5 {
+			toolCall = map[string]any{
+				"id": "call_r", "type": "function",
+				"function": map[string]any{"name": "remember", "arguments": `{"key":"k","value":"v"}`},
+			}
+		} else {
+			toolCall = map[string]any{
+				"id": "call_f", "type": "function",
+				"function": map[string]any{"name": "finish", "arguments": `{"summary":"all four parts done","findings":[]}`},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "", "tool_calls": []map[string]any{toolCall},
+			}, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	r := NewEinoRunner(store, nil, nil, Config{
+		StepBudget: 2, ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	goal := "1) do part one 2) do part two 3) do part three 4) do part four"
+	task, err := r.CreateAndPlan(context.Background(), "session-1", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v (a 4-part goal should have been scaled well past the configured StepBudget of 2)", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+	if final.StepBudget <= 2 {
+		t.Fatalf("StepBudget = %d, want it scaled up from the configured 2 (operator-visible ceiling must reflect what was actually enforced)", final.StepBudget)
+	}
+}
+
+// TestEinoRunner_Run_DoesNotScaleSingleIntentGoals proves the negative case:
+// a goal with no detected multiple parts must NOT have its budget inflated —
+// scaling only when there's a real, evidenced reason to expect more work is
+// what keeps MaxIterations meaningful as a runaway-loop backstop.
+func TestEinoRunner_Run_DoesNotScaleSingleIntentGoals(t *testing.T) {
+	srv := toolCallServer("remember", `{"key":"k","value":"v"}`)
+	defer srv.Close()
+
+	store, _ := agent.NewStore(nil)
+	r := NewEinoRunner(store, nil, nil, Config{
+		StepBudget: 2, ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "find the largest file under /var")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err == nil {
+		t.Fatal("expected the unscaled 2-step budget to still be enforced for a single-intent goal, got nil error")
+	}
+	final, _ := store.Get(task.ID)
+	if final.StepBudget != 2 {
+		t.Fatalf("StepBudget = %d, want unchanged at the configured 2 for a single-intent goal", final.StepBudget)
+	}
+}
