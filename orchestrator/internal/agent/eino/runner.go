@@ -2,6 +2,7 @@ package eino
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -44,6 +45,17 @@ type Config struct {
 	// configured tier/override, so both backends agree on context size.
 	// <=0 omits the field (server default, likely too small).
 	ModelNumCtx int
+	// PlanLLM is a plain-chat client used ONLY for the narrow, single-purpose
+	// goal-part audit (agent.AuditGoalParts) that backs the premature-FINISH
+	// guard's natural-language fallback below — separate from cm, the Eino
+	// ChatModel that actually drives the ReAct tool-calling loop. Reuses
+	// whichever agent.LLM the graph backend's own step loop uses (main.go
+	// wires the same value both places) so the audit call inherits the
+	// already tier-resolved num_ctx/fallback/circuit-breaker behavior instead
+	// of standing up a second, differently-configured client for one short
+	// call. Nil disables the natural-language fallback — SplitEnumeratedParts'
+	// numbered-marker case still works without it.
+	PlanLLM agent.LLM
 	// Persona is the same document-driven agent.yaml identity/principles the
 	// graph backend renders via StepSystemPrompt (ORIENT/ACT/OBSERVE/CONCLUDE:
 	// NO FABRICATION, EVIDENCE, TRUTH, COMPLETE, ...). Previously this backend
@@ -254,6 +266,58 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		})
 	}
 
+	// enumParts is computed here — BEFORE agent construction, not at its
+	// original spot right before the retry loop — specifically so it can
+	// also size effectiveStepBudget below. It still drives the premature-
+	// FINISH guard the same way once the retry loop starts.
+	//
+	// A multi-part goal ("1) ... 2) ... 3) ..." or "scan X and also check
+	// Y") reproducibly needs MUCH more real headroom than the flat
+	// StepBudget default (15) provides, and this was proven live, not
+	// guessed: three separate real runs against an actual target, using
+	// real cataloged pentest tools, either exhausted the entire 15-step
+	// budget or came within one step of it — including a run with only TWO
+	// requested parts (gobuster + nikto) that never even reached the second
+	// part, because ONE tool hitting real-world friction (a missing
+	// wordlist, in that case) was enough to burn the whole budget on its
+	// own. A flat higher default doesn't fit either: a genuinely
+	// single-intent goal ("what OS is this") finishes correctly in 2-4 real
+	// steps today and gains nothing from a bigger ceiling except a weaker
+	// runaway-loop backstop (MaxIterations is this backend's ONLY loop-
+	// prevention mechanism — see Config's own doc comment on why the
+	// graph's stuck/duplicate heuristics don't apply here). Scaling with the
+	// goal's OWN detected complexity is the proportionate fix: budget grows
+	// only when there's real reason to expect it's needed.
+	enumParts := agent.SplitEnumeratedParts(t.Goal)
+	if len(enumParts) < 2 && r.cfg.PlanLLM != nil && agent.LikelyMultiPart(t.Goal) {
+		if audited := agent.AuditGoalParts(ctx, r.cfg.PlanLLM, t.Goal); len(audited) >= 2 {
+			enumParts = audited
+		}
+	}
+	effectiveStepBudget := r.cfg.StepBudget
+	if len(enumParts) >= 2 {
+		// baseOverhead covers the model's own opening orientation and its
+		// final finish/report turn, independent of how many parts there
+		// are. perPart is deliberately generous — live-observed, a single
+		// friction-prone tool (gobuster's wordlist resolution) alone
+		// consumed something close to a full 15-step budget across
+		// multiple runs, so "a few steps per part" would just reproduce the
+		// exact shortfall this exists to fix. Capped at maxScaledBudget as
+		// a sanity backstop, not a expected ceiling — MaxIterations must
+		// still mean something as a runaway-loop guard.
+		const baseOverhead, perPart, maxScaledBudget = 6, 12, 80
+		scaled := baseOverhead + perPart*len(enumParts)
+		if scaled > maxScaledBudget {
+			scaled = maxScaledBudget
+		}
+		if scaled > effectiveStepBudget {
+			effectiveStepBudget = scaled
+		}
+	}
+	if effectiveStepBudget != task.StepBudget {
+		_ = r.store.Update(task.ID, func(t *agent.Task) { t.StepBudget = effectiveStepBudget })
+	}
+
 	einoAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "yummi",
 		Description: "an autonomous penetration-testing operator assistant",
@@ -261,8 +325,9 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		Model:       cm, // already model.ToolCallingChatModel per NewOllamaChatModel's return type
 		// StepBudget's real enforcement: without this, Eino's own default
 		// (20) governs regardless of what the task was actually configured
-		// for.
-		MaxIterations: r.cfg.StepBudget,
+		// for. effectiveStepBudget (not the flat r.cfg.StepBudget) — see its
+		// own computation above for why a multi-part goal needs more room.
+		MaxIterations: effectiveStepBudget,
 		ToolsConfig: adk.ToolsConfig{
 			// ExecuteSequentially: eino's default runs every tool call in a
 			// model turn concurrently. agent.Gate is single-slot per task
@@ -325,54 +390,166 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	}
 
 	runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: einoAgent})
-	iter := runner.Run(runCtx, []*schema.Message{schema.UserMessage(initialGoal)})
 
-	var lastMessage *schema.Message
-	var runErr error
+	// enumParts (computed above, before agent construction) also drives the
+	// premature-FINISH guard (parity with graph.go's stepNode guard): a
+	// multi-part goal is the exact case where the model reproducibly answers
+	// the first part and then calls finish, leaving the rest untouched — and
+	// this backend has no plan/step backbone to catch it. When finish is
+	// reached but fewer distinct tool results were produced than the goal
+	// has parts, bounce ONCE: re-run the agent with the parts listed and the
+	// work-so-far carried forward, so it completes the remaining parts.
+	// Bounded to a single re-run — a model that finishes again after seeing
+	// the checklist is obeyed, never wedged. This is model-size-independent:
+	// the deterministic bounce, not a bigger model, is what forces the
+	// second attempt.
+	openingMessage := initialGoal
+	nudged := false
+	transientRetries := 0
+
+	var summary string
+	var findings []string
 	for {
-		event, ok := iter.Next()
-		if !ok {
-			break
-		}
-		if event.Err != nil {
-			runErr = event.Err
-		}
-		if event.Output != nil && event.Output.MessageOutput != nil && !event.Output.MessageOutput.IsStreaming {
-			lastMessage = event.Output.MessageOutput.Message
-		}
-	}
+		capture.reset()
+		ask.reset()
 
-	if runCtx.Err() != nil {
-		return nil // Stop() already transitioned the task to StatusStopped
-	}
-
-	// A run-time error (e.g. adk.ErrExceedMaxIterations, or a mid-run model
-	// failure) must fail the task — previously this was silently dropped and
-	// the task completed anyway with a stale/empty summary, mirroring what
-	// graph.go's own budget-exhaustion path does explicitly instead.
-	if runErr != nil {
-		_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = runErr.Error() })
-		return runErr
-	}
-
-	// ask_operator pauses the task for operator input, mirroring graph.go's
-	// askNode exactly (StatusPaused + Question set) — checked ahead of
-	// finish since ReturnDirectly guarantees at most one of the two fires
-	// per run.
-	if question, asked := ask.get(); asked {
-		if question == "" {
-			question = "The agent needs operator input to continue."
+		iter := runner.Run(runCtx, []*schema.Message{schema.UserMessage(openingMessage)})
+		var lastMessage *schema.Message
+		var runErr error
+		for {
+			event, ok := iter.Next()
+			if !ok {
+				break
+			}
+			if event.Err != nil {
+				runErr = event.Err
+			}
+			if event.Output != nil && event.Output.MessageOutput != nil && !event.Output.MessageOutput.IsStreaming {
+				lastMessage = event.Output.MessageOutput.Message
+				// One completed (non-streaming) Role==Assistant MessageOutput
+				// == one real ChatModel-node turn == exactly what Eino's own
+				// adk.ChatModelAgentConfig.MaxIterations decrements against
+				// (see react.go's WithStatePreHandler). The ReAct loop also
+				// emits a Role==Tool MessageOutput for each tool's result —
+				// filtering to Assistant only avoids double-counting that as
+				// a second "turn". Previously StepsUsed was only bumped
+				// inside runToolPipeline — i.e. only on a successfully-
+				// dispatched tool call — so any turn that didn't reach that
+				// pipeline (a malformed tool-call arguments string, a
+				// remember/update_plan/ask_operator call, ...) consumed a
+				// real Eino iteration invisibly. Live-observed: steps_used
+				// showed 9 while Eino had already exhausted its real
+				// 15-iteration budget and failed the task — an operator
+				// watching "9/15" had no way to see the real ceiling
+				// approaching. This is now the single, accurate choke point;
+				// runToolPipeline's own increment is removed to avoid
+				// double-counting a turn that also ran a tool.
+				if r.store != nil && event.Output.MessageOutput.Role == schema.Assistant {
+					_ = r.store.Update(task.ID, func(t *agent.Task) { t.StepsUsed++ })
+				}
+			}
 		}
-		if err := r.store.Transition(task.ID, agent.StatusPaused, func(t *agent.Task) { t.Question = question }); err != nil {
-			return err
-		}
-		r.store.RecordActivity(agent.ActivityEvent{SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActAsk, Summary: question})
-		return nil
-	}
 
-	summary, findings, called := capture.get()
-	if !called && lastMessage != nil {
-		summary = lastMessage.Content
+		if runCtx.Err() != nil {
+			return nil // Stop() already transitioned the task to StatusStopped
+		}
+
+		// A run-time error (e.g. adk.ErrExceedMaxIterations, or a mid-run model
+		// failure) must fail the task — previously this was silently dropped and
+		// the task completed anyway with a stale/empty summary, mirroring what
+		// graph.go's own budget-exhaustion path does explicitly instead.
+		//
+		// One class is worth a bounded retry rather than an immediate fail:
+		// live-observed against Ollama-served gpt-oss:20b, a tool call's own
+		// argument JSON can come back truncated mid-generation ("error parsing
+		// tool call: ... unexpected end of JSON input") — a transient
+		// generation hiccup on ONE turn, not a structural problem with the
+		// goal or the model's reasoning (re-running the identical setup
+		// immediately afterward succeeded cleanly). Failing the whole task for
+		// one bad turn wastes everything already accomplished; this mirrors
+		// graph.go's own LLM-call retry discipline (retryNode) for the
+		// backend that, until now, had none at all for this error class.
+		if runErr != nil {
+			if isTransientToolCallError(runErr) && transientRetries < maxTransientRetries {
+				transientRetries++
+				openingMessage = buildRetryAfterErrorMessage(t.Goal, trace)
+				r.store.RecordActivity(agent.ActivityEvent{
+					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+					Summary: fmt.Sprintf("transient tool-call error, retrying (%d/%d): %s",
+						transientRetries, maxTransientRetries, runErr.Error()),
+				})
+				continue
+			}
+			_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = runErr.Error() })
+			return runErr
+		}
+
+		// ask_operator pauses the task for operator input, mirroring graph.go's
+		// askNode exactly (StatusPaused + Question set) — checked ahead of
+		// finish since ReturnDirectly guarantees at most one of the two fires
+		// per run.
+		if question, asked := ask.get(); asked {
+			question = agent.SanitizeAgentText(question)
+			if question == "" {
+				question = "The agent needs operator input to continue."
+			}
+			if err := r.store.Transition(task.ID, agent.StatusPaused, func(t *agent.Task) { t.Question = question }); err != nil {
+				return err
+			}
+			r.store.RecordActivity(agent.ActivityEvent{SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActAsk, Summary: question})
+			return nil
+		}
+
+		var called bool
+		summary, findings, called = capture.get()
+		if !called && lastMessage != nil {
+			// The model's finish intent can still be a complete, well-formed
+			// {"summary":...,"findings":...} object even when this turn's
+			// response wasn't routed into a proper tool_calls entry — live-
+			// observed with gpt-oss-20b's Harmony channel format via LM
+			// Studio, which sometimes serializes the tool call as inline
+			// text ("...json{\"summary\":...}") instead. Recovering that
+			// embedded object gives the real, clean answer instead of the
+			// channel-routing prose wrapped around it; falls back to the raw
+			// content when nothing finishArgs-shaped is found.
+			if s, f, ok := tryParseEmbeddedFinishJSON(lastMessage.Content); ok {
+				summary, findings = s, f
+			} else {
+				summary = lastMessage.Content
+			}
+		}
+		// The graph backend sanitizes every model-authored string before it
+		// becomes wire-visible on Task (agent.SanitizeAgentText's own doc
+		// comment: "must be the only line of defense"); this backend never
+		// did. Belt-and-suspenders even after the recovery above: strips any
+		// remaining raw "<|...|>" control token the embedded-JSON parse
+		// didn't catch (e.g. a genuinely non-JSON fallback).
+		summary = agent.SanitizeAgentText(summary)
+		findings = agent.SanitizeFindings(findings)
+		// believesFinished covers BOTH ways this loop iteration can end with
+		// nothing left queued: the model properly invoked the finish tool
+		// (called), or it simply stopped requesting any tool at all and the
+		// ADK loop's iterator exhausted with a plain assistant message
+		// (lastMessage != nil, called false) — live-observed with
+		// gpt-oss-20b, which sometimes ends a turn this way instead of
+		// calling finish. The original guard only checked `called`, so a
+		// model that silently stops instead of calling finish sailed straight
+		// past the premature-completion check with an under-covered goal —
+		// arguably worse than a model that at least tries to call finish
+		// early, since nothing here signals "I think I'm done" for the guard
+		// to catch. Both cases mean the same thing operationally: this run
+		// produced its last action, decide now whether that was premature.
+		believesFinished := called || lastMessage != nil
+		if believesFinished && shouldNudgeIncompleteGoals(enumParts, len(trace.pairs()), nudged) {
+			nudged = true
+			openingMessage = buildIncompleteGoalsMessage(t.Goal, enumParts, trace)
+			r.store.RecordActivity(agent.ActivityEvent{
+				SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+				Summary: fmt.Sprintf("finish reached with %d/%d goal parts covered — continuing", len(trace.pairs()), len(enumParts)),
+			})
+			continue
+		}
+		break
 	}
 	// Fallback for real evidence with nothing to show it: found via live
 	// long-form testing — a task can complete every part of a multi-part
@@ -487,6 +664,102 @@ func (r *EinoRunner) instruction(goal string) string {
 			"turn to delegate to several specialists at once, they run concurrently."
 	}
 	return instr
+}
+
+// shouldNudgeIncompleteGoals decides whether a finish should be bounced once so
+// the model completes an under-covered multi-part goal. It fires only for an
+// enumerated goal with >= 2 parts, only when fewer distinct tool results were
+// produced than the goal has parts (the "answered part 1, called it done"
+// signature), and never more than once — a model that finishes again after the
+// checklist re-run is obeyed. Kept as a pure predicate so the guard's decision
+// is unit-testable without a live model.
+func shouldNudgeIncompleteGoals(parts []string, coveredResults int, alreadyNudged bool) bool {
+	return !alreadyNudged && len(parts) >= 2 && coveredResults < len(parts)
+}
+
+// buildIncompleteGoalsMessage is the opening message for the single bounded
+// re-run the premature-FINISH guard triggers. Like the paused-resume message,
+// it starts a fresh conversation, so it must carry both the goal's parts and
+// the work already done — otherwise the model would redo part 1 instead of
+// advancing to the untouched parts. It never fabricates: the "already done"
+// lines are verbatim (compressed) results the task actually produced.
+// tryParseEmbeddedFinishJSON looks for a {"summary":...} object embedded
+// anywhere in raw fallback content and parses it as finishArgs. ok is false
+// when no valid finishArgs-shaped object is found (no braces at all, invalid
+// JSON, or a valid-but-empty summary) — the caller keeps the raw content
+// as-is in that case rather than risk silently swallowing a real answer.
+func tryParseEmbeddedFinishJSON(content string) (summary string, findings []string, ok bool) {
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start < 0 || end < start {
+		return "", nil, false
+	}
+	var args finishArgs
+	if err := json.Unmarshal([]byte(content[start:end+1]), &args); err != nil {
+		return "", nil, false
+	}
+	if strings.TrimSpace(args.Summary) == "" {
+		return "", nil, false
+	}
+	return args.Summary, args.Findings, true
+}
+
+// maxTransientRetries bounds how many times a transient tool-call error (see
+// isTransientToolCallError) is retried before the task is failed for real —
+// one, so a genuinely broken setup (not just a one-off generation hiccup)
+// doesn't retry forever.
+const maxTransientRetries = 1
+
+// isTransientToolCallError reports whether err is the specific class of
+// failure observed live against Ollama-served gpt-oss:20b: the model's tool
+// call arguments came back truncated mid-generation, and Ollama's own
+// tool-call parser hard-fails the request (HTTP 500) instead of tolerating
+// it. This is conservative on purpose — it matches only the exact message
+// text this failure produces, not "any error", so a genuine model/server
+// failure (network down, OOM, ...) still fails the task immediately rather
+// than being silently retried into a longer hang.
+func isTransientToolCallError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "error parsing tool call")
+}
+
+// buildRetryAfterErrorMessage is the opening message for the bounded retry
+// isTransientToolCallError triggers. Like buildIncompleteGoalsMessage, it
+// starts a fresh conversation, so it must carry forward whatever work
+// already completed — otherwise the retry would redo it. Generic (not
+// enumerated-parts-aware) since a transient error can interrupt a
+// single-intent goal just as easily as a multi-part one.
+func buildRetryAfterErrorMessage(goal string, trace *runTrace) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Continuing toward the original goal: %s\n\n", goal)
+	b.WriteString("The previous attempt was interrupted by a transient tool-call error, not a real problem " +
+		"with the goal or your reasoning — just retry.\n")
+	if pairs := trace.pairs(); len(pairs) > 0 {
+		b.WriteString("\nWork already completed (do NOT repeat these):\n")
+		for _, p := range pairs {
+			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
+		}
+	}
+	b.WriteString("\nContinue from here toward the goal.")
+	return b.String()
+}
+
+func buildIncompleteGoalsMessage(goal string, parts []string, trace *runTrace) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Continuing the original multi-part goal: %s\n\n", goal)
+	b.WriteString("The goal has these distinct parts:\n")
+	for i, p := range parts {
+		fmt.Fprintf(&b, "  %d) %s\n", i+1, strings.TrimSpace(p))
+	}
+	if pairs := trace.pairs(); len(pairs) > 0 {
+		b.WriteString("\nWork already completed (do NOT repeat these):\n")
+		for _, p := range pairs {
+			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
+		}
+	}
+	b.WriteString("\nYou called finish, but not every part above has been addressed yet. " +
+		"Work through each part that still has no result — run a real command/tool for it — " +
+		"and only call finish once every part is genuinely done.")
+	return b.String()
 }
 
 // ── agent.TaskRunner ─────────────────────────────────────────────────────

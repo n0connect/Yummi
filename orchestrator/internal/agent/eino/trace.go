@@ -104,6 +104,15 @@ func (f *finishCapture) get() (summary string, findings []string, called bool) {
 	return f.summary, f.findings, f.called
 }
 
+// reset clears the capture so the finishTool bound to it can be reused across
+// a bounded re-run (the premature-FINISH guard) without a stale finish from an
+// earlier attempt leaking into the next.
+func (f *finishCapture) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.summary, f.findings, f.called = "", nil, false
+}
+
 // askCapture is finishCapture's sibling for the ask_operator tool: both tools
 // are registered as ReturnDirectly, so Run()'s event loop can't tell from the
 // chat message alone which one ended the turn — it checks these captures.
@@ -123,4 +132,11 @@ func (a *askCapture) get() (question string, called bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.question, a.called
+}
+
+// reset clears the ask capture for reuse across a bounded re-run.
+func (a *askCapture) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.question, a.called = "", false
 }

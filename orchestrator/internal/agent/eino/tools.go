@@ -179,8 +179,43 @@ func (at askOperatorTool) InvokableRun(_ context.Context, argumentsInJSON string
 }
 
 type finishArgs struct {
-	Summary  string   `json:"summary"`
-	Findings []string `json:"findings,omitempty"`
+	Summary  string        `json:"summary"`
+	Findings looseFindings `json:"findings,omitempty"`
+}
+
+// looseFindings accepts either the schema's declared shape (a plain array of
+// strings) or an array of richer objects. Live-observed: gpt-oss sometimes
+// answers findings as structured objects (e.g. {"section":"...",
+// "details":[...]}) despite the tool schema declaring findings as
+// array-of-string — a MORE detailed answer than asked for, not a malformed
+// one, and hard-failing the whole finish call over it (the previous
+// behavior: json.Unmarshal into []string errors on the first non-string
+// element) threw away a real, correctly-reasoned result. Falls back to the
+// raw JSON text for any element that isn't a plain string, so richer
+// structure is preserved as readable text instead of being lost.
+type looseFindings []string
+
+func (f *looseFindings) UnmarshalJSON(data []byte) error {
+	var strs []string
+	if err := json.Unmarshal(data, &strs); err == nil {
+		*f = strs
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			out = append(out, s)
+			continue
+		}
+		out = append(out, strings.TrimSpace(string(r)))
+	}
+	*f = out
+	return nil
 }
 
 var finishInfo = &schema.ToolInfo{
@@ -199,10 +234,18 @@ func (finishTool) Info(_ context.Context) (*schema.ToolInfo, error) { return fin
 func (ft finishTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var args finishArgs
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
-		return fmt.Sprintf("invalid tool call arguments: %v", err), nil
+		// A real error here (not a disguised "success" string) — finish is
+		// ReturnDirectly, so a swallowed parse failure previously became the
+		// task's own user-facing Summary verbatim ("invalid tool call
+		// arguments: json: cannot unmarshal..."), live-observed marking a
+		// task StatusCompleted with a raw Go error as its deliverable. An
+		// actual error lets Run()'s existing runErr handling take over
+		// instead — failing the task honestly with this as LastError, which
+		// an operator can act on, rather than a fabricated-looking success.
+		return "", fmt.Errorf("invalid finish tool call arguments: %w", err)
 	}
 	if ft.capture != nil {
-		ft.capture.set(args.Summary, args.Findings)
+		ft.capture.set(args.Summary, []string(args.Findings))
 	}
 	return "task finished", nil
 }
