@@ -408,12 +408,17 @@ const tr = {
   'common.add': 'Ekle',
 
   // ── StatusBar ───────────────────────────────────────────────────────────
-  'statusBar.nav.agent': 'Agent',
+  // 'Ajan' matches the trust-rail's own "AJAN eino" label — keeping the same
+  // Turkish word for the same concept everywhere it appears in the app.
+  // Bash/Trace/Gateway stay as their technical/proper-noun names, matching
+  // how those same words are already used untranslated elsewhere (e.g. the
+  // Trace page's own h1, "Gateway bağlantısı kurulamadı").
+  'statusBar.nav.agent': 'Ajan',
   'statusBar.nav.bash': 'Bash',
   'statusBar.nav.trace': 'Trace',
-  'statusBar.nav.logs': 'Logs',
+  'statusBar.nav.logs': 'Günlükler',
   'statusBar.nav.gateway': 'Gateway',
-  'statusBar.nav.health': 'Health',
+  'statusBar.nav.health': 'Sağlık',
   'statusBar.navAriaLabel': 'Ana gezinme',
   'statusBar.theme.switchToLight': 'Açık temaya geç',
   'statusBar.theme.switchToDark': 'Koyu temaya geç',
@@ -438,7 +443,7 @@ const tr = {
   'sessionRail.recentActivity': 'Son etkinlik',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
-  'debugLog.title': 'Debug Log',
+  'debugLog.title': 'Debug Günlüğü',
   'debugLog.linesSuffix': 'satır',
   'debugLog.filterPlaceholder': 'Filtrele...',
   'debugLog.noEntries': 'Henüz log kaydı yok...',
@@ -461,8 +466,8 @@ const tr = {
   'gateway.title': 'Gateway',
   'gateway.unreachableTitle': 'Gateway bağlantısı kurulamadı',
   'gateway.unreachableBody': 'Yummi runtime çalıştığında ağ politikaları ve denetim kayıtları burada otomatik görünecek.',
-  'gateway.egressModeTitle': 'Egress Mode',
-  'gateway.egressModeGroupAriaLabel': 'Egress mode',
+  'gateway.egressModeTitle': 'Çıkış Modu',
+  'gateway.egressModeGroupAriaLabel': 'Çıkış modu',
   'gateway.egress.block.label': 'Tümü Engellensin',
   'gateway.egress.block.hint': 'Sandbox dış ağa erişemez (fail-closed).',
   'gateway.egress.allow.label': 'Tümüne İzin Ver',
@@ -471,7 +476,7 @@ const tr = {
   'gateway.egress.ask.hint': 'Her dış erişim için operatör onayı istenir.',
   'gateway.notConfigured': 'Gateway yapılandırılmamış.',
   'gateway.unreachableShort': 'Gateway erişilemez.',
-  'gateway.hostnamePolicyTitle': 'Hostname Policy',
+  'gateway.hostnamePolicyTitle': 'Hostname Politikası',
   'gateway.hostnamePolicyDesc': 'İsim bazlı kapsam. *.google.com apex + tüm subdomainleri kapsar. Engel kuralı her şeyi yener; izin listesi doluysa whitelist gibi davranır. Buradan eklenenler geçicidir (yeniden başlatınca config dosyasından yüklenir).',
   'gateway.allowListLabel': 'İzinli',
   'gateway.blockListLabel': 'Engelli',
@@ -480,7 +485,7 @@ const tr = {
   'gateway.selectAllow': 'İzin ver',
   'gateway.hostnameListSelectAriaLabel': 'Liste türü',
   'gateway.hostnamePlaceholder': '*.example.com veya example.com',
-  'gateway.activeRulesTitle': 'Active Rules',
+  'gateway.activeRulesTitle': 'Aktif Kurallar',
   'gateway.table.network': 'Ağ',
   'gateway.table.action': 'Eylem',
   'gateway.table.source': 'Kaynak',
@@ -491,18 +496,18 @@ const tr = {
   'gateway.table.decision': 'Karar',
   'gateway.table.target': 'Hedef',
   'gateway.permanent': 'kalıcı',
-  'gateway.fingerprintTitle': 'Fingerprint Masking',
+  'gateway.fingerprintTitle': 'Parmak İzi Gizleme',
   'gateway.ttlNormalization': 'TTL normalizasyonu',
   'gateway.macRandomization': 'MAC rastgeleleştirme',
   'gateway.off': 'kapalı',
   'gateway.on': 'açık',
   'gateway.unavailable': 'kullanılamıyor',
-  'gateway.addManualRuleTitle': 'Add Manual Rule',
+  'gateway.addManualRuleTitle': 'Manuel Kural Ekle',
   'gateway.cidrPlaceholder': 'CIDR (örn. 10.0.0.5/32)',
   'gateway.ttlPlaceholder': 'TTL saniye',
   'gateway.reasonPlaceholder': 'Sebep (zorunlu)',
   'gateway.addRuleButton': 'Kural Ekle',
-  'gateway.auditLogTitle': 'Audit Log',
+  'gateway.auditLogTitle': 'Denetim Günlüğü',
   'gateway.verified': '✓ doğrulandı',
   'gateway.broken': '✗ bozuk',
 
