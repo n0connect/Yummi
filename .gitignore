@@ -29,6 +29,8 @@ coverage.*
 orchestrator/test_agent
 orchestrator/test_engine
 orchestrator/test_loop
+orchestrator/context_probe
+orchestrator/test_openai_backend
 
 # sandbox-mcp built in place (plain `go build ./...` from within sandbox-mcp/
 # names its output after the module directory — use `make _build-sandbox-mcp`
