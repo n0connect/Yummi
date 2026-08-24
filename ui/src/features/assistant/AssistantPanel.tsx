@@ -394,8 +394,15 @@ export function AssistantPanel({
   // task exists at all, let alone its current status. Best-effort itself: a
   // failed fetch here just means the next real WS event, if one arrives,
   // still self-heals the same way it always did.
+  // Deliberately NOT skipped for sid === 'default': unlike chat messages
+  // (sessionStorage-only for that bucket, see loadHistory), agent.Runner
+  // never special-cases the session id when creating a task — a task
+  // started from the default bucket is a real, persisted row server-side
+  // under session_id="default" (HandleListTasks has no such guard either).
+  // Skipping the resync here left any such task permanently unrecoverable
+  // after a tab switch, dropped socket, or reload — still fully alive and
+  // possibly awaiting operator approval server-side, but invisible in the UI.
   const resyncActiveTask = useCallback((sid: string) => {
-    if (sid === 'default') return
     fetchJSON<AgentTask[]>(`/api/v1/sessions/${sid}/tasks`)
       .then((tasks) => {
         if (sessionIDRef.current !== sid) return
@@ -419,12 +426,15 @@ export function AssistantPanel({
   // resyncExecutionHolds re-derives the egress/threat approval bars for
   // `sid` from GET /sessions/{sid}/executions — the WS-reconnect
   // counterpart to loadHistory's own fetch of the same endpoint (which
-  // already covers the session-switch case, see its .then above). Without
-  // this, a command left holding at the gateway or the content scanner
-  // across a dropped/reconnecting socket has no way back onto the operator's
+  // already covers the session-switch case, see its .then above — except
+  // for sid === 'default', where loadHistory skips the network entirely
+  // and never fetches executions at all; see resyncActiveTask above for
+  // why executions, like tasks, are real server-side rows under
+  // session_id="default" too). Without this, a command left holding at
+  // the gateway or the content scanner across a dropped/reconnecting
+  // socket, tab switch, or reload has no way back onto the operator's
   // screen even though it is still genuinely stuck fail-closed server-side.
   const resyncExecutionHolds = useCallback((sid: string) => {
-    if (sid === 'default') return
     fetchJSON<ExecutionRecord[]>(`/api/v1/sessions/${sid}/executions?limit=100`)
       .then((executions) => {
         if (sessionIDRef.current !== sid) return
@@ -437,10 +447,18 @@ export function AssistantPanel({
   }, [])
 
   // Resync once per session load/switch — loadHistory's own effect only
-  // hydrates chat messages and activity, never task state (see above).
+  // hydrates chat messages and activity, never task state (see above), and
+  // for sid === 'default' skips the network entirely (sessionStorage-only
+  // bucket for messages), so it never reaches its own executions fetch
+  // either. resyncExecutionHolds was previously wired ONLY to the WS
+  // onReconnect handler below, leaving a genuine egress/threat approval
+  // hold under the default session invisible after a plain mount, tab
+  // switch, or reload — not just after a dropped socket. A redundant fetch
+  // here for a real session (already covered by loadHistory's own) is cheap.
   useEffect(() => {
     resyncActiveTask(sessionID)
-  }, [sessionID, resyncActiveTask])
+    resyncExecutionHolds(sessionID)
+  }, [sessionID, resyncActiveTask, resyncExecutionHolds])
 
   // Counts consecutive auto-feedbacks since the last user message.
   // Capped at 3 to break infinite retry loops.
