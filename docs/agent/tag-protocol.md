@@ -38,11 +38,13 @@ Every message the agent sends *to* the model is wrapped as `[TAG]\n<content>` by
 | `APPROVAL_DENIED` | The operator denied a gated command — propose an alternative or finish |
 | `APPROVAL_TIMEOUT` | Approval timed out |
 | `PLAN_UPDATED` | The plan update was accepted |
-| `BUDGET_WARNING` | Few steps remain — converge toward finishing |
+| `INCOMPLETE_GOALS` | The model tried to `FINISH` while plan steps are still pending — bounced back once with the specific unaddressed parts listed, so it reconsiders before genuinely giving up (see [Graph & Nodes § the premature-FINISH guard](graph-and-nodes.md#premature-finish)) |
 | `UNKNOWN` | The agent couldn't classify this situation; raw content follows — **highest priority**, the model decides |
 | `OPERATOR_ANSWER` | The operator's reply to an `[ASK_OPERATOR]` question |
 
 `UNKNOWN` deserves a specific callout: `Wrap()` degrades to it automatically whenever an unregistered tag name is passed in. This is a deliberate safety net — **the agent can never emit a label the model hasn't been told about**, so the protocol stays genuinely closed even if a future code change introduces a new internal tag string without also registering it. That's a fail-*visible* default (the model is told explicitly "I don't have a better classification for this, you decide"), not a silent swallow.
+
+**Not every recurring signal is a tag.** Budget pressure used to be a one-shot `BUDGET_WARNING` tag fired via `Wrap()` — it was removed because it was declared in the registry and never actually emitted by any node, so the model's own system prompt described a signal it would never receive. Budget-regime guidance (`BUDGET LOW`/`BUDGET CRITICAL`, ratio-based against `StepBudget`) is instead rendered directly into `BuildStepPrompt` every turn, the same way the plan's ○/✓ status and the goal-parts-still-open list already are — a persistent piece of always-current state belongs in the per-turn prompt render, not in a one-shot observation that would only be true for the single turn it fired on.
 
 ## LLM → Agent: the control tags <a id="llm-to-agent"></a>
 

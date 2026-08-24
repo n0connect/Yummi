@@ -7,6 +7,7 @@ This page assumes you've already completed [Installation](installation.md) — a
 ## Table of contents
 
 - [Two Go modules — the mistake almost everyone makes once](#two-go-modules)
+- [Fast rebuild after a source change](#rebase)
 - [Fast feedback loops per component](#fast-loops)
 - [Running a single test](#single-test)
 - [Linting and vulnerability scanning](#lint-vuln)
@@ -28,6 +29,16 @@ cd orchestrator && go test ./...
 ```
 
 `make test` (and its granular pieces below) already get this right — it's specifically ad-hoc `go test`/`go build`/`go vet` invocations outside the Makefile where this bites people.
+
+---
+
+## Fast rebuild after a source change <a id="rebase"></a>
+
+```bash
+make rebase
+```
+
+The habitual `make stop && make close && make clean && make build && make start` wastes real time: `make build` compiles native binaries to `./bin` and `ui/dist` that the Docker images never consume at all, and neither `clean` nor `close` touch Docker's own build cache, images, or volumes. `make rebase` is exactly `down`, `build`, `up` — Docker's own layer cache does the real work (the `go mod download`/`npm install` layers are skipped when `go.sum`/`package-lock.json` haven't changed), so a source-only change rebuilds in seconds instead of minutes. It never prunes Docker's cache/images/volumes and never touches Ollama — reach for `make clean` or `docker system prune` when you actually need a from-scratch rebuild.
 
 ---
 
@@ -101,16 +112,27 @@ Runs `scripts/dev.sh`, which bootstraps (`scripts/install.sh`) and brings up jus
 
 ## The dev harnesses (`cmd/test_*`) <a id="dev-harnesses"></a>
 
-`orchestrator/cmd/test_agent`, `cmd/test_engine`, and `cmd/test_loop` are small, runnable Go programs (not `_test.go` files — genuine `main` packages) for driving specific layers interactively against real dependencies while developing:
+`orchestrator/cmd/test_agent`, `cmd/test_engine`, `cmd/test_loop`, `cmd/test_openai_backend`, and `cmd/context_probe` are small, runnable Go programs (not `_test.go` files — genuine `main` packages) for driving specific layers interactively against real dependencies while developing:
 
 ```bash
 cd orchestrator
-go run ./cmd/test_engine   # exercise the conductor engine directly
-go run ./cmd/test_loop     # exercise the agent's graph loop directly
-go run ./cmd/test_agent    # exercise the full agent Runner
+go run ./cmd/test_engine          # exercise the conductor engine directly
+go run ./cmd/test_loop            # exercise the agent's graph loop directly
+go run ./cmd/test_agent           # exercise the full agent Runner (graph backend)
+go run ./cmd/test_openai_backend  # scripted multi-part-goal scenarios against the Eino backend + a real OpenAI-compatible model
 ```
 
-These compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchestrator/test_loop` if built in place — already covered by `.gitignore`, so building one locally won't accidentally get committed.
+`test_openai_backend` takes `EINO_STEP_BUDGET` and `SCENARIO_ID` env filters to reproduce one scenario in isolation, and reuses `eino.NewOpenAIChatClient` — the same client the orchestrator itself uses when `YUMMI_EINO_MODEL_BASE_URL` points the Eino backend at a non-Ollama server.
+
+`context_probe` is a different kind of tool: a transparent reverse proxy in front of an OpenAI-compatible chat-completions server, not a scripted test.
+
+```bash
+go run ./cmd/context_probe -listen :8899 -target http://localhost:1234
+```
+
+Point `YUMMI_EINO_MODEL_BASE_URL` (or the harness's own model-base-URL flag) at the probe's `-listen` address instead of the real server, and it logs every `/chat/completions` turn — message/tool counts, the **server's own** `usage.prompt_tokens`/`completion_tokens`/`total_tokens` (not an estimate), `finish_reason`, and whether `tool_calls` fired — the only way to actually measure context growth turn-by-turn in a long Eino session instead of guessing whether it's building up. `-dump-dir` additionally saves each turn's full raw request/response JSON, useful for inspecting a turn whose content came back empty or malformed.
+
+All five compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchestrator/test_loop`, `orchestrator/test_openai_backend`, `orchestrator/context_probe` if built in place — already covered by `.gitignore`, so building one locally won't accidentally get committed.
 
 ## Agent quality gates
 
