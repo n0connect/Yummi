@@ -183,3 +183,58 @@ func TestSanitizeAgentText_StripsSpecialTokens(t *testing.T) {
 		t.Fatalf("real content lost: %q", got)
 	}
 }
+
+// TestBuildStepPrompt_BudgetRegimeGuidance covers the three budget regimes a
+// step prompt can render: silent with a healthy budget, LOW under a quarter
+// remaining, CRITICAL with essentially no slack left. Replaces the old
+// BUDGET_WARNING protocol tag, which was declared in the registry but never
+// actually emitted by any node — the model was told the tag existed and would
+// never receive it. This guidance is a persistent per-turn prompt block
+// instead, consistent with how the plan/goal-parts state is already rendered
+// every turn rather than as a one-shot observation.
+func TestBuildStepPrompt_BudgetRegimeGuidance(t *testing.T) {
+	cases := []struct {
+		name              string
+		used, budget      int
+		wantCritical      bool
+		wantLow           bool
+		wantNeitherPhrase bool
+	}{
+		{name: "healthy budget stays silent", used: 2, budget: 42, wantNeitherPhrase: true},
+		{name: "low budget under a quarter remaining", used: 33, budget: 42, wantLow: true},
+		{name: "critical budget with one step left", used: 41, budget: 42, wantCritical: true},
+		{name: "critical at exactly zero-slack small budget", used: 14, budget: 15, wantCritical: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			task := Task{Goal: "g", StepsUsed: c.used, StepBudget: c.budget}
+			prompt := BuildStepPrompt(task, "", "", "")
+			hasCritical := strings.Contains(prompt, "BUDGET CRITICAL")
+			hasLow := strings.Contains(prompt, "BUDGET LOW")
+			if hasCritical != c.wantCritical {
+				t.Errorf("BUDGET CRITICAL present=%v, want %v", hasCritical, c.wantCritical)
+			}
+			if hasLow != c.wantLow {
+				t.Errorf("BUDGET LOW present=%v, want %v", hasLow, c.wantLow)
+			}
+			if c.wantNeitherPhrase && (hasCritical || hasLow) {
+				t.Errorf("expected no budget guidance for a healthy budget, got critical=%v low=%v", hasCritical, hasLow)
+			}
+		})
+	}
+}
+
+// TestBuildStepPrompt_BudgetRegimeScalesWithBudget proves the thresholds are
+// ratio-based, not a fixed step count — the same "3 remaining" must read as
+// healthy against a scaled 42-step budget but LOW against the flat 15-step
+// default, since ScaledStepBudget can put either in play for the same task.
+func TestBuildStepPrompt_BudgetRegimeScalesWithBudget(t *testing.T) {
+	small := BuildStepPrompt(Task{Goal: "g", StepsUsed: 12, StepBudget: 15}, "", "", "")
+	if !strings.Contains(small, "BUDGET LOW") && !strings.Contains(small, "BUDGET CRITICAL") {
+		t.Errorf("3 remaining of 15 should trigger budget guidance, got:\n%s", small)
+	}
+	large := BuildStepPrompt(Task{Goal: "g", StepsUsed: 12, StepBudget: 42}, "", "", "")
+	if strings.Contains(large, "BUDGET LOW") || strings.Contains(large, "BUDGET CRITICAL") {
+		t.Errorf("12 used of 42 is healthy and should not trigger budget guidance, got:\n%s", large)
+	}
+}

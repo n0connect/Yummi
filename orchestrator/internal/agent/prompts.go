@@ -485,6 +485,27 @@ func BuildStepPrompt(task Task, lastObservation, summary, preamble string) strin
 		b.WriteString("\n")
 	}
 
+	// Budget-regime guidance: the "(%d/%d steps used, %d remaining)" header
+	// above always shows the raw numbers, but a bare count doesn't tell the
+	// model what to DO about it — research on budget-aware tool use (Budget
+	// Tracker, arXiv 2511.17006) found that an explicit low-budget signal
+	// measurably changes agent behavior at the SAME total budget, because a
+	// model unaware it's running low can't adapt its strategy and keeps
+	// exploring instead of converging. Two thresholds, both ratio-based so
+	// they scale correctly whether StepBudget is the flat default or
+	// ScaledStepBudget's larger multi-part ceiling: CRITICAL fires with at
+	// most one meaningful step of slack left; LOW fires under a quarter of
+	// the budget remaining. Silent otherwise — a healthy budget needs no
+	// extra noise every turn.
+	if remaining := task.StepBudget - task.StepsUsed; task.StepBudget > 0 && remaining > 0 {
+		switch {
+		case remaining <= max(1, task.StepBudget/10):
+			b.WriteString("\nBUDGET CRITICAL: essentially no steps left. Finish now with whatever evidence you have, or explicitly mark unreachable plan parts — do not start new exploration.\n")
+		case remaining <= max(2, task.StepBudget/4):
+			b.WriteString("\nBUDGET LOW: few steps remain. Converge toward finishing — prefer the most direct remaining action over further exploration.\n")
+		}
+	}
+
 	// Explicit remaining-goals pressure: the ○/✓ plan view above is easy for a
 	// model to under-weight after answering the first part of a multi-part
 	// goal, so restate what is still open and that FINISH is not yet valid.
