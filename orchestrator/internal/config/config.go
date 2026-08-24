@@ -37,6 +37,23 @@ type Config struct {
 	OllamaThinking      *bool
 	OllamaFallbackModel string // optional lighter LOCAL model the agent loop degrades to when the primary repeatedly fails (empty = no downgrade, breaker still trips)
 	OllamaEmbedModel    string // local Ollama embedding model for semantic retrieval (separate pull from OllamaModel); SemanticRetrieval degrades to StructuredRetrieval if this model isn't actually pulled
+	// EinoModelBaseURL/EinoModelName/EinoModelNumCtx let the Eino backend's
+	// own ReAct loop run against a DIFFERENT OpenAI-compatible server/model
+	// than the one Ollama/OllamaModel drives — e.g. a local LM Studio, vLLM,
+	// or llama.cpp server instead of Ollama, for a larger/more capable
+	// tool-calling model. The conductor (chat/intent classification) and
+	// this override are independent: conductor always needs a working
+	// Ollama-native client regardless of this setting, since chat/intent
+	// handling never goes through the agent backend. All three are blank/0
+	// by default, in which case cmd/orchestrator/main.go derives the exact
+	// same values it always has (Ollama's own OpenAI-compat endpoint) — this
+	// is purely additive, zero behavior change until an operator sets it.
+	// EinoModelBaseURL must include any path prefix the target server needs
+	// (e.g. "http://localhost:1234/v1") — unlike the Ollama derivation, this
+	// is not assumed to be Ollama, so no "/v1" is auto-appended.
+	EinoModelBaseURL string
+	EinoModelName    string
+	EinoModelNumCtx  int
 	TLSDir              string // directory holding mTLS certificates for orchestrator ↔ gateway
 	GatewayTLS          bool   // opt-in until the Rust gateway IPC server supports TLS framing
 	// DataRetentionDays enables internal/retention's background pruning of
@@ -79,6 +96,9 @@ func Load() *Config {
 		OllamaThinking:      parseOptionalBool(os.Getenv("YUMMI_OLLAMA_THINKING")),
 		OllamaFallbackModel: strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
 		OllamaEmbedModel:    envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+		EinoModelBaseURL:    strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_BASE_URL")),
+		EinoModelName:       strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_NAME")),
+		EinoModelNumCtx:     parseIntOr(os.Getenv("YUMMI_EINO_MODEL_NUM_CTX"), 0),
 		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
 		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
 		DataRetentionDays:   parseIntOr(os.Getenv("YUMMI_DATA_RETENTION_DAYS"), 0),
