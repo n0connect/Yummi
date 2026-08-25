@@ -1158,6 +1158,104 @@ func TestEinoRunner_Run_NudgesWhenModelStopsWithoutCallingFinish(t *testing.T) {
 	}
 }
 
+// TestEinoRunner_Run_ReauditsCoverageEveryFinishAttempt is the regression
+// test for a real live-observed gap that survived a first attempted fix.
+// Attempt 1 gated the nudge only once (nudged bool): live-observed nudged
+// once, the model called finish again one turn later having run zero new
+// tools, and it was accepted purely because the bool was already true.
+// Attempt 2 tried "accept a repeat finish only if trace.pairs() grew since
+// the last nudge" — ALSO live-observed insufficient: a real run started with
+// zero tool calls at all, got nudged, then ran exactly two things (one
+// failing, one real but only covering ONE of four still-missing parts), and
+// immediately tried finish again — pairs went 0→2, "did pairs grow" said
+// yes, and the still-badly-incomplete finish was accepted anyway. Growth in
+// trace.pairs() is not the same claim as "coverage improved"; only
+// re-running the real coverage audit proves that. This locks the actual
+// fix: EVERY believesFinished occurrence gets audited the same way (not just
+// the first), up to maxNudges, so a finish preceded by some-but-insufficient
+// new tool activity is caught exactly like one preceded by none — and once
+// genuinely covered, or the cap is hit, it goes through.
+func TestEinoRunner_Run_ReauditsCoverageEveryFinishAttempt(t *testing.T) {
+	var turn int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		w.Header().Set("Content-Type", "application/json")
+		var tc map[string]any
+		switch turn {
+		case 1: // Covers part 1 for real.
+			tc = map[string]any{"id": "call_1", "type": "function", "function": map[string]any{
+				"name": "run_command", "arguments": `{"command":"whoami"}`}}
+		case 2: // Premature finish — nothing covers part 2 yet. Nudge #1.
+			tc = map[string]any{"id": "call_2", "type": "function", "function": map[string]any{
+				"name": "finish", "arguments": `{"summary":"","findings":[]}`}}
+		case 3: // SOME new activity — but irrelevant to part 2 (CPU cores).
+			tc = map[string]any{"id": "call_3", "type": "function", "function": map[string]any{
+				"name": "run_command", "arguments": `{"command":"id"}`}}
+		case 4: // Finish again — pairs grew (3), but part 2 is still genuinely
+			// uncovered. Must be caught by a SECOND real audit, not waved
+			// through just because *something* ran since the last nudge.
+			tc = map[string]any{"id": "call_4", "type": "function", "function": map[string]any{
+				"name": "finish", "arguments": `{"summary":"","findings":[]}`}}
+		case 5: // Only now does the model do real work for part 2.
+			tc = map[string]any{"id": "call_5", "type": "function", "function": map[string]any{
+				"name": "run_command", "arguments": `{"command":"nproc"}`}}
+		default: // Now genuinely covered — the audit must accept this one.
+			tc = map[string]any{"id": "call_6", "type": "function", "function": map[string]any{
+				"name": "finish", "arguments": `{"summary":"user is pentester, 2 cores","findings":[]}`}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": "", "tool_calls": []map[string]any{tc},
+			}, "finish_reason": "tool_calls"}},
+		})
+	}))
+	defer srv.Close()
+
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	exec := &fakeExecer{ran: make(chan string, 8), content: "pentester"}
+	r := NewEinoRunner(store, nil, exec, Config{
+		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+		// decompose(idx0), audit-at-turn2="2" uncovered, audit-at-turn4="2"
+		// STILL uncovered (the whole point — re-audited, not skipped just
+		// because turn 3 ran something), audit-at-turn6="" (fully covered).
+		PlanLLM: scriptedOllama(t, "check who we are\nfind out how many CPU cores", "2", "2", ""),
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "check who we are and also find out how many CPU cores we have")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+	if final.Summary != "user is pentester, 2 cores" {
+		t.Fatalf("summary = %q — accepted a still-incomplete finish instead of re-auditing turn 4's premature one", final.Summary)
+	}
+	if turn < 6 {
+		t.Fatalf("turn 4's premature finish (some activity, part 2 still uncovered) was accepted without a second real audit (turn=%d, want >=6)", turn)
+	}
+
+	nudges := 0
+	for _, ev := range store.ListActivity(task.SessionID, 50) {
+		if strings.Contains(ev.Summary, "goal parts uncovered") {
+			nudges++
+		}
+	}
+	if nudges < 2 {
+		t.Fatalf("expected at least 2 real nudges (turn 2 AND turn 4, proving re-audit isn't skipped after some activity), got %d", nudges)
+	}
+}
+
 // TestEinoRunner_Run_RetriesTransientToolCallError proves the bounded retry:
 // a "error parsing tool call: ... unexpected end of JSON input" failure
 // (live-observed against Ollama-served gpt-oss:20b — a truncated tool-call

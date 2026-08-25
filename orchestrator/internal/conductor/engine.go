@@ -599,6 +599,7 @@ CRITICAL RULES:
 4. Use your knowledge for commands — never invent flags you are unsure about.
 5. Classify risk: low (passive/read-only), medium (generates logs), high (triggers alerts), critical (destructive/irreversible).
 6. Do NOT ask for scope/IP when the request clearly refers to the local sandbox container (e.g. "list users", "check disk", "show processes").
+7. If the operator's request asks for more than one distinct action (numbered, or joined with "and"/"ve"/commas), task_goal MUST preserve every one of them as its own numbered item — never collapse a multi-part request into one vague sentence. The agent that receives task_goal only sees this field, never the operator's original words, so anything you drop here is gone for good and the agent will silently skip whatever part you summarized away.
 `, identity, disposition, scopeSection, languageRule)
 
 	if methodology != "" {
@@ -612,7 +613,7 @@ CRITICAL RULES:
 OUTPUT FORMAT:
 
 Commands: {"intent":"suggest_command","message":"<brief explanation>","proposals":[{"id":"p1","command":"<exact command>","rationale":"<why>","risk_level":"low|medium|high|critical","requires_approval":false,"target_tool":"<toolname>"}],"confidence":0.9}
-Multi-step task: {"intent":"start_task","message":"<one-line plan summary>","task_goal":"<the goal restated as one clear sentence>","confidence":0.9}
+Multi-step task: {"intent":"start_task","message":"<one-line plan summary>","task_goal":"<the goal restated clearly — a single request is one sentence, but a request with multiple distinct parts MUST be numbered: 1) ... 2) ... 3) ..., one item per distinct action, none dropped>","confidence":0.9}
 Answer:   {"intent":"explain","message":"<answer>","confidence":0.8}
 Clarify:  {"intent":"ask_clarification","message":"<question>","confidence":0.5}
 Decline:  {"intent":"decline","message":"<reason>","confidence":1.0}

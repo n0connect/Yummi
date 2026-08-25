@@ -47,6 +47,12 @@ type Config struct {
 	// configured tier/override, so both backends agree on context size.
 	// <=0 omits the field (server default, likely too small).
 	ModelNumCtx int
+	// ModelThinking mirrors the resolved tier/override Thinking value the
+	// conductor already applies to its own calls — see NewOllamaChatModel's
+	// doc comment for why false maps to "medium" reasoning_effort here, not
+	// a literal off (gpt-oss has no off switch, and this backend targets
+	// harder agentic work than the conductor's chat/intent classification).
+	ModelThinking bool
 	// PlanLLM is a plain-chat client used ONLY for the narrow, single-purpose
 	// goal-part audit (agent.AuditGoalParts) that backs the premature-FINISH
 	// guard's natural-language fallback below — separate from cm, the Eino
@@ -202,7 +208,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		return err
 	}
 
-	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelTimeout, r.cfg.ModelNumCtx)
+	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelTimeout, r.cfg.ModelNumCtx, r.cfg.ModelThinking)
 	if err != nil {
 		_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = err.Error() })
 		return err
@@ -304,6 +310,35 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		_ = r.store.Update(task.ID, func(t *agent.Task) { t.StepBudget = effectiveStepBudget })
 	}
 
+	// enumParts was, until now, used ONLY as bookkeeping: it sized the step
+	// budget above and (later, in the retry loop) audits coverage at the
+	// moment the model tries to call finish. The model itself never saw it —
+	// Instruction only ever carried the raw goal prose (below), so a goal
+	// asking for several distinct things relied entirely on the model's own
+	// single read of that prose, across a multi-turn tool-calling loop, to
+	// remember and prioritize all of them. Live-observed: a goal detected as
+	// having 6 real parts (full pentest: enumerate, fingerprint, dir
+	// discovery, vuln scan, credential attack, exploit) got 2 of them
+	// attempted before the model called finish — the SAME under-detection
+	// that under-sized the budget above also meant the finish-time audit
+	// judged its own too-short list as covered. Folding the detected parts
+	// into the static Instruction, same one-time-injection pattern as
+	// MEMORY/SKILLS above, keeps every part visible to the model on every
+	// turn instead of leaving it to native chat history alone — the
+	// cheapest fix that doesn't touch the audit-at-finish mechanism itself.
+	if len(enumParts) >= 2 {
+		var checklist strings.Builder
+		checklist.WriteString("This goal has multiple distinct parts. Address EACH one — do not call finish until every part below has been genuinely attempted, not just the first one or two:\n")
+		for i, part := range enumParts {
+			fmt.Fprintf(&checklist, "%d. %s\n", i+1, part)
+		}
+		instr += "\n\n" + checklist.String()
+		r.store.RecordActivity(agent.ActivityEvent{
+			SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+			Summary: fmt.Sprintf("%d goal parts detected — tracking each in the task instruction", len(enumParts)),
+		})
+	}
+
 	einoAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "yummi",
 		Description: "an autonomous penetration-testing operator assistant",
@@ -390,8 +425,32 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	// the deterministic bounce, not a bigger model, is what forces the
 	// second attempt.
 	openingMessage := initialGoal
-	nudged := false
+	nudgeCount := 0
+	const maxNudges = 3
 	transientRetries := 0
+	// nudgeCount replaces a first-attempt-only bool: the original single-shot
+	// nudge was NOT structurally enforced, only requested by its own text —
+	// live-observed nudged once, the model tried finish again one turn
+	// later having run exactly zero new tools, and it was silently accepted
+	// purely because "already nudged" was true. A first fix tried gating the
+	// re-accept on "did trace.pairs() grow at all since the last nudge" —
+	// also live-observed to be too weak: a SECOND live run started with
+	// pairs=0 (the model's very first move was finish with nothing done at
+	// all), got nudged, then ran exactly two things — one failing `ls`, one
+	// real nmap scan — and immediately tried finish again with 4 of 6 parts
+	// still untouched. pairs went 0→2, so "did pairs grow" said yes, and the
+	// still-badly-incomplete finish sailed through anyway. Growth in
+	// trace.pairs() is not the same claim as "coverage actually improved" —
+	// only re-running the real coverage audit proves that. So every
+	// believesFinished occurrence (not just the first) gets audited the same
+	// way, up to maxNudges total, and only a fully-covered result (or
+	// exhausting the cap) is allowed through — matching the exact
+	// reliability bar as the first nudge, applied uniformly instead of once.
+	// Isolated live reproduction of the exact single-nudge scenario (same
+	// system instruction, same "work already completed" list, asked
+	// directly, 3/3 trials) reliably picked the right next tool every time —
+	// so the gap was never the model being unable to reason through the
+	// checklist, only that nothing here actually verified it had.
 
 	var summary string
 	var findings []string
@@ -526,13 +585,14 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		// to catch. Both cases mean the same thing operationally: this run
 		// produced its last action, decide now whether that was premature.
 		believesFinished := called || lastMessage != nil
-		if believesFinished && !nudged && len(enumParts) >= 2 && r.cfg.PlanLLM != nil {
+		if believesFinished && nudgeCount < maxNudges && len(enumParts) >= 2 && r.cfg.PlanLLM != nil {
 			if uncovered := auditFinishCoverage(ctx, r.cfg.PlanLLM, enumParts, summary, trace); len(uncovered) > 0 {
-				nudged = true
+				nudgeCount++
 				openingMessage = buildIncompleteGoalsMessage(t.Goal, uncovered, trace)
 				r.store.RecordActivity(agent.ActivityEvent{
 					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
-					Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing", len(uncovered), len(enumParts)),
+					Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing (%d/%d nudges)",
+						len(uncovered), len(enumParts), nudgeCount, maxNudges),
 				})
 				continue
 			}

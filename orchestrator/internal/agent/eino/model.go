@@ -48,19 +48,71 @@ import (
 // num_ctx on the native API) could then force it back, so the effective
 // context window was flip-flopping between endpoints rather than being
 // reliably wrong OR right. numCtx<=0 omits the field (server default).
-func NewOllamaChatModel(ctx context.Context, baseURL, modelName string, timeout time.Duration, numCtx int) (model.ToolCallingChatModel, error) {
+//
+// reasoning mirrors conductor.TierOverrides.Thinking's intent, which
+// previously never reached this backend at all: tier.go declares
+// Thinking:false for every gpt-oss tier, but that value was only ever
+// threaded into the conductor's native-API calls (internal/llm.Options.Think,
+// a Qwen3-shaped boolean) — this OpenAI-compat client set no reasoning
+// signal whatsoever, leaving gpt-oss's actual effort level to whatever
+// Ollama defaults to server-side when the field is omitted (confirmed live
+// via a raw /v1/chat/completions call: the model still reasons by default,
+// just at an undeclared, uncontrolled level — this was never a "thinking
+// completely off" gap, only an unconfigured one).
+//
+// reasoning=false OMITS the field entirely rather than forcing an explicit
+// "medium" — tried exactly that first, and it regressed a real long-form
+// task: at step 7 of a 78-step budget, with a full ~20-tool schema plus six
+// prior tool-output turns already in context, the model's tool-call JSON
+// got cut off mid-argument (`{"rationale":"Fingerprint` — unexpected end of
+// JSON input) and the task hard-failed. eino-ext's MaxTokens is never set by
+// this client (nil, omitted — see cfg construction below), so nothing caps
+// generation length explicitly; forcing reasoning_effort spends more of
+// Ollama's own context-aware generation ceiling on the reasoning channel
+// before the model gets to writing the actual tool-call arguments, and that
+// ceiling shrinks as conversation history grows across steps — exactly why
+// this surfaced deep into a task, not on turn one. Given both gpt-oss tiers
+// currently resolve Thinking:false, and the server default already reasons
+// adequately (confirmed above) with zero observed truncation before this
+// field was added, omission is the proven-safe choice for the common case.
+// reasoning=true still maps to an explicit "high" — an opt-in a future
+// caller can reach for deliberately, not the default path every task takes.
+func NewOllamaChatModel(ctx context.Context, baseURL, modelName string, timeout time.Duration, numCtx int, reasoning bool) (model.ToolCallingChatModel, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
+	// Temperature: 0 — same reasoning llm.DefaultQwen3Options already applies
+	// to the conductor's own native-API calls (deterministic output matters
+	// more than sampling diversity for a security tool deciding what command
+	// to run), but this OpenAI-compat client left it unset entirely, so every
+	// decision in the ReAct loop — including whether to call finish or keep
+	// working — sampled from Ollama's own default temperature instead. Found
+	// while investigating a real task where the model gave up prematurely
+	// after a nudge: isolated replays of the exact same nudge, at whatever
+	// temperature Ollama defaults to, correctly picked the right next tool
+	// every time they were tried standalone, meaning the real run's outcome
+	// wasn't a reliable failure mode — just one of several possible samples.
+	// Pinning this doesn't replace the structural nudge-enforcement below
+	// (a model can still legitimately reason its way to a wrong call), but
+	// removes randomness as a source of run-to-run inconsistency on top of it.
+	zeroTemp := float32(0)
 	cfg := &openai.ChatModelConfig{
-		APIKey:  "ollama", // required non-empty by the client; Ollama does not validate it
-		Model:   modelName,
-		BaseURL: baseURL,
-		ByAzure: false,
-		Timeout: timeout,
+		APIKey:      "ollama", // required non-empty by the client; Ollama does not validate it
+		Model:       modelName,
+		BaseURL:     baseURL,
+		ByAzure:     false,
+		Timeout:     timeout,
+		Temperature: &zeroTemp,
 	}
+	extra := map[string]any{}
 	if numCtx > 0 {
-		cfg.ExtraFields = map[string]any{"options": map[string]any{"num_ctx": numCtx}}
+		extra["options"] = map[string]any{"num_ctx": numCtx}
+	}
+	if reasoning {
+		extra["reasoning_effort"] = "high"
+	}
+	if len(extra) > 0 {
+		cfg.ExtraFields = extra
 	}
 	cm, err := openai.NewChatModel(ctx, cfg)
 	if err != nil {
