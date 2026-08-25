@@ -94,6 +94,17 @@ func main() {
 	if cfg.OllamaNumCtx > 0 {
 		resolvedNumCtx = cfg.OllamaNumCtx
 	}
+	// resolvedThinking mirrors NewEngineWithOverrides' own resolution
+	// (DefaultTierRegistry tier default, overridden by an explicit
+	// YUMMI_OLLAMA_THINKING) so the Eino backend below gets the SAME
+	// resolved value the conductor actually applies to its own calls,
+	// instead of the two silently disagreeing — see eino.NewOllamaChatModel's
+	// doc comment for why false maps to "medium" reasoning_effort there,
+	// not a literal off.
+	resolvedThinking := resolvedTier.Thinking
+	if cfg.OllamaThinking != nil {
+		resolvedThinking = *cfg.OllamaThinking
+	}
 
 	assistant, err := conductor.NewEngineWithOverrides(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel, conductor.TierOverrides{
 		NumCtx:   cfg.OllamaNumCtx,
@@ -368,11 +379,12 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					eino.Config{
-						StepBudget:   15,
-						ApprovalMode: agent.ModeAskPermission,
-						ModelBaseURL: einoModelBaseURL,
-						ModelName:    einoModelName,
-						ModelNumCtx:  einoModelNumCtx,
+						StepBudget:    15,
+						ApprovalMode:  agent.ModeAskPermission,
+						ModelBaseURL:  einoModelBaseURL,
+						ModelName:     einoModelName,
+						ModelNumCtx:   einoModelNumCtx,
+						ModelThinking: resolvedThinking,
 						// Built from the SAME target as the ReAct loop above
 						// (not the conductor's agentLLM) so the goal-part
 						// audit call runs on whichever model is actually

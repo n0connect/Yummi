@@ -584,3 +584,26 @@ func TestSystemPromptIncludesStartTask(t *testing.T) {
 		t.Fatal("system prompt missing task_goal field")
 	}
 }
+
+// TestSystemPromptPreservesMultiPartTaskGoal is a live-long-form-testing-
+// found regression test: task_goal previously told the model to restate the
+// operator's request "as one clear sentence" with no exception for a
+// multi-part request — live-observed collapsing an explicit 6-item numbered
+// operator goal into one vague English sentence before the agent ever saw
+// it. Since agent.SplitEnumeratedParts (the deterministic, non-LLM-judgment
+// multi-part detector) and every downstream step-budget/finish-coverage
+// mechanism only ever see task_goal, never the operator's original words,
+// this collapse silently discarded the very structure those mechanisms
+// depend on — no fix inside the agent package can recover detail lost this
+// far upstream. Proves the prompt now explicitly instructs the model to
+// number each distinct part instead of collapsing them.
+func TestSystemPromptPreservesMultiPartTaskGoal(t *testing.T) {
+	engine, err := NewEngine("../../../persona/v0.1", "", "")
+	if err != nil {
+		t.Fatalf("engine init: %v", err)
+	}
+	prompt := engine.buildSystemPrompt()
+	if !strings.Contains(prompt, "task_goal MUST preserve every one of them as its own numbered item") {
+		t.Fatalf("system prompt does not instruct the model to preserve multi-part structure in task_goal:\n%s", prompt)
+	}
+}
