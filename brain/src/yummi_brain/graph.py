@@ -1,5 +1,5 @@
 """The LangGraph brain: a supervisor node routes to one of Yummi's existing
-specialist roles (mirrors persona/v0.1/subagents/*.yaml — recon, web, osint,
+specialist roles (persona/v0.1/subagents/*.yaml — recon, web, osint,
 exploiter, source-analysis, reverser), each a ReAct tool-calling loop bound
 to the yummi_* MCP tools (mcp_server.py). Deterministic routing edges, not
 LLM-guessed control flow — the supervisor's decision is the only place an
@@ -7,6 +7,11 @@ LLM call picks the next node; everything else is a plain graph edge. This
 is the reason LangGraph was chosen over a more autonomous multi-agent
 framework: for a security tool, the graph itself should be legible and
 auditable independent of what any single model call decides.
+
+Roster and persona are loaded from persona/v0.1 (persona.py), not
+hand-duplicated here — a brain running on a hand-written approximation of
+Yummi's identity is not really running as Yummi, and it silently drifts the
+moment an operator edits persona/v0.1 without knowing this module exists.
 """
 
 from __future__ import annotations
@@ -22,43 +27,24 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
 from . import config
+from . import persona as persona_mod
+from .persona import Persona, SubAgentPersona
 
-# Mirrors persona/v0.1/subagents/*.yaml's roster and routing_hint field —
-# kept in sync by hand for now (both are hand-authored role definitions in
-# their respective languages; a future pass could generate this from the
-# YAML directly, see AGENTS.md for the tracked TODO).
-ROSTER: dict[str, str] = {
-    "recon": (
-        "You perform reconnaissance: port/service scanning, host discovery, "
-        "OS/service fingerprinting. Route here first for any target Yummi "
-        "hasn't scanned yet in this session."
-    ),
-    "web": (
-        "You assess web applications: technology fingerprinting, directory/"
-        "file discovery, CMS-specific checks, common web vulnerability classes."
-    ),
-    "osint": (
-        "You perform passive open-source reconnaissance: subdomain "
-        "enumeration, DNS records, email/credential exposure — nothing that "
-        "touches the target directly."
-    ),
-    "exploiter": (
-        "You confirm and exploit an ALREADY-SCOPED, already-identified "
-        "weakness (injection, known CVE, credential issue) — you don't go "
-        "looking for new attack surface, you weaponize a specific finding."
-    ),
-    "source_analysis": (
-        "You review source code, configuration, or leaked artifacts pulled "
-        "from the target for hardcoded secrets, logic flaws, or dependency "
-        "vulnerabilities."
-    ),
-    "reverser": (
-        "You reverse-engineer a binary or compiled artifact recovered from "
-        "the target."
-    ),
+# Used only if persona/v0.1/subagents fails to load at all (missing
+# directory, bad checkout) — keeps the graph functional in degraded mode
+# instead of compiling with zero specialist nodes. routing_hint text here
+# is deliberately minimal; real behavior in the normal case comes entirely
+# from the loaded YAML, not from this list.
+_FALLBACK_ROLES: dict[str, str] = {
+    "recon": "Port/service scanning and host discovery.",
+    "web": "Web application assessment.",
+    "osint": "Passive open-source reconnaissance.",
+    "exploiter": "Confirms and exploits an already-scoped weakness.",
+    "source-analysis": "Reviews source code or leaked artifacts.",
+    "reverser": "Reverse-engineers a binary or compiled artifact.",
 }
 
-SUPERVISOR_SYSTEM = """You are the supervisor of a penetration-testing agent \
+SUPERVISOR_RULES = """You are the supervisor of a penetration-testing agent \
 team working inside Yummi's fail-closed sandbox. Given the operator's goal \
 and the conversation so far, decide which specialist should act next, or \
 that the goal is genuinely complete.
@@ -85,12 +71,23 @@ class BrainState(TypedDict):
     next: str
 
 
-def _supervisor_node(llm: ChatOpenAI):
-    roster_desc = "\n".join(f"- {name}: {desc}" for name, desc in ROSTER.items())
-    options = list(ROSTER.keys()) + ["FINISH"]
+def _roster(pz: Persona) -> dict[str, str]:
+    if pz.subagents:
+        return {role: sub.routing_hint or sub.identity[:200] for role, sub in pz.subagents.items()}
+    return _FALLBACK_ROLES
 
-    async def node(state: BrainState) -> Command[Literal[tuple(ROSTER.keys()) + ("__end__",)]]:  # type: ignore[misc]
-        system = SUPERVISOR_SYSTEM.format(roster=roster_desc)
+
+def _supervisor_node(llm: ChatOpenAI, pz: Persona):
+    roster = _roster(pz)
+    roster_desc = "\n".join(f"- {name}: {desc}" for name, desc in roster.items())
+    options = list(roster.keys()) + ["FINISH"]
+    # character_role/honesty/economy set tone once — the same disposition
+    # every Go backend's persona-driven prompt carries — even though the
+    # supervisor itself never calls a yummi_* tool.
+    tone = "\n\n".join(p for p in (pz.character_role, pz.honesty, pz.economy) if p)
+    system = (tone + "\n\n" if tone else "") + SUPERVISOR_RULES.format(roster=roster_desc)
+
+    async def node(state: BrainState) -> Command[Literal[tuple(roster.keys()) + ("__end__",)]]:  # type: ignore[misc]
         history = state["messages"]
         prompt = [
             {"role": "system", "content": system},
@@ -115,7 +112,57 @@ def _supervisor_node(llm: ChatOpenAI):
     return node
 
 
-def _specialist_node(role: str, llm: ChatOpenAI, tools: list):
+def _specialist_system(role: str, pz: Persona, sub: SubAgentPersona | None, session_id: str) -> str:
+    # Layered exactly like Go's eino backend folds persona into a
+    # specialist's prompt once per run (context_blocks.go): shared
+    # core_identity (who Yummi is, tone, language_parity) + agent.yaml's
+    # general reasoning framework (ORIENT/ACT/OBSERVE/CONCLUDE) + this
+    # role's own identity/principles/planning from subagents/*.yaml.
+    # language_parity in particular ("respond in the operator's own
+    # language") had NO equivalent anywhere in brain/ before this — every
+    # response was English regardless of the goal's language.
+    parts = [
+        pz.character_role,
+        pz.honesty,
+        pz.economy,
+        pz.language_parity,
+        pz.agent_identity,
+        pz.agent_principles,
+        pz.agent_planning,
+    ]
+    if sub:
+        parts.append(f"Your specific role — {sub.role}:\n{sub.identity}")
+        if sub.principles:
+            parts.append(sub.principles)
+        if sub.planning:
+            parts.append(sub.planning)
+    else:
+        parts.append(f"Your specific role — {role}: {_FALLBACK_ROLES.get(role, '')}")
+
+    identity_block = "\n\n".join(p for p in parts if p)
+
+    return (
+        f"{identity_block}\n\n"
+        f"The session_id for EVERY yummi_* tool call in this conversation is "
+        f"exactly: {session_id}\n"
+        "Every yummi_* tool requires this as its session_id argument — always "
+        "pass this exact value, never invent or omit one.\n\n"
+        "Before improvising: call yummi_list_skills and yummi_list_tactics "
+        "(optionally filtered by tool) to check whether Yummi already has "
+        "reviewed guidance or a known-working command pattern for this "
+        "situation — prefer that over guessing. Call yummi_get_context "
+        "once near the start of your work to pick up any persistent notes "
+        "left by earlier work in this session.\n\n"
+        "Use the yummi_* tools to do real work — run real commands, request "
+        "egress for targets outside the current scope, record real findings. "
+        "Report back concretely: what you ran, what you found. Do not "
+        "declare success without evidence from an actual tool call."
+    )
+
+
+def _specialist_node(role: str, llm: ChatOpenAI, tools: list, pz: Persona):
+    sub = pz.subagents.get(role)
+
     async def node(state: BrainState) -> Command[Literal["supervisor"]]:
         # session_id is only known at runtime (BrainState), but every
         # yummi_* tool's schema requires it as a mandatory argument — a
@@ -131,24 +178,7 @@ def _specialist_node(role: str, llm: ChatOpenAI, tools: list):
         # prompt is the reliable fix, independent of whether this
         # LangGraph version's create_react_agent prompt= accepts a
         # per-call callable.
-        system = (
-            f"You are Yummi's {role} specialist, operating inside a fail-closed "
-            f"pentest sandbox. {ROSTER[role]}\n\n"
-            f"The session_id for EVERY yummi_* tool call in this conversation is "
-            f"exactly: {state['session_id']}\n"
-            "Every yummi_* tool requires this as its session_id argument — always "
-            "pass this exact value, never invent or omit one.\n\n"
-            "Before improvising: call yummi_list_skills and yummi_list_tactics "
-            "(optionally filtered by tool) to check whether Yummi already has "
-            "reviewed guidance or a known-working command pattern for this "
-            "situation — prefer that over guessing. Call yummi_get_context "
-            "once near the start of your work to pick up any persistent notes "
-            "left by earlier work in this session.\n\n"
-            "Use the yummi_* tools to do real work — run real commands, request "
-            "egress for targets outside the current scope, record real findings. "
-            "Report back concretely: what you ran, what you found. Do not "
-            "declare success without evidence from an actual tool call."
-        )
+        system = _specialist_system(role, pz, sub, state["session_id"])
         agent = create_react_agent(llm, tools, prompt=system)
         # recursion_limit here bounds ONE specialist's own internal ReAct
         # turns — separate from, and not covered by, the outer graph's own
@@ -180,6 +210,8 @@ async def build_graph(cfg: config.Config | None = None):
     checkpoint sqlite connection is never released.
     """
     cfg = cfg or config.load()
+    pz = persona_mod.load()
+    roster = _roster(pz)
 
     mcp_client = MultiServerMCPClient(
         {
@@ -200,9 +232,9 @@ async def build_graph(cfg: config.Config | None = None):
     )
 
     builder = StateGraph(BrainState)
-    builder.add_node("supervisor", _supervisor_node(llm))
-    for role in ROSTER:
-        builder.add_node(role, _specialist_node(role, llm, tools))
+    builder.add_node("supervisor", _supervisor_node(llm, pz))
+    for role in roster:
+        builder.add_node(role, _specialist_node(role, llm, tools, pz))
     builder.set_entry_point("supervisor")
 
     saver_cm = AsyncSqliteSaver.from_conn_string(cfg.checkpoint_db_path)

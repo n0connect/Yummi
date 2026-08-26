@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.1",
     "pydantic>=2.8.0",
+    "pyyaml>=6.0.1",
 ]
 
 [project.scripts]
