@@ -106,3 +106,8 @@ vendor/
 *.exe
 Thumbs.db
 desktop.ini
+brain/.env
+brain/*.sqlite
+brain/.venv/
+__pycache__/
+*.egg-info/
