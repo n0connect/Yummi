@@ -30,7 +30,7 @@ mcp = FastMCP("yummi")
 # server's. Coupling the two would make this server (meant to be usable
 # standalone by any MCP client, not just this package's own LangGraph brain)
 # refuse to start for a client that brings its own model.
-_client = YummiClient(base_url=os.getenv("YUMMI_ORCHESTRATOR_URL", "http://127.0.0.1:9080").rstrip("/"))
+_client = YummiClient(base_url=(os.getenv("YUMMI_ORCHESTRATOR_URL") or "http://127.0.0.1:9080").rstrip("/"))
 
 
 def _fmt(obj: object) -> str:
@@ -66,19 +66,27 @@ async def yummi_get_scope(session_id: str) -> str:
     currently allowed, the gateway enforces it independent of anything this
     tool reports.
     """
-    status = await _client.get_gateway_status()
-    rules = await _client.list_gateway_rules()
-    egress = await _client.get_egress_mode()
+    try:
+        status = await _client.get_gateway_status()
+        rules = await _client.list_gateway_rules()
+        egress = await _client.get_egress_mode()
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
     return _fmt({"gateway_status": status, "egress_mode": egress, "active_rules": rules})
 
 
 @mcp.tool()
 async def yummi_request_egress(target: str, reason: str, ttl_secs: int = 300) -> str:
-    """Ask the gateway to temporarily allow reaching `target` (IP or CIDR,
-    e.g. "203.0.113.10/32"). This does NOT bypass the operator's boundary —
-    if egress mode is "block", the rule is still added but traffic to
-    anything outside it stays fail-closed; the operator's egress mode is the
-    outer boundary this can never widen. ttl_secs is capped at 86400 (24h)
+    """Ask the gateway to temporarily allow reaching `target`. target MUST be
+    a literal IP or CIDR (e.g. "203.0.113.10/32") — a hostname is rejected;
+    resolve it to an IP first (e.g. `dig +short <host>` via yummi_exec) if
+    you only have a hostname. reason must be 1-500 characters, letters/
+    numbers/spaces/basic punctuation only ( _ - . , ! ? ' " # ( ) [ ] ) — no
+    colons, slashes, or non-ASCII characters (Turkish included), or the
+    gateway rejects it. This does NOT bypass the operator's boundary — if
+    egress mode is "block", the rule is still added but traffic to anything
+    outside it stays fail-closed; the operator's egress mode is the outer
+    boundary this can never widen. ttl_secs is capped at 86400 (24h)
     server-side.
     """
     try:
@@ -93,9 +101,14 @@ async def yummi_record_finding(
     session_id: str, title: str, severity: str, description: str = "", evidence: str = ""
 ) -> str:
     """Record a structured finding. severity must be one of: info, low,
-    medium, high, critical. Use this for anything you'd put in a pentest
-    report — don't just mention it in your own summary text, it needs to
-    exist as a durable, queryable record.
+    medium, high, critical. title must be 1-200 characters, letters/numbers/
+    spaces/basic punctuation only ( _ - . , ! ? ' " # ( ) [ ] ) — no colons,
+    slashes, or non-ASCII characters (Turkish included); put anything that
+    needs those in description or evidence instead, which have no character
+    restriction (only length caps: description 5000 chars, evidence 10000).
+    Use this for anything you'd put in a pentest report — don't just mention
+    it in your own summary text, it needs to exist as a durable, queryable
+    record.
     """
     try:
         result = await _client.record_finding(
@@ -111,7 +124,10 @@ async def yummi_list_findings(session_id: str) -> str:
     """List every finding recorded so far in this session — use this to
     check what's already been documented before declaring the task done.
     """
-    result = await _client.list_findings(session_id)
+    try:
+        result = await _client.list_findings(session_id)
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
     return _fmt(result)
 
 
@@ -121,7 +137,10 @@ async def yummi_read_gateway_audit(limit: int = 20) -> str:
     every scope decision, rule change, and egress-mode change. Use this to
     understand WHY a command was rejected, not just that it was.
     """
-    result = await _client.read_gateway_audit(limit=limit)
+    try:
+        result = await _client.read_gateway_audit(limit=limit)
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
     return _fmt(result)
 
 

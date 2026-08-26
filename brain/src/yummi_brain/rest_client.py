@@ -9,18 +9,28 @@ one MCP tool in mcp_server.py, so the mapping stays obvious to audit.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json as jsonlib
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 
 class YummiAPIError(RuntimeError):
-    """Raised when the orchestrator rejects a request — e.g. HandleSandboxExec
-    returning 403 because RunScopedCommand found the target out of scope.
-    The message is deliberately the server's own detail text: the model
-    reading this needs to know WHY (out of scope vs. gateway unavailable vs.
-    validation error), not just that something failed.
+    """Raised for EVERY way a request to the orchestrator can fail — an HTTP
+    4xx/5xx (e.g. HandleSandboxExec returning 403 because RunScopedCommand
+    found the target out of scope), a transport-level failure (orchestrator
+    unreachable, connection refused, timeout), or a 2xx response whose body
+    isn't valid JSON. mcp_server.py's tools all catch only this one type —
+    letting httpx's own exception hierarchy leak through was a real gap
+    found in review: an unreachable orchestrator (down, wrong URL, network
+    blip) would have raised httpx.ConnectError/TimeoutException instead,
+    which every tool's `except YummiAPIError` doesn't match, so the model
+    would see a raw Python traceback instead of a normal "REJECTED: ..."
+    it can reason about and retry or report. The message is deliberately
+    the server's own detail text where one exists: the model needs to know
+    WHY (out of scope vs. gateway unavailable vs. validation error), not
+    just that something failed.
     """
 
 
@@ -28,10 +38,28 @@ class YummiAPIError(RuntimeError):
 class YummiClient:
     base_url: str
     timeout_secs: float = 300.0  # a real nmap/nikto/gobuster run can take minutes
+    # One shared client for this process's lifetime instead of opening a
+    # fresh connection (TCP handshake + TLS if applicable) on every single
+    # tool call — a real task makes dozens of these in a run. httpx.AsyncClient
+    # is explicitly documented as safe to reuse and pool connections across
+    # concurrent requests.
+    _http: httpx.AsyncClient = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._http = httpx.AsyncClient(timeout=self.timeout_secs)
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=self.timeout_secs) as client:
-            resp = await client.request(method, f"{self.base_url}{path}", **kwargs)
+        try:
+            resp = await self._http.request(method, f"{self.base_url}{path}", **kwargs)
+        except httpx.RequestError as e:
+            # Covers ConnectError, TimeoutException, ReadError, and every
+            # other transport-level failure httpx can raise — none of them
+            # are YummiAPIError by default, so without this they'd bypass
+            # every tool's error handling entirely (see class doc above).
+            raise YummiAPIError(f"{method} {path} -> could not reach orchestrator: {e}") from e
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -42,7 +70,12 @@ class YummiClient:
             raise YummiAPIError(f"{method} {path} -> {resp.status_code}: {detail}")
         if not resp.content:
             return {}
-        return resp.json()
+        try:
+            return resp.json()
+        except jsonlib.JSONDecodeError as e:
+            raise YummiAPIError(
+                f"{method} {path} -> 200 OK but response body isn't valid JSON: {e}"
+            ) from e
 
     # -- execution -----------------------------------------------------------
     # POST /api/v1/sandbox/exec — internal/api/handlers_system.go's
