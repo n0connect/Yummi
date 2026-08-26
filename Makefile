@@ -147,7 +147,7 @@ endef
 	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
 	app \
-	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp \
+	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain \
 	docker-build docker-orchestrator docker-ui \
 	_ollama-ensure \
 	_check-brain-deps brain-install brain-run brain-mcp
@@ -467,7 +467,7 @@ close:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ## test    Run all test suites (CLI + orchestrator + gateway + UI)
-test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp
+test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain
 	@$(call log_section,All Tests Passed)
 	@$(call log_pass,test,All suites completed successfully.)
 
@@ -641,6 +641,15 @@ _test-ui:
 	@$(call log_info,test,Running UI vitest...)
 	@set -o pipefail; cd $(UI_DIR) && unset VITE_YUMMI_LANG && npm test 2>&1 | sed 's/^/  /' || { $(call log_error,test,UI tests failed.); exit 1; }
 	@$(call log_pass,test,UI tests passed.)
+
+_test-brain:
+	@if ! command -v uv >/dev/null 2>&1; then \
+		$(call log_warn,test,uv is not installed -- skipping brain tests (brain/ is an optional component). Install from https://docs.astral.sh/uv/getting-started/installation/); \
+		exit 0; \
+	fi
+	@$(call log_info,test,Running brain (LangGraph) tests...)
+	@set -o pipefail; cd brain && uv sync --quiet && uv run pytest tests/ 2>&1 | sed 's/^/  /' || { $(call log_error,test,Brain tests failed.); exit 1; }
+	@$(call log_pass,test,Brain tests passed.)
 
 # ── Ollama lifecycle (internal) ───────────────────────────────────────────────
 

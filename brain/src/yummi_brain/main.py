@@ -10,11 +10,17 @@ import argparse
 import asyncio
 import sys
 
+from langgraph.errors import GraphRecursionError
+
 from . import config
 from .graph import build_graph
 
 
-async def run(goal: str) -> None:
+async def run(goal: str) -> bool:
+    """Returns True if the goal was judged complete (the graph reached
+    FINISH), False if it stopped early for a known, non-crashing reason
+    (outer step budget exhausted). cli() turns this into an exit code.
+    """
     cfg = config.load()
     print(f"Target orchestrator: {cfg.orchestrator_url}")
     print(f"Model: {cfg.model_name} @ {cfg.model_base_url}")
@@ -35,20 +41,37 @@ async def run(goal: str) -> None:
         # specialist's own agent.ainvoke for the inner bound.
         thread = {"configurable": {"thread_id": cfg.session_id}, "recursion_limit": 60}
         final_state = None
-        async for event in graph.astream(
-            {"messages": [], "session_id": cfg.session_id, "goal": goal, "next": ""},
-            config=thread,
-            stream_mode="values",
-        ):
-            final_state = event
-            nxt = event.get("next")
-            if nxt:
-                print(f"--> routed to: {nxt}")
-            for msg in event.get("messages", [])[-1:]:
-                content = getattr(msg, "content", None)
-                if content:
-                    role = getattr(msg, "type", getattr(msg, "role", "?"))
-                    print(f"[{role}] {str(content)[:2000]}")
+        completed = True
+        try:
+            async for event in graph.astream(
+                {"messages": [], "session_id": cfg.session_id, "goal": goal, "next": ""},
+                config=thread,
+                stream_mode="values",
+            ):
+                final_state = event
+                nxt = event.get("next")
+                if nxt:
+                    print(f"--> routed to: {nxt}")
+                for msg in event.get("messages", [])[-1:]:
+                    content = getattr(msg, "content", None)
+                    if content:
+                        role = getattr(msg, "type", getattr(msg, "role", "?"))
+                        print(f"[{role}] {str(content)[:2000]}")
+        except GraphRecursionError:
+            # The outer supervisor<->specialist graph — unlike the inner
+            # per-specialist ReAct loop, which degrades gracefully on its
+            # own recursion_limit — raises here instead of returning
+            # (live-verified: see tests/test_graph_recursion.py). A goal
+            # with enough distinct parts to need more than 60 handoffs is a
+            # real, expected outcome, not a crash — report whatever partial
+            # progress final_state already holds instead of a raw
+            # traceback, and let the caller see this as incomplete (not
+            # equivalent to reaching FINISH) via the return value.
+            completed = False
+            print(
+                "\n[step budget exhausted: reached the 60-handoff limit before "
+                "the goal was judged complete — see partial progress below]"
+            )
 
         print("\n=== FINAL STATE ===")
         if final_state:
@@ -56,6 +79,7 @@ async def run(goal: str) -> None:
                 content = getattr(msg, "content", None)
                 if content:
                     print(f"- {str(content)[:500]}")
+        return completed
     finally:
         # MultiServerMCPClient is NOT a context manager as of
         # langchain-mcp-adapters 0.1.0 (calling __aexit__ raises
@@ -74,7 +98,8 @@ def cli() -> None:
     goal = args.goal or sys.stdin.read().strip()
     if not goal:
         parser.error("no goal provided (pass as an argument or pipe via stdin)")
-    asyncio.run(run(goal))
+    completed = asyncio.run(run(goal))
+    sys.exit(0 if completed else 1)
 
 
 if __name__ == "__main__":
