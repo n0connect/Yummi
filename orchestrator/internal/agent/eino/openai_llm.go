@@ -29,40 +29,22 @@ import (
 type OpenAIChatClient struct {
 	baseURL string
 	model   string
+	apiKey  string
 	numCtx  int
 	http    *http.Client
 }
 
 // NewOpenAIChatClient builds a client against baseURL, which must include
-// any path prefix the target server needs (e.g. "http://localhost:1234/v1")
-// — unlike the Ollama-derived default elsewhere in this backend, this client
-// is not assumed to be talking to Ollama, so no "/v1" is appended for you.
-//
-// numCtx, when > 0, is sent as Ollama's "options.num_ctx" extra field on
-// every call — the same mechanism NewOllamaChatModel uses for the ReAct
-// loop's own requests, for the same reason: without it, whichever request
-// happens to be the FIRST to touch a not-yet-loaded model determines the
-// context window Ollama actually allocates for that model instance, and
-// every later request — including the ReAct loop's own correctly-configured
-// one — silently gets served against that already-fixed size instead
-// (Ollama doesn't resize a loaded model's KV cache per request). Live-
-// observed: this client's own calls omitting num_ctx let a stray
-// AuditGoalParts call load gpt-oss:20b at Ollama's bare 4096-token default,
-// and the ReAct loop's subsequent 32768 request was silently served against
-// that already-loaded, far smaller context — truncating mid-reasoning
-// (finish_reason "length") before the model ever reached a tool call.
-// numCtx<=0 omits the field, matching servers that don't understand it.
-//
-// timeout<=0 falls back to a generous default; this call is small (a short
-// system+user prompt, a short reply) so it doesn't need the ReAct loop's own
-// longer allowance.
-func NewOpenAIChatClient(baseURL, model string, numCtx int, timeout time.Duration) *OpenAIChatClient {
+// any path prefix the target server needs (e.g. "http://localhost:1234/v1"
+// or "https://openrouter.ai/api/v1").
+func NewOpenAIChatClient(baseURL, model, apiKey string, numCtx int, timeout time.Duration) *OpenAIChatClient {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
 	return &OpenAIChatClient{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		model:   model,
+		apiKey:  apiKey,
 		numCtx:  numCtx,
 		http:    &http.Client{Timeout: timeout},
 	}
@@ -78,7 +60,8 @@ func (c *OpenAIChatClient) Chat(ctx context.Context, system, user string) (strin
 		},
 		"stream": false,
 	}
-	if c.numCtx > 0 {
+	isOllama := (c.apiKey == "" || c.apiKey == "ollama") && !strings.Contains(c.baseURL, "openrouter.ai") && !strings.Contains(c.baseURL, "api.openai.com")
+	if c.numCtx > 0 && isOllama {
 		payload["options"] = map[string]any{"num_ctx": c.numCtx}
 	}
 	body, err := json.Marshal(payload)
@@ -90,6 +73,13 @@ func (c *OpenAIChatClient) Chat(ctx context.Context, system, user string) (strin
 		return "", fmt.Errorf("openai chat: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" && c.apiKey != "ollama" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	if strings.Contains(c.baseURL, "openrouter.ai") {
+		req.Header.Set("HTTP-Referer", "https://github.com/n0connect/yummi")
+		req.Header.Set("X-Title", "Yummi Pentest Conductor")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("openai chat: request: %w", err)

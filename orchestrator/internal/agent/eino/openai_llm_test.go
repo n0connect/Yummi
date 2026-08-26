@@ -24,7 +24,7 @@ func TestOpenAIChatClient_Chat_ParsesResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIChatClient(srv.URL, "test-model", 0, 0)
+	c := NewOpenAIChatClient(srv.URL, "test-model", "ollama", 0, 0)
 	got, err := c.Chat(context.Background(), "sys prompt", "user prompt")
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -48,7 +48,7 @@ func TestOpenAIChatClient_Chat_TrimsTrailingSlashInBaseURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIChatClient(srv.URL+"/", "test-model", 0, 0)
+	c := NewOpenAIChatClient(srv.URL+"/", "test-model", "ollama", 0, 0)
 	if _, err := c.Chat(context.Background(), "s", "u"); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestOpenAIChatClient_Chat_NonOKStatusIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIChatClient(srv.URL, "test-model", 0, 0)
+	c := NewOpenAIChatClient(srv.URL, "test-model", "ollama", 0, 0)
 	_, err := c.Chat(context.Background(), "s", "u")
 	if err == nil {
 		t.Fatal("expected an error for a non-200 response, got nil")
@@ -78,7 +78,7 @@ func TestOpenAIChatClient_Chat_EmptyChoicesIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIChatClient(srv.URL, "test-model", 0, 0)
+	c := NewOpenAIChatClient(srv.URL, "test-model", "ollama", 0, 0)
 	_, err := c.Chat(context.Background(), "s", "u")
 	if err == nil {
 		t.Fatal("expected an error for an empty choices array, got nil")
@@ -103,7 +103,7 @@ func TestOpenAIChatClient_Chat_SendsNumCtxWhenSet(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIChatClient(srv.URL, "test-model", 32768, 0)
+	c := NewOpenAIChatClient(srv.URL, "test-model", "ollama", 32768, 0)
 	if _, err := c.Chat(context.Background(), "s", "u"); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -130,11 +130,36 @@ func TestOpenAIChatClient_Chat_OmitsOptionsWhenNumCtxUnset(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIChatClient(srv.URL, "test-model", 0, 0)
+	c := NewOpenAIChatClient(srv.URL, "test-model", "ollama", 0, 0)
 	if _, err := c.Chat(context.Background(), "s", "u"); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
 	if _, present := gotBody["options"]; present {
 		t.Fatalf("options field present when numCtx was unset: %+v", gotBody)
+	}
+}
+
+func TestOpenAIChatClient_Chat_AuthorizationAndOpenRouter(t *testing.T) {
+	var gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "ok"}}},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewOpenAIChatClient(srv.URL, "anthropic/claude-3.5-sonnet", "sk-or-test-secret", 32768, 0)
+	if _, err := c.Chat(context.Background(), "s", "u"); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if gotAuth != "Bearer sk-or-test-secret" {
+		t.Fatalf("Authorization = %q, want Bearer sk-or-test-secret", gotAuth)
+	}
+	if _, present := gotBody["options"]; present {
+		t.Fatalf("options field should NOT be present when using real API key: %+v", gotBody)
 	}
 }
