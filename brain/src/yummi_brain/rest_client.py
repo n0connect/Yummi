@@ -123,3 +123,27 @@ class YummiClient:
     # -- health ------------------------------------------------------------------
     async def system_status(self) -> dict[str, Any]:
         return await self._request("GET", "/api/v1/system/status")
+
+    # -- knowledge (skills / tactics / persistent context) -----------------------
+    # Read-only by design: internal/knowledge.Store's writes (RecordContext,
+    # skill promotion) are only ever driven in-process by Go's own agent/
+    # skillcurator packages, following their own sanitize+threatscan+approval
+    # pipeline (see skillcurator.Worker, handlers_skills.go's approve flow).
+    # routes.go exposes no POST for context either — persistent memory is
+    # written by the Go backends' own remember node, not by an external
+    # actor. Wiring a raw write path here would let any MCP client (not just
+    # this brain) inject unreviewed content into Yummi's long-term memory,
+    # bypassing every one of those safeguards for no capability the operator
+    # asked for — findings (record_finding, already wired) are this agent's
+    # actual durable output.
+    async def list_skills(self) -> dict[str, Any]:
+        return await self._request("GET", "/api/v1/skills")
+
+    async def list_tactics(self, tool: str = "", limit: int = 50) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit}
+        if tool:
+            params["tool"] = tool
+        return await self._request("GET", "/api/v1/tactics", params=params)
+
+    async def get_context(self, session_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/api/v1/sessions/{session_id}/context")

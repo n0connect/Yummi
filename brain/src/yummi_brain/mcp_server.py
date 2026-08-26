@@ -132,6 +132,60 @@ async def yummi_list_findings(session_id: str) -> str:
 
 
 @mcp.tool()
+async def yummi_list_skills() -> str:
+    """List Yummi's loaded skill playbooks (persona/v0.1/skills/*.yaml) —
+    declarative, human-reviewed knowledge on how to approach a given kind of
+    target or technique (each has triggers, recommended tools, and free-text
+    knowledge). Call this before improvising an approach from scratch: if an
+    existing skill already covers the situation, follow its guidance instead
+    of rediscovering it. Knowledge-only — a skill never grants execution
+    authority by itself, you still need yummi_exec/yummi_request_egress for
+    anything it recommends.
+    """
+    try:
+        result = await _client.list_skills()
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
+    return _fmt(result)
+
+
+@mcp.tool()
+async def yummi_list_tactics(tool: str = "", limit: int = 50) -> str:
+    """List learned procedural tactics: past command patterns (target
+    redacted to <TARGET>) with their outcome (worked/failed/inconclusive),
+    aggregated across ALL sessions, not just this one — this is Yummi's
+    cross-session memory of what has and hasn't worked for a given tool.
+    Pass `tool` (e.g. "nmap", "gobuster") to filter to one tool, or leave it
+    empty for the most relevant tactics overall. Check this before running a
+    tool you're unsure how to invoke effectively, or after a command fails,
+    to see if a known-working variant already exists.
+    """
+    try:
+        result = await _client.list_tactics(tool=tool, limit=limit)
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
+    return _fmt(result)
+
+
+@mcp.tool()
+async def yummi_get_context(session_id: str) -> str:
+    """Read this session's persistent memory: long-lived notes (code maps,
+    documentation mappings, module/target relationships) written by an agent
+    earlier in this session that outlive any single conversation turn. Call
+    this early in a session to pick up where a prior run left off, before
+    re-deriving something that may already be recorded. Read-only — there is
+    currently no tool to write new persistent context; use
+    yummi_record_finding for anything you discover that should be durably
+    recorded.
+    """
+    try:
+        result = await _client.get_context(session_id)
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
+    return _fmt(result)
+
+
+@mcp.tool()
 async def yummi_read_gateway_audit(limit: int = 20) -> str:
     """Read the gateway's tamper-evident (SHA-256 hash-chained) audit log —
     every scope decision, rule change, and egress-mode change. Use this to
