@@ -92,9 +92,14 @@ Rules:
 been genuinely attempted — not just the first one or two. Re-read the goal \
 before finishing; a goal with several distinct asks needs several distinct \
 specialist turns, not one.
-- If a specialist reports it made no real progress, either try a different \
-specialist or a different specific instruction — do not send it right back \
-with the same instruction that already failed.
+- Judge progress by whether a specialist's report actually addresses the \
+operator's goal, not by whether it did SOME work — a report about something \
+unrelated to the goal is NOT progress, even if it looks like real tool \
+output.
+- If a specialist reports it made no real progress, or reports something \
+unrelated to the goal, either try a different specialist or a clear, \
+specific, corrective instruction that names the actual goal again — never \
+send it back with the same instruction that already failed or drifted.
 """
 
 
@@ -183,14 +188,24 @@ def _specialist_system(role: str, pz: Persona, sub: SubAgentPersona | None, sess
         "pass this exact value, never invent or omit one.\n\n"
         "Before improvising: call yummi_list_skills and yummi_list_tactics "
         "(optionally filtered by tool) to check whether Yummi already has "
-        "reviewed guidance or a known-working command pattern for this "
-        "situation — prefer that over guessing. Call yummi_get_context "
-        "once near the start of your work to pick up any persistent notes "
-        "left by earlier work in this session.\n\n"
+        "reviewed guidance or a known-working command pattern for THIS "
+        "SPECIFIC situation — prefer that over guessing, but ONLY if it "
+        "actually matches the task you were just handed. Skills cover many "
+        "unrelated situations; skim the list, use the one that fits the "
+        "current subtask, and ignore every other one. Never execute a "
+        "skill's example technique just because it appeared in the list — "
+        "if none of them fit what you were asked to do, proceed without "
+        "one. Call yummi_get_context once near the start of your work to "
+        "pick up any persistent notes left by earlier work in this "
+        "session.\n\n"
         "Use the yummi_* tools to do real work — run real commands, request "
         "egress for targets outside the current scope, record real findings. "
-        "Report back concretely: what you ran, what you found. Do not "
-        "declare success without evidence from an actual tool call."
+        "Everything you do must serve the subtask you were actually handed "
+        "— re-read it before each action. Report back concretely: what you "
+        "ran, what you found, and how it answers the subtask. Do not "
+        "declare success without evidence from an actual tool call, and "
+        "never report an unrelated investigation as if it were progress on "
+        "the assigned subtask."
     )
 
 
