@@ -16,11 +16,14 @@ this module follows the same shape, see load()'s error handling below).
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 def _persona_dir() -> Path:
@@ -35,9 +38,40 @@ def _persona_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "persona" / "v0.1"
 
 
-def _load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+def _load_yaml_dict(path: Path) -> dict | None:
+    """Loads one YAML file and returns it as a dict, or None to signal
+    "skip this file entirely". persona/v0.1 is hand-edited by operators —
+    a syntax error (yaml.YAMLError) or a root that parses fine but isn't a
+    mapping (e.g. a stray leading "- " turning it into a list) are both
+    routine typos, not exceptional conditions, and must not propagate:
+    every caller below builds a Persona out of whatever files DID parse
+    correctly, rather than the whole load failing over one bad file. An
+    empty file legitimately parses to None from yaml.safe_load and is
+    treated as a valid empty document ({}), distinct from a genuine error.
+    """
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        logger.warning("skipping unreadable persona file %s: %s", path, e)
+        return None
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "skipping %s: expected a YAML mapping at the document root, got %s",
+            path, type(data).__name__,
+        )
+        return None
+    return data
+
+
+def _str(value: object) -> str:
+    # A field like `honesty:` or `routing_hint:` is expected to be a plain
+    # scalar string in every real persona/v0.1 file, but a malformed edit
+    # could turn it into a list or nested mapping — treat anything that
+    # isn't actually a string as absent rather than crashing on .strip().
+    return value.strip() if isinstance(value, str) else ""
 
 
 @dataclass(frozen=True)
@@ -72,9 +106,6 @@ class Persona:
         return bool(self.character_role or self.subagents)
 
 
-_EMPTY = Persona()
-
-
 def load(persona_dir: Path | None = None) -> Persona:
     """Best-effort load. A missing or malformed persona directory returns an
     empty Persona (all fields "", no subagents) rather than raising — the
@@ -83,39 +114,41 @@ def load(persona_dir: Path | None = None) -> Persona:
     standalone) still runs, just without persona-flavored prompts.
     """
     d = persona_dir or _persona_dir()
-    try:
-        core = _load_yaml(d / "core_identity.yaml")
-        agent = _load_yaml(d / "agent.yaml")
-    except OSError:
-        return _EMPTY
 
-    character = core.get("character") or {}
-    disposition = character.get("disposition") or {}
+    # core_identity.yaml and agent.yaml are loaded independently — a syntax
+    # error in one must not discard a perfectly good other, or good
+    # subagents/*.yaml files below.
+    core = _load_yaml_dict(d / "core_identity.yaml") or {}
+    agent = _load_yaml_dict(d / "agent.yaml") or {}
+
+    character = core.get("character")
+    character = character if isinstance(character, dict) else {}
+    disposition = character.get("disposition")
+    disposition = disposition if isinstance(disposition, dict) else {}
 
     subagents: dict[str, SubAgentPersona] = {}
     subagents_dir = d / "subagents"
     if subagents_dir.is_dir():
         for path in sorted(subagents_dir.glob("*.yaml")):
-            try:
-                sub = _load_yaml(path)
-            except OSError:
+            sub = _load_yaml_dict(path)
+            if sub is None:
                 continue
-            role = sub.get("role") or path.stem
+            role = _str(sub.get("role")) or path.stem
             subagents[role] = SubAgentPersona(
                 role=role,
-                routing_hint=(sub.get("routing_hint") or "").strip(),
-                identity=(sub.get("identity") or "").strip(),
-                principles=(sub.get("principles") or "").strip(),
-                planning=(sub.get("planning") or "").strip(),
+                routing_hint=_str(sub.get("routing_hint")),
+                identity=_str(sub.get("identity")),
+                principles=_str(sub.get("principles")),
+                planning=_str(sub.get("planning")),
             )
 
     return Persona(
-        character_role=(character.get("role") or "").strip(),
-        honesty=(disposition.get("honesty") or "").strip(),
-        economy=(disposition.get("economy") or "").strip(),
-        language_parity=(disposition.get("language_parity") or "").strip(),
-        agent_identity=(agent.get("identity") or "").strip(),
-        agent_principles=(agent.get("principles") or "").strip(),
-        agent_planning=(agent.get("planning") or "").strip(),
+        character_role=_str(character.get("role")),
+        honesty=_str(disposition.get("honesty")),
+        economy=_str(disposition.get("economy")),
+        language_parity=_str(disposition.get("language_parity")),
+        agent_identity=_str(agent.get("identity")),
+        agent_principles=_str(agent.get("principles")),
+        agent_planning=_str(agent.get("planning")),
         subagents=subagents,
     )

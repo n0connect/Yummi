@@ -19,6 +19,12 @@ dependencies = [
 yummi-mcp-server = "yummi_brain.mcp_server:run"
 yummi-brain = "yummi_brain.main:cli"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
