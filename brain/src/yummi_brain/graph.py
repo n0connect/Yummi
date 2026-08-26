@@ -116,18 +116,47 @@ def _supervisor_node(llm: ChatOpenAI):
 
 
 def _specialist_node(role: str, llm: ChatOpenAI, tools: list):
-    system = (
-        f"You are Yummi's {role} specialist, operating inside a fail-closed "
-        f"pentest sandbox. {ROSTER[role]}\n\n"
-        "Use the yummi_* tools to do real work — run real commands, request "
-        "egress for targets outside the current scope, record real findings. "
-        "Report back concretely: what you ran, what you found. Do not "
-        "declare success without evidence from an actual tool call."
-    )
-    agent = create_react_agent(llm, tools, prompt=system)
-
     async def node(state: BrainState) -> Command[Literal["supervisor"]]:
-        result = await agent.ainvoke({"messages": state["messages"]})
+        # session_id is only known at runtime (BrainState), but every
+        # yummi_* tool's schema requires it as a mandatory argument — a
+        # system prompt built once at graph-construction time (before any
+        # state exists) has no way to include it. Live-observed without
+        # this: the model correctly refused to call any tool at all,
+        # since it had a mandatory parameter it was never told the value
+        # of, and just kept asking the operator for a session_id in a
+        # loop until the supervisor gave up and routed to FINISH — zero
+        # real tool calls made across an entire run. Rebuilding the agent
+        # per invocation (cheap — this wraps an existing llm/tools, it's
+        # not a new model load) with session_id baked into the system
+        # prompt is the reliable fix, independent of whether this
+        # LangGraph version's create_react_agent prompt= accepts a
+        # per-call callable.
+        system = (
+            f"You are Yummi's {role} specialist, operating inside a fail-closed "
+            f"pentest sandbox. {ROSTER[role]}\n\n"
+            f"The session_id for EVERY yummi_* tool call in this conversation is "
+            f"exactly: {state['session_id']}\n"
+            "Every yummi_* tool requires this as its session_id argument — always "
+            "pass this exact value, never invent or omit one.\n\n"
+            "Use the yummi_* tools to do real work — run real commands, request "
+            "egress for targets outside the current scope, record real findings. "
+            "Report back concretely: what you ran, what you found. Do not "
+            "declare success without evidence from an actual tool call."
+        )
+        agent = create_react_agent(llm, tools, prompt=system)
+        # recursion_limit here bounds ONE specialist's own internal ReAct
+        # turns — separate from, and not covered by, the outer graph's own
+        # recursion_limit (main.py's config, which only counts
+        # supervisor<->specialist handoffs as steps; a single specialist
+        # invocation is one of those steps no matter how many internal
+        # turns it takes). Without this, LangGraph's create_react_agent
+        # default (25) applies per specialist call, so the real worst-case
+        # cost is (outer limit) x 25, not just the outer limit — expensive
+        # in both wall-clock time and, on a rate-limited free-tier model,
+        # API quota. 10 is generous for the kind of single-target
+        # reconnaissance/assessment step this graph asks one specialist to
+        # do per turn.
+        result = await agent.ainvoke({"messages": state["messages"]}, config={"recursion_limit": 10})
         return Command(
             goto="supervisor",
             update={"messages": [*result["messages"][len(state["messages"]) :]]},
@@ -137,9 +166,12 @@ def _specialist_node(role: str, llm: ChatOpenAI, tools: list):
 
 
 async def build_graph(cfg: config.Config | None = None):
-    """Constructs the compiled graph. Returns (graph, mcp_client) — the
-    caller must keep mcp_client alive for the graph's lifetime (it owns the
-    stdio subprocess running mcp_server.py) and close it afterward.
+    """Constructs the compiled graph. Returns (graph, mcp_client, saver_cm).
+    mcp_client owns the stdio subprocess running mcp_server.py — nothing
+    currently needs to close it explicitly (see main.py's own note on why).
+    saver_cm is the checkpointer's own context manager; the caller MUST
+    call `await saver_cm.__aexit__(None, None, None)` when done, or the
+    checkpoint sqlite connection is never released.
     """
     cfg = cfg or config.load()
 

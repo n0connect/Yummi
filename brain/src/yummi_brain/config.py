@@ -39,12 +39,24 @@ class Config:
 
 
 def load() -> Config:
-    orchestrator_url = os.getenv("YUMMI_ORCHESTRATOR_URL", "http://127.0.0.1:9080").rstrip("/")
-    model_base_url = os.getenv("YUMMI_BRAIN_MODEL_BASE_URL", "https://openrouter.ai/api/v1")
-    model_name = os.getenv("YUMMI_BRAIN_MODEL_NAME", "anthropic/claude-3.5-sonnet")
-    model_api_key = os.getenv("YUMMI_BRAIN_MODEL_API_KEY", "")
-    session_id = os.getenv("YUMMI_BRAIN_SESSION_ID", "brain-default")
-    checkpoint_db_path = os.getenv("YUMMI_BRAIN_CHECKPOINT_DB", "yummi_brain_checkpoints.sqlite")
+    # `os.getenv(KEY, default)` only falls back when KEY is entirely absent
+    # from the environment — but Makefile's `export YUMMI_BRAIN_SESSION_ID`
+    # (and every other YUMMI_BRAIN_* var) sets the variable to an EMPTY
+    # string whenever .yummi.conf doesn't define it, not "unset". A plain
+    # os.getenv(..., default) treats "present but empty" as a real value,
+    # so the default silently never applied — live-observed: session_id
+    # came out as "" instead of "brain-default", which the brain then
+    # never told the model about at all (see graph.py), so every yummi_*
+    # tool call the model considered making had no session_id to use and
+    # it just kept asking the operator for one instead of ever calling a
+    # tool. `or default` treats empty-string the same as unset, which is
+    # what every one of these vars actually needs.
+    orchestrator_url = (os.getenv("YUMMI_ORCHESTRATOR_URL") or "http://127.0.0.1:9080").rstrip("/")
+    model_base_url = os.getenv("YUMMI_BRAIN_MODEL_BASE_URL") or "https://openrouter.ai/api/v1"
+    model_name = os.getenv("YUMMI_BRAIN_MODEL_NAME") or "anthropic/claude-3.5-sonnet"
+    model_api_key = os.getenv("YUMMI_BRAIN_MODEL_API_KEY") or ""
+    session_id = os.getenv("YUMMI_BRAIN_SESSION_ID") or "brain-default"
+    checkpoint_db_path = os.getenv("YUMMI_BRAIN_CHECKPOINT_DB") or "yummi_brain_checkpoints.sqlite"
 
     if not model_api_key:
         raise RuntimeError(

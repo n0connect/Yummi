@@ -22,7 +22,18 @@ async def run(goal: str) -> None:
 
     graph, mcp_client, saver_cm = await build_graph(cfg)
     try:
-        thread = {"configurable": {"thread_id": cfg.session_id}}
+        # recursion_limit is LangGraph's own step-budget equivalent — the
+        # SAME class of bound orchestrator/internal/agent/eino/runner.go
+        # needed hours of live debugging to get right today (unbounded
+        # "let the model decide when it's done" is not safe for a tool
+        # that runs real sandbox commands). LangGraph defaults to 25 if
+        # unset, which is silent and easy to not notice; setting it
+        # explicitly here makes the bound visible. This counts only
+        # supervisor<->specialist handoffs (one specialist invocation is
+        # one step here, however many internal ReAct turns it takes
+        # inside) — see graph.py's own recursion_limit=10 on the
+        # specialist's own agent.ainvoke for the inner bound.
+        thread = {"configurable": {"thread_id": cfg.session_id}, "recursion_limit": 60}
         final_state = None
         async for event in graph.astream(
             {"messages": [], "session_id": cfg.session_id, "goal": goal, "next": ""},
@@ -46,7 +57,13 @@ async def run(goal: str) -> None:
                 if content:
                     print(f"- {str(content)[:500]}")
     finally:
-        await mcp_client.__aexit__(None, None, None) if hasattr(mcp_client, "__aexit__") else None
+        # MultiServerMCPClient is NOT a context manager as of
+        # langchain-mcp-adapters 0.1.0 (calling __aexit__ raises
+        # NotImplementedError, which previously masked the real error from
+        # whatever actually failed above) — each get_tools()/tool
+        # invocation manages its own stdio subprocess lifecycle, nothing
+        # here needs closing. Only the checkpointer's own context manager
+        # needs an explicit exit.
         await saver_cm.__aexit__(None, None, None)
 
 
