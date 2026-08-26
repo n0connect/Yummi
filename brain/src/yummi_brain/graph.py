@@ -16,8 +16,10 @@ moment an operator edits persona/v0.1 without knowing this module exists.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
-from typing import Literal, TypedDict
+from typing import Awaitable, Callable, Literal, TypedDict, TypeVar
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
@@ -29,6 +31,38 @@ from langgraph.types import Command
 from . import config
 from . import persona as persona_mod
 from .persona import Persona, SubAgentPersona
+
+logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
+
+
+async def _with_retry(call: Callable[[], Awaitable[_T]], *, attempts: int = 3, base_delay: float = 5.0) -> _T:
+    """Retries a transient upstream LLM-call failure a few times with linear
+    backoff. A free-tier OpenRouter model's shared provider pool getting
+    momentarily rate-limited or overloaded is routine, not a bug — live-
+    observed across four different backend providers (Decart, GMICloud,
+    Nvidia) in a single session — and crashing an entire multi-minute run
+    over one blip wastes far more than a short retry costs. Deliberately
+    catches Exception broadly rather than specific status-code types:
+    some providers wrap a genuine 502 inside an HTTP 200 response body,
+    which surfaces from langchain_openai as a bare ValueError, not an
+    HTTP-level error the OpenAI SDK's own retry logic would ever see.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await call()
+        except Exception as e:  # noqa: BLE001 - intentionally broad, see docstring
+            last_exc = e
+            if attempt < attempts:
+                delay = base_delay * attempt
+                logger.warning(
+                    "transient LLM call failure (attempt %d/%d): %s — retrying in %.0fs",
+                    attempt, attempts, e, delay,
+                )
+                await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 # Used only if persona/v0.1/subagents fails to load at all (missing
 # directory, bad checkout) — keeps the graph functional in degraded mode
@@ -99,7 +133,7 @@ def _supervisor_node(llm: ChatOpenAI, pz: Persona):
                 "Nothing else.",
             },
         ]
-        reply = await llm.ainvoke(prompt)
+        reply = await _with_retry(lambda: llm.ainvoke(prompt))
         choice = str(reply.content).strip().strip('"').split()[0] if reply.content else "FINISH"
         if choice not in options:
             # A model that doesn't follow the exact-token instruction is a
@@ -192,7 +226,9 @@ def _specialist_node(role: str, llm: ChatOpenAI, tools: list, pz: Persona):
         # API quota. 10 is generous for the kind of single-target
         # reconnaissance/assessment step this graph asks one specialist to
         # do per turn.
-        result = await agent.ainvoke({"messages": state["messages"]}, config={"recursion_limit": 10})
+        result = await _with_retry(
+            lambda: agent.ainvoke({"messages": state["messages"]}, config={"recursion_limit": 10})
+        )
         return Command(
             goto="supervisor",
             update={"messages": [*result["messages"][len(state["messages"]) :]]},
