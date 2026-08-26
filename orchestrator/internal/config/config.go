@@ -53,6 +53,8 @@ type Config struct {
 	// is not assumed to be Ollama, so no "/v1" is auto-appended.
 	EinoModelBaseURL string
 	EinoModelName    string
+	EinoModelAPIKey  string
+	EinoProvider     string // "ollama" | "openrouter" | "openai" (auto-detected if blank)
 	EinoModelNumCtx  int
 	TLSDir           string // directory holding mTLS certificates for orchestrator ↔ gateway
 	GatewayTLS       bool   // opt-in until the Rust gateway IPC server supports TLS framing
@@ -98,6 +100,8 @@ func Load() *Config {
 		OllamaEmbedModel:    envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
 		EinoModelBaseURL:    strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_BASE_URL")),
 		EinoModelName:       strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_NAME")),
+		EinoModelAPIKey:     strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_API_KEY")),
+		EinoProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("YUMMI_EINO_PROVIDER"))),
 		EinoModelNumCtx:     parseIntOr(os.Getenv("YUMMI_EINO_MODEL_NUM_CTX"), 0),
 		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
 		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
@@ -218,3 +222,22 @@ func parseOptionalBool(v string) *bool {
 func (c *Config) RequestTimeout() time.Duration {
 	return 3 * time.Minute
 }
+
+// ResolvedEinoProvider returns the effective provider for Eino ("ollama", "openrouter", "openai").
+// Auto-detects based on BaseURL or APIKey if not explicitly set.
+func (c *Config) ResolvedEinoProvider() string {
+	if c.EinoProvider != "" {
+		return c.EinoProvider
+	}
+	if strings.Contains(c.EinoModelBaseURL, "openrouter.ai") {
+		return "openrouter"
+	}
+	if strings.Contains(c.EinoModelBaseURL, "api.openai.com") {
+		return "openai"
+	}
+	if c.EinoModelAPIKey != "" && c.EinoModelAPIKey != "ollama" {
+		return "openai"
+	}
+	return "ollama"
+}
+

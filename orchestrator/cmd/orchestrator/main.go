@@ -383,6 +383,7 @@ func main() {
 						ApprovalMode:  agent.ModeAskPermission,
 						ModelBaseURL:  einoModelBaseURL,
 						ModelName:     einoModelName,
+						ModelAPIKey:   cfg.EinoModelAPIKey,
 						ModelNumCtx:   einoModelNumCtx,
 						ModelThinking: resolvedThinking,
 						// Built from the SAME target as the ReAct loop above
@@ -390,7 +391,7 @@ func main() {
 						// audit call runs on whichever model is actually
 						// driving this task, self-consistent regardless of
 						// whether that's Ollama or an override.
-						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, einoModelNumCtx, 0),
+						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, 0),
 						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
@@ -407,7 +408,7 @@ func main() {
 						SubAgentTimeout: 20 * time.Minute,
 					},
 				)
-				slog.Info("agent backend: eino", "model", einoModelName, "base_url", einoModelBaseURL)
+				slog.Info("agent backend: eino", "model", einoModelName, "base_url", einoModelBaseURL, "provider", cfg.ResolvedEinoProvider())
 			default:
 				taskRunner = agent.NewRunner(
 					taskStore,

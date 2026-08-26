@@ -39,6 +39,8 @@ export YUMMI_DATA_RETENTION_DAYS
 # .yummi.conf.
 export YUMMI_EINO_MODEL_BASE_URL
 export YUMMI_EINO_MODEL_NAME
+export YUMMI_EINO_MODEL_API_KEY
+export YUMMI_EINO_PROVIDER
 export YUMMI_EINO_MODEL_NUM_CTX
 
 # ── Container engine selection ────────────────────────────────────────────────

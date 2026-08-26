@@ -31,7 +31,7 @@ func TestNewOllamaChatModel_TalksToConfiguredBaseURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", 0, 0, false)
+	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", "ollama", 0, 0, false)
 	if err != nil {
 		t.Fatalf("NewOllamaChatModel: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestNewOllamaChatModel_InjectsNumCtxOption(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", 0, 16384, false)
+	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", "ollama", 0, 16384, false)
 	if err != nil {
 		t.Fatalf("NewOllamaChatModel: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestNewOllamaChatModel_ReasoningEffort(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "gpt-oss:20b", 0, 0, tc.reasoning)
+			cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "gpt-oss:20b", "ollama", 0, 0, tc.reasoning)
 			if err != nil {
 				t.Fatalf("NewOllamaChatModel: %v", err)
 			}
@@ -162,5 +162,45 @@ func TestNewOllamaChatModel_ReasoningEffort(t *testing.T) {
 				t.Fatalf("reasoning_effort = %v, want %q:\n%s", got, tc.want, gotBody)
 			}
 		})
+	}
+}
+
+// TestNewOllamaChatModel_OpenRouterNoNumCtx proves that when configured
+// against OpenRouter or with a real API key, Ollama-specific options.num_ctx is omitted.
+func TestNewOllamaChatModel_OpenRouterNoNumCtx(t *testing.T) {
+	var gotAuth string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "test", "object": "chat.completion", "model": "anthropic/claude-3.5-sonnet",
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": "pong"},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "anthropic/claude-3.5-sonnet", "sk-or-test-key", 0, 16384, false)
+	if err != nil {
+		t.Fatalf("NewOllamaChatModel: %v", err)
+	}
+	if _, err := cm.Generate(context.Background(), []*schema.Message{schema.UserMessage("ping")}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if gotAuth != "Bearer sk-or-test-key" {
+		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer sk-or-test-key")
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(gotBody, &req); err != nil {
+		t.Fatalf("request body is not valid JSON: %v\n%s", err, gotBody)
+	}
+	if _, present := req["options"]; present {
+		t.Fatalf("options field should NOT be present for non-Ollama requests:\n%s", gotBody)
 	}
 }

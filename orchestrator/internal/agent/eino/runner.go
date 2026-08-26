@@ -34,8 +34,9 @@ import (
 type Config struct {
 	StepBudget   int
 	ApprovalMode agent.ApprovalMode
-	ModelBaseURL string // e.g. "http://localhost:11434/v1"
-	ModelName    string // e.g. "qwen3:14b"
+	ModelBaseURL string // e.g. "http://localhost:11434/v1" or "https://openrouter.ai/api/v1"
+	ModelName    string // e.g. "anthropic/claude-3.5-sonnet" or "gpt-oss:20b"
+	ModelAPIKey  string // e.g. "sk-or-v1-..." or empty for local Ollama
 	// ModelTimeout bounds every individual outbound call to the model — see
 	// NewOllamaChatModel's doc comment for why this exists (its absence let a
 	// single stalled model call hang a task's goroutine forever, found via
@@ -208,7 +209,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		return err
 	}
 
-	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelTimeout, r.cfg.ModelNumCtx, r.cfg.ModelThinking)
+	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelAPIKey, r.cfg.ModelTimeout, r.cfg.ModelNumCtx, r.cfg.ModelThinking)
 	if err != nil {
 		_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = err.Error() })
 		return err
