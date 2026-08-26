@@ -42,6 +42,18 @@ export YUMMI_EINO_MODEL_NAME
 export YUMMI_EINO_MODEL_API_KEY
 export YUMMI_EINO_PROVIDER
 export YUMMI_EINO_MODEL_NUM_CTX
+# The LangGraph brain (brain/) is a fully separate Python process — see
+# brain/README.md. It never reads YUMMI_OLLAMA_*/YUMMI_EINO_* (those govern
+# the Go orchestrator's own conductor/eino backends); these are its own,
+# independent model config, exported the same way for the same reason: so
+# `make conf` writing them to .yummi.conf is enough, no flag repeated by
+# hand on every `make brain-run`. All blank by default — brain-run fails
+# fast with a clear message if YUMMI_BRAIN_MODEL_API_KEY is unset, same
+# fail-fast discipline as brain/src/yummi_brain/config.py's own load().
+export YUMMI_BRAIN_MODEL_BASE_URL
+export YUMMI_BRAIN_MODEL_NAME
+export YUMMI_BRAIN_MODEL_API_KEY
+export YUMMI_BRAIN_SESSION_ID
 
 # ── Container engine selection ────────────────────────────────────────────────
 # CONTAINER_ENGINE: docker (default) or podman. Both speak the same `compose`
@@ -137,7 +149,8 @@ endef
 	app \
 	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp \
 	docker-build docker-orchestrator docker-ui \
-	_ollama-ensure
+	_ollama-ensure \
+	_check-brain-deps brain-install brain-run brain-mcp
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  DEPENDENCY GUARD
@@ -192,10 +205,13 @@ endif
 #  USER COMMANDS  (the ones you run every day)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## conf    Pick your container engine setup and UI language once (interactive);
-##         persists CONTAINER_ENGINE / YUMMI_NETWORK_MODE / YUMMI_LANG to
-##         .yummi.conf so `make build`/`make start` never need those flags
-##         again. Re-run anytime to change your choice.
+## conf    Interactive one-time setup: container engine, network mode, UI
+##         language, the orchestrator's own agent backend (local or cloud),
+##         and optionally the LangGraph brain's cloud model credentials.
+##         Persists everything to .yummi.conf so `make build`/`make start`/
+##         `make brain-run`/etc. never need those flags again. Re-run
+##         anytime to change any of it — every question shows what a
+##         default/skip does, nothing is silently required.
 conf:
 	@$(call log_section,Yummi Configuration)
 	@printf "$(BOLD)How are you running containers on this machine?$(RESET)\n\n"; \
@@ -225,17 +241,44 @@ conf:
 		2) lang=tr ;; \
 		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$langchoice"; exit 1 ;; \
 	esac; \
-	printf "\n$(BOLD)Agent backend?$(RESET) $(DIM)(which model you'll run — can be changed later without a rebuild)$(RESET)\n\n"; \
-	printf "  $(CYAN)1)$(RESET) Graph $(DIM)— small/local models (default)$(RESET)\n"; \
-	printf "  $(CYAN)2)$(RESET) Eino $(DIM)— larger models with reliable native tool-calling$(RESET)\n\n"; \
-	printf "$(BOLD)Choice [1-2]: $(RESET)"; \
+	printf "\n$(BOLD)Agent backend?$(RESET) $(DIM)(which engine drives the orchestrator's own chat/task loop —\n"; \
+	printf "independent of the LangGraph brain asked about further below)$(RESET)\n\n"; \
+	printf "  $(CYAN)1)$(RESET) Graph        $(DIM)— small/local models, tag-protocol state machine (default)$(RESET)\n"; \
+	printf "  $(CYAN)2)$(RESET) Eino local   $(DIM)— larger local models via Ollama, native tool-calling$(RESET)\n"; \
+	printf "  $(CYAN)3)$(RESET) Eino cloud   $(DIM)— native tool-calling against OpenRouter/OpenAI/any OpenAI-compatible endpoint$(RESET)\n\n"; \
+	printf "$(BOLD)Choice [1-3]: $(RESET)"; \
 	read backendchoice; \
+	einoprovider=""; einobaseurl=""; einomodel=""; einoapikey=""; \
 	case "$$backendchoice" in \
 		1) backend=graph ;; \
 		2) backend=eino ;; \
-		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
+		3) backend=eino; \
+		   printf "\n$(BOLD)Cloud provider for the eino backend$(RESET)\n\n"; \
+		   printf "  $(CYAN)1)$(RESET) OpenRouter   $(DIM)https://openrouter.ai — recommended, 400+ models behind one key$(RESET)\n"; \
+		   printf "  $(CYAN)2)$(RESET) OpenAI       $(DIM)https://api.openai.com$(RESET)\n"; \
+		   printf "  $(CYAN)3)$(RESET) Custom       $(DIM)any OpenAI-compatible base URL — vLLM, LM Studio, ...$(RESET)\n\n"; \
+		   printf "$(BOLD)Choice [1-3]: $(RESET)"; \
+		   read einoproviderchoice; \
+		   case "$$einoproviderchoice" in \
+			   1) einoprovider=openrouter; einobaseurl="https://openrouter.ai/api/v1" ;; \
+			   2) einoprovider=openai; einobaseurl="https://api.openai.com/v1" ;; \
+			   3) einoprovider=openai; \
+			      printf "\n$(BOLD)Base URL$(RESET) $(DIM)(include /v1 or whatever path prefix the server needs)$(RESET): "; \
+			      read einobaseurl; \
+			      if [ -z "$$einobaseurl" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Base URL cannot be empty.$(RESET)\n"; exit 1; fi ;; \
+			   *) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$einoproviderchoice"; exit 1 ;; \
+		   esac; \
+		   printf "\n$(BOLD)Model name$(RESET) $(DIM)(e.g. anthropic/claude-3.5-sonnet, deepseek/deepseek-chat, openai/gpt-4o)$(RESET): "; \
+		   read einomodel; \
+		   if [ -z "$$einomodel" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model name cannot be empty.$(RESET)\n"; exit 1; fi; \
+		   printf "\n$(BOLD)API key$(RESET) $(DIM)(input hidden as you type; stored in gitignored .yummi.conf, never committed)$(RESET): "; \
+		   read -s einoapikey; printf "\n"; \
+		   if [ -z "$$einoapikey" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)API key cannot be empty.$(RESET)\n"; exit 1; fi ;; \
+		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
 	esac; \
-	printf "\n$(BOLD)Which model?$(RESET) $(DIM)(sets the Ollama model tag — change any time by re-running 'make conf', no rebuild needed)$(RESET)\n\n"; \
+	printf "\n$(BOLD)Which local model?$(RESET) $(DIM)(the orchestrator's conductor — chat + intent classification — always\n"; \
+	printf "runs on a local Ollama model regardless of the choice above; this is that model. Also what Graph/Eino-local\n"; \
+	printf "actually run on. Change any time by re-running 'make conf', no rebuild needed.)$(RESET)\n\n"; \
 	printf "  $(CYAN)1)$(RESET) Standard  $(DIM)— gpt-oss:20b, recommended default, runs on 16GB+ RAM without a dedicated GPU$(RESET)\n"; \
 	printf "  $(CYAN)2)$(RESET) Expert    $(DIM)— gpt-oss:120b, same family at ~6x the parameters, workstation-grade hardware (80GB GPU or 64GB+ Mac)$(RESET)\n"; \
 	printf "  $(CYAN)3)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
@@ -253,14 +296,65 @@ conf:
 		   read numctx ;; \
 		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
 	esac; \
-	printf "CONTAINER_ENGINE=%s\n" "$$engine" > .yummi.conf; \
-	printf "YUMMI_NETWORK_MODE=%s\n" "$$mode" >> .yummi.conf; \
-	printf "YUMMI_LANG=%s\n" "$$lang" >> .yummi.conf; \
-	printf "YUMMI_AGENT_BACKEND=%s\n" "$$backend" >> .yummi.conf; \
-	printf "YUMMI_OLLAMA_MODEL=%s\n" "$$model" >> .yummi.conf; \
-	if [ -n "$$numctx" ]; then printf "YUMMI_OLLAMA_NUM_CTX=%s\n" "$$numctx" >> .yummi.conf; fi; \
-	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf — CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=$$mode YUMMI_LANG=$$lang YUMMI_AGENT_BACKEND=$$backend YUMMI_OLLAMA_MODEL=$$model$(RESET)\n"; \
-	printf "$(DIM)Every 'make build'/'make start'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
+	printf "\n$(BOLD)Set up the LangGraph brain?$(RESET) $(DIM)(optional — brain/, a separate Python agent that drives Yummi's\n"; \
+	printf "sandbox/gateway over MCP using a frontier model, independent of the agent backend above. See brain/README.md.\n"; \
+	printf "Skip if you only want the Go orchestrator's own agent backend.)$(RESET)\n\n"; \
+	printf "$(BOLD)Set it up now? [y/N]: $(RESET)"; \
+	read setup_brain; \
+	brainbaseurl=""; brainmodel=""; brainapikey=""; \
+	if [ "$$setup_brain" = "y" ] || [ "$$setup_brain" = "Y" ]; then \
+		printf "\n$(BOLD)Model provider for the brain$(RESET)\n\n"; \
+		printf "  $(CYAN)1)$(RESET) OpenRouter   $(DIM)https://openrouter.ai — recommended, 400+ models behind one key$(RESET)\n"; \
+		printf "  $(CYAN)2)$(RESET) OpenAI       $(DIM)https://api.openai.com$(RESET)\n"; \
+		printf "  $(CYAN)3)$(RESET) Custom       $(DIM)any OpenAI-compatible base URL$(RESET)\n\n"; \
+		printf "$(BOLD)Choice [1-3]: $(RESET)"; \
+		read brainproviderchoice; \
+		case "$$brainproviderchoice" in \
+			1) brainbaseurl="https://openrouter.ai/api/v1" ;; \
+			2) brainbaseurl="https://api.openai.com/v1" ;; \
+			3) printf "\n$(BOLD)Base URL$(RESET) $(DIM)(include /v1 or whatever path prefix the server needs)$(RESET): "; \
+			   read brainbaseurl; \
+			   if [ -z "$$brainbaseurl" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Base URL cannot be empty.$(RESET)\n"; exit 1; fi ;; \
+			*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$brainproviderchoice"; exit 1 ;; \
+		esac; \
+		printf "\n$(BOLD)Model name$(RESET) $(DIM)(e.g. anthropic/claude-3.5-sonnet, deepseek/deepseek-chat, openai/gpt-4o)$(RESET): "; \
+		read brainmodel; \
+		if [ -z "$$brainmodel" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model name cannot be empty.$(RESET)\n"; exit 1; fi; \
+		if [ -n "$$einoapikey" ] && [ "$$einobaseurl" = "$$brainbaseurl" ]; then \
+			printf "\n$(DIM)Same provider as the eino backend above — reuse that API key? [Y/n]: $(RESET)"; \
+			read reusekey; \
+			if [ "$$reusekey" != "n" ] && [ "$$reusekey" != "N" ]; then brainapikey="$$einoapikey"; fi; \
+		fi; \
+		if [ -z "$$brainapikey" ]; then \
+			printf "\n$(BOLD)API key$(RESET) $(DIM)(input hidden as you type; stored in gitignored .yummi.conf, never committed)$(RESET): "; \
+			read -s brainapikey; printf "\n"; \
+			if [ -z "$$brainapikey" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)API key cannot be empty.$(RESET)\n"; exit 1; fi; \
+		fi; \
+	fi; \
+	{ \
+		printf "CONTAINER_ENGINE=%s\n" "$$engine"; \
+		printf "YUMMI_NETWORK_MODE=%s\n" "$$mode"; \
+		printf "YUMMI_LANG=%s\n" "$$lang"; \
+		printf "YUMMI_AGENT_BACKEND=%s\n" "$$backend"; \
+		printf "YUMMI_OLLAMA_MODEL=%s\n" "$$model"; \
+		if [ -n "$$numctx" ]; then printf "YUMMI_OLLAMA_NUM_CTX=%s\n" "$$numctx"; fi; \
+		if [ -n "$$einobaseurl" ]; then \
+			printf "YUMMI_EINO_MODEL_BASE_URL=%s\n" "$$einobaseurl"; \
+			printf "YUMMI_EINO_MODEL_NAME=%s\n" "$$einomodel"; \
+			printf "YUMMI_EINO_MODEL_API_KEY=%s\n" "$$einoapikey"; \
+			printf "YUMMI_EINO_PROVIDER=%s\n" "$$einoprovider"; \
+		fi; \
+		if [ -n "$$brainbaseurl" ]; then \
+			printf "YUMMI_BRAIN_MODEL_BASE_URL=%s\n" "$$brainbaseurl"; \
+			printf "YUMMI_BRAIN_MODEL_NAME=%s\n" "$$brainmodel"; \
+			printf "YUMMI_BRAIN_MODEL_API_KEY=%s\n" "$$brainapikey"; \
+		fi; \
+	} > .yummi.conf; \
+	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf$(RESET)\n"; \
+	printf "$(DIM)  engine=$$engine  network=$$mode  lang=$$lang  backend=$$backend  local_model=$$model$(RESET)\n"; \
+	if [ -n "$$einomodel" ]; then printf "$(DIM)  eino_cloud=$$einoprovider/$$einomodel$(RESET)\n"; fi; \
+	if [ -n "$$brainmodel" ]; then printf "$(DIM)  brain=$$brainmodel @ $$brainbaseurl$(RESET)\n"; fi; \
+	printf "$(DIM)Every 'make build'/'make start'/'make brain-run'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
 
 ## build   Build native binaries and UI (CLI + orchestrator + gateway + UI).
 build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp
@@ -330,6 +424,9 @@ clean:
 	@rm -rf $(UI_DIST_DIR)
 	@$(call log_info,clean,Removing databases...)
 	@find . -name "*.db" -type f -delete 2>/dev/null || true
+	@$(call log_info,clean,Removing brain/ virtualenv and checkpoint databases...)
+	@rm -rf brain/.venv
+	@find brain -name "*.sqlite" -type f -delete 2>/dev/null || true
 	@$(call log_pass,clean,Workspace is tidy.)
 
 ## force-restart  Stop services, kill memory hogs (ollama), and restart
@@ -612,6 +709,54 @@ dev-orchestrator: ## Run orchestrator orchestrator locally (port 9080)
 	@$(call log_info,dev,Starting orchestrator...)
 	@cd orchestrator && go run ./cmd/orchestrator
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  BRAIN  (brain/ — the LangGraph agent, a separate Python process; see
+#  brain/README.md. Deliberately NOT part of _check-deps: the core Go/Docker
+#  workflow must keep working for anyone who never touches the brain — these
+#  targets gate on their own _check-brain-deps instead.)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_check-brain-deps:
+	@$(call log_section,Brain Dependency Validation)
+	@command -v uv >/dev/null 2>&1 || { $(call log_error,Dependencies,uv is not installed. Install from https://docs.astral.sh/uv/getting-started/installation/); exit 1; }
+	@$(call log_pass,Dependencies,uv is installed.)
+	@if [ -z "$$YUMMI_BRAIN_MODEL_API_KEY" ]; then \
+		$(call log_error,brain,YUMMI_BRAIN_MODEL_API_KEY is not set -- run 'make conf' and opt into brain setup or set it directly: make brain-run YUMMI_BRAIN_MODEL_API_KEY=sk-... GOAL='...'); \
+		exit 1; \
+	fi
+	@$(call log_pass,Dependencies,YUMMI_BRAIN_MODEL_API_KEY is set.)
+
+## brain-install  Install the LangGraph brain's Python dependencies (uv sync)
+brain-install: _check-brain-deps
+	@$(call log_section,Brain — Install)
+	@$(call log_info,uv,Syncing brain/ dependencies...)
+	@set -o pipefail; cd brain && uv sync 2>&1 | sed 's/^/  /' || { $(call log_error,brain,uv sync failed.); exit 1; }
+	@$(call log_pass,brain,Dependencies installed.)
+
+## brain-run      Run the LangGraph brain against a goal — requires
+##                `make start` already running (orchestrator + gateway +
+##                sandbox). Usage: make brain-run GOAL="203.0.113.10 ... 1) ... 2) ..."
+brain-run: _check-brain-deps
+	@$(call log_section,Brain — Run)
+	@if [ -z "$(GOAL)" ]; then \
+		$(call log_error,brain,No goal given. Usage: make brain-run GOAL='your goal here'); \
+		exit 1; \
+	fi
+	@if ! curl -sf http://127.0.0.1:9080/api/v1/system/status >/dev/null 2>&1; then \
+		$(call log_warn,brain,Orchestrator is not reachable at 127.0.0.1:9080 — this run will fail immediately.); \
+		$(call log_warn,brain,Run 'make start' first.); \
+	fi
+	@cd brain && uv run yummi-brain "$(GOAL)"
+
+## brain-mcp      Run ONLY the agent-facing MCP server standalone (stdio) —
+##                for connecting an external MCP client (Claude Desktop,
+##                Cursor, Windsurf, ...) instead of this repo's own
+##                LangGraph brain. Does not need YUMMI_BRAIN_MODEL_API_KEY:
+##                the external client brings its own model.
+brain-mcp:
+	@command -v uv >/dev/null 2>&1 || { $(call log_error,Dependencies,uv is not installed. Install from https://docs.astral.sh/uv/getting-started/installation/); exit 1; }
+	@cd brain && uv run yummi-mcp-server
+
 ## app       Alias for 'start' — kept for anyone with the old habit memorized.
 app: start
 
@@ -639,8 +784,14 @@ help:
 	@printf "    isolation as an engine-bug workaround, and requires typing a confirmation. Prefer OrbStack instead.$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_LANG=en|tr$(RESET)  $(DIM)default en — build-time UI language, baked into the UI at build time (no runtime switch)$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_AGENT_BACKEND=graph|eino$(RESET)  $(DIM)default graph — which agentic engine to run (no rebuild needed to change)$(RESET)\n"
-	@printf "  $(CYAN)YUMMI_EINO_MODEL_BASE_URL/_NAME/_NUM_CTX$(RESET)  $(DIM)optional — point ONLY the eino backend's ReAct loop at a\n"
-	@printf "    different OpenAI-compatible server/model (e.g. a local LM Studio instance), independent of the conductor's Ollama config$(RESET)\n"
+	@printf "  $(CYAN)YUMMI_EINO_MODEL_BASE_URL/_NAME/_API_KEY/_PROVIDER/_NUM_CTX$(RESET)  $(DIM)optional — point ONLY the eino backend's\n"
+	@printf "    ReAct loop at a different OpenAI-compatible server (local LM Studio, or a cloud provider like OpenRouter/OpenAI with\n"
+	@printf "    _API_KEY set), independent of the conductor's own Ollama config. 'make conf' sets all of these interactively.$(RESET)\n"
+	@printf "\n$(BOLD)  Brain$(RESET)  $(DIM)(brain/ — a separate Python/LangGraph agent driving Yummi over MCP; see brain/README.md)$(RESET)\n"
+	@printf "  $(CYAN)make brain-install$(RESET)  Install brain/'s Python dependencies (uv sync)\n"
+	@printf "  $(CYAN)make brain-run$(RESET)      Run the brain against a goal — GOAL=\"...\" required, orchestrator must be running\n"
+	@printf "  $(CYAN)make brain-mcp$(RESET)      Run only the agent-facing MCP server, for an external MCP client (Claude Desktop, Cursor, ...)\n"
+	@printf "  $(DIM)'make conf' can set up YUMMI_BRAIN_MODEL_BASE_URL/_NAME/_API_KEY interactively (masked key entry) — or set them directly.$(RESET)\n"
 	@printf "\n$(BOLD)  Developer commands$(RESET)\n"
 	@printf "  $(CYAN)make test$(RESET)        Run all test suites\n"
 	@printf "  $(CYAN)make test-agent-live$(RESET) Agentic loop e2e vs. real model + sandbox\n"
