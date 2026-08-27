@@ -762,6 +762,7 @@ export function AssistantPanel({
 
   const approveTaskGate = useCallback(
     async (taskID: string, proposalID: string, approved: boolean) => {
+      const sid = sessionID // the conversation this gate approval belongs to
       try {
         await fetchJSON(`/api/v1/tasks/${taskID}/approve`, {
           method: 'POST',
@@ -773,16 +774,18 @@ export function AssistantPanel({
           })
         })
       } catch {
+        if (sessionIDRef.current !== sid) return
         appendMessage({ role: 'system', content: t('assistant.approvalSendFailed') })
       }
     },
-    [appendMessage]
+    [appendMessage, sessionID]
   )
 
   const resolveEgress = useCallback(
     async (rec: ExecutionRecord, approved: boolean) => {
       // Optimistically drop the card; the resulting completed/failed event will
       // append the final result (or onExecution re-adds it if the call fails).
+      const sid = sessionID // the conversation this hold belongs to
       setEgressHolds((prev) => prev.filter((r) => r.id !== rec.id))
       try {
         await fetchJSON(`/api/v1/executions/${rec.id}/resolve-egress`, {
@@ -790,6 +793,7 @@ export function AssistantPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved })
         })
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: approved
@@ -797,6 +801,7 @@ export function AssistantPanel({
             : `${t('assistant.egressDeniedBefore')}${rec.egress_target ?? rec.command}`
         })
       } catch {
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: t('assistant.egressDecisionFailed')
@@ -804,13 +809,14 @@ export function AssistantPanel({
         setEgressHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec]) // restore
       }
     },
-    [appendMessage]
+    [appendMessage, sessionID]
   )
 
   const resolveThreat = useCallback(
     async (rec: ExecutionRecord, approved: boolean) => {
       // The terminal event emitted by the API is the source of truth for the
       // final card and (only on approval) the subsequent LLM feedback.
+      const sid = sessionID // the conversation this hold belongs to
       setThreatHolds((prev) => prev.filter((r) => r.id !== rec.id))
       try {
         await fetchJSON(`/api/v1/executions/${rec.id}/resolve-threat`, {
@@ -818,6 +824,7 @@ export function AssistantPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved })
         })
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: approved
@@ -825,6 +832,7 @@ export function AssistantPanel({
             : t('assistant.threatDenied')
         })
       } catch {
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: t('assistant.threatDecisionFailed')
@@ -832,7 +840,7 @@ export function AssistantPanel({
         setThreatHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec])
       }
     },
-    [appendMessage]
+    [appendMessage, sessionID]
   )
 
   const setApprovalMode = useCallback(
