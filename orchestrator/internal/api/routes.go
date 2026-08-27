@@ -69,6 +69,10 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/skills/pending", HandleListPendingSkills(curatorStore))
 		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
 		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
+		// Operator briefing — "operator drives, AI assists": the same
+		// accumulated knowledge the agent is fed (matching skills, tactics,
+		// findings on record), surfaced for the operator's own manual work.
+		r.Get("/operator/briefing", HandleOperatorBriefing(skillReg, ks))
 		r.Get("/agent/roles", HandleListRoles(taskRunner))
 		r.Get("/agent/capabilities", HandleAgentCapabilities(taskRunner))
 		r.Get("/agent/delegations", HandleListDelegations(taskRunner))
