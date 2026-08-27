@@ -13,7 +13,7 @@ import sys
 from langgraph.errors import GraphRecursionError
 
 from . import config
-from .graph import build_graph
+from .graph import _render_plan, build_graph
 
 
 async def run(goal: str) -> bool:
@@ -43,12 +43,16 @@ async def run(goal: str) -> bool:
         final_state = None
         completed = True
         try:
+            plan_shown = False
             async for event in graph.astream(
-                {"messages": [], "session_id": cfg.session_id, "goal": goal, "next": ""},
+                {"messages": [], "session_id": cfg.session_id, "goal": goal, "next": "", "plan": [], "report": ""},
                 config=thread,
                 stream_mode="values",
             ):
                 final_state = event
+                if not plan_shown and event.get("plan"):
+                    print(f"--> plan:\n{_render_plan(event['plan'])}\n")
+                    plan_shown = True
                 nxt = event.get("next")
                 if nxt:
                     print(f"--> routed to: {nxt}")
@@ -73,12 +77,21 @@ async def run(goal: str) -> bool:
                 "the goal was judged complete — see partial progress below]"
             )
 
-        print("\n=== FINAL STATE ===")
-        if final_state:
-            for msg in final_state.get("messages", []):
-                content = getattr(msg, "content", None)
-                if content:
-                    print(f"- {str(content)[:500]}")
+        report = (final_state or {}).get("report", "")
+        if report:
+            print("\n=== FINAL REPORT ===")
+            print(report)
+        else:
+            # No synthesized report — either the run never reached FINISH
+            # (step budget exhausted) or summarize's own LLM call failed.
+            # Fall back to the raw message trail so the operator still sees
+            # what happened instead of nothing at all.
+            print("\n=== FINAL STATE (no synthesized report) ===")
+            if final_state:
+                for msg in final_state.get("messages", []):
+                    content = getattr(msg, "content", None)
+                    if content:
+                        print(f"- {str(content)[:500]}")
         return completed
     finally:
         # MultiServerMCPClient is NOT a context manager as of
