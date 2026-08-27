@@ -151,7 +151,9 @@ def _supervisor_node(llm: ChatOpenAI, pz: Persona):
     return node
 
 
-def _specialist_system(role: str, pz: Persona, sub: SubAgentPersona | None, session_id: str) -> str:
+def _specialist_system(
+    role: str, pz: Persona, sub: SubAgentPersona | None, session_id: str, goal: str
+) -> str:
     # Layered exactly like Go's eino backend folds persona into a
     # specialist's prompt once per run (context_blocks.go): shared
     # core_identity (who Yummi is, tone, language_parity) + agent.yaml's
@@ -182,6 +184,15 @@ def _specialist_system(role: str, pz: Persona, sub: SubAgentPersona | None, sess
 
     return (
         f"{identity_block}\n\n"
+        f"THE OPERATOR'S GOAL for this session is exactly:\n{goal}\n\n"
+        "Everything you do must serve this goal and only this goal. If a "
+        "tool's own output happens to mention some other target, network, "
+        "or rule (an existing gateway rule, a stray entry in a list, "
+        "anything not stated in the goal above) — that is NOT your target. "
+        "Never substitute another target you merely noticed for the one "
+        "the operator actually gave you, even if it looks plausible or is "
+        "already in scope. If the goal above ever seems to conflict with "
+        "what you were routed here to do, the goal wins.\n\n"
         f"The session_id for EVERY yummi_* tool call in this conversation is "
         f"exactly: {session_id}\n"
         "Every yummi_* tool requires this as its session_id argument — always "
@@ -213,11 +224,16 @@ def _specialist_node(role: str, llm: ChatOpenAI, tools: list, pz: Persona):
     sub = pz.subagents.get(role)
 
     async def node(state: BrainState) -> Command[Literal["supervisor"]]:
-        # session_id is only known at runtime (BrainState), but every
-        # yummi_* tool's schema requires it as a mandatory argument — a
+        # session_id AND goal are only known at runtime (BrainState) — a
         # system prompt built once at graph-construction time (before any
-        # state exists) has no way to include it. Live-observed without
-        # this: the model correctly refused to call any tool at all,
+        # state exists) has no way to include either. Live-observed without
+        # goal specifically: the supervisor never writes to state["messages"]
+        # (it only updates "next"), so on the first handoff a specialist's
+        # only input was its own role description — no goal, no target. It
+        # didn't error or refuse; it just picked up an unrelated target it
+        # noticed in a tool's own output (an existing gateway rule) and
+        # confidently scanned that instead, misreporting success. Without
+        # session_id: the model correctly refused to call any tool at all,
         # since it had a mandatory parameter it was never told the value
         # of, and just kept asking the operator for a session_id in a
         # loop until the supervisor gave up and routed to FINISH — zero
@@ -227,7 +243,7 @@ def _specialist_node(role: str, llm: ChatOpenAI, tools: list, pz: Persona):
         # prompt is the reliable fix, independent of whether this
         # LangGraph version's create_react_agent prompt= accepts a
         # per-call callable.
-        system = _specialist_system(role, pz, sub, state["session_id"])
+        system = _specialist_system(role, pz, sub, state["session_id"], state["goal"])
         agent = create_react_agent(llm, tools, prompt=system)
         # recursion_limit here bounds ONE specialist's own internal ReAct
         # turns — separate from, and not covered by, the outer graph's own
