@@ -17,9 +17,10 @@ moment an operator edits persona/v0.1 without knowing this module exists.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
-from typing import Awaitable, Callable, Literal, TypedDict, TypeVar
+from typing import Any, Awaitable, Callable, Literal, TypedDict, TypeVar
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
@@ -78,20 +79,79 @@ _FALLBACK_ROLES: dict[str, str] = {
     "reverser": "Reverse-engineers a binary or compiled artifact.",
 }
 
+PLANNER_SYSTEM = """You are Yummi's mission planner. Given the operator's \
+goal, produce a short ordered plan — the same discipline Yummi's other \
+backends follow: cover every distinct part of the goal, as many steps as it \
+genuinely needs and no filler, each step a concrete one-sentence subtask \
+assigned to exactly one specialist role.
+
+Specialist roles available:
+{roster_desc}
+
+Yummi's own reviewed skill guidance (use only what genuinely fits this \
+goal — most of this will be irrelevant, that's normal, skim and ignore):
+{skills_summary}
+
+Known tactics — past command patterns and their outcomes, if any are \
+relevant:
+{tactics_summary}
+
+Persistent notes from earlier work in this session, if any:
+{context_summary}
+
+Return ONLY a JSON array, nothing else — no markdown fences, no prose \
+before or after. Each element: {{"role": "<one of the roles above>", \
+"description": "<concrete subtask>"}}."""
+
+
+def _planner_node(llm: ChatOpenAI, pz: Persona, tools_by_name: dict[str, Any]):
+    roster = _roster(pz)
+    roster_desc = "\n".join(f"- {name}: {desc}" for name, desc in roster.items())
+
+    async def node(state: BrainState) -> Command[Literal["supervisor"]]:
+        skills, tactics, context = await asyncio.gather(
+            _fetch_tool_text(tools_by_name, "yummi_list_skills", {}),
+            _fetch_tool_text(tools_by_name, "yummi_list_tactics", {}),
+            _fetch_tool_text(tools_by_name, "yummi_get_context", {"session_id": state["session_id"]}),
+        )
+        system = PLANNER_SYSTEM.format(
+            roster_desc=roster_desc,
+            skills_summary=(skills[:3000] or "(none available)"),
+            tactics_summary=(tactics[:2000] or "(none available)"),
+            context_summary=(context[:1500] or "(none)"),
+        )
+        prompt = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Operator's goal: {state['goal']}"},
+        ]
+        reply = await _with_retry(lambda: llm.ainvoke(prompt))
+        plan = _parse_plan(str(reply.content or ""), fallback_goal=state["goal"], valid_roles=set(roster.keys()))
+        return Command(goto="supervisor", update={"plan": plan})
+
+    return node
+
+
 SUPERVISOR_RULES = """You are the supervisor of a penetration-testing agent \
-team working inside Yummi's fail-closed sandbox. Given the operator's goal \
-and the conversation so far, decide which specialist should act next, or \
-that the goal is genuinely complete.
+team working inside Yummi's fail-closed sandbox. Given the operator's goal, \
+the plan, and the conversation so far, decide which specialist should act \
+next, or that the goal is genuinely complete.
 
 Specialists and when to route to them:
 {roster}
+
+The plan below is a starting guide, not a rigid script — a specialist's \
+actual findings can reveal a step is unnecessary, already covered, or that \
+a different order makes more sense. Use it to stay organized, not to \
+follow blindly.
 
 Rules:
 - Route to exactly one specialist per turn. They report back to you.
 - Only choose "FINISH" when EVERY distinct part of the operator's goal has \
 been genuinely attempted — not just the first one or two. Re-read the goal \
 before finishing; a goal with several distinct asks needs several distinct \
-specialist turns, not one.
+specialist turns, not one. An unchecked plan step is a strong signal that \
+goal is not yet done, but a checked step is not proof either — judge by \
+the actual conversation.
 - Judge progress by whether a specialist's report actually addresses the \
 operator's goal, not by whether it did SOME work — a report about something \
 unrelated to the goal is NOT progress, even if it looks like real tool \
@@ -103,17 +163,108 @@ send it back with the same instruction that already failed or drifted.
 """
 
 
+class PlanStep(TypedDict):
+    id: str
+    role: str
+    description: str
+    status: str  # "pending" | "done"
+
+
 class BrainState(TypedDict):
     messages: list
     session_id: str
     goal: str
     next: str
+    plan: list[PlanStep]
+    report: str
 
 
 def _roster(pz: Persona) -> dict[str, str]:
     if pz.subagents:
         return {role: sub.routing_hint or sub.identity[:200] for role, sub in pz.subagents.items()}
     return _FALLBACK_ROLES
+
+
+def _render_plan(plan: list[PlanStep]) -> str:
+    if not plan:
+        return "(no plan yet)"
+    lines = []
+    for step in plan:
+        marker = "x" if step.get("status") == "done" else " "
+        role = step.get("role") or "any"
+        lines.append(f"[{marker}] ({role}) {step.get('description', '')}")
+    return "\n".join(lines)
+
+
+def _parse_plan(raw: str, *, fallback_goal: str, valid_roles: set[str]) -> list[PlanStep]:
+    """Parses the planner LLM's JSON array reply into a validated plan.
+    Falls back to a single catch-all step covering the whole goal on any
+    parse failure or empty/invalid result — a planner that can't produce
+    structured output must still let the run proceed unplanned, not crash
+    it; the supervisor's own routing loop remains the real safety net
+    either way.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if "\n" in text:
+            text = text.split("\n", 1)[1]
+    start, end = text.find("["), text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        text = text[start : end + 1]
+    try:
+        items = json.loads(text)
+        if not isinstance(items, list) or not items:
+            raise ValueError("planner reply is not a non-empty JSON array")
+        plan: list[PlanStep] = []
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            description = item.get("description")
+            if role not in valid_roles or not description:
+                continue
+            plan.append({"id": f"s{i + 1}", "role": str(role), "description": str(description), "status": "pending"})
+        if plan:
+            return plan
+        raise ValueError("no valid steps survived validation")
+    except Exception as e:  # noqa: BLE001 - any parse/shape failure degrades the same way
+        logger.warning("planner: could not parse a structured plan (%s) — falling back to a single step", e)
+        return [{"id": "s1", "role": "", "description": fallback_goal, "status": "pending"}]
+
+
+def _mark_step_done(plan: list[PlanStep], role: str) -> list[PlanStep]:
+    # Marks the first still-pending step assigned to this role as done —
+    # a reasonable heuristic (the specialist that just reported back
+    # presumably worked on the next thing planned for its role) without
+    # asking the model to explicitly name which step it completed, which
+    # would add another fragile parse to every specialist turn.
+    updated: list[PlanStep] = []
+    marked = False
+    for step in plan:
+        if not marked and step.get("role") == role and step.get("status") != "done":
+            step = {**step, "status": "done"}
+            marked = True
+        updated.append(step)
+    return updated
+
+
+async def _fetch_tool_text(tools_by_name: dict[str, Any], name: str, args: dict[str, Any]) -> str:
+    """Best-effort direct call to one already-loaded MCP tool object, bypassing
+    the ReAct loop — the planner needs this data once, up front, not as
+    something a model decides whether to ask for. Any failure (tool
+    missing, orchestrator unreachable) degrades to an empty string so a
+    knowledge-store hiccup can never block planning.
+    """
+    tool = tools_by_name.get(name)
+    if tool is None:
+        return ""
+    try:
+        result = await tool.ainvoke(args)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("planner: %s fetch failed: %s", name, e)
+        return ""
+    return str(result)
 
 
 def _supervisor_node(llm: ChatOpenAI, pz: Persona):
@@ -126,11 +277,14 @@ def _supervisor_node(llm: ChatOpenAI, pz: Persona):
     tone = "\n\n".join(p for p in (pz.character_role, pz.honesty, pz.economy) if p)
     system = (tone + "\n\n" if tone else "") + SUPERVISOR_RULES.format(roster=roster_desc)
 
-    async def node(state: BrainState) -> Command[Literal[tuple(roster.keys()) + ("__end__",)]]:  # type: ignore[misc]
+    async def node(state: BrainState) -> Command[Literal[tuple(roster.keys()) + ("summarize",)]]:  # type: ignore[misc]
         history = state["messages"]
         prompt = [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Operator's goal: {state['goal']}"},
+            {
+                "role": "user",
+                "content": f"Operator's goal: {state['goal']}\n\nPlan:\n{_render_plan(state.get('plan', []))}",
+            },
             *history,
             {
                 "role": "user",
@@ -145,7 +299,11 @@ def _supervisor_node(llm: ChatOpenAI, pz: Persona):
             # real, expected failure mode — fail closed to FINISH rather
             # than crash the graph on an invalid Command target.
             choice = "FINISH"
-        goto = END if choice == "FINISH" else choice
+        # FINISH routes to summarize (one more LLM call that synthesizes a
+        # clean final report) rather than straight to END — without this,
+        # the operator's "result" was whatever the last specialist happened
+        # to say, not a coherent answer to the actual goal.
+        goto = "summarize" if choice == "FINISH" else choice
         return Command(goto=goto, update={"next": choice})
 
     return node
@@ -274,8 +432,42 @@ def _specialist_node(role: str, llm: ChatOpenAI, tools: list, pz: Persona):
         )
         return Command(
             goto="supervisor",
-            update={"messages": [*result["messages"][len(state["messages"]) :]]},
+            update={
+                "messages": [*result["messages"][len(state["messages"]) :]],
+                "plan": _mark_step_done(state.get("plan", []), role),
+            },
         )
+
+    return node
+
+
+SUMMARY_SYSTEM = """You are Yummi, wrapping up a task for the operator. \
+Given the goal, the plan, and everything that happened, write a concise \
+final report: what was accomplished, concrete findings (cite actual \
+evidence from the conversation below — ports, services, vulnerabilities, \
+whatever was really found — never invent anything), and what, if anything, \
+remains incomplete or was blocked and why. Plain text, no markdown headers \
+needed."""
+
+
+def _summarize_node(llm: ChatOpenAI, pz: Persona):
+    system = SUMMARY_SYSTEM
+    if pz.language_parity:
+        system += "\n\n" + pz.language_parity
+
+    async def node(state: BrainState) -> Command[Literal["__end__"]]:
+        prompt = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": f"Goal: {state['goal']}\n\nPlan:\n{_render_plan(state.get('plan', []))}",
+            },
+            *state["messages"],
+            {"role": "user", "content": "Write the final report now."},
+        ]
+        reply = await _with_retry(lambda: llm.ainvoke(prompt))
+        report = str(reply.content or "").strip()
+        return Command(goto=END, update={"report": report})
 
     return node
 
@@ -310,11 +502,15 @@ async def build_graph(cfg: config.Config | None = None):
         temperature=0,
     )
 
+    tools_by_name = {tool.name: tool for tool in tools}
+
     builder = StateGraph(BrainState)
+    builder.add_node("planner", _planner_node(llm, pz, tools_by_name))
     builder.add_node("supervisor", _supervisor_node(llm, pz))
+    builder.add_node("summarize", _summarize_node(llm, pz))
     for role in roster:
         builder.add_node(role, _specialist_node(role, llm, tools, pz))
-    builder.set_entry_point("supervisor")
+    builder.set_entry_point("planner")
 
     saver_cm = AsyncSqliteSaver.from_conn_string(cfg.checkpoint_db_path)
     checkpointer = await saver_cm.__aenter__()
