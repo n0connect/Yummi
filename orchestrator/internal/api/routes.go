@@ -128,6 +128,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 
 	// WebSocket
 	r.Get("/ws/terminal", HandleTerminalWSBridge(bridge))
+	r.Get("/ws/desktop", HandleDesktopWSBridge(cfg.SandboxDesktopAddr))
 	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg, curatorStore, assistant))
 
 	return r

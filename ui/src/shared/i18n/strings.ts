@@ -16,6 +16,7 @@ const en = {
   // ── StatusBar ───────────────────────────────────────────────────────────
   'statusBar.nav.agent': 'Agent',
   'statusBar.nav.bash': 'Bash',
+  'statusBar.nav.desktop': 'Desktop',
   'statusBar.nav.trace': 'Trace',
   'statusBar.nav.logs': 'Logs',
   'statusBar.nav.gateway': 'Gateway',
@@ -62,6 +63,16 @@ const en = {
   'terminalPanel.disconnectedMsgBefore': '[Connection lost — retrying in ',
   'terminalPanel.disconnectedMsgAfter': 's…]',
   'terminalPanel.errorMsg': '[Connection error]',
+
+  // ── DesktopPanel (Stage 2: noVNC graphical sandbox) ────────────────────────
+  'desktopPanel.title': 'Desktop — Sandbox',
+  'desktopPanel.connecting': 'Connecting…',
+  'desktopPanel.connected': 'Connected',
+  'desktopPanel.disconnected': 'Disconnected',
+  'desktopPanel.unavailableTitle': 'Graphical desktop not running',
+  'desktopPanel.unavailableBody': "This is an opt-in surface — start it with: make start-desktop",
+  'desktopPanel.retry': 'Retry connection',
+  'desktopPanel.scaleToggle': 'Fit to window',
 
   // ── GatewayPage ─────────────────────────────────────────────────────────
   'gateway.title': 'Gateway',
@@ -440,6 +451,7 @@ const tr = {
   // Trace page's own h1, "Gateway bağlantısı kurulamadı").
   'statusBar.nav.agent': 'Ajan',
   'statusBar.nav.bash': 'Bash',
+  'statusBar.nav.desktop': 'Masaüstü',
   'statusBar.nav.trace': 'Trace',
   'statusBar.nav.logs': 'Günlükler',
   'statusBar.nav.gateway': 'Gateway',
@@ -486,6 +498,16 @@ const tr = {
   'terminalPanel.disconnectedMsgBefore': '[Bağlantı kesildi — ',
   'terminalPanel.disconnectedMsgAfter': ' sn içinde yeniden denenecek…]',
   'terminalPanel.errorMsg': '[Bağlantı hatası]',
+
+  // ── DesktopPanel (Aşama 2: noVNC grafik sandbox) ───────────────────────────
+  'desktopPanel.title': 'Masaüstü — Sandbox',
+  'desktopPanel.connecting': 'Bağlanıyor…',
+  'desktopPanel.connected': 'Bağlı',
+  'desktopPanel.disconnected': 'Bağlı değil',
+  'desktopPanel.unavailableTitle': 'Grafik masaüstü çalışmıyor',
+  'desktopPanel.unavailableBody': 'Bu opsiyonel bir yüzey — başlatmak için: make start-desktop',
+  'desktopPanel.retry': 'Bağlantıyı tekrar dene',
+  'desktopPanel.scaleToggle': 'Pencereye sığdır',
 
   // ── GatewayPage ─────────────────────────────────────────────────────────
   'gateway.title': 'Gateway',
