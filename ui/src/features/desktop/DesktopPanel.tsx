@@ -27,8 +27,16 @@ export function DesktopPanel(): JSX.Element {
     setUnavailable(false)
 
     const rfb = new RFB(containerRef.current, websocketURL('/ws/desktop'))
-    rfb.scaleViewport = true
-    rfb.resizeSession = false
+    // resizeSession (not scaleViewport): tell the SERVER to actually resize
+    // the X display (TigerVNC supports this via RandR/ExtendedDesktopSize)
+    // to match the browser viewport exactly, instead of CSS-scaling a fixed
+    // 1600x900 desktop into whatever aspect ratio the panel happens to be —
+    // the latter was live-observed leaving visible black letterbox bars on
+    // any viewport that isn't exactly 16:9. This is what makes it feel like
+    // a native desktop at the operator's own resolution, not a window onto
+    // a fixed-size remote screen.
+    rfb.scaleViewport = false
+    rfb.resizeSession = true
     rfbRef.current = rfb
 
     const onConnect = () => setStatus('connected')
