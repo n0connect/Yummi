@@ -59,10 +59,20 @@ func HandleTerminalWSBridge(bridge *sandbox.Bridge) http.HandlerFunc {
 
 		// docker exec -it allocates a TTY inside the container; pty.Start()
 		// provides the matching PTY on the host side so ANSI codes flow correctly.
+		//
+		// `tmux new-session -A -s operator` (attach if it exists, create if
+		// not) instead of a bare shell: every WS connection — a page refresh,
+		// a dropped connection, a new browser tab — reattaches to the SAME
+		// session instead of starting a fresh, empty shell. A long-running
+		// command, scrollback, and any other shell (vim, htop, a second pane)
+		// the operator had open all survive a reconnect. Without this, the
+		// Bash tab was a disposable shell: the exact "cut off from
+		// everything, starts from zero every time" complaint that made it
+		// feel like a toy next to a real terminal.
 		cmd := exec.CommandContext(ctx, "docker", "exec", "-it",
 			"--user", "1000:1000",
 			bridge.ContainerName(),
-			"/bin/bash", "--norc", "--noprofile",
+			"tmux", "new-session", "-A", "-s", "operator",
 		)
 
 		ptyFile, err := pty.Start(cmd)
