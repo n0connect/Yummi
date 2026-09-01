@@ -278,6 +278,18 @@ export type SkillInfo = {
   knowledge?: string
 }
 
+// The operator briefing (from /api/v1/operator/briefing) — the same
+// accumulated knowledge the AI conductor is fed, surfaced for the operator's
+// own manual work: matching skills, tactics that worked before, and findings
+// already on record for the session.
+export type OperatorBriefing = {
+  goal: string
+  tool: string
+  skills: SkillInfo[]
+  tactics: Tactic[]
+  findings: Finding[]
+}
+
 // A curator-drafted skill awaiting operator review (from
 // /api/v1/skills/pending). Never auto-loaded — approval writes it to disk
 // and hot-adds it to the live registry; rejection just marks the row.
