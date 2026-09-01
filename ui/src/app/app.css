@@ -833,14 +833,20 @@ body::before {
   font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
 }
 .execution-output-truncated { color: var(--orange); }
-.execution-output { margin: 0; padding: var(--space-sm) var(--space-lg) var(--space-md); font-family: var(--font-mono); font-size: 12px; line-height: 1.65; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: min(55vh, 460px); overflow-y: auto; background: var(--bg-base); }
+/* Command output is terminal output: preserve exact column alignment
+   (nmap tables, aligned key/value dumps) with horizontal scroll instead of
+   break-all, which shredded aligned columns and split IPs/URLs/hashes at
+   arbitrary characters. `pre` (not pre-wrap) keeps a tool's own layout
+   intact the way a real terminal does; the wrapper scrolls in both axes and
+   never pushes the chat column wider than the viewport. */
+.execution-output { margin: 0; padding: var(--space-sm) var(--space-lg) var(--space-md); font-family: var(--font-mono); font-size: 12px; line-height: 1.65; color: var(--text-secondary); white-space: pre; tab-size: 4; max-height: min(60vh, 520px); overflow: auto; overscroll-behavior: contain; background: var(--bg-base); }
 /* A running execution's provisional, still-growing output (WS
    "execution.output" chunks) — same shape as the finished .execution-output
    block, plus a small cyan "live" badge so it reads as provisional rather
    than the authoritative result that replaces it on completion. */
 .execution-output-wrap-live { border-top: 1px solid rgba(56, 189, 248, 0.15); }
 .execution-output-live-badge { color: var(--cyan); font-weight: 600; }
-.execution-output-wrap-live .execution-output { max-height: min(35vh, 260px); }
+.execution-output-wrap-live .execution-output { max-height: min(40vh, 320px); }
 .execution-error { padding: var(--space-md) var(--space-lg); background: var(--red-bg); color: var(--red); font-size: var(--text-xs); border-top: 1px solid rgba(255,69,58,0.2); }
 .execution-threat { padding: var(--space-md) var(--space-lg); background: var(--red-bg); color: var(--red); font-size: var(--text-xs); font-weight: 600; line-height: 1.5; border-bottom: 1px solid rgba(255,69,58,0.3); word-break: break-word; }
 
