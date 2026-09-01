@@ -14,12 +14,33 @@ type Status = 'connecting' | 'connected' | 'disconnected'
 // a stuck spinner when sandbox-desktop was never started, since that's the
 // expected common case, not an error.
 export function DesktopPanel(): JSX.Element {
+  const panelRef = useRef<HTMLElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<InstanceType<typeof RFB> | null>(null)
   const [status, setStatus] = useState<Status>('connecting')
   const [unavailable, setUnavailable] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   // Bumped to force a fresh connect() after the operator clicks Retry.
   const [attempt, setAttempt] = useState(0)
+
+  // True fullscreen (not just CSS sizing) — the same affordance any real
+  // remote-desktop client (Guacamole, an RDP viewer) offers, so this reads
+  // as a native workbench rather than a web page with a video embedded in
+  // it. resizeSession (above) means going fullscreen also resizes the
+  // remote X display to the now-larger viewport automatically.
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+    } else if (panelRef.current) {
+      void panelRef.current.requestFullscreen()
+    }
+  }
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(document.fullscreenElement === panelRef.current)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -62,7 +83,7 @@ export function DesktopPanel(): JSX.Element {
   }, [attempt])
 
   return (
-    <section className="panel desktop-panel">
+    <section ref={panelRef} className={`panel desktop-panel ${isFullscreen ? 'desktop-panel-fullscreen' : ''}`}>
       <div className="panel-header">
         <span className="panel-header-title">
           <span className={`dot ${status === 'connected' ? 'dot-ok' : 'dot-err'}`} aria-hidden="true" />
@@ -73,6 +94,16 @@ export function DesktopPanel(): JSX.Element {
             {status === 'disconnected' && t('desktopPanel.disconnected')}
           </span>
         </span>
+        {status === 'connected' && (
+          <button
+            type="button"
+            className="small-button desktop-fullscreen-btn"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? t('desktopPanel.exitFullscreen') : t('desktopPanel.enterFullscreen')}
+          >
+            {isFullscreen ? t('desktopPanel.exitFullscreen') : t('desktopPanel.enterFullscreen')}
+          </button>
+        )}
       </div>
       <div className="panel-body desktop-body" style={{ padding: 0, overflow: 'hidden' }}>
         <div ref={containerRef} className="desktop-host" />

@@ -55,11 +55,49 @@ for i in $(seq 1 20); do
 done
 
 echo "[sandbox-desktop] starting XFCE session..."
+# XFCE session start AND the wallpaper branding below run in the SAME `su`
+# shell invocation, sharing the SAME D-Bus session bus — critical, and the
+# reason an earlier version of this silently never applied the wallpaper:
+# `dbus-launch --exit-with-session CMD` exports DBUS_SESSION_BUS_ADDRESS
+# only into CMD's own environment, not back into this script, so a
+# SEPARATE later `su -c "..."` invocation (a fresh shell, fresh D-Bus
+# session) could never see xfce4-desktop's real xfconf properties — its
+# own `xfconf-query -c xfce4-desktop -l` came back nearly empty every
+# time, live-confirmed. `eval $(dbus-launch --sh-syntax)` instead sets the
+# session bus address in THIS shell explicitly, so everything after it —
+# xfce4-session itself and the wallpaper xfconf-query calls — talks to the
+# one real session bus.
 su - pentester -c "
   export DISPLAY=:${DISPLAY_NUM}
   export XDG_RUNTIME_DIR=/run/user/1000
-  dbus-launch --exit-with-session xfce4-session > /tmp/xfce4-session.log 2>&1 &
-"
+  eval \$(dbus-launch --sh-syntax)
+  export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
+  xfce4-session > /tmp/xfce4-session.log 2>&1 &
+
+  # Applies the Yummi-branded wallpaper once xfwm4/Xtigervnc's RandR output
+  # is up (xrandr -q succeeding is the real readiness signal — xfce4-desktop
+  # itself never pre-populates these xfconf properties at all on a fresh
+  # profile, confirmed live: -l on the xfce4-desktop channel came back
+  # with nothing under /backdrop even long after the desktop was fully
+  # rendered, so discovering an EXISTING property to overwrite never found
+  # one — the earlier version of this loop that tried that starved out
+  # every time). -n creates the property outright instead. 'VNC-0' is
+  # TigerVNC's own fixed RandR output name (confirmed via xrandr -q in this
+  # exact image), not a guess. Backgrounded and entirely best-effort: a
+  # branding step failing must never take down the desktop session itself.
+  (
+    for i in \$(seq 1 30); do
+      if xrandr -q > /dev/null 2>&1; then
+        xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitorVNC-0/workspace0/last-image -n -t string -s /usr/share/backgrounds/yummi/wallpaper.png 2>/dev/null || true
+        xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitorVNC-0/workspace0/image-style -n -t int -s 5 2>/dev/null || true
+        xfdesktop --reload > /dev/null 2>&1 || true
+        break
+      fi
+      sleep 1
+    done
+  ) &
+  wait
+" > /tmp/xfce-shell.log 2>&1 &
 
 echo "[sandbox-desktop] starting websockify (ws ${WS_PORT} -> vnc ${VNC_PORT})..."
 echo "[sandbox-desktop] ready — $(nmap --version 2>&1 | head -1)"

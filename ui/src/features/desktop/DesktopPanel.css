@@ -19,6 +19,16 @@
   justify-content: center;
 }
 
+/* :fullscreen sizes the element to fill the screen via UA default styles,
+   but a flex column needs its own 100% explicitly or the browser's default
+   fullscreen box model can leave a sliver of unstyled background showing. */
+.desktop-panel-fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+.desktop-fullscreen-btn { flex-shrink: 0; }
+
 .desktop-status-label {
   margin-left: var(--space-sm);
   color: var(--text-tertiary);
