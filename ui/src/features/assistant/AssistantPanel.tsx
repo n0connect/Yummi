@@ -35,6 +35,7 @@ import {
   StreamingMessage,
   LIVE_OUTPUT_CAP
 } from './MessageRenderers'
+import { MiniSandboxPreview } from './MiniSandboxPreview'
 
 // ≈4 chars per token (BPE average — same estimate ContextBar.tsx already
 // uses for its overall-usage display; this is a per-turn size, not exact,
@@ -1168,6 +1169,7 @@ export function AssistantPanel({
 
   return (
     <section className="panel panel-left">
+      <MiniSandboxPreview />
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
         {taskRunning && (

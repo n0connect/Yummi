@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import RFB from '@novnc/novnc'
 import { websocketURL } from '../../shared/api/runtime'
 import { t } from '../../shared/i18n/strings'
+import { SessionContextBadge } from '../../shared/lib/SessionContextBadge'
 import './DesktopPanel.css'
 
 type Status = 'connecting' | 'connected' | 'disconnected'
@@ -94,6 +95,7 @@ export function DesktopPanel(): JSX.Element {
             {status === 'disconnected' && t('desktopPanel.disconnected')}
           </span>
         </span>
+        <SessionContextBadge />
         {status === 'connected' && (
           <button
             type="button"
