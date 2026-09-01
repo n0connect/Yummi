@@ -1,5 +1,6 @@
 import { TerminalPanel } from '../../features/terminal/TerminalPanel'
 import { BriefingPanel } from '../../features/operator/BriefingPanel'
+import { SessionContextBadge } from '../../shared/lib/SessionContextBadge'
 import './TerminalPage.css'
 
 // The operator's manual workbench: they drive on the left (a real shell into
@@ -11,6 +12,9 @@ export function TerminalPage(): JSX.Element {
   return (
     <main className="page-wrap workbench">
       <div className="page-card workbench-terminal">
+        <div className="workbench-session-strip">
+          <SessionContextBadge />
+        </div>
         <TerminalPanel />
       </div>
       <div className="workbench-briefing">

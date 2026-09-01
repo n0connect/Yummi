@@ -1,0 +1,14 @@
+.session-context-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+.session-context-label { color: var(--text-muted); letter-spacing: 0.03em; }
+.session-context-value { color: var(--text-secondary); font-weight: 600; }

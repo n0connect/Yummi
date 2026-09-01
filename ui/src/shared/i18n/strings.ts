@@ -6,6 +6,8 @@
 // has (or vice versa) is a compile error, not a silent runtime fallback.
 const en = {
   // ── common ──────────────────────────────────────────────────────────────
+  'common.sessionLabel': 'Session',
+  'common.defaultSessionLabel': 'Adhoc',
   'common.retry': 'Retry',
   'common.reject': 'Reject',
   'common.close': 'Close',
@@ -298,6 +300,8 @@ const en = {
   'assistant.taskRunningIndicator': 'Task running',
   'assistant.replyPreparingIndicator': 'Preparing reply',
   'assistant.stopResponseButton': 'Stop',
+  'assistant.miniSandboxLabel': 'Sandbox',
+  'assistant.miniSandboxToggle': "Peek at the sandbox — the same box the agent's own commands run in",
   'assistant.responseStopped': 'Response stopped.',
   'assistant.analysisFailed': "Couldn't analyze the command's result — the model call failed or timed out. The command's own output is still visible above.",
   'assistant.turnStatusDone': 'Done',
@@ -444,6 +448,8 @@ const en = {
 
 const tr = {
   // ── common ──────────────────────────────────────────────────────────────
+  'common.sessionLabel': 'Oturum',
+  'common.defaultSessionLabel': 'Ad-hoc',
   'common.retry': 'Tekrar dene',
   'common.reject': 'Reddet',
   'common.close': 'Kapat',
@@ -742,6 +748,8 @@ const tr = {
   'assistant.taskRunningIndicator': 'Görev çalışıyor',
   'assistant.replyPreparingIndicator': 'Yanıt hazırlanıyor',
   'assistant.stopResponseButton': 'Durdur',
+  'assistant.miniSandboxLabel': 'Sandbox',
+  'assistant.miniSandboxToggle': 'Sandbox\'a göz at — agent\'ın kendi komutlarının çalıştığı aynı kutu',
   'assistant.responseStopped': 'Yanıt durduruldu.',
   'assistant.analysisFailed': 'Komut sonucu analiz edilemedi — model çağrısı başarısız oldu ya da zaman aşımına uğradı. Komutun kendi çıktısı yukarıda hâlâ görünüyor.',
   'assistant.turnStatusDone': 'Tamamlandı',
