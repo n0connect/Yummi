@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useEffect } from 'react'
 import type { ActivityEvent, AgentTask, ExecutionRecord } from '../../entities/types'
 import { TaskTracker } from '../tasks/TaskTracker'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
@@ -164,6 +164,27 @@ export function ExecutionMessage({
     () => (liveOutput ? formatOutputForDisplay(liveOutput) : null),
     [liveOutput]
   )
+  // Auto-follow-tail: as streamed output grows, keep the live <pre> pinned to
+  // the bottom the way a real terminal (and Claude Code's tool output) does —
+  // but ONLY while the operator is already at the bottom. The moment they
+  // scroll up to read earlier output, stop yanking them back down; resume
+  // following as soon as they scroll back to the bottom themselves. Without
+  // this the operator either never sees the newest line of a long-running
+  // scan, or gets fought for control of the scrollbar mid-read.
+  const liveOutputRef = useRef<HTMLPreElement>(null)
+  const followTailRef = useRef(true)
+  useEffect(() => {
+    const el = liveOutputRef.current
+    if (el && followTailRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [liveOutputView?.display])
+  const onLiveScroll = (e: React.UIEvent<HTMLPreElement>) => {
+    const el = e.currentTarget
+    // A small slack (4px) so sub-pixel rounding at the true bottom still
+    // counts as "at the bottom" and keeps following.
+    followTailRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 4
+  }
   const statusLabel: Record<string, string> = {
     queued: t('assistant.execStatus.queued'),
     running: t('assistant.execStatus.running'),
@@ -249,7 +270,11 @@ export function ExecutionMessage({
                 </span>
               )}
             </div>
-            <pre className="execution-output">{liveOutputView.display}</pre>
+            <pre
+              ref={liveOutputRef}
+              className="execution-output"
+              onScroll={onLiveScroll}
+            >{liveOutputView.display}</pre>
           </div>
         )}
         {!isActive && visibleOutput && (
