@@ -399,6 +399,28 @@ const en = {
   'trace.capabilityRecovery': 'Recovery',
   'trace.capabilityMemory': 'Memory retrieval',
   'trace.capabilityGovernance': 'Skill governance',
+
+  // ── operator briefing (operator drives, AI assists) ───────────────────────
+  'briefing.title': 'Operator briefing',
+  'briefing.subtitle': 'What Yummi already knows — for you.',
+  'briefing.toolPlaceholder': 'Tool (e.g. nmap)',
+  'briefing.goalPlaceholder': 'What are you working on? (optional)',
+  'briefing.query': 'Brief me',
+  'briefing.querying': 'Gathering…',
+  'briefing.clear': 'Clear',
+  'briefing.hint': 'Name a tool or describe your task — get matching playbooks, command patterns that worked before, and findings already on record.',
+  'briefing.error': 'Could not load briefing.',
+  'briefing.empty': 'Nothing on record yet for that. As you work and record findings, this fills up.',
+  'briefing.skillsHeading': 'Playbooks',
+  'briefing.tacticsHeading': 'Tactics that worked',
+  'briefing.findingsHeading': 'On record this session',
+  'briefing.tacticHitCount': '× used',
+  'briefing.noSkills': 'No matching playbook.',
+  'briefing.noTactics': 'No recorded tactics.',
+  'briefing.noFindings': 'No findings recorded yet this session.',
+  'briefing.outcomeWorked': 'worked',
+  'briefing.outcomeFailed': 'failed',
+  'briefing.outcomeInconclusive': 'inconclusive',
 }
 
 const tr = {
@@ -802,6 +824,28 @@ const tr = {
   'trace.capabilityRecovery': 'Kurtarma',
   'trace.capabilityMemory': 'Memory erişimi',
   'trace.capabilityGovernance': 'Skill yönetişimi',
+
+  // ── operatör brifingi (operatör sürer, AI yardımcı olur) ──────────────────
+  'briefing.title': 'Operatör brifingi',
+  'briefing.subtitle': "Yummi'nin bildikleri — senin için.",
+  'briefing.toolPlaceholder': 'Araç (örn. nmap)',
+  'briefing.goalPlaceholder': 'Ne üzerinde çalışıyorsun? (opsiyonel)',
+  'briefing.query': 'Beni bilgilendir',
+  'briefing.querying': 'Toplanıyor…',
+  'briefing.clear': 'Temizle',
+  'briefing.hint': 'Bir araç adı ver ya da görevini yaz — eşleşen playbook’ları, daha önce işe yaramış komut kalıplarını ve halihazırda kayıtlı bulguları getir.',
+  'briefing.error': 'Brifing yüklenemedi.',
+  'briefing.empty': 'Bununla ilgili henüz kayıt yok. Çalışıp bulgu kaydettikçe burası dolar.',
+  'briefing.skillsHeading': 'Playbook’lar',
+  'briefing.tacticsHeading': 'İşe yaramış taktikler',
+  'briefing.findingsHeading': 'Bu oturumda kayıtlı',
+  'briefing.tacticHitCount': '× kullanıldı',
+  'briefing.noSkills': 'Eşleşen playbook yok.',
+  'briefing.noTactics': 'Kayıtlı taktik yok.',
+  'briefing.noFindings': 'Bu oturumda henüz bulgu kaydedilmedi.',
+  'briefing.outcomeWorked': 'çalıştı',
+  'briefing.outcomeFailed': 'başarısız',
+  'briefing.outcomeInconclusive': 'belirsiz',
 } satisfies Record<keyof typeof en, string>
 
 export type Lang = 'en' | 'tr'
