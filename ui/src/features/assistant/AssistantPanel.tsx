@@ -36,6 +36,13 @@ import {
   LIVE_OUTPUT_CAP
 } from './MessageRenderers'
 
+// ≈4 chars per token (BPE average — same estimate ContextBar.tsx already
+// uses for its overall-usage display; this is a per-turn size, not exact,
+// since /api/v1/chat returns no real token count from Ollama).
+function estimateTokens(chars: number): number {
+  return Math.max(0, Math.round(chars / 4))
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ChatResponse = {
@@ -87,6 +94,26 @@ export function AssistantPanel({
   // the authoritative source for the final message.
   const [streamingText, setStreamingText] = useState<string | null>(null)
   const activeTurnIDRef = useRef<string | null>(null)
+  // Aborts the in-flight /api/v1/chat call (sendChat OR analyzeOutput,
+  // whichever is currently running — only one can be at once, gated by
+  // isLoading) when the operator clicks Stop. A stale controller from a
+  // turn that already finished is never aborted by a later click: each
+  // caller only aborts what it itself stored here, checked via the turnID
+  // guard alongside it.
+  const chatAbortRef = useRef<AbortController | null>(null)
+  // Small always-visible summary of how the LAST turn ended — done, an
+  // error surfaced (was previously swallowed silently by analyzeOutput's
+  // catch — live-observed as "the model just stops with zero explanation"
+  // after a large tool output like linpeas.sh triggered a chat-analysis
+  // failure), or stopped by the operator. Distinct from isLoading/the
+  // typing dots: those only say a request is IN FLIGHT, never what
+  // happened once it isn't. tokens is the same ~4-chars-per-token estimate
+  // ContextBar already uses — real Ollama token counts aren't returned by
+  // /api/v1/chat, so this is honestly an estimate, not exact.
+  const [turnStatus, setTurnStatus] = useState<{
+    kind: 'done' | 'stopped' | 'error'
+    tokens: number
+  } | null>(null)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
   // subTasks tracks every currently-live sub-agent task delegated (via
@@ -157,6 +184,7 @@ export function AssistantPanel({
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setTurnStatus(null)
     setLiveOutputs({})
     // isLoading isn't session-scoped state, so it must be cleared here too:
     // an in-flight request from the previous session now skips its own
@@ -370,6 +398,7 @@ export function AssistantPanel({
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setTurnStatus(null)
     setLiveOutputs({})
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
@@ -535,7 +564,11 @@ export function AssistantPanel({
       const turnID = crypto.randomUUID()
       activeTurnIDRef.current = turnID
       setIsLoading(true)
+      setTurnStatus(null)
+      const controller = new AbortController()
+      chatAbortRef.current = controller
       setStreamingText('') // this call streams too — see onChatStream
+      let replyChars = feedback.length
       try {
         const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
           method: 'POST',
@@ -545,7 +578,8 @@ export function AssistantPanel({
             session_id: sid,
             turn_id: turnID,
             from_feedback: true
-          })
+          }),
+          signal: controller.signal
         })
         // The operator may have switched to a different conversation while this
         // was in flight — its (now-stale) reply/proposals belong to `sid`, not
@@ -554,17 +588,35 @@ export function AssistantPanel({
         // will show up correctly if the operator switches back to it.
         if (sessionIDRef.current !== sid) return
         const reply = res.data?.message ?? res.reply ?? ''
+        replyChars += reply.length
         if (reply) appendMessage({ role: 'assistant', content: reply })
         // If the model suggests new proposals after a failure, surface them.
         const newProposals = res.data?.proposals ?? []
         if (newProposals.length > 0) setProposals(newProposals)
-      } catch {
-        /* silent — execution output already visible in card */
+        if (sessionIDRef.current === sid) setTurnStatus({ kind: 'done', tokens: estimateTokens(replyChars) })
+      } catch (e) {
+        // This used to be silently swallowed entirely — live-observed as
+        // "the model just stops with zero explanation" after a large tool
+        // output (e.g. linpeas.sh's own verbose scan output, tens of
+        // thousands of characters) triggered a failure analyzing it: the
+        // command's OWN result was visible in its execution card, but
+        // whether the FOLLOW-UP analysis step succeeded was invisible.
+        // Always surface which of those two very different things happened.
+        if (sessionIDRef.current === sid) {
+          if (e instanceof DOMException && e.name === 'AbortError') {
+            appendMessage({ role: 'system', content: t('assistant.responseStopped') })
+            setTurnStatus({ kind: 'stopped', tokens: estimateTokens(replyChars) })
+          } else {
+            appendMessage({ role: 'system', content: t('assistant.analysisFailed') })
+            setTurnStatus({ kind: 'error', tokens: estimateTokens(replyChars) })
+          }
+        }
       } finally {
         if (sessionIDRef.current === sid) {
           setIsLoading(false)
           setStreamingText(null)
           if (activeTurnIDRef.current === turnID) activeTurnIDRef.current = null
+          if (chatAbortRef.current === controller) chatAbortRef.current = null
         }
       }
     },
@@ -876,6 +928,9 @@ export function AssistantPanel({
     setInput('')
     appendMessage({ role: 'user', content: text })
     setIsLoading(true)
+    setTurnStatus(null)
+    const controller = new AbortController()
+    chatAbortRef.current = controller
     // Show the in-progress bubble immediately (typing indicator until the
     // first delta lands) — see onChatStream / the streamingText render below.
     setStreamingText('')
@@ -896,11 +951,13 @@ export function AssistantPanel({
         })
     }
 
+    let replyChars = 0
     try {
       const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session_id: sid, turn_id: turnID })
+        body: JSON.stringify({ message: text, session_id: sid, turn_id: turnID }),
+        signal: controller.signal
       })
 
       // The operator may have switched to a different conversation while this
@@ -914,6 +971,7 @@ export function AssistantPanel({
         onSessionChange(res.session_id)
 
       const reply = res.data?.message ?? res.reply ?? t('assistant.noReplyReceived')
+      replyChars = text.length + reply.length
       appendMessage({ role: 'assistant', content: reply })
 
       const taskID = res.data?.task_id
@@ -942,12 +1000,20 @@ export function AssistantPanel({
         const newProposals = res.data?.proposals ?? []
         if (newProposals.length > 0) setProposals(newProposals)
       }
-    } catch {
-      if (sessionIDRef.current === sid)
-        appendMessage({
-          role: 'system',
-          content: t('assistant.connectionError')
-        })
+      if (sessionIDRef.current === sid) setTurnStatus({ kind: 'done', tokens: estimateTokens(replyChars) })
+    } catch (e) {
+      if (sessionIDRef.current === sid) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          appendMessage({ role: 'system', content: t('assistant.responseStopped') })
+          setTurnStatus({ kind: 'stopped', tokens: estimateTokens(replyChars) })
+        } else {
+          appendMessage({
+            role: 'system',
+            content: t('assistant.connectionError')
+          })
+          setTurnStatus({ kind: 'error', tokens: estimateTokens(replyChars) })
+        }
+      }
     } finally {
       if (sessionIDRef.current === sid) {
         setIsLoading(false)
@@ -957,6 +1023,7 @@ export function AssistantPanel({
         // ever arrived over the websocket.
         setStreamingText(null)
         if (activeTurnIDRef.current === turnID) activeTurnIDRef.current = null
+        if (chatAbortRef.current === controller) chatAbortRef.current = null
         inputRef.current?.focus()
       }
     }
@@ -1087,6 +1154,16 @@ export function AssistantPanel({
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
+  // Aborts whichever chat call (sendChat or analyzeOutput) is currently in
+  // flight. Both stash their own AbortController here, so this always
+  // targets the real in-flight request regardless of which function
+  // started it — there is deliberately no separate "stop a task" affordance
+  // here; taskRunning has its own distinct UI (see the running-indicator
+  // branch above) and its own cancel path (cancelExecution).
+  const stopChat = () => {
+    chatAbortRef.current?.abort()
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -1101,6 +1178,14 @@ export function AssistantPanel({
         {!taskRunning && isLoading && (
           <span className="running-indicator" role="status" aria-live="polite">
             <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.replyPreparingIndicator')}
+            <button
+              type="button"
+              className="small-button chat-stop-btn"
+              onClick={stopChat}
+              title={t('assistant.stopResponseButton')}
+            >
+              {t('assistant.stopResponseButton')}
+            </button>
           </span>
         )}
         <span className="panel-header-actions">
@@ -1408,6 +1493,24 @@ export function AssistantPanel({
             </button>
           )}
         </div>
+
+        {/* Last-turn status — small and easy to miss on purpose, but ALWAYS
+            present once a turn ends, whichever way it ended. Distinct from
+            the typing-dots/Stop button above (those only exist while a
+            request is in flight); this is the answer to "did anything
+            happen after that" once it isn't. See analyzeOutput's own
+            comment for the silent-failure case this replaces. */}
+        {turnStatus && !isLoading && (
+          <div className={`chat-turn-status chat-turn-status-${turnStatus.kind}`}>
+            {turnStatus.kind === 'done' && t('assistant.turnStatusDone')}
+            {turnStatus.kind === 'stopped' && t('assistant.turnStatusStopped')}
+            {turnStatus.kind === 'error' && t('assistant.turnStatusError')}
+            {' · ~'}
+            {turnStatus.tokens >= 1000 ? `${(turnStatus.tokens / 1000).toFixed(1)}k` : turnStatus.tokens}
+            {' '}
+            {t('assistant.turnStatusTokensSuffix')}
+          </div>
+        )}
 
         {/* Context bar */}
         <ContextBar
