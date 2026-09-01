@@ -124,6 +124,83 @@ services:
       retries: 3
       start_period: 60s
 
+  # ── sandbox-desktop — Stage 2 of the browser-Linux workbench ────────────────
+  # Opt-in graphical twin of `sandbox` above: a full XFCE desktop reached via
+  # noVNC, proxied through orchestrator's /ws/desktop (never a published host
+  # port — same "browser never talks directly to the sandbox network" pattern
+  # the terminal bridge already uses). NOT started by plain `make start` — the
+  # `desktop` profile keeps it opt-in, since it relaxes properties (writable
+  # filesystem, a persistent process tree instead of one-shot execs) the
+  # default headless sandbox's security docs state as read. See
+  # docs/superpowers/specs/2026-09-01-browser-linux-pwnbox-design.md.
+  sandbox-desktop:
+    container_name: yummi-sandbox-desktop
+    profiles: ["desktop"]
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.desktop
+    image: yummi/sandbox-desktop:local
+    command: ["/usr/local/bin/entrypoint.sh"]
+    # Deliberately NOT read_only — see entrypoint-desktop.sh's own comment.
+    dns:
+      - "1.1.1.1"
+      - "1.0.0.1"
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /run:size=64m,mode=755
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      # CHOWN/FOWNER/DAC_OVERRIDE: the entrypoint (root) prepares the
+      # pentester user's home directory and the tmpfs-mounted runtime dir
+      # before dropping to that user for the actual desktop session —
+      # cap_drop ALL removes even root's normal filesystem-permission
+      # bypass, so this is the real minimal set for that one-time,
+      # startup-only filesystem prep (live-verified: mkdir into a dir
+      # pentester already owns failed with plain "Permission denied"
+      # without DAC_OVERRIDE, and chmod on a dir chown already moved to
+      # pentester failed without FOWNER — root alone isn't enough once
+      # capabilities are this tightly scoped). Never exposed to a pentest
+      # command; the headless sandbox needs none of this since its
+      # entrypoint only sets up routing, no filesystem ownership changes.
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+      # SETUID/SETGID: `su - pentester` (the entrypoint's privilege-drop
+      # mechanism for the VNC/XFCE session — see entrypoint-desktop.sh)
+      # calls setgroups()/setuid() internally, which need these explicitly
+      # once cap_drop ALL is in effect; without them `su` itself fails
+      # before ever reaching the desktop session.
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:false
+    volumes:
+      - ${HOME}/.yummi/wordlists:/wordlists:ro
+      - ${HOME}/.yummi/workspace:/workspace:rw
+      - ${HOME}/.yummi/payloads:/payloads:ro
+    networks:
+      yummi_internal:
+        ipv4_address: 172.20.0.11
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3g
+          pids: 512
+        reservations:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:6080/ > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
   # ── orchestrator — orchestrator ─────────────────────────────────────────────────────────
   # Go API server. Talks to gateway via IPC socket and to sandbox via docker exec.
   # On yummi_external for Ollama access (host.docker.internal).
