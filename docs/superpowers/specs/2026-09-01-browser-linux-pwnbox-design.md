@@ -1,8 +1,15 @@
 # Browser-accessible Linux (Pwnbox-style) — engineering assessment
 
 **Date:** 2026-09-01
-**Status:** Assessment + staged plan. Nothing built yet — the graphical stage
-relaxes documented security properties and is the operator's call to make.
+**Status:** BUILT AND LIVE-VERIFIED — both stages. Stage 1 (persistent
+tmux-backed terminal) and Stage 2 (full noVNC/XFCE desktop) are implemented,
+committed, and confirmed working end to end in a real browser: a live XFCE
+session rendered, a mouse click opened a real xfce4-terminal showing the
+sandbox-desktop container's actual hostname. See the "operator drives, AI
+assists" direction doc and this repo's commit history (`feat(terminal):
+tmux-backed persistent sessions`, `feat(desktop): Stage 2`) for the
+implementation. The assessment below is kept as-is for the reasoning; treat
+its "nothing built yet" framing as historical.
 
 ## The ask
 
