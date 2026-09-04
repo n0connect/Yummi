@@ -142,7 +142,7 @@ endef
 
 # ── Phony declarations ────────────────────────────────────────────────────────
 .PHONY: help conf \
-	build start start-desktop rebase stop clean force-restart close \
+	build start rebase stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
 	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
@@ -369,6 +369,9 @@ build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _buil
 ## start   Start Ollama + runtime services via compose (always rebuilds
 ##         images first so source changes are never silently skipped).
 ##         UI is served at http://localhost:3000 — Yummi is web-managed only.
+##         The sandbox is a single unified environment: the agent's exec
+##         path and the browser Desktop tab (http://localhost:3000/desktop)
+##         both run against it, no separate opt-in image/container.
 ##         Engine: CONTAINER_ENGINE=docker|podman (default docker).
 ##         Network trade-off: YUMMI_NETWORK_MODE=secure|insecure-bridge (default secure).
 start: _check-deps _ollama-ensure
@@ -378,21 +381,7 @@ start: _check-deps _ollama-ensure
 	@$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
-	@$(call log_pass,services,Running — UI on http://localhost:3000)
-
-## start-desktop  Like `start`, plus the opt-in graphical sandbox-desktop
-##                (full XFCE reached via noVNC — Stage 2 of the browser-Linux
-##                workbench, see docs/superpowers/specs/2026-09-01-browser-
-##                linux-pwnbox-design.md). A separate target, not a flag on
-##                `start`, because this image is large (XFCE + wireshark +
-##                firefox-esr) and its container is NOT read-only — an
-##                explicit, deliberate choice each time, not a default.
-start-desktop: start
-	@$(call log_section,Starting Desktop Sandbox)
-	@$(call log_info,$(CONTAINER_ENGINE) compose,Building sandbox-desktop image (large — XFCE/VNC/Wireshark/Firefox)...)
-	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) --profile desktop build sandbox-desktop 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build sandbox-desktop image.); exit 1; }
-	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) --profile desktop up -d sandbox-desktop 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start sandbox-desktop.); exit 1; }
-	@$(call log_pass,services,Desktop sandbox running — open the Desktop tab at http://localhost:3000/desktop)
+	@$(call log_pass,services,Running — UI on http://localhost:3000 — Desktop tab at http://localhost:3000/desktop)
 
 ## rebase  Fast clean restart: down, rebuild images, up — Docker's OWN layer
 ##         cache does the work (go mod download / npm install layers are
@@ -426,7 +415,7 @@ rebase: _check-deps _ollama-ensure
 stop:
 	@$(call log_section,Stopping Services)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping all services...)
-	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) stop gateway sandbox sandbox-desktop orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to stop services.); exit 1; }
+	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) stop gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to stop services.); exit 1; }
 	@$(call log_pass,services,All services stopped.)
 
 ## clean   Remove all build artifacts

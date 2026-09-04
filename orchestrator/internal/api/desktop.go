@@ -1,14 +1,17 @@
 // Desktop WebSocket bridge — proxies the browser's noVNC (RFB.js) client
-// through to the sandbox-desktop container's websockify bridge.
+// through to the sandbox container's own websockify bridge. This is the
+// SAME container the agent execs into (sandbox.Bridge / sandboxmcp.Client)
+// and the operator's Bash tab attaches a tmux session on — one unified
+// environment, this handler just opens a second, independent path into it.
 //
 // Unlike the terminal bridge (HandleTerminalWSBridge, terminal.go), this is
-// NOT a docker-exec-backed PTY — sandbox-desktop runs its own persistent VNC
-// server + websockify process (see sandbox/entrypoint-desktop.sh), and this
-// handler is a pure byte relay between the browser's WebSocket connection and
-// a second WebSocket connection this orchestrator dials to that container.
-// Keeps the same trust-boundary shape every other browser-facing surface
-// here follows: the browser only ever talks to orchestrator, never directly
-// to a sandbox container's own network address.
+// NOT a docker-exec-backed PTY — sandbox runs its own persistent VNC server
+// + websockify process (see sandbox/entrypoint.sh), and this handler is a
+// pure byte relay between the browser's WebSocket connection and a second
+// WebSocket connection this orchestrator dials to that container. Keeps the
+// same trust-boundary shape every other browser-facing surface here
+// follows: the browser only ever talks to orchestrator, never directly to a
+// sandbox container's own network address.
 
 package api
 
@@ -27,18 +30,18 @@ const (
 )
 
 // desktopDialer intentionally omits an origin/TLS config — the upstream
-// target is always the sandbox-desktop container on the internal Docker
-// network, never operator-supplied.
+// target is always the sandbox container on the internal Docker network,
+// never operator-supplied.
 var desktopDialer = websocket.Dialer{
 	HandshakeTimeout: 10 * time.Second,
 }
 
 // HandleDesktopWSBridge relays the browser's noVNC WebSocket to
-// ws://<desktopAddr>/ (sandbox-desktop's websockify bridge, see
-// Dockerfile.desktop's EXPOSE 6080 and entrypoint-desktop.sh). desktopAddr
-// is host:port, e.g. "sandbox-desktop:6080" — resolved via Docker DNS on
-// yummi_internal, the same network orchestrator already shares with every
-// other component it reaches this way.
+// ws://<desktopAddr>/ (sandbox's own websockify bridge, see Dockerfile's
+// EXPOSE 6080 and entrypoint.sh). desktopAddr is host:port, e.g.
+// "sandbox:6080" — resolved via Docker DNS on yummi_internal, the same
+// network orchestrator already shares with every other component it
+// reaches this way.
 func HandleDesktopWSBridge(desktopAddr string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if desktopAddr == "" {

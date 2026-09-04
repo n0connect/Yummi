@@ -5,11 +5,27 @@
 tmux-backed terminal) and Stage 2 (full noVNC/XFCE desktop) are implemented,
 committed, and confirmed working end to end in a real browser: a live XFCE
 session rendered, a mouse click opened a real xfce4-terminal showing the
-sandbox-desktop container's actual hostname. See the "operator drives, AI
-assists" direction doc and this repo's commit history (`feat(terminal):
-tmux-backed persistent sessions`, `feat(desktop): Stage 2`) for the
-implementation. The assessment below is kept as-is for the reasoning; treat
-its "nothing built yet" framing as historical.
+sandbox's actual hostname. See the "operator drives, AI assists" direction
+doc and this repo's commit history (`feat(terminal): tmux-backed persistent
+sessions`, `feat(desktop): Stage 2`) for the implementation. The assessment
+below is kept as-is for the reasoning; treat its "nothing built yet" framing
+as historical.
+
+**Update 2026-09-04 — unified into a single container.** Stage 2 originally
+shipped as a separate opt-in `sandbox-desktop` container (`make
+start-desktop`), so the agent's exec path and the GUI ran in two different
+environments with two different tool sets. That's now retired: `sandbox/
+Dockerfile` and `sandbox/entrypoint.sh` are the union of both (headless tool
+set + XFCE/VNC/Burp/Wireshark), the compose service is just `sandbox`
+(container `yummi-sandbox`, no `profiles: ["desktop"]` gate), and `make
+start` brings it up unconditionally — the Desktop tab is reachable at
+http://localhost:3000/desktop immediately, no second build/target. Zero
+environmental difference between what the agent can reach and what the
+operator sees in the browser: same filesystem, same tools, same container.
+Traded away: the read-only rootfs the headless variant had (XFCE/VNC need
+writable session state) — the network trust boundary (gateway's fail-closed
+nftables) is completely unaffected, since it never depended on which
+container held the tools.
 
 ## The ask
 

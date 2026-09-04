@@ -65,9 +65,22 @@ services:
       retries: 6
       start_period: 15s
 
-  # ── sandbox — Kali pentest container ───────────────────────────────────────────────
-  # Isolated Kali box. Only on yummi_internal — external traffic is gated through
-  # gateway. sandbox sets its default gateway to gateway (172.20.0.2) at startup.
+  # ── sandbox — unified pentest + desktop container ───────────────────────────
+  # ONE Kali environment for everything: the agent's docker-exec path
+  # (sandbox.Bridge / sandboxmcp.Client), the operator's Bash tab (tmux), AND
+  # the browser-reached graphical desktop (/ws/desktop → noVNC → this
+  # container's own websockify+TigerVNC, see sandbox/entrypoint.sh). There
+  # used to be a separate opt-in "sandbox-desktop" container for the GUI —
+  # unified into this single always-on environment so there is zero
+  # tool/environment drift between what the agent can reach and what the
+  # operator sees in the Desktop tab. Only on yummi_internal — external
+  # traffic is gated through gateway; sandbox sets its default gateway to
+  # gateway (172.20.0.2) at startup. See
+  # docs/superpowers/specs/2026-09-01-browser-linux-pwnbox-design.md.
+  #
+  # Trade-off accepted knowingly: NOT read-only (XFCE/VNC/dbus need scattered
+  # writable session state) and the desktop stack always runs, not just on
+  # request — the network trust boundary is unaffected either way.
   sandbox:
     container_name: yummi-sandbox
     build:
@@ -75,7 +88,6 @@ services:
       dockerfile: sandbox/Dockerfile
     image: yummi/sandbox:local
     command: ["/usr/local/bin/entrypoint.sh"]
-    read_only: true
     # Resolve names via Cloudflare DNS (not Docker's embedded resolver), so the
     # sandbox and the orchestrator (which resolves the same names through
     # Cloudflare before opening a gateway rule) agree on the target IPs. DNS
@@ -83,65 +95,6 @@ services:
     # gateway (udp/53 is accepted), and the actual connection to the resolved IP
     # is gated by nftables. Resolution only maps name→IP; reachability is the
     # gateway's call.
-    dns:
-      - "1.1.1.1"
-      - "1.0.0.1"
-    tmpfs:
-      - /tmp:size=256m,mode=1777
-      - /run:size=64m,mode=755
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_RAW
-      - NET_ADMIN
-    security_opt:
-      - no-new-privileges:false
-    volumes:
-      - ${HOME}/.yummi/wordlists:/wordlists:ro
-      - ${HOME}/.yummi/workspace:/workspace:rw
-      - ${HOME}/.yummi/payloads:/payloads:ro
-    networks:
-      yummi_internal:
-        ipv4_address: 172.20.0.10
-    restart: unless-stopped
-    logging: *default-logging
-    # Generous relative to the others — this container runs the actual
-    # pentest tools an operator/agent chooses (nmap against wide ranges,
-    # sqlmap, hydra, large wordlist fuzzing). pids is fork-bomb /
-    # runaway-brute-force insurance, not a normal-use ceiling.
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 2g
-          pids: 512
-        reservations:
-          memory: 256m
-    healthcheck:
-      test: ["CMD-SHELL", "nmap --version > /dev/null 2>&1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ── sandbox-desktop — Stage 2 of the browser-Linux workbench ────────────────
-  # Opt-in graphical twin of `sandbox` above: a full XFCE desktop reached via
-  # noVNC, proxied through orchestrator's /ws/desktop (never a published host
-  # port — same "browser never talks directly to the sandbox network" pattern
-  # the terminal bridge already uses). NOT started by plain `make start` — the
-  # `desktop` profile keeps it opt-in, since it relaxes properties (writable
-  # filesystem, a persistent process tree instead of one-shot execs) the
-  # default headless sandbox's security docs state as read. See
-  # docs/superpowers/specs/2026-09-01-browser-linux-pwnbox-design.md.
-  sandbox-desktop:
-    container_name: yummi-sandbox-desktop
-    profiles: ["desktop"]
-    build:
-      context: .
-      dockerfile: sandbox/Dockerfile.desktop
-    image: yummi/sandbox-desktop:local
-    command: ["/usr/local/bin/entrypoint.sh"]
-    # Deliberately NOT read_only — see entrypoint-desktop.sh's own comment.
     dns:
       - "1.1.1.1"
       - "1.0.0.1"
@@ -155,24 +108,22 @@ services:
       - NET_ADMIN
       # CHOWN/FOWNER/DAC_OVERRIDE: the entrypoint (root) prepares the
       # pentester user's home directory and the tmpfs-mounted runtime dir
-      # before dropping to that user for the actual desktop session —
-      # cap_drop ALL removes even root's normal filesystem-permission
-      # bypass, so this is the real minimal set for that one-time,
-      # startup-only filesystem prep (live-verified: mkdir into a dir
-      # pentester already owns failed with plain "Permission denied"
-      # without DAC_OVERRIDE, and chmod on a dir chown already moved to
-      # pentester failed without FOWNER — root alone isn't enough once
-      # capabilities are this tightly scoped). Never exposed to a pentest
-      # command; the headless sandbox needs none of this since its
-      # entrypoint only sets up routing, no filesystem ownership changes.
+      # before dropping to that user for the desktop session — cap_drop ALL
+      # removes even root's normal filesystem-permission bypass, so this is
+      # the real minimal set for that one-time, startup-only filesystem prep
+      # (live-verified: mkdir into a dir pentester already owns failed with
+      # plain "Permission denied" without DAC_OVERRIDE, and chmod on a dir
+      # chown already moved to pentester failed without FOWNER — root alone
+      # isn't enough once capabilities are this tightly scoped). Never
+      # exposed to a pentest command itself.
       - CHOWN
       - FOWNER
       - DAC_OVERRIDE
       # SETUID/SETGID: `su - pentester` (the entrypoint's privilege-drop
-      # mechanism for the VNC/XFCE session — see entrypoint-desktop.sh)
-      # calls setgroups()/setuid() internally, which need these explicitly
-      # once cap_drop ALL is in effect; without them `su` itself fails
-      # before ever reaching the desktop session.
+      # mechanism for the VNC/XFCE session) calls setgroups()/setuid()
+      # internally, which need these explicitly once cap_drop ALL is in
+      # effect; without them `su` itself fails before ever reaching the
+      # desktop session.
       - SETUID
       - SETGID
     security_opt:
@@ -183,9 +134,14 @@ services:
       - ${HOME}/.yummi/payloads:/payloads:ro
     networks:
       yummi_internal:
-        ipv4_address: 172.20.0.11
+        ipv4_address: 172.20.0.10
     restart: unless-stopped
     logging: *default-logging
+    # Generous relative to the others — this container runs the actual
+    # pentest tools an operator/agent chooses (nmap against wide ranges,
+    # sqlmap, hydra, large wordlist fuzzing) AND the desktop session
+    # (XFCE/Firefox/Wireshark). pids is fork-bomb / runaway-brute-force
+    # insurance, not a normal-use ceiling.
     deploy:
       resources:
         limits:

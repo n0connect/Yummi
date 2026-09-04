@@ -7,13 +7,13 @@ import './DesktopPanel.css'
 
 type Status = 'connecting' | 'connected' | 'disconnected'
 
-// DesktopPanel is Stage 2 of the browser-Linux workbench: a real XFCE
-// desktop inside the sandbox, reached via noVNC (RFB.js) over orchestrator's
+// DesktopPanel is the browser-Linux workbench: a real XFCE desktop inside
+// the SAME sandbox container the agent execs into and the Bash tab attaches
+// a tmux session on, reached via noVNC (RFB.js) over orchestrator's
 // /ws/desktop bridge — see docs/superpowers/specs/2026-09-01-browser-linux-
-// pwnbox-design.md. Opt-in on the server side (the "desktop" compose
-// profile); this panel degrades to a clear "not running" state rather than
-// a stuck spinner when sandbox-desktop was never started, since that's the
-// expected common case, not an error.
+// pwnbox-design.md. The sandbox container always runs this (no separate
+// opt-in image); this panel degrades to a clear "unavailable" state rather
+// than a stuck spinner only if the sandbox container itself is down.
 export function DesktopPanel(): JSX.Element {
   const panelRef = useRef<HTMLElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
