@@ -10,9 +10,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// TestDesktopHandlerRejectsEmptyAddr confirms the "sandbox-desktop was never
-// started" case (SandboxDesktopAddr empty) degrades to a clean 503 rather
-// than attempting a dial that could hang or panic.
+// TestDesktopHandlerRejectsEmptyAddr confirms the "desktop address not
+// configured" case (SandboxDesktopAddr empty) degrades to a clean 503
+// rather than attempting a dial that could hang or panic.
 func TestDesktopHandlerRejectsEmptyAddr(t *testing.T) {
 	handler := HandleDesktopWSBridge("")
 	srv := httptest.NewServer(handler)
@@ -29,10 +29,10 @@ func TestDesktopHandlerRejectsEmptyAddr(t *testing.T) {
 }
 
 // TestDesktopHandlerRelaysBytesBothWays exercises the full relay path
-// against a REAL local WebSocket server standing in for sandbox-desktop's
-// websockify bridge — not a mock of orchestrator's own code, a genuine
-// second WS endpoint the handler dials exactly as it would dial the real
-// container. Confirms bytes sent by a "browser" client reach the "upstream"
+// against a REAL local WebSocket server standing in for the sandbox
+// container's websockify bridge — not a mock of orchestrator's own code, a
+// genuine second WS endpoint the handler dials exactly as it would dial the
+// real container. Confirms bytes sent by a "browser" client reach the "upstream"
 // server, and the upstream's own binary replies come back to the client —
 // the same shape RFB traffic needs in both directions.
 func TestDesktopHandlerRelaysBytesBothWays(t *testing.T) {

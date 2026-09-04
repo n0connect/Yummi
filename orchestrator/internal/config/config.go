@@ -16,14 +16,14 @@ type Config struct {
 	DatabasePath     string
 	GatewaySocket    string
 	SandboxContainer string
-	// SandboxDesktopAddr is host:port for the OPTIONAL graphical sandbox-desktop
-	// container's websockify bridge (see docker-compose.yml's opt-in "desktop"
-	// profile) — HandleDesktopWSBridge dials this on every /ws/desktop
-	// connection. Defaults to the compose service's own DNS name; when that
-	// container was never started (the common case — "desktop" is opt-in),
-	// the dial simply fails with a clean "desktop sandbox unreachable"
-	// message per-connection rather than the orchestrator refusing to start
-	// or needing to know in advance whether the profile is active.
+	// SandboxDesktopAddr is host:port for the sandbox container's own
+	// websockify bridge (see docker-compose.yml — the same unified "sandbox"
+	// service the agent execs into also runs the desktop stack) —
+	// HandleDesktopWSBridge dials this on every /ws/desktop connection.
+	// Defaults to the compose service's own DNS name; if the sandbox
+	// container itself is down, the dial simply fails with a clean "desktop
+	// sandbox unreachable" message per-connection rather than the
+	// orchestrator refusing to start.
 	SandboxDesktopAddr string
 	// SandboxExecTimeout bounds a single sandbox command's wall-clock time —
 	// see sandbox.Bridge's defaultTimeout doc comment for why the default is
@@ -96,7 +96,7 @@ func Load() *Config {
 		DatabasePath:        envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
 		GatewaySocket:       envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
 		SandboxContainer:    envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
-		SandboxDesktopAddr:  envOr("YUMMI_SANDBOX_DESKTOP_ADDR", "sandbox-desktop:6080"),
+		SandboxDesktopAddr:  envOr("YUMMI_SANDBOX_DESKTOP_ADDR", "sandbox:6080"),
 		SandboxExecTimeout:  parseDuration(os.Getenv("YUMMI_SANDBOX_EXEC_TIMEOUT")), // 0 = use sandbox.Bridge's own default
 		PersonaDir:          envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
 		AutoSkillDir:        envOr("YUMMI_AUTO_SKILL_DIR", filepath.Join(home, "skills")),
@@ -250,4 +250,3 @@ func (c *Config) ResolvedEinoProvider() string {
 	}
 	return "ollama"
 }
-
