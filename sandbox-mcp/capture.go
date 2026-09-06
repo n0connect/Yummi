@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -144,20 +145,54 @@ func runCapturedEnvToFile(ctx context.Context, extraEnv []string, outputFile str
 	return result, meta, err
 }
 
+// sandboxHome is the pentester UID's own home directory (sandbox/Dockerfile's
+// `useradd --create-home` for UID 1000) and the fixed backstop output_file
+// writes are confined to. output_file is a value the model chooses, and the
+// model's choice can in turn be shaped by hostile content in scanned-target
+// responses (the exact content-layer prompt-injection risk the orchestrator's
+// threatscan package exists for) — so this floor stops an injected or
+// mistaken path from landing outside the pentester user's own scratch space,
+// even though the sandbox's root filesystem is otherwise writable.
+var sandboxHome = "/home/pentester" // overridden in tests, which can't write under the real path
+
+// hasPathPrefix reports whether p is lexically strictly inside base — a pure
+// string/path comparison, no filesystem access. Both arguments must already
+// be resolved to the same degree (either both raw, or both passed through
+// filepath.EvalSymlinks) or the comparison is meaningless.
+func hasPathPrefix(p, base string) bool {
+	rel, err := filepath.Rel(base, p)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // saveNote writes content to path and returns a short status line to append
-// to a tool's result text. path must be absolute — sandbox-mcp's own working
-// directory is fixed at /home/pentester regardless of whatever directory a
-// separate shell command "cd"s into, so a relative path here would silently
-// resolve against the wrong base.
+// to a tool's result text. path must be an absolute path under sandboxHome —
+// sandbox-mcp's own working directory is fixed at /home/pentester regardless
+// of whatever directory a separate shell command "cd"s into, so a relative
+// path here would silently resolve against the wrong base.
 func saveNote(path, content string) string {
 	if !filepath.IsAbs(path) {
 		return fmt.Sprintf("\n\n[output_file %q was not saved: must be an absolute path]", path)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	clean := filepath.Clean(path)
+	if !hasPathPrefix(clean, sandboxHome) {
+		return fmt.Sprintf("\n\n[output_file %q was not saved: must be under %s]", path, sandboxHome)
+	}
+	dir := filepath.Dir(clean)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Sprintf("\n\n[output_file %q was not saved: %v]", path, err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	// dir may pre-exist as (or contain) a symlink planted by an earlier step;
+	// re-resolve it, and sandboxHome the same way, before writing — comparing
+	// a resolved dir against an unresolved sandboxHome would either falsely
+	// reject (if sandboxHome itself sits behind a symlink) or, worse, falsely
+	// accept an escape.
+	realDir, dirErr := filepath.EvalSymlinks(dir)
+	realHome, homeErr := filepath.EvalSymlinks(sandboxHome)
+	if dirErr == nil && homeErr == nil && !hasPathPrefix(realDir, realHome) {
+		return fmt.Sprintf("\n\n[output_file %q was not saved: resolves outside %s]", path, sandboxHome)
+	}
+	if err := os.WriteFile(clean, []byte(content), 0o600); err != nil {
 		return fmt.Sprintf("\n\n[output_file %q was not saved: %v]", path, err)
 	}
-	return fmt.Sprintf("\n\n[output saved to %s]", path)
+	return fmt.Sprintf("\n\n[output saved to %s]", clean)
 }
