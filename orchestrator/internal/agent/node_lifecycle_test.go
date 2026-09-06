@@ -348,3 +348,28 @@ func TestFinishNodeNilSkillCuratorIsNoop(t *testing.T) {
 		t.Fatalf("finishNode with nil SkillCurator: %v", err)
 	}
 }
+
+func TestFinishNodePreservesIntermediateFindings(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "enumerate the target")
+	// Simulate intermediate tool steps finding open ports
+	_ = store.Update(task.ID, func(tk *Task) {
+		tk.Findings = []string{"port 80 open (Apache)", "port 22 open (SSH)"}
+	})
+
+	// Model finishes without re-listing findings in Action
+	s := finishState(t, store, task, fastRetryCfg(), outcomeCompleted, "done")
+	s.pendingAct = Action{Findings: nil}
+
+	if _, err := finishNode(context.Background(), s); err != nil {
+		t.Fatalf("finishNode: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if len(got.Findings) != 2 {
+		t.Fatalf("expected 2 preserved intermediate findings, got %d: %+v", len(got.Findings), got.Findings)
+	}
+	if got.Findings[0] != "port 80 open (Apache)" || got.Findings[1] != "port 22 open (SSH)" {
+		t.Fatalf("unexpected findings: %+v", got.Findings)
+	}
+}

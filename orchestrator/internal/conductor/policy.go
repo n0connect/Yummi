@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var explicitTargetPattern = regexp.MustCompile(`(?i)(https?://\S+|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b|\b[a-z0-9][a-z0-9.-]+\.[a-z]{2,}\b|(?:^|\s)(?:\./|/)[^\s]+|\b[a-z0-9_.-]+\.(?:zip|tar|gz|pcap|bin|exe|apk)\b)`)
+var explicitTargetPattern = regexp.MustCompile(`(?i)(https?://\S+|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b|\b[a-z0-9][a-z0-9.-]+\.[a-z]{2,}\b|(?:^|\s)(?:\./|/)[^\s]+|\b[a-z0-9_.-]+\.(?:zip|tar|gz|tgz|bz2|xz|7z|pcap|pcapng|bin|exe|apk|elf|so|dylib|dll|py|js|php|html|json|yaml|yml|xml|raw|dump|db|sqlite)\b)`)
 var explicitActionWordPattern = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(tara|scan|pentest|enumerate|crack)(?:$|[^\p{L}\p{N}_])`)
 
 // biliyorMusunPattern requires a non-letter (or string start) immediately

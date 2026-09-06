@@ -27,6 +27,14 @@ func TestExtendedTools_EmptyRequiredFieldsRejected(t *testing.T) {
 		{"snmpwalk_enum", map[string]any{"target": ""}},
 		{"hydra_bruteforce", map[string]any{"target": "", "service": "", "pass_list": "x"}},
 		{"medusa_bruteforce", map[string]any{"target": "", "module": "", "pass_list": "x"}},
+		{"httpx_probe", map[string]any{"target": ""}},
+		{"dnsx_resolve", map[string]any{"domain": ""}},
+		{"alterx_mutate", map[string]any{"domain": ""}},
+		{"gau_fetch", map[string]any{"domain": ""}},
+		{"katana_crawl", map[string]any{"url": ""}},
+		{"dalfox_scan", map[string]any{"url": ""}},
+		{"checksec_audit", map[string]any{"file": ""}},
+		{"radare2_disasm", map[string]any{"file": ""}},
 	}
 	for _, c := range cases {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: c.tool, Arguments: c.args})
@@ -75,6 +83,11 @@ func TestExtendedTools_RejectsFlagInjection(t *testing.T) {
 		{"snmpwalk_enum", map[string]any{"target": "10.0.0.5", "oid": "-Cc"}},
 		{"hydra_bruteforce", map[string]any{"target": "-e", "service": "ssh", "user": "admin", "pass_list": "x"}},
 		{"hydra_bruteforce", map[string]any{"target": "10.0.0.5", "service": "-V", "user": "admin", "pass_list": "x"}},
+		{"dnsx_resolve", map[string]any{"domain": "--json"}},
+		{"alterx_mutate", map[string]any{"domain": "--enrich"}},
+		{"gau_fetch", map[string]any{"domain": "--json"}},
+		{"dalfox_scan", map[string]any{"url": "--silence"}},
+		{"radare2_disasm", map[string]any{"file": "-w"}},
 	}
 	for _, c := range cases {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: c.tool, Arguments: c.args})

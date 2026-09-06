@@ -297,6 +297,131 @@ func dirbHandler(ctx context.Context, _ *mcp.CallToolRequest, args dirbArgs) (*m
 	return runCaptured(ctx, "dirb", argv...)
 }
 
+type httpxArgs struct {
+	Target string `json:"target" jsonschema:"the target URL or host to probe with httpx"`
+	Title  bool   `json:"title,omitempty" jsonschema:"extract page title"`
+	Tech   bool   `json:"tech,omitempty" jsonschema:"detect technologies"`
+}
+
+func httpxHandler(ctx context.Context, _ *mcp.CallToolRequest, args httpxArgs) (*mcp.CallToolResult, any, error) {
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return errResult("target is required")
+	}
+	argv := []string{"-u", target, "-silent", "-sc"}
+	if args.Title {
+		argv = append(argv, "-title")
+	}
+	if args.Tech {
+		argv = append(argv, "-td")
+	}
+	return runCaptured(ctx, "httpx", argv...)
+}
+
+type dnsxArgs struct {
+	Domain string `json:"domain" jsonschema:"the target domain or host to resolve"`
+}
+
+func dnsxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dnsxArgs) (*mcp.CallToolResult, any, error) {
+	domain := strings.TrimSpace(args.Domain)
+	if domain == "" {
+		return errResult("domain is required")
+	}
+	if err := rejectIfFlagLike("domain", domain); err != nil {
+		return errResult(err.Error())
+	}
+	return runCaptured(ctx, "dnsx", "-d", domain, "-silent", "-a", "-resp")
+}
+
+type alterxArgs struct {
+	Domain string `json:"domain" jsonschema:"the seed domain name for mutation"`
+}
+
+func alterxHandler(ctx context.Context, _ *mcp.CallToolRequest, args alterxArgs) (*mcp.CallToolResult, any, error) {
+	domain := strings.TrimSpace(args.Domain)
+	if domain == "" {
+		return errResult("domain is required")
+	}
+	if err := rejectIfFlagLike("domain", domain); err != nil {
+		return errResult(err.Error())
+	}
+	return runCaptured(ctx, "alterx", "-target", domain, "-silent")
+}
+
+type dalfoxArgs struct {
+	URL string `json:"url" jsonschema:"the target URL (with a query parameter) to scan for reflected/DOM XSS"`
+}
+
+func dalfoxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dalfoxArgs) (*mcp.CallToolResult, any, error) {
+	url := strings.TrimSpace(args.URL)
+	if url == "" {
+		return errResult("url is required")
+	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
+	}
+	return runCaptured(ctx, "dalfox", "url", url, "--silence", "--no-color")
+}
+
+type gauArgs struct {
+	Domain string `json:"domain" jsonschema:"the target domain to fetch historical URLs for"`
+}
+
+func gauHandler(ctx context.Context, _ *mcp.CallToolRequest, args gauArgs) (*mcp.CallToolResult, any, error) {
+	domain := strings.TrimSpace(args.Domain)
+	if domain == "" {
+		return errResult("domain is required")
+	}
+	if err := rejectIfFlagLike("domain", domain); err != nil {
+		return errResult(err.Error())
+	}
+	return runCaptured(ctx, "gau", "--subs", domain)
+}
+
+type katanaArgs struct {
+	URL string `json:"url" jsonschema:"the target URL to crawl with katana"`
+}
+
+func katanaHandler(ctx context.Context, _ *mcp.CallToolRequest, args katanaArgs) (*mcp.CallToolResult, any, error) {
+	url := strings.TrimSpace(args.URL)
+	if url == "" {
+		return errResult("url is required")
+	}
+	return runCaptured(ctx, "katana", "-u", url, "-d", "2", "-jc", "-silent")
+}
+
+type checksecArgs struct {
+	File string `json:"file" jsonschema:"the binary file path to audit protections for"`
+}
+
+func checksecHandler(ctx context.Context, _ *mcp.CallToolRequest, args checksecArgs) (*mcp.CallToolResult, any, error) {
+	file := strings.TrimSpace(args.File)
+	if file == "" {
+		return errResult("file is required")
+	}
+	return runCaptured(ctx, "checksec", "--file="+file)
+}
+
+type radare2Args struct {
+	File    string `json:"file" jsonschema:"the binary file path to analyze with radare2"`
+	Command string `json:"command,omitempty" jsonschema:"the radare2 commands to execute (e.g. 'aaa; afl' or 'aaa; s main; pdf')"`
+}
+
+func radare2Handler(ctx context.Context, _ *mcp.CallToolRequest, args radare2Args) (*mcp.CallToolResult, any, error) {
+	file := strings.TrimSpace(args.File)
+	if file == "" {
+		return errResult("file is required")
+	}
+	if err := rejectIfFlagLike("file", file); err != nil {
+		return errResult(err.Error())
+	}
+	cmd := strings.TrimSpace(args.Command)
+	if cmd == "" {
+		cmd = "aaa; afl"
+	}
+	return runCaptured(ctx, "r2", "-q", "-c", cmd, file)
+}
+
 // registerExtendedTools wires the second wave of cataloged tools. Called
 // from registerTools in tools.go.
 func registerExtendedTools(server *mcp.Server) {
@@ -356,4 +481,36 @@ func registerExtendedTools(server *mcp.Server) {
 		Name:        "snmpwalk_enum",
 		Description: "Enumerate SNMP MIB data on a target with snmpwalk once a community string is known — pair with onesixtyone_scan, which finds the community string first.",
 	}, snmpwalkHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "httpx_probe",
+		Description: "Probe a URL or host for HTTP status, title, technology stack, and web server with httpx.",
+	}, httpxHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "dnsx_resolve",
+		Description: "Resolve domain and hostnames for A and CNAME records with dnsx.",
+	}, dnsxHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "alterx_mutate",
+		Description: "Generate subdomain mutations and permutations with alterx.",
+	}, alterxHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "gau_fetch",
+		Description: "Fetch historical and indexed URLs for a domain from Wayback, AlienVault, and CommonCrawl with gau.",
+	}, gauHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "dalfox_scan",
+		Description: "Scan a URL's query parameters for reflected and DOM-based XSS with dalfox.",
+	}, dalfoxHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "katana_crawl",
+		Description: "Crawl web applications, extract endpoints, and scrape JavaScript links with katana.",
+	}, katanaHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "checksec_audit",
+		Description: "Audit binary security mitigations (RELRO, Stack Canary, NX, PIE) with checksec.",
+	}, checksecHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "radare2_disasm",
+		Description: "Analyze and disassemble binaries non-interactively with radare2 (r2).",
+	}, radare2Handler)
 }

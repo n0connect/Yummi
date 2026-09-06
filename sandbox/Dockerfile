@@ -38,6 +38,8 @@ ENV CGO_ENABLED=0 GOBIN=/out
 RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest && \
     go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
     go install github.com/projectdiscovery/alterx/cmd/alterx@latest && \
+    go install github.com/projectdiscovery/katana/cmd/katana@latest && \
+    go install github.com/hahwul/dalfox/v2@latest && \
     go install github.com/lc/gau/v2/cmd/gau@latest
 
 FROM kalilinux/kali-rolling:latest
@@ -57,13 +59,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       amass \
+      binutils \
+      binwalk \
       ca-certificates \
+      checksec \
       crunch \
       curl \
       dirb \
       dnsenum \
       enum4linux \
       ffuf \
+      file \
+      gdb \
       git \
       gobuster \
       hydra \
@@ -71,6 +78,7 @@ RUN apt-get update && \
       iproute2 \
       jq \
       libcap2-bin \
+      ltrace \
       medusa \
       netcat-openbsd \
       nftables \
@@ -78,10 +86,13 @@ RUN apt-get update && \
       nmap \
       nuclei \
       onesixtyone \
+      patchelf \
+      radare2 \
       smbclient \
       snmp \
       socat \
       sqlmap \
+      strace \
       subfinder \
       tcpdump \
       theharvester \
@@ -104,9 +115,9 @@ RUN apt-get update && \
       x11-xserver-utils \
       burpsuite \
       imagemagick && \
-    if [ -f /usr/lib/nmap/nmap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/lib/nmap/nmap; fi && \
-    for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert; do command -v "$tool" >/dev/null; done && \
-    rm -rf /var/lib/apt/lists/*
+      if [ -f /usr/lib/nmap/nmap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/lib/nmap/nmap; fi && \
+      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf; do command -v "$tool" >/dev/null; done && \
+      rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 1000 pentester && \
     useradd --uid 1000 --gid pentester --create-home --shell /bin/bash pentester && \
@@ -118,6 +129,19 @@ RUN groupadd --gid 1000 pentester && \
     # via `sudo`-less docker exec's own privilege if this doesn't apply, so
     # this must not fail the whole image build over it.
     (usermod -aG wireshark pentester || true)
+
+# nuclei ships with ZERO templates from Kali's apt package — without this,
+# every nuclei invocation (vuln-scanning skill, api-pentest's -tags graphql)
+# silently matches nothing, no error, no findings, ever. Fetched here as the
+# SAME user (pentester, UID 1000) that will actually run nuclei via
+# docker exec, so the template path nuclei resolves at build time is the
+# exact one it resolves at runtime. This also gives subdomain-takeover
+# detection "for free" — nuclei's own templates include a takeover-tagged
+# category (`nuclei -tags takeover`), no separate tool needed. Templates are
+# baked into the image (not fetched at container start) for a fast, fully
+# offline-capable first run; they go stale between image rebuilds, which is
+# the same rolling-image trade-off this Dockerfile already makes elsewhere.
+RUN su - pentester -c "nuclei -update-templates -silent" 2>&1 | tail -5
 
 # Branded wallpaper — generated at build time (no external asset fetch),
 # matching the web UI's own dark theme tokens (--bg-base #0a0c0e, --cyan
@@ -139,11 +163,12 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh
 COPY --from=mcpbuilder /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
 RUN chmod 0755 /usr/local/bin/yummi-sandbox-mcp
 
-# Modern recon binaries (see the recontools stage) — httpx/dnsx/alterx/gau.
-# Verify they landed and are runnable, so a broken install fails the build
-# rather than surfacing as a mysterious "command not found" mid-engagement.
+# Modern recon/web binaries (see the recontools stage) —
+# httpx/dnsx/alterx/katana/dalfox/gau. Verify they landed and are runnable, so
+# a broken install fails the build rather than surfacing as a mysterious
+# "command not found" mid-engagement.
 COPY --from=recontools /out/ /usr/local/bin/
-RUN for tool in httpx dnsx alterx gau; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
+RUN for tool in httpx dnsx alterx gau katana dalfox; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
 
 # Pentest commands from orchestrator run as UID 1000 via docker exec --user;
 # the operator's Bash tab attaches a tmux session as the same user. The

@@ -228,13 +228,13 @@ export function TaskTracker({
   const terminal = isTerminal(task.status)
   const recordTitles = new Set(
     (task.finding_records ?? []).map((record) =>
-      sanitizeOperatorText(record.title).trim().toLocaleLowerCase('tr-TR')
+      sanitizeOperatorText(record.title).trim().toLowerCase()
     )
   )
   const unmatchedFindings = (task.findings ?? []).filter(
     (finding) =>
       !recordTitles.has(
-        sanitizeOperatorText(finding).trim().toLocaleLowerCase('tr-TR')
+        sanitizeOperatorText(finding).trim().toLowerCase()
       )
   )
   const hasFindings =

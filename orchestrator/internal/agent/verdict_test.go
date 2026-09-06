@@ -52,6 +52,18 @@ func TestVerifyFindingDetail(t *testing.T) {
 			wantOracleKind: OracleToolEvidence,
 		},
 		{
+			name:           "quoted and backticked evidence matches cleanly",
+			detail:         FindingDetail{Title: "MySQL exposed", Evidence: "`3306/tcp open mysql 5.5.47`", StepID: "s1"},
+			wantVerdict:    VerdictVerified,
+			wantOracleKind: OracleToolEvidence,
+		},
+		{
+			name:           "whitespace-normalized evidence matches multi-column output",
+			detail:         FindingDetail{Title: "MySQL exposed", Evidence: "3306/tcp   open   mysql 5.5.47", StepID: "s1"},
+			wantVerdict:    VerdictVerified,
+			wantOracleKind: OracleToolEvidence,
+		},
+		{
 			name:        "cited step that failed is unsupported even with a plausible quote",
 			detail:      FindingDetail{Title: "Nikto found vulns", Evidence: "known vulnerabilities", StepID: "s2"},
 			wantVerdict: VerdictUnsupported,
