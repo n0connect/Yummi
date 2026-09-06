@@ -106,9 +106,53 @@ func main() {
 		resolvedThinking = *cfg.OllamaThinking
 	}
 
+	// Eino's own model target: defaults to mirroring the conductor's Ollama
+	// config exactly (same URL rewritten to its OpenAI-compat path, same
+	// model, same resolved context window) when none of the three
+	// YUMMI_EINO_MODEL_* overrides are set — zero behavior change for
+	// anyone who hasn't opted in. Resolved here (before conductor
+	// construction, not down in the Eino backend switch below) because the
+	// conductor's own cloud-override decision right below needs the same
+	// values: an explicitly-set base URL means an operator has opted into a
+	// cloud model, full stop, not just "for Eino."
+	einoModelBaseURL := cfg.EinoModelBaseURL
+	if einoModelBaseURL == "" {
+		einoModelBaseURL = strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1"
+	}
+	einoModelName := cfg.EinoModelName
+	if einoModelName == "" {
+		einoModelName = cfg.OllamaModel
+	}
+	einoModelNumCtx := cfg.EinoModelNumCtx
+	if einoModelNumCtx <= 0 {
+		einoModelNumCtx = resolvedNumCtx
+	}
+
+	// CloudBaseURL, when the operator explicitly set YUMMI_EINO_MODEL_BASE_URL,
+	// is a MANDATORY replacement for Ollama, not an addition alongside it: an
+	// operator who has already opted an agent backend into a cloud model gets
+	// no privacy benefit from also running Ollama purely for chat/intent
+	// classification, since that classification step hands the same goal
+	// text to the same cloud model anyway the moment a task starts — see
+	// conductor.ChatBackend's doc comment. cfg.EinoModelBaseURL (not the
+	// derived einoModelBaseURL, which is never empty) is the right check
+	// here: an UNSET override already means "Eino mirrors Ollama exactly,"
+	// so there is no redundancy to eliminate in that case — conductor
+	// staying on Ollama is already correct. This also means the graph
+	// backend's own agent loop (which reuses assistant.LLM() as primaryLLM
+	// below) moves to the same cloud model automatically, not just Eino's
+	// ReAct loop.
 	assistant, err := conductor.NewEngineWithOverrides(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel, conductor.TierOverrides{
 		NumCtx:   cfg.OllamaNumCtx,
 		Thinking: cfg.OllamaThinking,
+		CloudBaseURL: func() string {
+			if cfg.EinoModelBaseURL == "" {
+				return ""
+			}
+			return einoModelBaseURL
+		}(),
+		CloudModel:  einoModelName,
+		CloudAPIKey: cfg.EinoModelAPIKey,
 	})
 	if err != nil {
 		slog.Warn("assistant persona load failed; running without conductor", "error", err, "persona_dir", cfg.PersonaDir)
@@ -185,7 +229,18 @@ func main() {
 	// cold-start. Failure is non-fatal; the model lazy-loads on the first chat.
 	// With keep_alive="-1", once loaded it stays resident for the process lifetime,
 	// so this runs exactly once regardless of how many requests follow.
-	if cfg.OllamaURL != "" {
+	//
+	// Skipped when the conductor has moved to a cloud backend
+	// (cfg.EinoModelBaseURL set — see conductor.NewEngineWithOverrides'
+	// CloudBaseURL above): nothing in that configuration calls the Ollama
+	// chat model anymore, so preloading (and keeping resident) a
+	// multi-gigabyte model into VRAM for zero actual use is exactly the
+	// redundant local load an operator who opted into a cloud model
+	// shouldn't pay for. embedClient above is untouched — semantic
+	// retrieval's embedding model is a genuinely separate, small, local-only
+	// feature with no cloud equivalent in this architecture, unrelated to
+	// the chat-model redundancy this guards against.
+	if cfg.OllamaURL != "" && cfg.EinoModelBaseURL == "" {
 		preloadCtx, preloadCancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer preloadCancel()
 		if err := llmClient.Preload(preloadCtx); err != nil {
@@ -347,31 +402,16 @@ func main() {
 			// container, not rebuilding it; make conf's YUMMI_AGENT_BACKEND
 			// question just pre-seeds this for convenience.
 			//
-			// Eino's own model target defaults to mirroring the conductor's
-			// Ollama config exactly as before (same URL rewritten to its
-			// OpenAI-compat path, same model, same resolved context window)
-			// — zero behavior change for anyone who hasn't set the three
-			// EinoModel* overrides. An operator CAN point only the agent
-			// loop at a different OpenAI-compatible server/model (e.g. a
-			// local LM Studio instance running a larger tool-calling model)
-			// via YUMMI_EINO_MODEL_BASE_URL/YUMMI_EINO_MODEL_NAME/
-			// YUMMI_EINO_MODEL_NUM_CTX — see config.Config's doc comments.
-			// The conductor keeps using Ollama regardless of this setting:
-			// chat/intent classification never goes through the agent
-			// backend, so it has no dependency on which model drives tasks.
-			einoModelBaseURL := cfg.EinoModelBaseURL
-			if einoModelBaseURL == "" {
-				einoModelBaseURL = strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1"
-			}
-			einoModelName := cfg.EinoModelName
-			if einoModelName == "" {
-				einoModelName = cfg.OllamaModel
-			}
-			einoModelNumCtx := cfg.EinoModelNumCtx
-			if einoModelNumCtx <= 0 {
-				einoModelNumCtx = resolvedNumCtx
-			}
-
+			// einoModelBaseURL/einoModelName/einoModelNumCtx are resolved once,
+			// early (see the block right before conductor.NewEngineWithOverrides
+			// above) — defaults to mirroring the conductor's Ollama config
+			// exactly when none of the three YUMMI_EINO_MODEL_* overrides are
+			// set (zero behavior change for anyone who hasn't opted in), or to
+			// an explicit override target otherwise. When an override IS set,
+			// the conductor was ALREADY pointed at this same target above —
+			// not left on Ollama — so chat/intent classification and the
+			// agent's own task execution run on one self-consistent model, not
+			// two silently different ones.
 			switch backend := strings.ToLower(os.Getenv("YUMMI_AGENT_BACKEND")); backend {
 			case "eino":
 				taskRunner = eino.NewEinoRunner(
