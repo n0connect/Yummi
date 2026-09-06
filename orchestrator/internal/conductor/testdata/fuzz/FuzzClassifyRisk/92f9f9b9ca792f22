@@ -1,0 +1,2 @@
+go test fuzz v1
+string("cat \"0|sort")
