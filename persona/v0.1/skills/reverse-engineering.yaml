@@ -1,37 +1,77 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: reverse-engineering
-description: Static and dynamic analysis of compiled binaries to understand behavior and find vulnerabilities.
+description: Senior-level static and dynamic binary analysis, vulnerability auditing, and firmware unpacking.
 triggers:
   - reverse engineer
   - reversing
   - binary
   - disassemble
   - decompile
-  - strings
-  - objdump
+  - radare2
+  - r2
+  - checksec
   - gdb
+  - strace
+  - ltrace
+  - binwalk
+  - objdump
+  - readelf
   - malware
+  - elf
 tools:
   - file
+  - checksec
+  - readelf
   - strings
+  - radare2
   - objdump
+  - strace
+  - ltrace
+  - binwalk
+  - gdb
 knowledge: |
-  Static analysis before dynamic — understand a binary without running it first:
-  1. `file <binary>` to identify format/architecture, then `strings <binary>` for quick
-     signal (URLs, error messages, hardcoded credentials, library hints).
-  2. `objdump -d <binary>` (or `-T`/`-x` for symbols/headers) to inspect disassembly and
-     imports — imported functions (network, crypto, exec) hint at behavior before you read
-     a single instruction in detail.
-  3. Document the execution flow and any interesting function as you go with [REMEMBER] —
-     a binary's structure is exactly the kind of thing worth persisting across turns.
-  4. Dynamic analysis (actually running the binary) is higher-risk and higher-signal — only
-     do it when static analysis doesn't answer the subtask, and never on a target/binary
-     outside the sandbox's isolation.
-  5. Record concrete findings: a hardcoded secret, a suspicious network call, an unsafe
-     function (strcpy/system/exec-family) — with the exact string/address, not a vague summary.
+  Analyze binaries methodically from low-risk static triage to deep disassembly and controlled dynamic tracing.
+  Never guess or execute an unknown binary blindly:
+
+  1. BINARY TRIAGE & MITIGATION AUDIT (Static, Non-Invasive):
+     - Identify architecture, endianness, and linking: `file <binary>`
+     - Audit binary protections (RELRO, Stack Canary, NX, PIE, ASLR): `checksec --file=<binary>`
+     - Inspect headers and shared library dependencies: `readelf -h <binary>` and `readelf -d <binary>`
+
+  2. STRING & SYMBOL SIGNAL HARVESTING:
+     - Extract high-signal strings (URLs, IPs, API keys, paths, formatting strings):
+       `strings -a -n 6 <binary> | grep -E 'http|admin|key|secret|pass|token|api|debug|flag|/bin/'`
+     - Dump exported, imported, and internal function symbols:
+       `readelf -s --wide <binary>` and `nm -D <binary>`
+     - Look for dangerous C runtime APIs: `strcpy`, `strcat`, `sprintf`, `gets`, `system`, `popen`, `execve`.
+
+  3. DISASSEMBLY & CROSS-REFERENCE ANALYSIS WITH RADARE2:
+     - Analyze functions and disassemble the entrypoint/main function non-interactively:
+       `r2 -q -c "aaa; afl" <binary>` (list all detected functions)
+       `r2 -q -c "aaa; s main; pdf" <binary>` (disassemble main function)
+     - Trace cross-references to sensitive strings and sensitive APIs:
+       `r2 -q -c "aaa; iz" <binary>` (list data section strings)
+       `r2 -q -c "aaa; axt @@ str.*" <binary>` (find xrefs to all strings)
+     - Trace callers of critical functions (e.g. sym.imp.system or sym.imp.strcpy):
+       `r2 -q -c "aaa; axt sym.imp.system" <binary>`
+
+  4. DYNAMIC BEHAVIORAL TRACING (Controlled Sandbox Execution):
+     - Trace system calls (file access, network sockets, child process execution):
+       `strace -f -e trace=file,network,process,desc -o /tmp/strace.log <binary> <args>`
+     - Trace dynamic library calls and string comparisons:
+       `ltrace -f -s 128 -e malloc+free+strcmp+strncmp+strcpy+system+execve <binary> <args>`
+
+  5. FIRMWARE & EMBEDDED PAYLOAD UNPACKING:
+     - Scan and extract embedded files, archives, and compressed file systems:
+       `binwalk -Me <binary_or_firmware>`
+
+  6. TRIAGE & STRUCTURED FINDINGS:
+     - Record findings with exact virtual addresses (`0x08048450`), function names, or evidence strings.
+     - Categorize findings: Hardcoded Secrets, Missing Stack Protections (No Canary / RWX Segments),
+       Command Injection sinks, Memory Corruption risks, or Suspicious Network Communications.
 references:
-  - persona:reverse-engineering-v1
+  - persona:reverse-engineering-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/reverse-engineering.yaml

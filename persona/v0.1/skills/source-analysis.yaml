@@ -1,5 +1,7 @@
+schema_version: 1
+version: 2.0.0
 name: source-analysis
-description: Read a codebase for security-relevant patterns and map its structure.
+description: Senior static application security testing (SAST) — dependency auditing, untrusted input sink tracing, secret detection, and code vulnerability mapping.
 triggers:
   - source
   - source code
@@ -11,16 +13,33 @@ triggers:
   - sast
   - vulnerability
   - audit
+  - code audit
+  - secrets scan
 tools:
   - grep
   - rg
   - git
 knowledge: |
-  Analyze source systematically and leave a durable map behind:
-  1. Orient first: read the build/manifest files and top-level layout before any deep dive.
-  2. Trace untrusted input to sinks — injection (SQL/cmd/template), deserialization, path traversal,
-     SSRF, auth/authorization gaps, secrets in code.
-  3. Use `rg` for known dangerous patterns; confirm by reading the surrounding code, not the
-     match alone.
-  4. Record each finding with the exact file:line and a one-line description as evidence.
-  5. Prefer documenting connections (who calls what) as you go so the map survives the session.
+  Perform static application security testing (SAST) systematically across the target repository:
+
+  1. MANIFEST & DEPENDENCY TRIAGE:
+     - Inspect project descriptors to identify the framework, language version, and third-party dependencies:
+       `find . -maxdepth 2 -name "package.json" -o -name "go.mod" -o -name "pom.xml" -o -name "requirements.txt" -o -name "Cargo.toml"`
+
+  2. DANGEROUS INPUT-TO-SINK TRACING:
+     - Command Execution / Injection: `rg -n -i -e '(exec|spawn|os\.system|subprocess|eval|Runtime\.getRuntime)'`
+     - SQL Query Concatenation: `rg -n -i -e '(SELECT|INSERT|UPDATE|DELETE).*\+.*' -e 'rawQuery|db\.query'`
+     - Path Traversal & File System Access: `rg -n -i -e '(fs\.readFile|open\(|FileInputStream|os\.Open).*\+'`
+     - Insecure Deserialization & Template Injection: `rg -n -i -e '(pickle\.loads|unserialize|yaml\.load\(|render_template_string)'`
+
+  3. HARDCODED SECRET & KEY EXTRACTION:
+     - Scan for exposed credentials, private keys, and API tokens:
+       `rg -n -i -e '(api_key|jwt_secret|private_key|aws_access_key|client_secret|password)\s*[:=]\s*["'\''][^"'\'']+'`
+
+  4. STRUCTURED EVIDENCE:
+     - Record findings with exact `file_path:line_number`, code context snippets, and the data flow path from input to sink.
+references:
+  - persona:source-analysis-v2
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/source-analysis.yaml

@@ -1,5 +1,7 @@
+schema_version: 1
+version: 2.0.0
 name: recon
-description: Host and network enumeration — discover what is alive and what it runs.
+description: Senior host and network reconnaissance — port sweeps, service/version detection, and safe NSE script enumeration.
 triggers:
   - recon
   - reconnaissance
@@ -11,11 +13,33 @@ triggers:
   - nmap
   - discover
   - footprint
+  - service detection
+  - banner grab
 tools:
   - nmap
 knowledge: |
-  Enumerate before you exploit. Start passive/light, escalate only as needed:
-  1. Confirm reachability, then `nmap -sV -sC <target>` for service + version + default scripts.
-  2. For wide ranges, start with an nmap discovery/port sweep, then run targeted `-sV` on open ports.
-  3. Record every open port and service version as a structured finding (it becomes shared memory).
-  4. Avoid `-A`/aggressive timing on production unless the engagement allows it — it is loud.
+  Perform host and network enumeration systematically with disciplined stealth and accuracy:
+
+  1. FAST PORT SWEEP (Establish Live Ports First):
+     - Scan the top TCP ports quickly without DNS resolution delays:
+       `nmap -sT -T4 --top-ports 1000 --open -n <target>`
+     - For broad IP ranges, run discovery ping sweeps before detailed port scanning:
+       `nmap -sn -n <target_cidr>`
+
+  2. TARGETED SERVICE & VERSION DETECTION:
+     - Run detailed service detection and default NSE scripts ONLY against open ports:
+       `nmap -sV -sC -p <open_ports> -n <target>`
+     - Extract banners, protocol versions, and service names without aggressive timing.
+
+  3. FOCUSED UDP RECONNAISSANCE:
+     - Probe high-value UDP services (DNS, SNMP, NTP, DHCP, TFTP, IKE):
+       `nmap -sU --top-ports 25 -n <target>`
+
+  4. STRUCTURED FINDINGS & SHARED MEMORY:
+     - Record each open port, transport protocol (tcp/udp), service name, product version, and host banner as a structured finding.
+     - These findings feed subsequent specialized subagents (web, smb-enum, snmp-enum, exploiter).
+references:
+  - persona:recon-v2
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/recon.yaml

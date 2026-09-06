@@ -1,0 +1,46 @@
+schema_version: 1
+version: 1.0.0
+name: js-recon
+description: Client-side JavaScript bundle mining, endpoint extraction, and API key/secret leakage discovery.
+triggers:
+  - javascript
+  - js
+  - js mining
+  - js analysis
+  - client side
+  - secrets
+  - api key
+  - hardcoded token
+  - source maps
+tools:
+  - katana
+  - curl
+  - grep
+  - rg
+knowledge: |
+  Extract hidden API endpoints, routing patterns, and hardcoded secrets from client-side JavaScript bundles:
+
+  1. SCRAPING JS ASSETS:
+     - Use katana to crawl the web application and isolate all loaded `.js` scripts:
+       `katana -u <url> -d 2 -jc -silent | grep -E '\.js(\?|$)' | sort -u`
+
+  2. HIDDEN API ROUTE EXTRACTION:
+     - Download discovered JS files and search for API routes and URL paths:
+       `curl -sL <js_url> | rg -o -e '(\/api\/[a-zA-Z0-9_\-\/]+)' | sort -u`
+
+  3. SECRET & CREDENTIAL LEAK PATTERNS:
+     - Scan JS files for high-signal secret patterns (API keys, JWTs, AWS tokens, Firebase configs):
+       `curl -sL <js_url> | rg -i -e '(api[_-]?key|access[_-]?token|bearer|secret|aws_key|firebaseConfig|authorization)' -C 2`
+
+  4. SOURCE MAP DISCOVERY:
+     - Check if production source maps (`.js.map`) are exposed:
+       `curl -sIL <js_url>.map`
+     - If exposed, note the full client-side source code recovery opportunity as a finding.
+
+  5. STRUCTURED EVIDENCE:
+     - Record the specific JS file URL, the exact regex/line match, and the discovered route or credential snippet.
+references:
+  - persona:js-recon-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/js-recon.yaml

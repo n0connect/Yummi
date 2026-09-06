@@ -21,3 +21,4 @@ planning: |
   modules/paths, and inspects the highest-risk flows for the handed subtask.
 skills:
   - source-analysis
+  - js-recon
