@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -105,4 +107,57 @@ func runCapturedEnv(ctx context.Context, extraEnv []string, program string, args
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+}
+
+// runCapturedToFile behaves exactly like runCapturedEnv, but when outputFile
+// is non-empty also persists the exact same text the caller sees to that
+// path. This is what lets a recon tool's result feed straight into a later
+// step's file-based input (dnsx/alterx/nuclei's own -l flag, a follow-up
+// grep/sort pipeline) without the model having to hand-copy potentially
+// large tool output into a new file itself via a separate shell step. Using
+// the text this function ALREADY captured — rather than trusting each tool's
+// own native -o/-f flag, whose conventions vary (some tools mix a progress
+// bar into the same stream a naive shell redirect would capture) — guarantees
+// the saved file always matches what the model just read, tool by tool,
+// with no separate flag-convention surface to get wrong. A save failure is
+// reported inline in the returned text but never replaces or hides the
+// tool's own captured output — the pentest command already ran and produced
+// a real result regardless of whether the convenience save succeeded.
+func runCapturedToFile(ctx context.Context, outputFile string, program string, args ...string) (*mcp.CallToolResult, any, error) {
+	return runCapturedEnvToFile(ctx, nil, outputFile, program, args...)
+}
+
+// runCapturedEnvToFile is runCapturedToFile with the extra-environment layer
+// runCapturedEnv itself supports — the one caller that needs both together is
+// wpscanHandler (HOME redirected to a writable path, output also saved for a
+// later step).
+func runCapturedEnvToFile(ctx context.Context, extraEnv []string, outputFile string, program string, args ...string) (*mcp.CallToolResult, any, error) {
+	result, meta, err := runCapturedEnv(ctx, extraEnv, program, args...)
+	if outputFile == "" || result == nil || len(result.Content) == 0 {
+		return result, meta, err
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		return result, meta, err
+	}
+	text.Text += saveNote(outputFile, text.Text)
+	return result, meta, err
+}
+
+// saveNote writes content to path and returns a short status line to append
+// to a tool's result text. path must be absolute — sandbox-mcp's own working
+// directory is fixed at /home/pentester regardless of whatever directory a
+// separate shell command "cd"s into, so a relative path here would silently
+// resolve against the wrong base.
+func saveNote(path, content string) string {
+	if !filepath.IsAbs(path) {
+		return fmt.Sprintf("\n\n[output_file %q was not saved: must be an absolute path]", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Sprintf("\n\n[output_file %q was not saved: %v]", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Sprintf("\n\n[output_file %q was not saved: %v]", path, err)
+	}
+	return fmt.Sprintf("\n\n[output saved to %s]", path)
 }

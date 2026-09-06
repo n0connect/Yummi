@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,9 +19,19 @@ import (
 // smbclient (interactive by default) — none of these fit this catalog's
 // one-shot request/response shape.
 
+// Every output_file field below repeats the same jsonschema description —
+// struct tags can't reference a shared const, and each tool's schema needs
+// the guidance regardless of which one the model reads first: sandbox-mcp's
+// own working directory is fixed at /home/pentester, so a path relative to
+// wherever a separate shell command "cd"s into would silently save to the
+// wrong place. See runCapturedToFile/saveNote in capture.go for the actual
+// write-through — the same already-captured text the model reads is written
+// verbatim, not re-derived from the underlying tool's own -o/-f convention.
+
 type amassArgs struct {
-	Domain  string `json:"domain" jsonschema:"the target domain to enumerate"`
-	Passive bool   `json:"passive,omitempty" jsonschema:"pass -passive for passive-only enumeration (no direct target contact)"`
+	Domain     string `json:"domain" jsonschema:"the target domain to enumerate"`
+	Passive    bool   `json:"passive,omitempty" jsonschema:"pass -passive for passive-only enumeration (no direct target contact)"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, e.g. /home/pentester/work/<domain>/subs_amass.txt, for a later step to use as file input"`
 }
 
 // amassBinary bypasses Kali's /usr/bin/amass wrapper, which unconditionally
@@ -43,11 +54,12 @@ func amassHandler(ctx context.Context, _ *mcp.CallToolRequest, args amassArgs) (
 	if args.Passive {
 		argv = append(argv, "-passive")
 	}
-	return runCaptured(ctx, amassBinary, argv...)
+	return runCapturedToFile(ctx, args.OutputFile, amassBinary, argv...)
 }
 
 type subfinderArgs struct {
-	Domain string `json:"domain" jsonschema:"the target domain to enumerate subdomains for"`
+	Domain     string `json:"domain" jsonschema:"the target domain to enumerate subdomains for"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, e.g. /home/pentester/work/<domain>/subs_subfinder.txt, for a later step to use as file input"`
 }
 
 func subfinderHandler(ctx context.Context, _ *mcp.CallToolRequest, args subfinderArgs) (*mcp.CallToolResult, any, error) {
@@ -55,12 +67,13 @@ func subfinderHandler(ctx context.Context, _ *mcp.CallToolRequest, args subfinde
 	if domain == "" {
 		return errResult("domain is required")
 	}
-	return runCaptured(ctx, "subfinder", "-d", domain, "-silent")
+	return runCapturedToFile(ctx, args.OutputFile, "subfinder", "-d", domain, "-silent")
 }
 
 type theharvesterArgs struct {
-	Domain string `json:"domain" jsonschema:"the target domain to harvest emails/hosts for"`
-	Source string `json:"source,omitempty" jsonschema:"data source, e.g. google, bing, or all (default: all)"`
+	Domain     string `json:"domain" jsonschema:"the target domain to harvest emails/hosts for"`
+	Source     string `json:"source,omitempty" jsonschema:"data source, e.g. google, bing, or all (default: all)"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, e.g. /home/pentester/work/<domain>/theharvester.txt, for a later step to use as file input"`
 }
 
 func theharvesterHandler(ctx context.Context, _ *mcp.CallToolRequest, args theharvesterArgs) (*mcp.CallToolResult, any, error) {
@@ -72,7 +85,7 @@ func theharvesterHandler(ctx context.Context, _ *mcp.CallToolRequest, args theha
 	if source == "" {
 		source = "all"
 	}
-	return runCaptured(ctx, "theHarvester", "-d", domain, "-b", source)
+	return runCapturedToFile(ctx, args.OutputFile, "theHarvester", "-d", domain, "-b", source)
 }
 
 type dnsenumArgs struct {
@@ -138,7 +151,8 @@ func wafw00fHandler(ctx context.Context, _ *mcp.CallToolRequest, args wafw00fArg
 }
 
 type wpscanArgs struct {
-	URL string `json:"url" jsonschema:"the target WordPress site URL"`
+	URL        string `json:"url" jsonschema:"the target WordPress site URL"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func wpscanHandler(ctx context.Context, _ *mcp.CallToolRequest, args wpscanArgs) (*mcp.CallToolResult, any, error) {
@@ -150,11 +164,14 @@ func wpscanHandler(ctx context.Context, _ *mcp.CallToolRequest, args wpscanArgs)
 	// it does anything else — including just parsing --help — which aborts
 	// immediately under the sandbox's read-only root filesystem unless HOME
 	// points somewhere writable. /tmp is the sandbox's one writable mount.
-	return runCapturedEnv(ctx, []string{"HOME=/tmp"}, "wpscan", "--url", url)
+	return runCapturedEnvToFile(ctx, []string{"HOME=/tmp"}, args.OutputFile, "wpscan", "--url", url)
 }
 
 type nucleiArgs struct {
-	Target string `json:"target" jsonschema:"the target URL or host to scan with nuclei templates"`
+	Target     string `json:"target" jsonschema:"the target URL or host to scan, OR an absolute path to a file of many targets (one per line) for a bulk scan — sandbox-mcp's own working directory is fixed at /home/pentester, so a relative file path here won't resolve"`
+	Tags       string `json:"tags,omitempty" jsonschema:"comma-separated nuclei template tags to scope the scan, e.g. 'takeover' or 'cve,exposure' — omit to run nuclei's full default template set, which is thorough but slow, especially in bulk mode"`
+	Severity   string `json:"severity,omitempty" jsonschema:"optional comma-separated severity filter, e.g. 'low,medium,high,critical' — narrows a tag-scoped scan to only the findings worth immediate attention"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func nucleiHandler(ctx context.Context, _ *mcp.CallToolRequest, args nucleiArgs) (*mcp.CallToolResult, any, error) {
@@ -162,7 +179,38 @@ func nucleiHandler(ctx context.Context, _ *mcp.CallToolRequest, args nucleiArgs)
 	if target == "" {
 		return errResult("target is required")
 	}
-	return runCaptured(ctx, "nuclei", "-u", target)
+	var argv []string
+	if strings.HasPrefix(target, "/") {
+		// An absolute path means bulk mode: -l instead of -u. A scan against
+		// many hosts needs tighter per-host timing, or a handful of slow/
+		// unresponsive hosts can exhaust the whole scan — confirmed live: an
+		// untuned bulk run against ~3,000 mostly-NXDOMAIN candidates never
+		// finished inside a 300s wrapper. These values are what a live agent
+		// session converged on after two timeouts. Kept as one field (not a
+		// separate target/list pair) so this tool's target field is always
+		// populated for the orchestrator's own gateway scope check, the same
+		// way dnsx_resolve/alterx_mutate's "domain" field already is.
+		argv = append(argv, "-l", target, "-c", "15", "-rate-limit", "50", "-bulk-size", "50", "-timeout", "5", "-retries", "1")
+	} else {
+		if err := rejectIfFlagLike("target", target); err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-u", target)
+	}
+	if tags := strings.TrimSpace(args.Tags); tags != "" {
+		if err := rejectIfFlagLike("tags", tags); err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-tags", tags)
+	}
+	if severity := strings.TrimSpace(args.Severity); severity != "" {
+		if err := rejectIfFlagLike("severity", severity); err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-severity", severity)
+	}
+	argv = append(argv, "-silent")
+	return runCapturedToFile(ctx, args.OutputFile, "nuclei", argv...)
 }
 
 type sqlmapArgs struct {
@@ -309,9 +357,10 @@ func dirbHandler(ctx context.Context, _ *mcp.CallToolRequest, args dirbArgs) (*m
 }
 
 type httpxArgs struct {
-	Target string `json:"target" jsonschema:"the target URL or host to probe with httpx"`
-	Title  bool   `json:"title,omitempty" jsonschema:"extract page title"`
-	Tech   bool   `json:"tech,omitempty" jsonschema:"detect technologies"`
+	Target     string `json:"target" jsonschema:"the target URL, host, or an absolute path to a file of hosts (one per line) to probe with httpx"`
+	Title      bool   `json:"title,omitempty" jsonschema:"extract page title"`
+	Tech       bool   `json:"tech,omitempty" jsonschema:"detect technologies"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func httpxHandler(ctx context.Context, _ *mcp.CallToolRequest, args httpxArgs) (*mcp.CallToolResult, any, error) {
@@ -319,18 +368,23 @@ func httpxHandler(ctx context.Context, _ *mcp.CallToolRequest, args httpxArgs) (
 	if target == "" {
 		return errResult("target is required")
 	}
-	argv := []string{"-u", target, "-silent", "-sc"}
+	// -server/-ip/-cl/-location/-fr are all display-only (what the response
+	// looked like), never a scan-scope change, so they're always on — a
+	// senior bug-bounty triage step needs the tech/redirect/IP fingerprint
+	// every time, not as an opt-in the model has to remember to request.
+	argv := []string{"-u", target, "-silent", "-sc", "-server", "-ip", "-cl", "-location", "-fr"}
 	if args.Title {
 		argv = append(argv, "-title")
 	}
 	if args.Tech {
 		argv = append(argv, "-td")
 	}
-	return runCaptured(ctx, "httpx", argv...)
+	return runCapturedToFile(ctx, args.OutputFile, "httpx", argv...)
 }
 
 type dnsxArgs struct {
-	Domain string `json:"domain" jsonschema:"the target domain or host to resolve"`
+	Domain     string `json:"domain" jsonschema:"the target domain, host, or an absolute path to a file of hosts (one per line) to resolve"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func dnsxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dnsxArgs) (*mcp.CallToolResult, any, error) {
@@ -344,12 +398,19 @@ func dnsxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dnsxArgs) (*m
 	// -l (not -d): dnsx's -d/-domain is brute-force mode and demands a
 	// wordlist ("-FTL- missing wordlist(w) flag required with domain(d)
 	// input", confirmed live) — -l resolves the given host(s) directly,
-	// which is this tool's actual job.
-	return runCaptured(ctx, "dnsx", "-l", domain, "-silent", "-a", "-resp")
+	// which is this tool's actual job. -cname/-ns/-mx cost nothing extra
+	// (same query round-trip, dnsx just reports more of what it already
+	// received) and -cname specifically is the one record type a
+	// subdomain-takeover check actually depends on — a bare -a-only
+	// resolve can never surface a dangling CNAME. -retry 2 is the value a
+	// live agent session needed for reliable results against a real domain.
+	return runCapturedToFile(ctx, args.OutputFile, "dnsx", "-l", domain, "-silent", "-a", "-resp", "-cname", "-ns", "-mx", "-retry", "2")
 }
 
 type alterxArgs struct {
-	Domain string `json:"domain" jsonschema:"the seed domain name for mutation"`
+	Domain     string `json:"domain" jsonschema:"the seed domain name, or an absolute path to a file of seed hostnames (one per line), for mutation"`
+	Enrich     bool   `json:"enrich,omitempty" jsonschema:"pass -en to extract additional words from the seed input itself, producing more realistic permutations"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func alterxHandler(ctx context.Context, _ *mcp.CallToolRequest, args alterxArgs) (*mcp.CallToolResult, any, error) {
@@ -363,11 +424,16 @@ func alterxHandler(ctx context.Context, _ *mcp.CallToolRequest, args alterxArgs)
 	// -l (not -target, which doesn't exist): confirmed live —
 	// "flag provided but not defined: -target". -l is the seed
 	// subdomain/hostname list alterx actually mutates.
-	return runCaptured(ctx, "alterx", "-l", domain, "-silent")
+	argv := []string{"-l", domain, "-silent"}
+	if args.Enrich {
+		argv = append(argv, "-en")
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "alterx", argv...)
 }
 
 type dalfoxArgs struct {
-	URL string `json:"url" jsonschema:"the target URL (with a query parameter) to scan for reflected/DOM XSS"`
+	URL        string `json:"url" jsonschema:"the target URL (with a query parameter) to scan for reflected/DOM XSS"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func dalfoxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dalfoxArgs) (*mcp.CallToolResult, any, error) {
@@ -378,11 +444,12 @@ func dalfoxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dalfoxArgs)
 	if err := rejectIfFlagLike("url", url); err != nil {
 		return errResult(err.Error())
 	}
-	return runCaptured(ctx, "dalfox", "url", url, "--silence", "--no-color")
+	return runCapturedToFile(ctx, args.OutputFile, "dalfox", "url", url, "--silence", "--no-color")
 }
 
 type gauArgs struct {
-	Domain string `json:"domain" jsonschema:"the target domain to fetch historical URLs for"`
+	Domain     string `json:"domain" jsonschema:"the target domain to fetch historical URLs for"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step to use as file input"`
 }
 
 func gauHandler(ctx context.Context, _ *mcp.CallToolRequest, args gauArgs) (*mcp.CallToolResult, any, error) {
@@ -400,11 +467,13 @@ func gauHandler(ctx context.Context, _ *mcp.CallToolRequest, args gauArgs) (*mcp
 	// provider (urlscan.io in particular often needs an API key) from
 	// stalling the whole call — each provider individually returns in
 	// under 12s against a real domain.
-	return runCaptured(ctx, "gau", "--subs", "--threads", "4", "--timeout", "10", domain)
+	return runCapturedToFile(ctx, args.OutputFile, "gau", "--subs", "--threads", "4", "--timeout", "10", domain)
 }
 
 type katanaArgs struct {
-	URL string `json:"url" jsonschema:"the target URL to crawl with katana"`
+	URL        string `json:"url" jsonschema:"the target URL to crawl with katana"`
+	Depth      int    `json:"depth,omitempty" jsonschema:"optional crawl depth (default: 2; a wider surface may warrant 3)"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to, for a later step (e.g. filtering for .js URLs) to use as file input"`
 }
 
 func katanaHandler(ctx context.Context, _ *mcp.CallToolRequest, args katanaArgs) (*mcp.CallToolResult, any, error) {
@@ -412,7 +481,11 @@ func katanaHandler(ctx context.Context, _ *mcp.CallToolRequest, args katanaArgs)
 	if url == "" {
 		return errResult("url is required")
 	}
-	return runCaptured(ctx, "katana", "-u", url, "-d", "2", "-jc", "-silent")
+	depth := args.Depth
+	if depth <= 0 {
+		depth = 2
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "katana", "-u", url, "-d", fmt.Sprint(depth), "-jc", "-silent")
 }
 
 type checksecArgs struct {

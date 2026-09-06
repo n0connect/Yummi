@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,6 +64,63 @@ func TestRunCapturedEnv_OverridesVar(t *testing.T) {
 	}
 	if !strings.Contains(text.Text, "MARKER=inherited") {
 		t.Fatalf("expected inherited env to survive alongside the override, got %+v", result.Content)
+	}
+}
+
+// TestRunCapturedToFile_SavesExactlyWhatWasCaptured proves the saved file's
+// content matches the text the model itself reads back — no re-derivation
+// from the underlying tool's own -o/-f convention, no risk of the two
+// diverging (see runCapturedToFile's doc comment for why that matters).
+func TestRunCapturedToFile_SavesExactlyWhatWasCaptured(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "output.txt")
+	result, _, err := runCapturedToFile(context.Background(), path, "echo", "sub1.example.com")
+	if err != nil {
+		t.Fatalf("runCapturedToFile: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got IsError with content %+v", result.Content)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %+v", result.Content[0])
+	}
+	if !strings.Contains(text.Text, "output saved to "+path) {
+		t.Fatalf("expected a save confirmation naming %s, got %q", path, text.Text)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected file at %s to exist: %v", path, err)
+	}
+	if !strings.Contains(string(saved), "sub1.example.com") {
+		t.Fatalf("saved file missing the tool's own output, got %q", string(saved))
+	}
+	if strings.Contains(string(saved), "output saved to") {
+		t.Fatalf("saved file should hold only the tool's own output, not the confirmation note appended afterward, got %q", string(saved))
+	}
+}
+
+func TestRunCapturedToFile_EmptyPathIsNoop(t *testing.T) {
+	result, _, err := runCapturedToFile(context.Background(), "", "echo", "hello")
+	if err != nil {
+		t.Fatalf("runCapturedToFile: %v", err)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok || text.Text != "hello\n" {
+		t.Fatalf("expected plain runCaptured behavior with no save note, got %+v", result.Content)
+	}
+}
+
+func TestRunCapturedToFile_RelativePathRejected(t *testing.T) {
+	result, _, err := runCapturedToFile(context.Background(), "relative/path.txt", "echo", "hello")
+	if err != nil {
+		t.Fatalf("runCapturedToFile: %v", err)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok || !strings.Contains(text.Text, "must be an absolute path") {
+		t.Fatalf("expected an absolute-path complaint, got %+v", result.Content)
+	}
+	if result.IsError {
+		t.Fatal("a failed convenience save must not turn the tool's own successful run into an error result")
 	}
 }
 
