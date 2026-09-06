@@ -984,6 +984,50 @@ body::before {
   box-shadow: 0 10px 26px -20px var(--accent-glow); transform: translateY(-1px);
 }
 
+/* Target-first launcher — the primary "reflex" entry point, above the
+   generic starter prompts: drop a target, pick a mode, one action. */
+.target-launcher {
+  width: 100%; margin-top: var(--space-xl);
+  padding: var(--space-lg);
+  display: flex; flex-direction: column; gap: var(--space-md);
+  background: var(--wash-soft); border: 1px solid var(--border); border-radius: var(--radius-md);
+  text-align: left;
+}
+.target-launcher-eyebrow {
+  color: var(--accent-hover); font-family: var(--font-mono); font-size: 10px;
+  font-weight: 700; letter-spacing: 0.13em;
+}
+.target-launcher-modes {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-sm);
+}
+.target-launcher-mode {
+  padding: var(--space-sm) var(--space-md);
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-secondary); text-align: left; box-shadow: none;
+}
+.target-launcher-mode-label { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }
+.target-launcher-mode-hint { color: var(--text-tertiary); font-size: 11px; line-height: 1.4; }
+.target-launcher-mode:hover { border-color: rgba(45, 212, 191, 0.35); }
+.target-launcher-mode.is-active {
+  border-color: var(--accent); background: rgba(45, 212, 191, 0.08);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.25) inset;
+}
+.target-launcher-row { display: flex; gap: var(--space-sm); }
+.target-launcher-input {
+  flex: 1; min-width: 0; padding: var(--space-sm) var(--space-md);
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-family: var(--font-mono); font-size: var(--text-sm);
+}
+.target-launcher-input:focus { outline: none; border-color: var(--accent); }
+.target-launcher-start {
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  color: var(--bg-base); font-size: var(--text-sm); font-weight: 700; white-space: nowrap;
+}
+.target-launcher-start:hover:not(:disabled) { background: var(--accent-hover); }
+.target-launcher-start:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* History load state — distinguishes "still loading" / "failed, retry" from
    a genuinely empty conversation, so a transient fetch error never looks
    like the history was silently wiped. */

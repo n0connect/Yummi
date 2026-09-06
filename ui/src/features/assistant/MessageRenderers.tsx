@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import type { ActivityEvent, AgentTask, ExecutionRecord } from '../../entities/types'
 import { TaskTracker } from '../tasks/TaskTracker'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
@@ -56,10 +56,96 @@ const STARTER_PROMPTS = [
   t('assistant.starterPrompt.2')
 ]
 
+// Two modes, not a free-text guess at what "web pentest" or "bug bounty
+// recon" means: each goal string is written to hit the exact trigger
+// keywords the matching persona skills key off (osint-enum: "bug bounty",
+// "attack surface", "subdomain", "takeover"; web/api-pentest/js-recon/
+// parameter-fuzzing/vuln-scanning: "web", "API", "BOLA", "javascript",
+// "secrets", "hidden parameters", "XSS", "vulnerability scan") — so the
+// composed instruction reliably pulls in the full methodology on the very
+// first step, not a generic response the model has to reinterpret.
+const TARGET_LAUNCHER_MODES = [
+  {
+    id: 'bugBounty' as const,
+    label: t('assistant.targetLauncher.bugBounty'),
+    hint: t('assistant.targetLauncher.bugBountyHint'),
+    goal: t('assistant.targetLauncher.goal.bugBounty')
+  },
+  {
+    id: 'webPentest' as const,
+    label: t('assistant.targetLauncher.webPentest'),
+    hint: t('assistant.targetLauncher.webPentestHint'),
+    goal: t('assistant.targetLauncher.goal.webPentest')
+  }
+]
+
+// TargetFirstLauncher is the actual "reflex" entry point: drop a target,
+// pick a mode, go — one action, not composing a sentence around a
+// fill-in-the-blank starter prompt. onLaunch receives the fully-composed
+// goal and is expected to send it immediately (not just populate the input
+// box), since minimizing clicks between "I have a target" and "Yummi is
+// already working" is the entire point.
+export function TargetFirstLauncher({
+  onLaunch
+}: {
+  onLaunch: (goal: string) => void
+}): JSX.Element {
+  const [target, setTarget] = useState('')
+  const [modeID, setModeID] = useState<(typeof TARGET_LAUNCHER_MODES)[number]['id']>('bugBounty')
+
+  const launch = () => {
+    const trimmed = target.trim()
+    if (!trimmed) return
+    const mode = TARGET_LAUNCHER_MODES.find((m) => m.id === modeID) ?? TARGET_LAUNCHER_MODES[0]
+    onLaunch(mode.goal.replace('{target}', trimmed))
+  }
+
+  return (
+    <div className="target-launcher">
+      <span className="target-launcher-eyebrow">{t('assistant.targetLauncher.eyebrow')}</span>
+      <div className="target-launcher-modes" role="radiogroup">
+        {TARGET_LAUNCHER_MODES.map((mode) => (
+          <button
+            key={mode.id}
+            type="button"
+            role="radio"
+            aria-checked={modeID === mode.id}
+            className={`target-launcher-mode${modeID === mode.id ? ' is-active' : ''}`}
+            onClick={() => setModeID(mode.id)}
+          >
+            <span className="target-launcher-mode-label">{mode.label}</span>
+            <span className="target-launcher-mode-hint">{mode.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="target-launcher-row">
+        <input
+          className="target-launcher-input"
+          type="text"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              launch()
+            }
+          }}
+          placeholder={t('assistant.targetLauncher.placeholder')}
+        />
+        <button type="button" className="target-launcher-start" onClick={launch} disabled={!target.trim()}>
+          {t('assistant.targetLauncher.start')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function EmptyWorkspace({
-  onUsePrompt
+  onUsePrompt,
+  onLaunchTarget
 }: {
   onUsePrompt: (prompt: string) => void
+  onLaunchTarget: (goal: string) => void
 }): JSX.Element {
   return (
     <div className="chat-empty">
@@ -71,6 +157,7 @@ export function EmptyWorkspace({
       <p>
         {t('assistant.emptyBody')}
       </p>
+      <TargetFirstLauncher onLaunch={onLaunchTarget} />
       <div className="chat-starters" aria-label={t('assistant.startersAriaLabel')}>
         {STARTER_PROMPTS.map((prompt) => (
           <button
