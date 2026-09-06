@@ -918,8 +918,14 @@ export function AssistantPanel({
 
   // ── Chat API ───────────────────────────────────────────────────────────────
 
-  const sendChat = async () => {
-    const text = input.trim()
+  // overrideText lets a caller send a fully-composed message immediately
+  // without a round-trip through input state first (setInput is
+  // asynchronous — reading `input` right back in the same tick would see
+  // the stale value). Used by the target-first recon/pentest launcher,
+  // which composes its own goal string and sends it in one action rather
+  // than filling the box and waiting for a second manual click.
+  const sendChat = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim()
     if (!text || isLoading) return
 
     const sid = sessionID // the conversation this turn actually belongs to
@@ -1227,7 +1233,7 @@ export function AssistantPanel({
           aria-relevant="additions"
         >
           {isFreshWorkspace ? (
-            <EmptyWorkspace onUsePrompt={useStarterPrompt} />
+            <EmptyWorkspace onUsePrompt={useStarterPrompt} onLaunchTarget={(goal) => void sendChat(goal)} />
           ) : (
             messages.map((msg) => {
               if (msg.role === 'task' && msg.taskID) {
