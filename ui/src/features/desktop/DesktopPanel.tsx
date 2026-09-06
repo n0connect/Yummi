@@ -66,9 +66,9 @@ export function DesktopPanel(): JSX.Element {
       setStatus('disconnected')
       // RFB's disconnect event carries { clean: boolean } — an unclean
       // disconnect on the FIRST attempt (never reached "connected") almost
-      // always means orchestrator's dial to sandbox-desktop failed, i.e.
-      // the desktop profile isn't running — the common, expected case this
-      // panel should explain rather than just show a bare error.
+      // always means orchestrator's dial to the sandbox's VNC bridge failed,
+      // i.e. the sandbox container isn't up yet — the common, expected case
+      // this panel should explain rather than just show a bare error.
       const detail = (e as CustomEvent<{ clean: boolean }>).detail
       if (!detail?.clean) setUnavailable(true)
     }
