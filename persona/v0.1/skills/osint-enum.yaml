@@ -34,7 +34,11 @@ knowledge: |
   1. PASSIVE subdomain sources (no direct contact with the target — safe to run
      immediately, in parallel):
      - `subfinder -d <domain> -all -silent` (many passive sources at once).
-     - `amass enum -d <domain> -passive` (independent source set).
+     - `/usr/lib/amass/amass enum -d <domain> -passive` (independent source set;
+       use this exact path, not the bare `amass` command — Kali's own
+       `/usr/bin/amass` wrapper unconditionally tries `sudo libpostal_data
+       download ...` first and hard-fails with no sudo access, which this
+       sandbox never has).
      - Certificate Transparency — often finds names nothing else does:
        `curl -s 'https://crt.sh/?q=%25.<domain>&output=json' | jq -r '.[].common_name,.[].name_value' | sed 's/\*\.//g' | sort -u`
      - `theHarvester -d <domain> -b all` (emails/hosts/subdomains from search

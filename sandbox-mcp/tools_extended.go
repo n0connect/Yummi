@@ -23,6 +23,17 @@ type amassArgs struct {
 	Passive bool   `json:"passive,omitempty" jsonschema:"pass -passive for passive-only enumeration (no direct target contact)"`
 }
 
+// amassBinary bypasses Kali's /usr/bin/amass wrapper, which unconditionally
+// runs `sudo libpostal_data download all ...` on every invocation when
+// /usr/share/libpostal/transliteration is missing (it always is here — that
+// dataset is a ~1GB+ multi-part download, not worth baking into the image
+// for a dependency amass's own enumeration doesn't need). Confirmed live:
+// the wrapper hard-fails non-interactively ("sudo: a terminal is required to
+// read the password") for every single call in this non-root, no-sudo
+// sandbox, while the real binary underneath enumerates correctly without
+// that data at all. var, not const: overridable in tests.
+var amassBinary = "/usr/lib/amass/amass"
+
 func amassHandler(ctx context.Context, _ *mcp.CallToolRequest, args amassArgs) (*mcp.CallToolResult, any, error) {
 	domain := strings.TrimSpace(args.Domain)
 	if domain == "" {
@@ -32,7 +43,7 @@ func amassHandler(ctx context.Context, _ *mcp.CallToolRequest, args amassArgs) (
 	if args.Passive {
 		argv = append(argv, "-passive")
 	}
-	return runCaptured(ctx, "amass", argv...)
+	return runCaptured(ctx, amassBinary, argv...)
 }
 
 type subfinderArgs struct {
