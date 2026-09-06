@@ -2,14 +2,15 @@
 
 # Usage Guide
 
-Yummi is managed entirely through **one web UI** (nginx-served React app, port 3000) talking to the orchestrator's REST/WS API (see [API Reference](api-reference.md)) — there is no alternative operator surface. This page walks the web UI's six tabs, then the CLI helper binary, in the order you'll actually use them.
+Yummi is managed entirely through **one web UI** (nginx-served React app, port 3000) talking to the orchestrator's REST/WS API (see [API Reference](api-reference.md)) — there is no alternative operator surface. This page walks the web UI's seven tabs, then the CLI helper binary, in the order you'll actually use them.
 
 ## Table of contents
 
 - [Starting a session](#starting-a-session)
-- [The six UI tabs](#six-tabs)
+- [The seven UI tabs](#seven-tabs)
   - [Agent](#tab-agent)
   - [Bash](#tab-bash)
+  - [Desktop](#tab-desktop)
   - [Trace](#tab-trace)
   - [Logs](#tab-logs)
   - [Gateway](#tab-gateway)
@@ -34,9 +35,9 @@ explicitly provision it first.
 
 ---
 
-## The six UI tabs <a id="six-tabs"></a>
+## The seven UI tabs <a id="seven-tabs"></a>
 
-The top status bar has six tabs, all talking to the same orchestrator: **Agent · Bash · Trace · Logs · Gateway · Health**.
+The top status bar has seven tabs, all talking to the same orchestrator: **Agent · Bash · Desktop · Trace · Logs · Gateway · Health**.
 
 ### Agent <a id="tab-agent"></a>
 
@@ -49,7 +50,11 @@ This is where you talk to Yummi in natural language, and it's also where the dis
 
 ### Bash <a id="tab-bash"></a>
 
-A live, WebSocket-backed terminal directly into the sandbox container (`/ws/terminal`) — for when you want to type commands yourself rather than asking the agent to. It is `docker exec` under the hood and its packets still cross gateway's nftables policy, but it does **not** run orchestrator's pre-exec target extraction or hostname-policy check. When hostname restrictions matter, prefer agent/direct-exec paths and keep gateway in `block` or `ask`; input files and shell-expanded targets are opaque to name-level policy.
+A live, WebSocket-backed terminal directly into the sandbox container (`/ws/terminal`) — for when you want to type commands yourself rather than asking the agent to. It is `docker exec` under the hood and its packets still cross gateway's nftables policy, but it does **not** run orchestrator's pre-exec target extraction or hostname-policy check. When hostname restrictions matter, prefer agent/direct-exec paths and keep gateway in `block` or `ask`; input files and shell-expanded targets are opaque to name-level policy. The session is `tmux`-backed, so closing the tab or reconnecting reattaches the *same* shell rather than starting a fresh one — and it's the **same container** the Desktop tab and the agent use.
+
+### Desktop <a id="tab-desktop"></a>
+
+A full **graphical Kali desktop** (XFCE) inside that same sandbox container, streamed to the browser over noVNC through orchestrator's `/ws/desktop` bridge — the Pwnbox/Hackviser-style experience, but self-hosted and local. Use it when a task wants a GUI tool the terminal can't give you: **Burp Suite**, **Wireshark**, a browser for manual testing, a file manager. It is the *same environment* as the Bash tab and the agent's tool runs — same filesystem, same installed tools, same hostname — so anything you set up by hand in the Desktop is visible to the agent and vice versa; there is deliberately zero environment drift between them. The desktop is for **you**, the operator: the agent drives the sandbox through `docker exec`, not by moving the mouse. A **Fullscreen** button resizes the remote display to your viewport (no letterboxing). The browser only ever talks to orchestrator — the sandbox's VNC port is never published to the host — so this surface inherits Yummi's local, single-operator trust model (see [Security Model § The unified sandbox trade-off](security-model.md#unified-sandbox)). If the tab shows "unreachable," the sandbox container simply isn't up yet — `make start` brings it, and everything else, online.
 
 ### Trace <a id="tab-trace"></a>
 
