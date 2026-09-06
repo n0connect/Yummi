@@ -62,6 +62,17 @@ func (c *Client) ensureSession(ctx context.Context) (*mcp.ClientSession, error) 
 // drops the (possibly dead) session and retries exactly once against a
 // freshly reconnected one — shared by CallTool and ListTools, which
 // otherwise duplicated this retry-after-reconnect shape identically.
+//
+// If ctx is already past its deadline when the first call fails — the
+// realistic case for a slow tool (gau's historical-URL fetch against a
+// live domain has been observed taking 90s+ depending on external OSINT
+// service responsiveness) that simply ran out of the caller's time budget
+// — a second attempt is doomed before it starts: ensureSession's own
+// Connect(ctx, ...) would fail immediately on the same expired ctx. Retrying
+// anyway produced a misleading "reconnect failed: context deadline exceeded"
+// that reads as a broken connection when the real story is "the call itself
+// timed out" — confirmed live against gau_fetch. Surface the original error
+// directly in that case instead of masking it behind a doomed reconnect.
 func withReconnect[T any](c *Client, ctx context.Context, call func(*mcp.ClientSession) (T, error)) (T, error) {
 	var zero T
 	session, err := c.ensureSession(ctx)
@@ -71,6 +82,9 @@ func withReconnect[T any](c *Client, ctx context.Context, call func(*mcp.ClientS
 	result, err := call(session)
 	if err == nil {
 		return result, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return zero, fmt.Errorf("sandboxmcp: call did not complete before context was done: %w", err)
 	}
 
 	c.mu.Lock()

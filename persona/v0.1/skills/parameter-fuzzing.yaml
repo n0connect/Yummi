@@ -25,7 +25,7 @@ knowledge: |
 
   1. HISTORICAL & PASSIVE PARAMETER EXTRACTION:
      - Extract historical URLs containing query parameters from passive search engines and archives:
-       `gau --subs <domain> | grep -E '\?' | head -n 100`
+       `gau --subs --threads 4 --timeout 10 <domain> | grep -E '\?' | head -n 100`
      - Extract and de-duplicate unique parameter names across endpoints.
 
   2. HIDDEN PARAMETER FUZZING:
