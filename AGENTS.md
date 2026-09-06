@@ -16,7 +16,7 @@ User/CLI  →  orchestrator (Go)  →  gateway (Rust, IPC)  →  sandbox (Kali D
 
 - **orchestrator** — Go service; owns the AI conductor, the agentic task loop, the execution store, and the REST/WebSocket API. Never touches nftables directly.
 - **gateway** — Rust daemon (binary name `yummi-gateway`); the only component that can open external traffic from sandbox. Installs DROP-all nftables rules on startup; if it crashes, those rules persist (fail-closed).
-- **sandbox** — hardened Kali container (read-only fs, non-root, `NET_RAW`/`NET_ADMIN` only). Passive — only acts when orchestrator runs `docker exec` into it.
+- **sandbox** — hardened Kali container (writable fs, agent commands run non-root as UID 1000, `NET_RAW`/`NET_ADMIN` + minimal filesystem-prep caps). One unified environment: the agent's `docker exec` tool runs, the operator's Bash (tmux) tab, and the graphical Desktop (noVNC/XFCE) tab all share it. Runs an always-on desktop process tree; the agent still reaches it only via `docker exec`. (Was two containers + a read-only headless box — unified 2026-09-04.)
 - **ui** — React 18 + Vite SPA, served by nginx on :3000 in Docker, proxying `/api/` and `/ws/` to orchestrator on :9080. Display language (English/Turkish) is fixed at build time via `make conf`'s `YUMMI_LANG` — see [UI i18n](#code-patterns--conventions) below. This is the **only** operator surface — a native Tauri desktop shell and a terminal UI both existed at one point (`desktop/`, `internal/tui`) and were deliberately removed in favor of a single, simpler web-only surface; don't reintroduce either without a real reason. The root-module `yummi` binary (`internal/cli`) still exists but only handles Docker lifecycle/diagnostics and opens this same web UI in an app-style browser window by default — it is not a second client of the API.
 
 ## Build & Development Commands
@@ -94,7 +94,7 @@ cd gateway && cargo test policy_engine::tests::test_allow_rule
 
 ## Architecture
 
-### Two separate Go modules — don't mix them up
+### Three separate Go modules — don't mix them up
 
 1. **Root module** (`./go.mod`, `github.com/n0connect/yummi`): CLI entrypoint only.
    - `cmd/yummi` — binary
@@ -123,8 +123,11 @@ cd gateway && cargo test policy_engine::tests::test_allow_rule
    - `internal/mcp` — JSON-RPC 2.0 stdio client for MCP servers
    - `internal/dnsresolve` — leaf package dialing Cloudflare DNS (1.1.1.1:53) directly, so the orchestrator and sandbox agree on a hostname's IP before the gateway opens a rule
    - `internal/tlsutil` — mTLS cert generation (ECDSA P-256)
+   - `internal/sandboxmcp` — orchestrator-side client for the sandbox-resident MCP server (module #3), reached via `docker exec -i`; used by the Eino agent backend's cataloged pentest tools
 
-Tests under `orchestrator/internal/*` must run from `orchestrator/` (or with that prefix) — running `go test ./...` from the repo root will silently skip them since they're a different module.
+3. **sandbox-mcp module** (`sandbox-mcp/go.mod`, `github.com/n0connect/yummi/sandbox-mcp`): the MCP server that runs *inside* the Kali sandbox container — compiled into `sandbox/Dockerfile`'s image via a Go multi-stage build, and never linked against `orchestrator/` (a structural guarantee — it's simply not in this module's dependency graph). Built on the official `modelcontextprotocol/go-sdk`. Registers the cataloged pentest tools (`nmap_scan`, `gobuster_dir`, `nikto_scan`, …); each handler execs the real binary argv-style (`exec.Command("nmap", args...)`), never a shell. `make _build-sandbox-mcp`/`make _test-sandbox-mcp` for host-side dev; the Docker image recompiles it in its own build stage.
+
+Tests under `orchestrator/internal/*` and `sandbox-mcp/` must run from their own module directory (or with that prefix) — running `go test ./...` from the repo root will silently skip them since they're different modules.
 
 ### Conductor: LLM is required, there is no rule-based fallback
 
@@ -194,7 +197,7 @@ The gate is a plain Go channel; proposals separately expire via a 20-minute TTL 
 
 ### sandbox
 
-Read-only root filesystem, runs as `1000:1000`, only `NET_RAW`/`NET_ADMIN` capabilities, `no-new-privileges`. DNS is set to **Cloudflare (1.1.1.1 / 1.0.0.1)** — the same resolver the orchestrator uses (`internal/dnsresolve`), so both agree on a name's IP before the gateway opens a rule; DNS queries still egress through the gateway (udp/53 is accepted in the FORWARD chain) but resolution is not the trust boundary, the connection to the resolved IP is. Default route is via gateway (`172.20.0.2`). Entrypoint just waits for gateway's socket then `sleep infinity` — every command is a fresh `docker exec`, never a persistent shell.
+Writable root filesystem (unified desktop environment), agent commands run as `1000:1000`, `NET_RAW`/`NET_ADMIN` plus the minimal `CHOWN`/`FOWNER`/`DAC_OVERRIDE`/`SETUID`/`SETGID` set the entrypoint needs for one-time filesystem prep + privilege-drop, `no-new-privileges:false`. DNS is set to **Cloudflare (1.1.1.1 / 1.0.0.1)** — the same resolver the orchestrator uses (`internal/dnsresolve`), so both agree on a name's IP before the gateway opens a rule; DNS queries still egress through the gateway (udp/53 is accepted in the FORWARD chain) but resolution is not the trust boundary, the connection to the resolved IP is. Default route is via gateway (`172.20.0.2`). Entrypoint sets up routing, then brings up the XFCE/VNC desktop and `exec`s `websockify` as the container's foreground/liveness process; agent and operator commands are a separate fresh `docker exec` each, independent of that process tree.
 
 ### Network topology
 

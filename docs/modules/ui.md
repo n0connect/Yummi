@@ -17,10 +17,10 @@ The web dashboard — the only piece of this repository built with Node/npm rath
 
 ```
 ui/src/
-├── app/            App.tsx — top-level routing between the six tabs (routes past the
+├── app/            App.tsx — top-level routing between the seven tabs (routes past the
 │                   first are React.lazy-loaded behind a Suspense boundary)
 ├── entities/       types.ts — shared TypeScript types mirroring orchestrator's JSON shapes
-├── pages/          One directory per tab: chat/, terminal/, trace/, logs/, gateway/, health/
+├── pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/
 ├── features/       One directory per data concern: chat/, gateway/, health/, sessions/,
 │                   skills/, system/, tasks/, terminal/, trace/, assistant/, debuglog/
 ├── shared/         api/http.ts (the one fetch wrapper everything else uses), api/runtime.ts

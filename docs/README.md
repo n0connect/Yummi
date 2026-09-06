@@ -11,8 +11,8 @@ docs/
   architecture.md         The 5 runtime components, network topology, the 3 core data flows
   security-model.md       Fail-closed network layer + content-layer threat scanning + audit chain
   installation.md         OS/architecture-specific setup, the cgo/Go-version/Node gotchas, troubleshooting
-  usage-guide.md           The 6 UI tabs, approval flows, the CLI
-  development.md          Fast build loops, running a single test, the two-Go-modules trap
+  usage-guide.md           The 7 UI tabs, approval flows, the CLI
+  development.md          Fast build loops, running a single test, the three-Go-modules trap
   api-reference.md        Every REST route and WebSocket event, grouped by domain
 
   agent/                  The agent AS A SYSTEM — behavior, not file layout

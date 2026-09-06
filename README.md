@@ -37,10 +37,10 @@ The [`docs/`](docs/) directory is the full, in-depth reference — start at **[d
 - **[Architecture](docs/architecture.md)** — The 5 components, network topology, core data flows
 - **[Security Model](docs/security-model.md)** — Fail-closed network layer, content-layer threat scanning, audit chain
 - **[Installation](docs/installation.md)** — OS/architecture-specific setup (Linux/macOS/Windows, x86_64/ARM64), common first-run errors
-- **[Usage Guide](docs/usage-guide.md)** — The 6 UI tabs, approval flows, CLI
+- **[Usage Guide](docs/usage-guide.md)** — The 7 UI tabs, approval flows, CLI
 - **[Agent internals](docs/agent/overview.md)** — The graph state machine, memory, skills, sub-agents
 - **[API Reference](docs/api-reference.md)** — Every REST route and WebSocket event
-- **[Development](docs/development.md)** — Fast build loops, running a single test, the two-Go-modules trap
+- **[Development](docs/development.md)** — Fast build loops, running a single test, the three-Go-modules trap
 
 ## What Yummi is
 
@@ -79,9 +79,11 @@ make test    # all suites: CLI + orchestrator + gateway (cargo) + UI (vitest)
 make lint    # golangci-lint, root and orchestrator modules
 ```
 
-See **[docs/development.md](docs/development.md)** for fast per-component build loops, running a single test, and a real gotcha worth knowing up front: this repo is **two separate Go modules** (root CLI vs. `orchestrator/`) — `go test ./...` from the repo root silently skips every orchestrator test.
+See **[docs/development.md](docs/development.md)** for fast per-component build loops, running a single test, and a real gotcha worth knowing up front: this repo is **three separate Go modules** (root CLI, `orchestrator/`, and `sandbox-mcp/`) — `go test ./...` from the repo root silently skips every orchestrator and sandbox-mcp test.
 
 Tests favor real stores and engines. Scripted substitutes are used at external or nondeterministic boundaries such as the LLM and test HTTP servers; live suites cover the real model and sandbox when explicitly enabled.
+
+New contributors: **[CONTRIBUTING.md](CONTRIBUTING.md)** covers the module layout, the security invariants you must not break, and commit conventions. Please also read the **[Code of Conduct](CODE_OF_CONDUCT.md)** and, for anything security-sensitive, **[SECURITY.md](SECURITY.md)**.
 
 ## License
 
@@ -91,6 +93,6 @@ Tests favor real stores and engines. Scripted substitutes are used at external o
 
 <div align="center">
 
-Built with Go · Rust · React · Charm · Ollama. Conventional Commits.
+Built with Go · Rust · React · Ollama. Conventional Commits.
 
 </div>
