@@ -65,10 +65,36 @@ func HandleDesktopWSBridge(desktopAddr string) http.HandlerFunc {
 		defer func() { _ = upstreamConn.Close() }()
 
 		var once sync.Once
+		done := make(chan struct{})
 		closeBoth := func() {
+			close(done)
 			_ = clientConn.Close()
 			_ = upstreamConn.Close()
 		}
+
+		// Keepalive: ping the browser side on an interval, exactly like the
+		// terminal and events bridges (terminal.go, event_hub.go) do. Without
+		// it, a long-idle desktop — a static screen, or an intermediary proxy
+		// with its own idle timeout — is silently dropped where the Bash tab
+		// would stay connected. gorilla/websocket permits WriteControl
+		// concurrently with the relay's WriteMessage on the same conn, so this
+		// needs no extra write serialization.
+		go func() {
+			ticker := time.NewTicker(desktopPingInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					_ = clientConn.SetWriteDeadline(time.Now().Add(desktopWriteTimeout))
+					if err := clientConn.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(desktopWriteTimeout)); err != nil {
+						once.Do(closeBoth)
+						return
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
 
 		relay := func(dst, src *websocket.Conn) {
 			defer once.Do(closeBoth)
