@@ -24,6 +24,22 @@ RUN go mod download
 COPY sandbox-mcp/*.go ./
 RUN CGO_ENABLED=0 go build -trimpath -o /out/yummi-sandbox-mcp .
 
+# ── recontools stage: modern bug-bounty recon binaries not in Kali apt ───────
+# ProjectDiscovery's httpx/dnsx/alterx and lc/gau give the senior recon
+# methodology (persona/v0.1/skills/osint-enum.yaml) its live-probing,
+# resolution, permutation, and historical-URL steps — the pieces subfinder/
+# amass/theHarvester alone don't cover. Installed here and copied as static
+# binaries so the runtime image needs no Go toolchain. @latest is intentional
+# and consistent with this image's design: the base is kali-rolling:latest and
+# subfinder/nuclei come from rolling apt, so the sandbox is deliberately a
+# rolling/latest environment, not a pinned one.
+FROM golang:1.26.6-bookworm AS recontools
+ENV CGO_ENABLED=0 GOBIN=/out
+RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest && \
+    go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
+    go install github.com/projectdiscovery/alterx/cmd/alterx@latest && \
+    go install github.com/lc/gau/v2/cmd/gau@latest
+
 FROM kalilinux/kali-rolling:latest
 
 LABEL org.opencontainers.image.title="Yummi sandbox"
@@ -122,6 +138,12 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 COPY --from=mcpbuilder /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
 RUN chmod 0755 /usr/local/bin/yummi-sandbox-mcp
+
+# Modern recon binaries (see the recontools stage) — httpx/dnsx/alterx/gau.
+# Verify they landed and are runnable, so a broken install fails the build
+# rather than surfacing as a mysterious "command not found" mid-engagement.
+COPY --from=recontools /out/ /usr/local/bin/
+RUN for tool in httpx dnsx alterx gau; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
 
 # Pentest commands from orchestrator run as UID 1000 via docker exec --user;
 # the operator's Bash tab attaches a tmux session as the same user. The

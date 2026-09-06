@@ -1,7 +1,7 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: osint-enum
-description: Passive/active subdomain, DNS, and email OSINT enumeration for a domain.
+description: Complete senior subdomain + attack-surface enumeration for a domain (bug-bounty recon).
 triggers:
   - subdomain
   - subdomains
@@ -10,29 +10,74 @@ triggers:
   - dns
   - email harvest
   - domain enum
+  - attack surface
+  - bug bounty
+  - bugbounty
+  - recon a domain
   - amass
   - subfinder
   - theharvester
   - dnsenum
-tools:
-  - amass
-  - subfinder
-  - theharvester
-  - dnsenum
+  - crt.sh
+  - httpx
+  - dnsx
+  - gau
+  - wayback
+  - permutation
 knowledge: |
-  Enumerate the attack surface of a domain before touching individual hosts:
-  1. Start passive: `subfinder -d <domain> -silent` and `amass enum -d <domain> -passive` for
-     fast, low-noise subdomain discovery — these don't touch the target directly.
-  2. `theHarvester -d <domain> -b all` for emails/hosts/subdomains from public sources (search
-     engines, certificate transparency, etc.) — also passive.
-  3. `dnsenum <domain>` for DNS record enumeration (NS/MX/TXT, zone transfer attempts) — this
-     does query the target's own DNS infrastructure directly, treat as light-active.
-  4. Cross-reference results across tools — a subdomain found by one tool and confirmed live
-     by another is stronger evidence than either alone.
-  5. Record every discovered subdomain/host as a structured finding; this feeds recon/web
-     sub-agents' later targeting.
+  Map the FULL attack surface of a domain like a senior bug-bounty hunter — be
+  exhaustive, then triage. Never stop at one tool: every source finds names the
+  others miss, and the win is the UNION, resolved and probed. Run passive first
+  (no packets to the target), then active, then resolve, then probe, then
+  fingerprint. Work on the authorized in-scope domain only.
+
+  1. PASSIVE subdomain sources (no direct contact with the target — safe to run
+     immediately, in parallel):
+     - `subfinder -d <domain> -all -silent` (many passive sources at once).
+     - `amass enum -d <domain> -passive` (independent source set).
+     - Certificate Transparency — often finds names nothing else does:
+       `curl -s 'https://crt.sh/?q=%25.<domain>&output=json' | jq -r '.[].common_name,.[].name_value' | sed 's/\*\.//g' | sort -u`
+     - `theHarvester -d <domain> -b all` (emails/hosts/subdomains from search
+       engines + CT + more).
+     - Historical URLs (reveal old/forgotten subdomains, params, endpoints):
+       `gau --subs <domain>` (wayback + commoncrawl + OTX). Extract hostnames
+       from the URLs and fold them into the subdomain set.
+
+  2. Consolidate: merge every source into ONE de-duplicated list of candidate
+     subdomains (`sort -u`). This union is the real surface — not any single
+     tool's output.
+
+  3. PERMUTATION / mutation — generate likely-but-undiscovered names from the
+     ones you already have (dev-, staging-, api-, admin-, -old, numeric bumps):
+     `alterx -l subs.txt -silent` (or dnsgen). This catches internal-naming
+     patterns pure enumeration misses. Add the output to the candidate set.
+
+  4. RESOLVE — a name is worthless until it resolves. Keep only the live ones:
+     `dnsx -l subs.txt -silent -a -resp` resolves the whole set fast and shows
+     A records. (For a brute-force pass, `dnsx -d <domain> -w <wordlist>` or
+     `dnsenum <domain>` for NS/MX/TXT and zone-transfer attempts — light-active.)
+
+  5. LIVE-PROBE the resolved hosts — this is the step most people skip and the
+     one that turns a name list into targets:
+     `httpx -l resolved.txt -silent -sc -title -td -server -ip -cl` gives, per
+     host: status code, page title, detected technologies, server header, IP,
+     content length. Now you know which subdomains are actually serving HTTP(S),
+     on which ports, running what.
+
+  6. TRIAGE like a professional — do NOT dump raw tool output. Present:
+     - the count found vs resolved vs live (surface size at each stage),
+     - the interesting live hosts grouped by what they run (admin panels, dev/
+       staging, APIs, non-standard ports, unusual tech, default/error titles),
+     - and a short "where I'd look next" (each promising host → the natural
+       follow-up: content discovery, nuclei, the web skill).
+     Record every live host + its tech as a structured finding — that becomes
+     shared memory the web/vuln sub-agents target next.
+
+  Noise discipline: steps 1–2 are passive and always safe; 3–5 touch DNS/HTTP
+  and should respect the engagement's rate/scope rules. Prefer `-silent`/quiet
+  flags so output stays parseable and the pipeline stays fast.
 references:
-  - persona:osint-enum-v1
+  - persona:osint-enum-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/osint-enum.yaml
