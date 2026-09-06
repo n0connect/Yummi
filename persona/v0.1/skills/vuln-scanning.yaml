@@ -1,29 +1,46 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: vuln-scanning
-description: Template-based vulnerability scanning against a target with nuclei.
+description: Senior template-based vulnerability scanning and signature triage with nuclei.
 triggers:
   - nuclei
   - vulnerability scan
   - vuln scan
   - cve scan
   - template scan
+  - misconfig scan
+  - exposure scan
+  - subdomain takeover
+  - takeover
+  - dangling cname
 tools:
   - nuclei
 knowledge: |
-  nuclei matches known CVE/misconfiguration templates against a target — fast breadth,
-  shallow depth:
-  1. Run it after basic fingerprinting (whatweb/curl), not instead of it — knowing the stack
-     first makes nuclei's hits easier to interpret and prioritize.
-  2. Treat every nuclei hit as a candidate, not a confirmed finding — template matches can be
-     version-string false positives. Where feasible, cross-check a hit against the actual
-     fingerprinted version before reporting it as confirmed.
-  3. Record the template ID and severity nuclei reports alongside your own confirmation status
-     (confirmed / candidate — unconfirmed).
-  4. Good complement to targeted tools (sqlmap, wpscan) rather than a replacement — nuclei
-     finds what's in its template set, not everything.
+  nuclei matches targeted CVE and misconfiguration signatures against verified live services:
+
+  1. TARGETED TEMPLATE FILTERING:
+     - Run targeted template categories rather than dumping the entire template library:
+       `nuclei -u <target> -tags cve,exposure,auth-bypass,misconfig -severity low,medium,high,critical -silent`
+     - When specific technology was already identified (e.g. Spring, Laravel, Jenkins, Nginx):
+       `nuclei -u <target> -tags <technology> -silent`
+
+  2. SUBDOMAIN TAKEOVER — run this against EVERY subdomain list osint-enum produces,
+     not just the primary target. One of the highest-value, lowest-effort bug classes:
+     a dangling CNAME pointing at an unclaimed cloud resource (S3, GitHub Pages, Heroku,
+     Azure, etc.) is a full takeover, not a "maybe":
+       `nuclei -l subs.txt -tags takeover -silent`
+     A hit here is a critical/high finding on its own — don't bury it in general scan noise.
+
+  3. OPERATIONAL TEMPO & RATE DISCIPLINE:
+     - Bound concurrency and request rate to avoid overwhelming targets or tripping rate limits:
+       `nuclei -u <target> -c 15 -rate-limit 30 -silent`
+
+  4. TRIAGE & FALSE-POSITIVE FILTERING:
+     - Treat template matches with high/critical severity as priority investigation leads.
+     - Verify version-detection hits against exact HTTP response headers / HTML bodies.
+     - Record the Template ID, matched URL, and exact vulnerability classification as evidence.
 references:
-  - persona:vuln-scanning-v1
+  - persona:vuln-scanning-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/vuln-scanning.yaml

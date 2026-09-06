@@ -1,5 +1,7 @@
+schema_version: 1
+version: 2.0.0
 name: web
-description: Web service assessment — fingerprint, map, and probe HTTP(S) targets.
+description: Senior web application penetration testing — fingerprinting, crawler-based endpoint extraction, directory/parameter fuzzing, and WAF triage.
 triggers:
   - web
   - http
@@ -13,16 +15,52 @@ triggers:
   - port 443
   - url
   - api
+  - katana
+  - ffuf
+  - gobuster
+  - whatweb
+  - wafw00f
 tools:
   - whatweb
+  - wafw00f
   - curl
-  - gobuster
+  - katana
   - ffuf
+  - gobuster
   - nikto
+  - gau
 knowledge: |
-  Assess web targets methodically:
-  1. Fingerprint: `whatweb <url>` and `curl -sI <url>` for server, framework, headers.
-  2. Map content with `gobuster dir -u <url> -w <wordlist>` or `ffuf -u <url>/FUZZ -w <wordlist>`.
-  3. Known issues: `nikto -h <url>` for outdated software / misconfig signatures.
-  4. Inspect security headers (CSP, HSTS, X-Frame-Options) and cookie flags.
-  5. Record each distinct issue as its own structured finding with the evidence (response snippet).
+  Assess web application attack surfaces systematically like a senior red-team operator:
+
+  1. FINGERPRINTING & WAF TRIAGE:
+     - Identify web server, application framework, CMS, and technologies:
+       `whatweb -a 3 <url>`
+     - Check for Web Application Firewalls (Cloudflare, AWS WAF, Akamai, Imperva):
+       `wafw00f <url>`
+     - Inspect security headers (CSP, HSTS, CORS `Origin: null`, Cookie flags `HttpOnly; Secure; SameSite`):
+       `curl -sIL <url>`
+
+  2. MODERN ENDPOINT CRAWLING & JAVASCRIPT DISCOVERY:
+     - Crawl pages, parse client-side forms, and extract endpoints from loaded JS:
+       `katana -u <url> -d 3 -jc -silent`
+     - Harvest historical endpoints and parameter names:
+       `gau --subs <domain> | head -n 200`
+
+  3. CONTENT & HIDDEN DIRECTORY DISCOVERY:
+     - Fuzz directories and file extensions with status code filtering:
+       `ffuf -u <url>/FUZZ -w /usr/share/dirb/wordlists/common.txt -mc 200,204,301,302,307,401,403 -silent`
+     - For identified 403 Forbidden endpoints, test standard bypass headers:
+       `curl -s -H "X-Forwarded-For: 127.0.0.1" -H "X-Custom-IP-Authorization: 127.0.0.1" <url>/admin`
+
+  4. API & CONFIGURATION EXPOSURE PROBING:
+     - Check common API documentation paths: `/api/v1`, `/swagger.json`, `/api-docs`, `/openapi.json`, `/graphql`.
+     - Check critical exposed files: `/.git/HEAD`, `/.env`, `/.DS_Store`, `/robots.txt`, `/sitemap.xml`.
+
+  5. STRUCTURED EVIDENCE & FINDINGS:
+     - Never report generic descriptions. Include exact HTTP status codes, server response headers,
+       parameter names, or matched URL paths as verifiable evidence.
+references:
+  - persona:web-v2
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/web.yaml

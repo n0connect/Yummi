@@ -73,6 +73,14 @@ knowledge: |
      Record every live host + its tech as a structured finding — that becomes
      shared memory the web/vuln sub-agents target next.
 
+  7. TAKEOVER CHECK — one of the highest-value, lowest-effort bug classes:
+     `nuclei -l subs.txt -tags takeover -silent`
+     Run this against the FULL subdomain list, not just the live ones — a
+     dangling CNAME (pointing at an unclaimed S3 bucket, GitHub Pages, Heroku
+     app, etc.) often does NOT respond on HTTP, which is exactly the signal.
+     A hit is a critical/high finding on its own — this is one pipeline, not
+     two separate tasks; don't stop at step 6.
+
   Noise discipline: steps 1–2 are passive and always safe; 3–5 touch DNS/HTTP
   and should respect the engagement's rate/scope rules. Prefer `-silent`/quiet
   flags so output stays parseable and the pipeline stays fast.
