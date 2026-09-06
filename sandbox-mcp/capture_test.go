@@ -72,7 +72,10 @@ func TestRunCapturedEnv_OverridesVar(t *testing.T) {
 // from the underlying tool's own -o/-f convention, no risk of the two
 // diverging (see runCapturedToFile's doc comment for why that matters).
 func TestRunCapturedToFile_SavesExactlyWhatWasCaptured(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "output.txt")
+	home := t.TempDir()
+	sandboxHome = home
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
+	path := filepath.Join(home, "nested", "output.txt")
 	result, _, err := runCapturedToFile(context.Background(), path, "echo", "sub1.example.com")
 	if err != nil {
 		t.Fatalf("runCapturedToFile: %v", err)
@@ -121,6 +124,65 @@ func TestRunCapturedToFile_RelativePathRejected(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatal("a failed convenience save must not turn the tool's own successful run into an error result")
+	}
+}
+
+// TestSaveNote_RejectsPathOutsideSandboxHome is the regression test for a
+// real arbitrary-file-write finding: output_file is a value the model
+// chooses (and can be steered by hostile content in scanned-target
+// responses), so a path outside the pentester user's own home must be
+// refused rather than written.
+func TestSaveNote_RejectsPathOutsideSandboxHome(t *testing.T) {
+	home := t.TempDir()
+	sandboxHome = home
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
+
+	outside := filepath.Join(filepath.Dir(home), "escaped.txt")
+	note := saveNote(outside, "pwned")
+	if !strings.Contains(note, "must be under "+home) {
+		t.Fatalf("expected an outside-sandboxHome rejection, got %q", note)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("expected no file to be written outside sandboxHome, stat err = %v", err)
+	}
+}
+
+// TestSaveNote_RejectsDotDotEscape covers the ../ traversal shape directly
+// (as opposed to a plain sibling path), since that's the most likely form an
+// injected or malformed output_file value would actually take.
+func TestSaveNote_RejectsDotDotEscape(t *testing.T) {
+	home := t.TempDir()
+	sandboxHome = home
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
+
+	traversal := filepath.Join(home, "..", "escaped.txt")
+	note := saveNote(traversal, "pwned")
+	if !strings.Contains(note, "must be under "+home) {
+		t.Fatalf("expected a traversal rejection, got %q", note)
+	}
+}
+
+// TestSaveNote_RejectsSymlinkEscape covers a pre-existing symlink under
+// sandboxHome that points outside it — the check against the raw path alone
+// would pass, so saveNote must re-resolve the parent through the filesystem
+// before writing.
+func TestSaveNote_RejectsSymlinkEscape(t *testing.T) {
+	home := t.TempDir()
+	outsideDir := t.TempDir()
+	sandboxHome = home
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
+
+	link := filepath.Join(home, "escape-link")
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	target := filepath.Join(link, "output.txt")
+	note := saveNote(target, "pwned")
+	if !strings.Contains(note, "resolves outside "+home) {
+		t.Fatalf("expected a symlink-escape rejection, got %q", note)
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "output.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected no file to be written through the symlink, stat err = %v", err)
 	}
 }
 
