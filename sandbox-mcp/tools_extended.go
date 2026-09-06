@@ -330,7 +330,11 @@ func dnsxHandler(ctx context.Context, _ *mcp.CallToolRequest, args dnsxArgs) (*m
 	if err := rejectIfFlagLike("domain", domain); err != nil {
 		return errResult(err.Error())
 	}
-	return runCaptured(ctx, "dnsx", "-d", domain, "-silent", "-a", "-resp")
+	// -l (not -d): dnsx's -d/-domain is brute-force mode and demands a
+	// wordlist ("-FTL- missing wordlist(w) flag required with domain(d)
+	// input", confirmed live) — -l resolves the given host(s) directly,
+	// which is this tool's actual job.
+	return runCaptured(ctx, "dnsx", "-l", domain, "-silent", "-a", "-resp")
 }
 
 type alterxArgs struct {
@@ -345,7 +349,10 @@ func alterxHandler(ctx context.Context, _ *mcp.CallToolRequest, args alterxArgs)
 	if err := rejectIfFlagLike("domain", domain); err != nil {
 		return errResult(err.Error())
 	}
-	return runCaptured(ctx, "alterx", "-target", domain, "-silent")
+	// -l (not -target, which doesn't exist): confirmed live —
+	// "flag provided but not defined: -target". -l is the seed
+	// subdomain/hostname list alterx actually mutates.
+	return runCaptured(ctx, "alterx", "-l", domain, "-silent")
 }
 
 type dalfoxArgs struct {
@@ -375,7 +382,14 @@ func gauHandler(ctx context.Context, _ *mcp.CallToolRequest, args gauArgs) (*mcp
 	if err := rejectIfFlagLike("domain", domain); err != nil {
 		return errResult(err.Error())
 	}
-	return runCaptured(ctx, "gau", "--subs", domain)
+	// gau's own defaults are --threads 1 (its 4 providers run serially) and
+	// --timeout 45 (per HTTP request) — confirmed live: an unflagged run
+	// against a real domain took 45s+ and felt hung. --threads 4 runs the
+	// providers in parallel; --timeout 10 keeps one slow/unresponsive
+	// provider (urlscan.io in particular often needs an API key) from
+	// stalling the whole call — each provider individually returns in
+	// under 12s against a real domain.
+	return runCaptured(ctx, "gau", "--subs", "--threads", "4", "--timeout", "10", domain)
 }
 
 type katanaArgs struct {

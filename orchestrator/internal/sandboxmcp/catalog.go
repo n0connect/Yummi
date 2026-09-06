@@ -244,17 +244,17 @@ func renderHttpx(a map[string]any) string {
 
 func renderDnsx(a map[string]any) string {
 	domain, _ := a["domain"].(string)
-	return "dnsx -d " + domain + " -silent -a -resp"
+	return "dnsx -l " + domain + " -silent -a -resp"
 }
 
 func renderAlterx(a map[string]any) string {
 	domain, _ := a["domain"].(string)
-	return "alterx -target " + domain + " -silent"
+	return "alterx -l " + domain + " -silent"
 }
 
 func renderGau(a map[string]any) string {
 	domain, _ := a["domain"].(string)
-	return "gau --subs " + domain
+	return "gau --subs --threads 4 --timeout 10 " + domain
 }
 
 func renderKatana(a map[string]any) string {
@@ -280,4 +280,3 @@ func renderRadare2(a map[string]any) string {
 	}
 	return fmt.Sprintf("r2 -q -c %q %s", cmd, file)
 }
-

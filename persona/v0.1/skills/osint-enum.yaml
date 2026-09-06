@@ -40,8 +40,8 @@ knowledge: |
      - `theHarvester -d <domain> -b all` (emails/hosts/subdomains from search
        engines + CT + more).
      - Historical URLs (reveal old/forgotten subdomains, params, endpoints):
-       `gau --subs <domain>` (wayback + commoncrawl + OTX). Extract hostnames
-       from the URLs and fold them into the subdomain set.
+       `gau --subs --threads 4 --timeout 10 <domain>` (wayback + commoncrawl + OTX; the flags matter — gau's own defaults are single-threaded with a 45s per-provider timeout and feel hung on a real domain). Extract hostnames
+       from the URLs and fold them into the subdomain set. Even with these flags this step can genuinely take up to a minute or two — it depends on how fast wayback/commoncrawl/OTX answer right now, not on anything Yummi controls. That's expected, not a hang; don't abandon the pipeline over it.
 
   2. Consolidate: merge every source into ONE de-duplicated list of candidate
      subdomains (`sort -u`). This union is the real surface — not any single

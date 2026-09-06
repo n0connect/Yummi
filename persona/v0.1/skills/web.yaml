@@ -44,7 +44,7 @@ knowledge: |
      - Crawl pages, parse client-side forms, and extract endpoints from loaded JS:
        `katana -u <url> -d 3 -jc -silent`
      - Harvest historical endpoints and parameter names:
-       `gau --subs <domain> | head -n 200`
+       `gau --subs --threads 4 --timeout 10 <domain> | head -n 200`
 
   3. CONTENT & HIDDEN DIRECTORY DISCOVERY:
      - Fuzz directories and file extensions with status code filtering:
