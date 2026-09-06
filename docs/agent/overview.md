@@ -2,7 +2,7 @@
 
 # The Agent — Overview
 
-Everything else in this repository — the gateway's nftables enforcement, the sandbox's hardened container, the UI's six tabs — exists to **serve the agent**. The agent is the actual product: it is what turns "enumerate this host and tell me what's exploitable" into a sequence of real decisions, real commands, and a real report. This section of the documentation (`docs/agent/`) is about the agent *as a system* — its reasoning loop, its memory, its delegation model, its relationship with the sandbox — as distinct from [Modules](../modules/) which documents *where the code lives* per implementation language.
+Everything else in this repository — the gateway's nftables enforcement, the sandbox's hardened container, the UI's seven tabs — exists to **serve the agent**. The agent is the actual product: it is what turns "enumerate this host and tell me what's exploitable" into a sequence of real decisions, real commands, and a real report. This section of the documentation (`docs/agent/`) is about the agent *as a system* — its reasoning loop, its memory, its delegation model, its relationship with the sandbox — as distinct from [Modules](../modules/) which documents *where the code lives* per implementation language.
 
 ## What makes this agent different from a plain LLM loop
 

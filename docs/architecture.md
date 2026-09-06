@@ -189,12 +189,12 @@ Yummi's code is organized by **implementation stack**, and this documentation se
 
 | Ecosystem | Component(s) | Entry point for reading the code | Docs page |
 |---|---|---|---|
-| **Go — two separate modules** | CLI (root `go.mod`) + orchestrator (`orchestrator/go.mod`, its own `go.mod`) | `cmd/yummi/main.go`, `orchestrator/cmd/orchestrator/main.go` | [Orchestrator module](modules/orchestrator.md), [CLI](modules/cli.md) |
+| **Go — three separate modules** | CLI (root `go.mod`) + orchestrator (`orchestrator/go.mod`) + sandbox-mcp (`sandbox-mcp/go.mod`) | `cmd/yummi/main.go`, `orchestrator/cmd/orchestrator/main.go`, `sandbox-mcp/main.go` | [Orchestrator module](modules/orchestrator.md), [CLI](modules/cli.md) |
 | **Rust** | gateway | `gateway/src/main.rs` | [Gateway module](modules/gateway.md) |
 | **Node / React** | ui | `ui/src/main.tsx` | [UI module](modules/ui.md) |
 | **Shell / declarative** | sandbox image, persona YAML | `sandbox/Dockerfile`, `persona/v0.1/` | [Sandbox execution](agent/sandbox-execution.md), [Persona & Skills](persona/persona-and-skills.md) |
 
-**Why two Go modules and not one?** `go.mod` at the repo root (`github.com/n0connect/yummi`) is the CLI only — it depends on terminal UI libraries (`bubbletea`, `lipgloss`) that the server has no business importing. `orchestrator/go.mod` (`github.com/n0connect/yummi/orchestrator`) is everything AI/API/execution-related, with its own dependency set (`chi`, `mattn/go-sqlite3`, etc.). Splitting them means `go test ./...` from the repo root **silently skips every orchestrator test** — it's a different module, so you must `cd orchestrator` (or prefix `cd orchestrator &&`) first. This is a common first surprise; see the [Installation](installation.md) and [Development](development.md) pages for the exact commands.
+**Why three Go modules and not one?** `go.mod` at the repo root (`github.com/n0connect/yummi`) is the CLI only — a deliberately tiny surface (Docker lifecycle, diagnostics, launching the web UI) with no business importing the server's heavy dependency set. `orchestrator/go.mod` (`.../orchestrator`) is everything AI/API/execution-related, with its own dependencies (`chi`, `mattn/go-sqlite3`, the agent engine, etc.). `sandbox-mcp/go.mod` (`.../sandbox-mcp`) is the MCP server that compiles *into the Kali container image* — kept a separate module precisely so it can be built independently inside that image and can **never** link against `orchestrator/` (a structural guarantee, not a discipline: it's simply not in orchestrator's dependency graph). The practical consequence: `go test ./...` from the repo root **silently skips every orchestrator and sandbox-mcp test** — they're different modules, so you must `cd` into the module (or prefix `cd <module> &&`) first. This is a common first surprise; see the [Installation](installation.md) and [Development](development.md) pages for the exact commands.
 
 ---
 

@@ -6,7 +6,7 @@ This page assumes you've already completed [Installation](installation.md) — a
 
 ## Table of contents
 
-- [Two Go modules — the mistake almost everyone makes once](#two-go-modules)
+- [Three Go modules — the mistake almost everyone makes once](#two-go-modules)
 - [Fast rebuild after a source change](#rebase)
 - [Fast feedback loops per component](#fast-loops)
 - [Running a single test](#single-test)
@@ -16,16 +16,17 @@ This page assumes you've already completed [Installation](installation.md) — a
 
 ---
 
-## Two Go modules — the mistake almost everyone makes once <a id="two-go-modules"></a>
+## Three Go modules — the mistake almost everyone makes once <a id="two-go-modules"></a>
 
-This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root and `orchestrator/go.mod` are **two independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/`, you must `cd orchestrator` (or prefix each command with `cd orchestrator &&`) first:
+This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root, `orchestrator/go.mod`, and `sandbox-mcp/go.mod` are **three independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator and sandbox-mcp test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/` or `sandbox-mcp/`, you must `cd` into that module (or prefix each command with `cd <module> &&`) first:
 
 ```bash
-# WRONG — silently skips every orchestrator_test.go
+# WRONG — silently skips every orchestrator_test.go and sandbox-mcp test
 go test ./...
 
 # RIGHT
 cd orchestrator && go test ./...
+cd sandbox-mcp && go test ./...
 ```
 
 `make test` (and its granular pieces below) already get this right — it's specifically ad-hoc `go test`/`go build`/`go vet` invocations outside the Makefile where this bites people.
@@ -92,11 +93,11 @@ The `cmd/test_agent`, `cmd/test_engine`, and `cmd/test_loop` binaries under `orc
 ## Linting and vulnerability scanning <a id="lint-vuln"></a>
 
 ```bash
-make lint    # golangci-lint run — TWICE: once at the repo root, once `cd orchestrator`
-make vuln    # govulncheck — supply-chain scan, both Go modules
+make lint    # golangci-lint run — once per Go module: root, orchestrator, sandbox-mcp
+make vuln    # govulncheck — supply-chain scan, all three Go modules
 ```
 
-`make lint` running twice is not a typo — it's the same two-module split as above: `golangci-lint` operates per Go module, so one invocation at the repo root lints the CLI module and a second, separate invocation (`cd orchestrator && golangci-lint run`) lints the orchestrator module. There is only **one** `.golangci.yml` in the repository (at the root) — `golangci-lint` discovers it by walking up from the current directory, so both passes read the same config; you don't need a second copy inside `orchestrator/` for shared rules to apply there too.
+`make lint` running three times is not a typo — it's the same three-module split as above: `golangci-lint` operates per Go module, so it runs once at the repo root (CLI module), once in `orchestrator/`, and once in `sandbox-mcp/`. There is only **one** `.golangci.yml` in the repository (at the root) — `golangci-lint` discovers it by walking up from the current directory, so every pass reads the same config; you don't need a copy inside `orchestrator/` or `sandbox-mcp/` for shared rules to apply there too.
 
 ---
 
