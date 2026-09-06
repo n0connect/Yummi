@@ -14,12 +14,26 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 )
 
+// ChatBackend is everything Engine needs from its LLM client — satisfied by
+// both *llm.Client (Ollama's native /api/chat) and *llm.OpenAIClient (any
+// OpenAI-compatible /v1/chat/completions endpoint, e.g. OpenRouter). Engine
+// doesn't care which protocol is underneath; NewEngineWithOverrides decides
+// that once at construction time based on whether a cloud override is
+// configured. Kept here (the consumer) rather than in package llm, per the
+// usual Go "accept interfaces" placement.
+type ChatBackend interface {
+	Model() string
+	Chat(ctx context.Context, system, user string) (string, error)
+	ChatStream(ctx context.Context, system, user string, onChunk func(chunk string)) (string, error)
+	ChatHistoryStream(ctx context.Context, system string, history []llm.Message, onChunk func(chunk string)) (string, error)
+}
+
 // Engine coordinates persona-backed assistant decisions via LLM.
-// A nil llmClient means Ollama is not configured; Chat returns decline.
+// A nil llmClient means no backend is configured; Chat returns decline.
 type Engine struct {
 	persona   Persona
 	validator *Validator
-	llmClient *llm.Client
+	llmClient ChatBackend
 	tier      TierConfig
 
 	histMu      sync.Mutex
@@ -78,6 +92,19 @@ func capHistory(msgs []llm.Message) []llm.Message {
 type TierOverrides struct {
 	NumCtx   int   // 0 = tier default
 	Thinking *bool // nil = tier default
+
+	// CloudBaseURL/CloudModel/CloudAPIKey, when CloudBaseURL is non-empty,
+	// make the conductor talk to an OpenAI-compatible endpoint (e.g.
+	// OpenRouter) INSTEAD of Ollama — not an addition alongside it. This is
+	// a deliberate, mandatory replacement: an operator who has already
+	// opted an agent backend into a cloud model gets zero benefit from also
+	// running a redundant local model purely for chat/intent
+	// classification, since that classification step already hands the
+	// same goal text to the same cloud model the moment a task starts. See
+	// ChatBackend's doc comment.
+	CloudBaseURL string
+	CloudModel   string
+	CloudAPIKey  string
 }
 
 // NewEngine constructs an engine from persona files and optional Ollama settings.
@@ -106,8 +133,17 @@ func NewEngineWithOverrides(personaDir, ollamaURL, ollamaModel string, overrides
 		tier.Thinking = *overrides.Thinking
 	}
 
-	var client *llm.Client
-	if ollamaURL != "" {
+	// var client ChatBackend (not *llm.Client): a *llm.Client(nil) assigned
+	// into an interface field is a classic Go trap — the interface value
+	// would be non-nil (it has a type) even though the pointer inside is
+	// nil, breaking every "e.llmClient == nil" nil-safety check elsewhere
+	// in this file. Starting from the interface's own zero value and only
+	// ever assigning a genuinely-constructed client keeps a true nil when
+	// neither branch below fires.
+	var client ChatBackend
+	if overrides.CloudBaseURL != "" {
+		client = llm.NewOpenAIClient(overrides.CloudBaseURL, overrides.CloudModel, overrides.CloudAPIKey, tier.NumCtx, 0)
+	} else if ollamaURL != "" {
 		opts := llm.DefaultQwen3Options()
 		opts.NumCtx = tier.NumCtx
 		if tier.Thinking {
@@ -164,17 +200,42 @@ func (e *Engine) PersonaVersion() string {
 	return e.persona.Version
 }
 
-// OllamaModel returns the configured Ollama model tag, or empty when not configured.
+// OllamaModel returns the configured model tag (Ollama or, when a cloud
+// override replaced it, the cloud model — see ChatBackend), or empty when no
+// backend is configured. e.llmClient == nil must be checked explicitly here:
+// unlike the old concrete *llm.Client, whose own Model() method was
+// nil-receiver-safe, a genuinely nil ChatBackend interface value has no
+// concrete type to dispatch to at all, and calling any method on it panics
+// rather than degrading gracefully — confirmed live by
+// TestEngineOllamaModelReporting against an unconfigured engine.
 func (e *Engine) OllamaModel() string {
-	if e == nil {
+	if e == nil || e.llmClient == nil {
 		return ""
 	}
 	return e.llmClient.Model()
 }
 
+// Backend reports which protocol e.llmClient actually speaks — "ollama",
+// "cloud" (an OpenAI-compatible endpoint, e.g. OpenRouter — see
+// TierOverrides.CloudBaseURL), or "none" when unconfigured. Exists so
+// status/health reporting (api/system.go) doesn't hardcode "ollama" the way
+// it did before ChatBackend existed, which kept claiming "ollama" even after
+// a cloud override had replaced it — confirmed live: /api/v1/system/status
+// showed backend:"ollama" while meta.model correctly reported the OpenRouter
+// model tag, a real, user-visible inconsistency.
+func (e *Engine) Backend() string {
+	if e == nil || e.llmClient == nil {
+		return "none"
+	}
+	if _, ok := e.llmClient.(*llm.OpenAIClient); ok {
+		return "cloud"
+	}
+	return "ollama"
+}
+
 // LLM exposes the underlying client for non-chat callers (agent runner).
 // Nil when Ollama is not configured.
-func (e *Engine) LLM() *llm.Client {
+func (e *Engine) LLM() ChatBackend {
 	if e == nil {
 		return nil
 	}

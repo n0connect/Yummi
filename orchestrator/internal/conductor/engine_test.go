@@ -301,6 +301,85 @@ func TestNewEngineWithOverrides_CustomModelHonorsExplicitOverrides(t *testing.T)
 	}
 }
 
+// TestNewEngineWithOverrides_CloudBaseURLReplacesOllama is the actual point
+// of CloudBaseURL: an operator who has pointed an agent backend at a cloud
+// model gets conductor moved to that SAME model too, not left on Ollama
+// alongside it — see ChatBackend's doc comment on why this is a mandatory
+// replacement, not an addition. Model() must report the cloud tag, not the
+// Ollama tier's resolved model, proving the swap actually happened rather
+// than just being ignored.
+func TestNewEngineWithOverrides_CloudBaseURLReplacesOllama(t *testing.T) {
+	e, err := NewEngineWithOverrides("", "http://127.0.0.1:11434", "gpt-oss:20b", TierOverrides{
+		CloudBaseURL: "https://openrouter.ai/api/v1",
+		CloudModel:   "z-ai/glm-5.2:free",
+		CloudAPIKey:  "sk-or-test",
+	})
+	if err != nil {
+		t.Fatalf("NewEngineWithOverrides: %v", err)
+	}
+	backend := e.LLM()
+	if backend == nil {
+		t.Fatal("LLM() = nil, want a configured cloud backend")
+	}
+	if got := backend.Model(); got != "z-ai/glm-5.2:free" {
+		t.Fatalf("Model() = %q, want the cloud model — Ollama's gpt-oss:20b must not still be active", got)
+	}
+	if _, ok := backend.(*llm.OpenAIClient); !ok {
+		t.Fatalf("LLM() backend is %T, want *llm.OpenAIClient", backend)
+	}
+}
+
+// TestEngine_Backend_ReportsActualProtocol guards the exact regression found
+// live: api/system.go's health status hardcoded "backend": "ollama" whenever
+// any model was configured, even after CloudBaseURL had replaced it with
+// OpenRouter — meta.model correctly showed the cloud tag while meta.backend
+// kept lying. Backend() must distinguish all three real states.
+func TestEngine_Backend_ReportsActualProtocol(t *testing.T) {
+	none, err := NewEngineWithOverrides("", "", "", TierOverrides{})
+	if err != nil {
+		t.Fatalf("NewEngineWithOverrides (none): %v", err)
+	}
+	if got := none.Backend(); got != "none" {
+		t.Errorf("Backend() = %q, want %q for an unconfigured engine", got, "none")
+	}
+
+	ollama, err := NewEngineWithOverrides("", "http://127.0.0.1:11434", "gpt-oss:20b", TierOverrides{})
+	if err != nil {
+		t.Fatalf("NewEngineWithOverrides (ollama): %v", err)
+	}
+	if got := ollama.Backend(); got != "ollama" {
+		t.Errorf("Backend() = %q, want %q for a plain Ollama config", got, "ollama")
+	}
+
+	cloud, err := NewEngineWithOverrides("", "http://127.0.0.1:11434", "gpt-oss:20b", TierOverrides{
+		CloudBaseURL: "https://openrouter.ai/api/v1",
+		CloudModel:   "z-ai/glm-5.2:free",
+		CloudAPIKey:  "sk-or-test",
+	})
+	if err != nil {
+		t.Fatalf("NewEngineWithOverrides (cloud): %v", err)
+	}
+	if got := cloud.Backend(); got != "cloud" {
+		t.Errorf("Backend() = %q, want %q once CloudBaseURL replaces Ollama", got, "cloud")
+	}
+}
+
+// TestEngine_LLM_NilWhenNothingConfigured guards the exact Go footgun
+// NewEngineWithOverrides' own comment calls out: assigning a nil *llm.Client
+// into the ChatBackend interface field would produce a NON-nil interface
+// (it has a concrete type, just a nil pointer inside), silently breaking
+// every "== nil" check downstream. This must stay a genuine nil interface
+// when neither an Ollama URL nor a cloud override is configured.
+func TestEngine_LLM_NilWhenNothingConfigured(t *testing.T) {
+	e, err := NewEngineWithOverrides("", "", "", TierOverrides{})
+	if err != nil {
+		t.Fatalf("NewEngineWithOverrides: %v", err)
+	}
+	if e.LLM() != nil {
+		t.Fatalf("LLM() = %#v, want a true nil interface with no backend configured", e.LLM())
+	}
+}
+
 // TestNewEngineWithOverrides_ZeroOverridesLeaveTierAlone proves a named tier
 // (not a custom tag) is unaffected by a zero-value TierOverrides — overrides
 // are additive, never a silent replacement for the tier system.
