@@ -119,7 +119,7 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 	}
 
 	if stepID == currentStepID && liveContent != "" {
-		if containsFold(liveContent, evidence) {
+		if matchEvidence(liveContent, evidence) {
 			rec.Verdict = VerdictVerified
 			rec.OracleKind = OracleToolEvidence
 			return rec
@@ -138,7 +138,7 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 		rec.Reason = fmt.Sprintf("cited step %q never completed successfully (status: %s)", stepID, step.Status)
 		return rec
 	}
-	if !containsFold(step.Result, evidence) {
+	if !matchEvidence(step.Result, evidence) {
 		rec.Reason = fmt.Sprintf("could not confirm — claimed evidence not found verbatim in step %q's recorded output", stepID)
 		return rec
 	}
@@ -147,8 +147,31 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 	return rec
 }
 
+func matchEvidence(haystack, needle string) bool {
+	if needle == "" || haystack == "" {
+		return false
+	}
+	if containsFold(haystack, needle) {
+		return true
+	}
+	trimmed := strings.Trim(needle, "\"'` \t\r\n")
+	if trimmed != "" && containsFold(haystack, trimmed) {
+		return true
+	}
+	normHaystack := normalizeWhitespace(haystack)
+	normNeedle := normalizeWhitespace(trimmed)
+	if normNeedle != "" && containsFold(normHaystack, normNeedle) {
+		return true
+	}
+	return false
+}
+
 func containsFold(haystack, needle string) bool {
 	return needle != "" && strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}
+
+func normalizeWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func findPlanStep(plan []PlanStep, id string) (PlanStep, bool) {

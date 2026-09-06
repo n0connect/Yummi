@@ -222,6 +222,11 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		var records []FindingRecord
 		if task0, ok := s.store.Get(s.taskID); ok {
 			records = buildFindingRecords(s.pendingAct.FindingsDetail, "", "", task0.Plan)
+			if len(findings) == 0 {
+				findings = task0.Findings
+			} else if len(task0.Findings) > 0 {
+				findings = dedupeStrings(append(task0.Findings, findings...))
+			}
 		}
 		_ = s.store.Transition(s.taskID, StatusCompleted, func(t *Task) {
 			t.Summary = summary
@@ -241,6 +246,13 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		summary, findings := mergeSynthesis(ctx, s, nil)
 		summary = appendUnverifiedToolWarning(s, summary, findings)
 		summary = appendEvidenceDigest(s, summary)
+		if task0, ok := s.store.Get(s.taskID); ok && len(task0.Findings) > 0 {
+			if len(findings) == 0 {
+				findings = task0.Findings
+			} else {
+				findings = dedupeStrings(append(task0.Findings, findings...))
+			}
+		}
 		_ = s.store.Transition(s.taskID, StatusFailed, func(t *Task) {
 			t.LastError = s.finishMsg
 			t.Summary = summary // what was gathered before the failure, if anything
@@ -390,4 +402,19 @@ func askNode(ctx context.Context, s *GraphState) (string, error) {
 	})
 	s.emit(ActAsk, question, "")
 	return edgeDone, nil
+}
+
+func dedupeStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
+		if _, exists := seen[item]; !exists {
+			seen[item] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	return out
 }

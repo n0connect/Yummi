@@ -171,10 +171,18 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			if err := taskRunner.Start(resp.TaskID, ""); err != nil {
 				slog.Warn("agent task start failed from chat", "task_id", resp.TaskID, "error", err)
 				resp.Intent = "decline"
-				resp.Message = "Görev başlatılamadı: " + err.Error()
+				if isLikelyTurkish(req.Message) {
+					resp.Message = "Görev başlatılamadı: " + err.Error()
+				} else {
+					resp.Message = "Failed to start task: " + err.Error()
+				}
 			} else {
 				resp.Intent = "explain"
-				resp.Message = "Görev başlatıldı. Plan ve adımlar aşağıda canlı olarak görüntüleniyor."
+				if isLikelyTurkish(req.Message) {
+					resp.Message = "Görev başlatıldı. Plan ve adımlar aşağıda canlı olarak görüntüleniyor."
+				} else {
+					resp.Message = "Task started. Plan and progress are streaming live below."
+				}
 			}
 		}
 
@@ -363,4 +371,17 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 			},
 		})
 	}
+}
+
+func isLikelyTurkish(s string) bool {
+	lower := strings.ToLower(s)
+	if strings.ContainsAny(lower, "çğıöşü") {
+		return true
+	}
+	for _, k := range []string{"lütfen", "hedef", "tarama", "tara", "için", "ve", "nasıl"} {
+		if strings.Contains(lower, k) {
+			return true
+		}
+	}
+	return false
 }

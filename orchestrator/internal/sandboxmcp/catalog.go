@@ -34,6 +34,14 @@ var catalog = map[string]ToolSpec{
 	"medusa_bruteforce": {TargetField: "target", Render: renderMedusa},
 	"dirb_scan":         {TargetField: "url", Render: renderDirb},
 	"snmpwalk_enum":     {TargetField: "target", Render: renderSnmpwalk},
+	"httpx_probe":       {TargetField: "target", Render: renderHttpx},
+	"dnsx_resolve":      {TargetField: "domain", Render: renderDnsx},
+	"alterx_mutate":     {TargetField: "domain", Render: renderAlterx},
+	"gau_fetch":         {TargetField: "domain", Render: renderGau},
+	"katana_crawl":      {TargetField: "url", Render: renderKatana},
+	"dalfox_scan":       {TargetField: "url", Render: renderDalfox},
+	"checksec_audit":    {TargetField: "", Render: renderChecksec},
+	"radare2_disasm":    {TargetField: "", Render: renderRadare2},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -221,3 +229,55 @@ func renderSnmpwalk(a map[string]any) string {
 	}
 	return s
 }
+
+func renderHttpx(a map[string]any) string {
+	target, _ := a["target"].(string)
+	s := "httpx -u " + target + " -silent -sc"
+	if b, _ := a["title"].(bool); b {
+		s += " -title"
+	}
+	if b, _ := a["tech"].(bool); b {
+		s += " -td"
+	}
+	return s
+}
+
+func renderDnsx(a map[string]any) string {
+	domain, _ := a["domain"].(string)
+	return "dnsx -d " + domain + " -silent -a -resp"
+}
+
+func renderAlterx(a map[string]any) string {
+	domain, _ := a["domain"].(string)
+	return "alterx -target " + domain + " -silent"
+}
+
+func renderGau(a map[string]any) string {
+	domain, _ := a["domain"].(string)
+	return "gau --subs " + domain
+}
+
+func renderKatana(a map[string]any) string {
+	url, _ := a["url"].(string)
+	return "katana -u " + url + " -d 2 -jc -silent"
+}
+
+func renderDalfox(a map[string]any) string {
+	url, _ := a["url"].(string)
+	return "dalfox url " + url + " --silence"
+}
+
+func renderChecksec(a map[string]any) string {
+	file, _ := a["file"].(string)
+	return "checksec --file=" + file
+}
+
+func renderRadare2(a map[string]any) string {
+	file, _ := a["file"].(string)
+	cmd, _ := a["command"].(string)
+	if cmd == "" {
+		cmd = "aaa; afl"
+	}
+	return fmt.Sprintf("r2 -q -c %q %s", cmd, file)
+}
+

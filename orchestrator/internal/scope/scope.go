@@ -9,9 +9,11 @@
 package scope
 
 import (
+	"net"
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -29,7 +31,8 @@ var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-z
 // when the token is not a structurally valid IP, CIDR, or hostname. This is an
 // allowlist of well-formed shapes, not a blacklist: IP and CIDR forms are
 // bound-checked by net/netip (rejecting out-of-range octets like 999.x or
-// 256.1.1.1 and bad prefix lengths), and hostnames must match the whole token.
+// 256.1.1.1 and bad prefix lengths), hostnames must match the whole token, and
+// host:port endpoints have their port validated and stripped.
 // Anything else returns "" — the caller then treats the command as targetless,
 // and the gateway (sole scope authority) stays fail-closed.
 func validTarget(tok string) string {
@@ -41,6 +44,16 @@ func validTarget(tok string) string {
 	}
 	if hostnamePattern.MatchString(tok) {
 		return tok
+	}
+	if host, port, err := net.SplitHostPort(tok); err == nil && port != "" {
+		if p, err := strconv.Atoi(port); err == nil && p > 0 && p <= 65535 {
+			if addr, err := netip.ParseAddr(host); err == nil {
+				return addr.String()
+			}
+			if hostnamePattern.MatchString(host) {
+				return host
+			}
+		}
 	}
 	return ""
 }

@@ -77,6 +77,13 @@ func TestExtractTarget(t *testing.T) {
 		{"single-quoted hostname", `nikto -h 'example.org'`, "example.org"},
 		{"quoted equals url flag", `ffuf --url="http://10.0.0.9/FUZZ"`, "10.0.0.9"},
 
+		// Host:port targets without URL scheme.
+		{"ip with port", "nikto -h 192.168.1.10:8080", "192.168.1.10"},
+		{"hostname with port", "curl example.com:8443", "example.com"},
+		{"ipv6 literal with port", "curl [2001:db8::1]:8080", "2001:db8::1"},
+		{"invalid port number ignored", "curl example.com:99999", ""},
+		{"port range not mistaken for target", "nmap -p 80:443 10.0.0.1", "10.0.0.1"},
+
 		// No target.
 		{"local only", "echo hello", ""},
 		{"whoami", "whoami", ""},
