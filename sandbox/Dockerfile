@@ -67,6 +67,7 @@ RUN apt-get update && \
       curl \
       dirb \
       dnsenum \
+      dnsutils \
       enum4linux \
       ffuf \
       file \
@@ -116,7 +117,7 @@ RUN apt-get update && \
       burpsuite \
       imagemagick && \
       if [ -f /usr/lib/nmap/nmap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/lib/nmap/nmap; fi && \
-      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf; do command -v "$tool" >/dev/null; done && \
+      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig; do command -v "$tool" >/dev/null; done && \
       rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 1000 pentester && \
