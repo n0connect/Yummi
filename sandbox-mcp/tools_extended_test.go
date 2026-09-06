@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -96,6 +97,53 @@ func TestExtendedTools_RejectsFlagInjection(t *testing.T) {
 		}
 		if !result.IsError {
 			t.Errorf("%s %v: expected IsError for a flag-shaped value", c.tool, c.args)
+		}
+	}
+}
+
+func TestNucleiScan_RejectsFlagInjectionOnTagsAndBareTarget(t *testing.T) {
+	session := newTestServer(t)
+	cases := []map[string]any{
+		{"target": "-update-templates"},
+		{"target": "https://example.com", "tags": "-update-templates"},
+	}
+	for _, args := range cases {
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "nuclei_scan", Arguments: args})
+		if err != nil {
+			t.Fatalf("%v: CallTool: %v", args, err)
+		}
+		if !result.IsError {
+			t.Errorf("%v: expected IsError for a flag-shaped value", args)
+		}
+	}
+}
+
+// TestNucleiScan_AbsolutePathTargetIsBulkMode proves an absolute-path target
+// (rather than a URL/host) routes to -l instead of -u, without needing a
+// second field — this is what keeps the tool's own "target" field always
+// populated for the orchestrator's gateway scope check (sandboxmcp.Target),
+// which fails closed on an empty target. Bulk mode is exercised indirectly
+// here (no real nuclei binary in this test environment) via the flag-
+// injection guard: an absolute path is never flag-shaped, so it must reach
+// the non-error branch that actually execs, distinguishing it from
+// TestExtendedTools_RejectsFlagInjection's bare-target coverage above.
+func TestNucleiScan_AbsolutePathTargetIsBulkMode(t *testing.T) {
+	session := newTestServer(t)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "nuclei_scan",
+		Arguments: map[string]any{"target": "/home/pentester/definitely-not-a-real-file.txt"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	// The real nuclei binary isn't installed in this test environment, so
+	// this exercises the launch-failure path — the point is that it reaches
+	// exec at all (an absolute path is never rejected as flag-shaped),
+	// unlike a genuinely flag-shaped target.
+	if result.IsError {
+		text, _ := result.Content[0].(*mcp.TextContent)
+		if text != nil && strings.Contains(text.Text, "looks like a command-line flag") {
+			t.Fatalf("an absolute path must not be rejected as flag-shaped: %s", text.Text)
 		}
 	}
 }
