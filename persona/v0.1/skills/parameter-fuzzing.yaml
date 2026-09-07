@@ -1,5 +1,5 @@
 schema_version: 1
-version: 1.1.0
+version: 1.2.0
 name: parameter-fuzzing
 description: Query and body parameter mining, hidden parameter discovery, input reflection testing, and XSS confirmation.
 triggers:
@@ -21,18 +21,27 @@ tools:
   - curl
   - dalfox
 knowledge: |
-  Discover hidden query/body parameters that unlock injection, SSRF, open redirect, and IDOR vulnerabilities:
+  Discover hidden query/body parameters that unlock injection, SSRF, open
+  redirect, and IDOR vulnerabilities.
+
+  TOOLING: prefer `gau_fetch`/`ffuf_fuzz`/`dalfox_scan` over a raw shell
+  command — one tool call instead of a shell chain, and it avoids the
+  operator-approval system's chained-command risk floor. Give `output_file`
+  (an absolute path under `/home/pentester/work/<target>/`) when a result
+  feeds a later step.
 
   1. HISTORICAL & PASSIVE PARAMETER EXTRACTION:
      - Extract historical URLs containing query parameters from passive search engines and archives:
-       `gau --subs --threads 4 --timeout 10 <domain> | grep -E '\?' | head -n 100`
+       `gau_fetch(domain, output_file)`, then `grep -E '\?'` the saved file
+       for URLs that actually carry a query string (raw shell — pure text
+       filtering on already-fetched content, no dedicated tool for that).
      - Extract and de-duplicate unique parameter names across endpoints.
 
   2. HIDDEN PARAMETER FUZZING:
      - Fuzz for unlinked/hidden GET parameters on high-interest endpoints (e.g. `/profile`, `/api/item`, `/search`):
-       `ffuf -u "<url>?FUZZ=test" -w /usr/share/dirb/wordlists/common.txt -mc 200,302 -silent`
+       `ffuf_fuzz(url="<url>?FUZZ=test", wordlist="common.txt", match_codes="200,302", output_file)`.
      - Fuzz POST JSON parameters on API endpoints:
-       `ffuf -u "<url>" -X POST -H "Content-Type: application/json" -d '{"FUZZ":"test"}' -w /usr/share/dirb/wordlists/common.txt -silent`
+       `ffuf_fuzz(url, wordlist="common.txt", method="POST", headers=["Content-Type: application/json"], data='{"FUZZ":"test"}', output_file)`.
 
   3. REFLECTION & BEHAVIOR TRIAGE:
      - Identify parameters whose values are reflected in the HTTP response body or headers (candidates for XSS or header injection).
@@ -40,7 +49,7 @@ knowledge: |
 
   4. XSS CONFIRMATION — don't stop at "reflected," confirm it. For every URL
      with a reflected parameter found in step 3, run it through dalfox:
-       `dalfox url "<url>?param=test" --silence`
+       `dalfox_scan(url="<url>?param=test")`.
      A dalfox hit is a confirmed XSS finding (payload + injection point), not
      just a candidate — record it as such, distinct from an unconfirmed
      reflection.
