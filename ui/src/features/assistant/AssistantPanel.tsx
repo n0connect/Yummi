@@ -834,6 +834,23 @@ export function AssistantPanel({
     [appendMessage, sessionID]
   )
 
+  const toggleTaskAutoApprove = useCallback(
+    async (taskID: string, enable: boolean) => {
+      const sid = sessionID // the conversation this task belongs to
+      try {
+        await fetchJSON(`/api/v1/tasks/${taskID}/auto-approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enable })
+        })
+      } catch {
+        if (sessionIDRef.current !== sid) return
+        appendMessage({ role: 'system', content: t('assistant.autoApproveToggleFailed') })
+      }
+    },
+    [appendMessage, sessionID]
+  )
+
   const resolveEgress = useCallback(
     async (rec: ExecutionRecord, approved: boolean) => {
       // Optimistically drop the card; the resulting completed/failed event will
@@ -1264,6 +1281,7 @@ export function AssistantPanel({
                     onApproveSub={(subTaskID, pid, approved) =>
                       approveTaskGate(subTaskID, pid, approved)
                     }
+                    onToggleAutoApprove={(enable) => toggleTaskAutoApprove(msg.taskID!, enable)}
                   />
                 )
               }

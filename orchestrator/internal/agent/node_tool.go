@@ -93,7 +93,13 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 	// Auto mode exists so an operator can let ordinary risk run unattended —
 	// it was never meant to also mean "run a disk-wipe unsupervised because a
 	// small local model misjudged it as low risk."
-	if s.cfg.ApprovalMode == ModeAskPermission || p.ForceApprovalReason != "" {
+	//
+	// task.AutoApproveNonCritical (see its own doc comment on Task) is a
+	// narrower, per-task, operator-opted-in escape from ask_permission mode
+	// specifically — it never touches ForceApprovalReason's hard gate, and
+	// only ever skips the gate for a risk level below high/critical.
+	skipForTaskOverride := task.AutoApproveNonCritical && p.ForceApprovalReason == "" && !conductor.IsHighSeverity(p.RiskLevel)
+	if (s.cfg.ApprovalMode == ModeAskPermission && !skipForTaskOverride) || p.ForceApprovalReason != "" {
 		s.pendingProposal = p
 		return edgeRequiresApproval, nil
 	}

@@ -163,6 +163,12 @@ export type AgentTask = {
   pending_proposal_id?: string
   pending_command?: string
   pending_risk?: string
+  // Operator-set, per-task override (POST /api/v1/tasks/{id}/auto-approve):
+  // when true, a proposal below high/critical risk skips the ask_permission
+  // gate for the REST of this one task — high/critical and anything
+  // destructiveFloor forces still always gate. Distinct from the runner-wide
+  // approval mode, which only ever applies to tasks started after a change.
+  auto_approve_non_critical?: boolean
   created_at?: number
   updated_at?: number
 }

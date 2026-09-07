@@ -163,11 +163,16 @@ function SubTaskTree({ tasks }: { tasks: AgentTask[] }): JSX.Element | null {
 // which previously duplicated this JSX identically apart from the nested
 // badge and which callback the approve/deny buttons call.
 function ApprovalGate({
-  risk, command, onApprove, nested
+  risk, command, onApprove, onApproveAndAutoApprove, nested
 }: {
   risk?: string
   command?: string
   onApprove: (approved: boolean) => void
+  // Present only for the task's own (non-nested) gate — a sub-task shares
+  // its parent's AutoApproveNonCritical flag server-side (same Task field
+  // semantics apply to any task ID), but offering a second, separate toggle
+  // per sub-task in the UI would just be confusing without adding capability.
+  onApproveAndAutoApprove?: () => void
   nested?: boolean
 }): JSX.Element {
   return (
@@ -185,6 +190,11 @@ function ApprovalGate({
         <button className="tt-btn tt-btn-deny" onClick={() => onApprove(false)}>
           {t('taskTracker.deny')}
         </button>
+        {onApproveAndAutoApprove && (
+          <button className="tt-btn tt-btn-auto" onClick={onApproveAndAutoApprove}>
+            {t('taskTracker.approveAndAutoApprove')}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -210,6 +220,12 @@ type Props = {
   // but stuck forever from their point of view).
   subTasks?: AgentTask[]
   onApproveSub?: (subTaskID: string, proposalID: string, approved: boolean) => void
+  // Flips Task.AutoApproveNonCritical (POST /api/v1/tasks/{id}/auto-approve)
+  // — a per-task escape from ask_permission mode for below-high risk only.
+  // Omitted entirely (rather than a no-op) when the caller can't wire it, so
+  // ApprovalGate's third button and the header badge/toggle both just don't
+  // render instead of doing nothing on click.
+  onToggleAutoApprove?: (enable: boolean) => void
 }
 
 export function TaskTracker({
@@ -220,7 +236,8 @@ export function TaskTracker({
   onResume,
   activities = [],
   subTasks = [],
-  onApproveSub
+  onApproveSub,
+  onToggleAutoApprove
 }: Props): JSX.Element {
   const [replyText, setReplyText] = useState('')
   const pct =
@@ -259,6 +276,19 @@ export function TaskTracker({
         )}
       </header>
 
+      {/* Auto-approve-non-critical status — only shown once it's actually on,
+          since the toggle already appears as a button on the gate itself the
+          first time it's relevant; this is purely "it's on, here's how to
+          turn it off" for the rest of the task's run. */}
+      {!terminal && task.auto_approve_non_critical && onToggleAutoApprove && (
+        <div className="tt-auto-approve-badge">
+          <span>{t('taskTracker.autoApproveOnBadge')}</span>
+          <button className="tt-btn tt-btn-link" onClick={() => onToggleAutoApprove(false)}>
+            {t('taskTracker.autoApproveTurnOff')}
+          </button>
+        </div>
+      )}
+
       {/* Progress bar */}
       <div className="tt-progress">
         <div className="tt-progress-bar" style={{ width: `${pct}%` }} />
@@ -280,6 +310,14 @@ export function TaskTracker({
           risk={task.pending_risk}
           command={task.pending_command}
           onApprove={(approved) => onApprove(task.pending_proposal_id!, approved)}
+          onApproveAndAutoApprove={
+            onToggleAutoApprove
+              ? () => {
+                  onApprove(task.pending_proposal_id!, true)
+                  onToggleAutoApprove(true)
+                }
+              : undefined
+          }
         />
       )}
 

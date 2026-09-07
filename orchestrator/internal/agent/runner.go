@@ -560,6 +560,17 @@ func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 	return nil
 }
 
+// SetTaskAutoApprove flips one task's AutoApproveNonCritical override. A
+// single store.Update call is enough regardless of whether taskID names a
+// top-level task or a sub-agent's — every Runner in this hierarchy (top-level
+// and every sub-agent) shares the SAME *Store instance (wired identically in
+// cmd/orchestrator/main.go), unlike gate.Resolve, which is per-Runner and so
+// Approve above must fan out to every sub-agent's own gate to find the right
+// one.
+func (r *Runner) SetTaskAutoApprove(taskID string, enable bool) error {
+	return r.store.Update(taskID, func(t *Task) { t.AutoApproveNonCritical = enable })
+}
+
 // ResumeRecovered starts top-level tasks that Store startup converted to a
 // safe step checkpoint. Interrupted sub-agent tasks are not started
 // independently; their parent reconciles the handoff to avoid duplicates.

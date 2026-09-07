@@ -27,6 +27,11 @@ type TaskRunner interface {
 	// SetApprovalMode changes the mode applied to tasks started from this
 	// point on, propagating to configured sub-agents.
 	SetApprovalMode(mode ApprovalMode) error
+	// SetTaskAutoApprove flips one already-running task's own
+	// AutoApproveNonCritical override (see Task's own doc comment) — unlike
+	// SetApprovalMode, this targets a single in-flight task by ID, not the
+	// runner-wide default for future tasks.
+	SetTaskAutoApprove(taskID string, enable bool) error
 	// ResumeRecovered starts top-level tasks the store's startup recovery
 	// converted to a safe checkpoint. Returns the count started.
 	ResumeRecovered() (int, error)

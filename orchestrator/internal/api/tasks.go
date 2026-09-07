@@ -234,3 +234,32 @@ func HandleApproveTask(runner agent.TaskRunner, store *agent.Store) http.Handler
 		writeJSON(w, http.StatusOK, map[string]bool{"resolved": true})
 	}
 }
+
+// HandleSetTaskAutoApprove flips one running task's own AutoApproveNonCritical
+// override (see Task's own doc comment in internal/agent/task.go) — distinct
+// from the runner-wide POST /api/v1/agent/mode, which only ever applies to
+// tasks started after the change, never one already mid-loop. This is what
+// lets an operator watching a long ask_permission-mode task stop clicking
+// approve for the REST of just this one task, without silently trusting
+// every future task or losing the hard gate on high/critical risk.
+func HandleSetTaskAutoApprove(runner agent.TaskRunner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		taskID := chi.URLParam(r, "id")
+		if !isValidSessionID(taskID) {
+			writeError(w, http.StatusBadRequest, "invalid task id format", nil)
+			return
+		}
+		var req struct {
+			Enable bool `json:"enable"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request", err)
+			return
+		}
+		if err := runner.SetTaskAutoApprove(taskID, req.Enable); err != nil {
+			writeError(w, http.StatusNotFound, "task not found", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"auto_approve_non_critical": req.Enable})
+	}
+}
