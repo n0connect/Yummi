@@ -1,5 +1,5 @@
 schema_version: 1
-version: 2.0.0
+version: 2.3.0
 name: osint-enum
 description: Complete senior subdomain + attack-surface enumeration for a domain (bug-bounty recon).
 triggers:
@@ -31,42 +31,92 @@ knowledge: |
   (no packets to the target), then active, then resolve, then probe, then
   fingerprint. Work on the authorized in-scope domain only.
 
-  1. PASSIVE subdomain sources (no direct contact with the target — safe to run
-     immediately, in parallel):
-     - `subfinder -d <domain> -all -silent` (many passive sources at once).
-     - `/usr/lib/amass/amass enum -d <domain> -passive` (independent source set;
-       use this exact path, not the bare `amass` command — Kali's own
-       `/usr/bin/amass` wrapper unconditionally tries `sudo libpostal_data
-       download ...` first and hard-fails with no sudo access, which this
-       sandbox never has).
-     - Certificate Transparency — often finds names nothing else does:
-       `curl -s 'https://crt.sh/?q=%25.<domain>&output=json' | jq -r '.[].common_name,.[].name_value' | sed 's/\*\.//g' | sort -u`
-     - `theHarvester -d <domain> -b all` (emails/hosts/subdomains from search
-       engines + CT + more).
-     - Historical URLs (reveal old/forgotten subdomains, params, endpoints):
-       `gau --subs --threads 4 --timeout 10 <domain>` (wayback + commoncrawl + OTX; the flags matter — gau's own defaults are single-threaded with a 45s per-provider timeout and feel hung on a real domain). Extract hostnames
-       from the URLs and fold them into the subdomain set. Even with these flags this step can genuinely take up to a minute or two — it depends on how fast wayback/commoncrawl/OTX answer right now, not on anything Yummi controls. That's expected, not a hang; don't abandon the pipeline over it.
+  TOOLING: prefer `run_pentest_tool` over a raw shell command for every step
+  below that names one — `subfinder_enum`, `amass_enum`, `theharvester_scan`,
+  `gau_fetch`, `alterx_mutate`, `dnsx_resolve`, `httpx_probe`, `nuclei_scan`.
+  Each already runs with this methodology's proven flags baked in (no need to
+  reconstruct or guess CLI flags yourself), returns clean parsed text instead
+  of a shell pipeline's raw output, and — as ONE tool call instead of a
+  multi-command shell chain — doesn't trip the operator-approval system's
+  chained-command risk floor the way `cmd1 && cmd2 | cmd3` does. Give every
+  one of them an `output_file` set to an ABSOLUTE path under
+  `/home/pentester/work/<domain>/` (e.g.
+  `/home/pentester/work/example.com/subs_subfinder.txt`) so its result feeds
+  straight into the next step as a file — sandbox-mcp's own working directory
+  is fixed, so a path relative to wherever a separate shell command `cd`s into
+  will NOT resolve; always use the full absolute path. `consolidate_hosts`
+  handles every union/dedupe/domain-validation step below — it replaces a
+  hand-written `cat | grep | sort -u` pipeline with something that can't
+  mistake a tool's own banner/progress-bar noise for real data (a live
+  session did exactly that with amass's own report header before this tool
+  existed). Only crt.sh has no dedicated tool and stays raw shell.
 
-  2. Consolidate: merge every source into ONE de-duplicated list of candidate
-     subdomains (`sort -u`). This union is the real surface — not any single
-     tool's output.
+  1. PASSIVE subdomain sources (no direct contact with the target — safe to
+     run immediately, in parallel). PREFER
+     `passive_recon_batch(domain, output_dir="/home/pentester/work/<domain>")`
+     over four separate calls: it runs subfinder, amass, theHarvester, and
+     gau CONCURRENTLY in one tool call (one approval instead of four), each
+     source's result saved as its own `subs_<source>.txt` in output_dir, and
+     each source's own success/failure reported independently — a slow or
+     failing one (theHarvester timing out is common) never blocks or hides
+     the others. Fall back to the individual calls below only if a narrower,
+     single-source pass is actually what's needed:
+     - `subfinder_enum(domain, output_file)` — many passive sources at once.
+     - `amass_enum(domain, passive=true, output_file)` — an independent source
+       set; runs against the correct binary internally, no sudo/wrapper issues
+       to work around.
+     - `theharvester_scan(domain, source="all", output_file)` — emails/hosts/
+       subdomains from search engines + CT + more.
+     - `gau_fetch(domain, output_file)` — historical URLs (wayback +
+       commoncrawl + OTX) that reveal old/forgotten subdomains, params,
+       endpoints; already tuned to avoid its default 45s-per-provider hang.
+       Even tuned this can genuinely take up to a minute or two depending on
+       how fast wayback/commoncrawl/OTX answer right now, not on anything
+       Yummi controls — that's expected, not a hang; extract hostnames from
+       the returned URLs and fold them into the subdomain set.
+     - Certificate Transparency — often finds names nothing else does, and has
+       no dedicated tool, so this one stays raw shell:
+       `curl -s 'https://crt.sh/?q=%25.<domain>&output=json' | jq -r '.[].common_name,.[].name_value' | sed 's/\*\.//g' | sort -u > /home/pentester/work/<domain>/subs_crtsh.txt`
+
+  2. Consolidate: merge every source's output_file into ONE de-duplicated,
+     domain-validated list of candidate subdomains:
+     `consolidate_hosts(input_files=[<every subs_*.txt path>], domain,
+     output_file=".../subs_all_union.txt")`. This union is the real
+     surface — not any single tool's output. Unlike a hand-written
+     `cat | sort -u`, this also DROPS any line that isn't actually a
+     `*.<domain>` hostname — the tool's own banner/progress-bar text (mixed
+     into a raw shell capture when a source ignores its `-silent` flag) gets
+     filtered out instead of silently polluting the candidate set as if it
+     were real data. A missing/empty source file is skipped and noted, not a
+     failure — that's the expected shape when a passive source finds nothing.
 
   3. PERMUTATION / mutation — generate likely-but-undiscovered names from the
-     ones you already have (dev-, staging-, api-, admin-, -old, numeric bumps):
-     `alterx -l subs.txt -silent` (or dnsgen). This catches internal-naming
-     patterns pure enumeration misses. Add the output to the candidate set.
+     ones you already have (dev-, staging-, api-, admin-, -old, numeric
+     bumps): `alterx_mutate(domain=<path to subs_all_union.txt>, enrich=true,
+     output_file)`. This catches internal-naming patterns pure enumeration
+     misses. Fold the output back in with another
+     `consolidate_hosts(input_files=[subs_all_union.txt, <alterx output>],
+     domain, output_file=".../candidates_all.txt")` to get the final,
+     de-duplicated, domain-validated candidate set.
 
-  4. RESOLVE — a name is worthless until it resolves. Keep only the live ones:
-     `dnsx -l subs.txt -silent -a -resp` resolves the whole set fast and shows
-     A records. (For a brute-force pass, `dnsx -d <domain> -w <wordlist>` or
-     `dnsenum <domain>` for NS/MX/TXT and zone-transfer attempts — light-active.)
+  4. RESOLVE — a name is worthless until it resolves. Keep only the live
+     ones: `dnsx_resolve(domain=<path to the full candidate list>,
+     output_file)` resolves the whole set and reports A, CNAME, NS, and MX
+     records — CNAME in particular is what step 7's takeover check depends
+     on; a bare A-only resolve can never surface a dangling CNAME. Extract
+     the unique resolved hostnames into their own file
+     (`awk '{print $1}' resolved_full.txt | sort -u > resolved_hosts.txt`).
+     Expect most permutation guesses to NOT resolve — that's normal, not a
+     failure; a domain's real subdomain count is usually a small fraction of
+     its permutation-generated candidate count.
 
-  5. LIVE-PROBE the resolved hosts — this is the step most people skip and the
-     one that turns a name list into targets:
-     `httpx -l resolved.txt -silent -sc -title -td -server -ip -cl` gives, per
-     host: status code, page title, detected technologies, server header, IP,
-     content length. Now you know which subdomains are actually serving HTTP(S),
-     on which ports, running what.
+  5. LIVE-PROBE the resolved hosts — this is the step most people skip and
+     the one that turns a name list into targets:
+     `httpx_probe(target=<path to resolved_hosts.txt>, title=true, tech=true,
+     output_file)` gives, per host: status code, page title, detected
+     technologies, server header, IP, content length, and redirect target.
+     Now you know which subdomains are actually serving HTTP(S) and running
+     what.
 
   6. TRIAGE like a professional — do NOT dump raw tool output. Present:
      - the count found vs resolved vs live (surface size at each stage),
@@ -78,16 +128,24 @@ knowledge: |
      shared memory the web/vuln sub-agents target next.
 
   7. TAKEOVER CHECK — one of the highest-value, lowest-effort bug classes:
-     `nuclei -l subs.txt -tags takeover -silent`
-     Run this against the FULL subdomain list, not just the live ones — a
+     `nuclei_scan(target=<path to the full candidate list>, tags="takeover",
+     output_file)`. Run this against every name that came from real
+     enumeration or resolved during step 4, not just the live-HTTP ones — a
      dangling CNAME (pointing at an unclaimed S3 bucket, GitHub Pages, Heroku
-     app, etc.) often does NOT respond on HTTP, which is exactly the signal.
-     A hit is a critical/high finding on its own — this is one pipeline, not
-     two separate tasks; don't stop at step 6.
+     app, etc.) often does NOT respond on HTTP, which is exactly the signal a
+     live-only scan would miss. A hit is a critical/high finding on its own —
+     this is one pipeline, not two separate tasks; don't stop at step 6.
+     A name with NO DNS record at all (most permutation guesses) cannot have
+     a dangling CNAME to begin with, so if a full-candidate-list scan is
+     taking too long even with this tool's own built-in bulk tuning, it is
+     reasonable to prioritize finishing the scan against the (usually much
+     smaller) real-enumeration + resolved-hosts set first and treat the
+     wider permutation superset as best-effort within the remaining time
+     budget — report explicitly which set was actually covered rather than
+     silently only covering the smaller one.
 
   Noise discipline: steps 1–2 are passive and always safe; 3–5 touch DNS/HTTP
-  and should respect the engagement's rate/scope rules. Prefer `-silent`/quiet
-  flags so output stays parseable and the pipeline stays fast.
+  and should respect the engagement's rate/scope rules.
 references:
   - persona:osint-enum-v2
 provenance:

@@ -1,5 +1,5 @@
 schema_version: 1
-version: 1.0.0
+version: 1.1.0
 name: js-recon
 description: Client-side JavaScript bundle mining, endpoint extraction, and API key/secret leakage discovery.
 triggers:
@@ -18,23 +18,32 @@ tools:
   - grep
   - rg
 knowledge: |
-  Extract hidden API endpoints, routing patterns, and hardcoded secrets from client-side JavaScript bundles:
+  Extract hidden API endpoints, routing patterns, and hardcoded secrets from
+  client-side JavaScript bundles.
+
+  TOOLING: `katana_crawl`/`curl_probe` with `output_file` (an absolute path
+  under `/home/pentester/work/<target>/`) so a saved crawl/fetch result feeds
+  the `grep`/`rg` filtering steps below — those stay raw shell, since pure
+  text filtering on already-fetched content has no dedicated tool.
 
   1. SCRAPING JS ASSETS:
      - Use katana to crawl the web application and isolate all loaded `.js` scripts:
-       `katana -u <url> -d 2 -jc -silent | grep -E '\.js(\?|$)' | sort -u`
+       `katana_crawl(url, depth=2, output_file)`, then
+       `grep -E '\.js(\?|$)' <output_file> | sort -u`.
 
   2. HIDDEN API ROUTE EXTRACTION:
      - Download discovered JS files and search for API routes and URL paths:
-       `curl -sL <js_url> | rg -o -e '(\/api\/[a-zA-Z0-9_\-\/]+)' | sort -u`
+       `curl_probe(url=<js_url>, follow_redirects=true, output_file)`, then
+       `rg -o -e '(\/api\/[a-zA-Z0-9_\-\/]+)' <output_file> | sort -u`.
 
   3. SECRET & CREDENTIAL LEAK PATTERNS:
      - Scan JS files for high-signal secret patterns (API keys, JWTs, AWS tokens, Firebase configs):
-       `curl -sL <js_url> | rg -i -e '(api[_-]?key|access[_-]?token|bearer|secret|aws_key|firebaseConfig|authorization)' -C 2`
+       reuse step 2's saved file —
+       `rg -i -e '(api[_-]?key|access[_-]?token|bearer|secret|aws_key|firebaseConfig|authorization)' -C 2 <output_file>`.
 
   4. SOURCE MAP DISCOVERY:
      - Check if production source maps (`.js.map`) are exposed:
-       `curl -sIL <js_url>.map`
+       `curl_probe(url="<js_url>.map", headers_only=true, follow_redirects=true)`.
      - If exposed, note the full client-side source code recovery opportunity as a finding.
 
   5. STRUCTURED EVIDENCE:

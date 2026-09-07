@@ -1,5 +1,5 @@
 schema_version: 1
-version: 2.0.0
+version: 2.1.0
 name: reverse-engineering
 description: Senior-level static and dynamic binary analysis, vulnerability auditing, and firmware unpacking.
 triggers:
@@ -34,9 +34,18 @@ knowledge: |
   Analyze binaries methodically from low-risk static triage to deep disassembly and controlled dynamic tracing.
   Never guess or execute an unknown binary blindly:
 
+  TOOLING: prefer `checksec_audit(file)` and `radare2_disasm(file, command)` over
+  a raw shell command for those two steps — one tool call instead of a shell
+  chain avoids the operator-approval system's chained-command risk floor, and
+  is what actually makes these two run correctly at all (they're pure local
+  file analysis with no network target, dispatched through a dedicated
+  no-scope-check path). `readelf`/`strings`/`nm`/`objdump`/`strace`/`ltrace`/
+  `binwalk`/`gdb` have no dedicated tool and stay raw shell.
+
   1. BINARY TRIAGE & MITIGATION AUDIT (Static, Non-Invasive):
      - Identify architecture, endianness, and linking: `file <binary>`
-     - Audit binary protections (RELRO, Stack Canary, NX, PIE, ASLR): `checksec --file=<binary>`
+     - Audit binary protections (RELRO, Stack Canary, NX, PIE, ASLR):
+       `checksec_audit(file=<binary>)`.
      - Inspect headers and shared library dependencies: `readelf -h <binary>` and `readelf -d <binary>`
 
   2. STRING & SYMBOL SIGNAL HARVESTING:
@@ -48,13 +57,13 @@ knowledge: |
 
   3. DISASSEMBLY & CROSS-REFERENCE ANALYSIS WITH RADARE2:
      - Analyze functions and disassemble the entrypoint/main function non-interactively:
-       `r2 -q -c "aaa; afl" <binary>` (list all detected functions)
-       `r2 -q -c "aaa; s main; pdf" <binary>` (disassemble main function)
+       `radare2_disasm(file=<binary>, command="aaa; afl")` (list all detected functions)
+       `radare2_disasm(file=<binary>, command="aaa; s main; pdf")` (disassemble main function)
      - Trace cross-references to sensitive strings and sensitive APIs:
-       `r2 -q -c "aaa; iz" <binary>` (list data section strings)
-       `r2 -q -c "aaa; axt @@ str.*" <binary>` (find xrefs to all strings)
+       `radare2_disasm(file=<binary>, command="aaa; iz")` (list data section strings)
+       `radare2_disasm(file=<binary>, command="aaa; axt @@ str.*")` (find xrefs to all strings)
      - Trace callers of critical functions (e.g. sym.imp.system or sym.imp.strcpy):
-       `r2 -q -c "aaa; axt sym.imp.system" <binary>`
+       `radare2_disasm(file=<binary>, command="aaa; axt sym.imp.system")`
 
   4. DYNAMIC BEHAVIORAL TRACING (Controlled Sandbox Execution):
      - Trace system calls (file access, network sockets, child process execution):
