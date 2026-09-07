@@ -155,31 +155,39 @@ func runCapturedEnvToFile(ctx context.Context, extraEnv []string, outputFile str
 // even though the sandbox's root filesystem is otherwise writable.
 var sandboxHome = "/home/pentester" // overridden in tests, which can't write under the real path
 
-// hasPathPrefix reports whether p is lexically strictly inside base — a pure
+// hasPathPrefix reports whether p is lexically at or inside base — a pure
 // string/path comparison, no filesystem access. Both arguments must already
 // be resolved to the same degree (either both raw, or both passed through
-// filepath.EvalSymlinks) or the comparison is meaningless.
+// filepath.EvalSymlinks) or the comparison is meaningless. Equality (p ==
+// base) counts as inside: writeConfinedFile's second call site compares a
+// file's parent directory against sandboxHome, and a file living directly in
+// sandboxHome (parent == sandboxHome itself) is the ordinary, valid case —
+// rejecting it here would just mean a WriteFile attempt against the home
+// directory path itself, which the OS already refuses on its own.
 func hasPathPrefix(p, base string) bool {
 	rel, err := filepath.Rel(base, p)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// saveNote writes content to path and returns a short status line to append
-// to a tool's result text. path must be an absolute path under sandboxHome —
-// sandbox-mcp's own working directory is fixed at /home/pentester regardless
-// of whatever directory a separate shell command "cd"s into, so a relative
-// path here would silently resolve against the wrong base.
-func saveNote(path, content string) string {
+// writeConfinedFile writes content to path after confirming path is an
+// absolute path that resolves inside sandboxHome (see sandboxHome's doc
+// comment for why). Shared by every tool that accepts a model-chosen output
+// path — saveNote's append-to-captured-output style, and consolidate_hosts'
+// direct single-shot write — so the confinement logic exists in exactly one
+// place. Returns the cleaned absolute path and an empty reason on success,
+// or an empty path and a human-readable (unwrapped — callers embed it in
+// their own message format) reason otherwise.
+func writeConfinedFile(path string, content []byte) (clean string, reason string) {
 	if !filepath.IsAbs(path) {
-		return fmt.Sprintf("\n\n[output_file %q was not saved: must be an absolute path]", path)
+		return "", "must be an absolute path"
 	}
-	clean := filepath.Clean(path)
+	clean = filepath.Clean(path)
 	if !hasPathPrefix(clean, sandboxHome) {
-		return fmt.Sprintf("\n\n[output_file %q was not saved: must be under %s]", path, sandboxHome)
+		return "", fmt.Sprintf("must be under %s", sandboxHome)
 	}
 	dir := filepath.Dir(clean)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Sprintf("\n\n[output_file %q was not saved: %v]", path, err)
+		return "", err.Error()
 	}
 	// dir may pre-exist as (or contain) a symlink planted by an earlier step;
 	// re-resolve it, and sandboxHome the same way, before writing — comparing
@@ -189,10 +197,23 @@ func saveNote(path, content string) string {
 	realDir, dirErr := filepath.EvalSymlinks(dir)
 	realHome, homeErr := filepath.EvalSymlinks(sandboxHome)
 	if dirErr == nil && homeErr == nil && !hasPathPrefix(realDir, realHome) {
-		return fmt.Sprintf("\n\n[output_file %q was not saved: resolves outside %s]", path, sandboxHome)
+		return "", fmt.Sprintf("resolves outside %s", sandboxHome)
 	}
-	if err := os.WriteFile(clean, []byte(content), 0o600); err != nil {
-		return fmt.Sprintf("\n\n[output_file %q was not saved: %v]", path, err)
+	if err := os.WriteFile(clean, content, 0o600); err != nil {
+		return "", err.Error()
+	}
+	return clean, ""
+}
+
+// saveNote writes content to path and returns a short status line to append
+// to a tool's result text. path must be an absolute path under sandboxHome —
+// sandbox-mcp's own working directory is fixed at /home/pentester regardless
+// of whatever directory a separate shell command "cd"s into, so a relative
+// path here would silently resolve against the wrong base.
+func saveNote(path, content string) string {
+	clean, reason := writeConfinedFile(path, []byte(content))
+	if reason != "" {
+		return fmt.Sprintf("\n\n[output_file %q was not saved: %s]", path, reason)
 	}
 	return fmt.Sprintf("\n\n[output saved to %s]", clean)
 }

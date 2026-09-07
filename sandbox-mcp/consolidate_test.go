@@ -21,6 +21,8 @@ func writeTestFile(t *testing.T, dir, name, content string) string {
 
 func TestConsolidateHosts_MergesDeduplicatesAndFiltersNoise(t *testing.T) {
 	dir := t.TempDir()
+	sandboxHome = dir
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
 	f1 := writeTestFile(t, dir, "subs_subfinder.txt", "www.example.com\nDEV.example.com\napi.example.com\n")
 	f2 := writeTestFile(t, dir, "subs_amass.txt", "www.example.com\nSession Scope\n\nFQDN:\nexample.com\nnotexample.com\n")
 	out := filepath.Join(dir, "union.txt")
@@ -64,6 +66,8 @@ func TestConsolidateHosts_MergesDeduplicatesAndFiltersNoise(t *testing.T) {
 
 func TestConsolidateHosts_MissingInputFileIsSkippedNotFatal(t *testing.T) {
 	dir := t.TempDir()
+	sandboxHome = dir
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
 	f1 := writeTestFile(t, dir, "real.txt", "www.example.com\n")
 	out := filepath.Join(dir, "union.txt")
 
@@ -90,6 +94,8 @@ func TestConsolidateHosts_MissingInputFileIsSkippedNotFatal(t *testing.T) {
 
 func TestConsolidateHosts_HighConfidenceOnlyDropsNoiseLikeNames(t *testing.T) {
 	dir := t.TempDir()
+	sandboxHome = dir
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
 	f1 := writeTestFile(t, dir, "in.txt", "www.example.com\n142.example.com\nab.example.com\nsupport.example.com\n")
 	out := filepath.Join(dir, "union.txt")
 
@@ -150,6 +156,8 @@ func TestConsolidateHosts_RequiredFieldsAndValidation(t *testing.T) {
 
 func TestConsolidateHosts_MatchesApexAndIsCaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
+	sandboxHome = dir
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
 	f1 := writeTestFile(t, dir, "in.txt", "EXAMPLE.COM\nWWW.EXAMPLE.COM\nwww.example.com\n")
 	out := filepath.Join(dir, "union.txt")
 
