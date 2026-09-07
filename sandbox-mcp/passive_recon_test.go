@@ -70,6 +70,8 @@ func TestResolvePassiveReconSources(t *testing.T) {
 // still gets saved, proving the save-path runs regardless of exec success.
 func TestPassiveReconBatch_RunsRequestedSourcesConcurrentlyAndSavesEach(t *testing.T) {
 	dir := t.TempDir()
+	sandboxHome = dir
+	t.Cleanup(func() { sandboxHome = "/home/pentester" })
 	session := newTestServer(t)
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "passive_recon_batch",

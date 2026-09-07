@@ -44,9 +44,6 @@ func consolidateHandler(_ context.Context, _ *mcp.CallToolRequest, args consolid
 	if outputFile == "" {
 		return errResult("output_file is required")
 	}
-	if !filepath.IsAbs(outputFile) {
-		return errResult(fmt.Sprintf("output_file %q must be an absolute path", outputFile))
-	}
 
 	// Matches the bare apex ("example.com") or any depth of subdomain
 	// ("a.example.com", "a.b.example.com") — each label RFC1035-shaped
@@ -93,14 +90,12 @@ func consolidateHandler(_ context.Context, _ *mcp.CallToolRequest, args consolid
 	}
 	sort.Strings(unique)
 
-	if err := os.MkdirAll(filepath.Dir(outputFile), 0o755); err != nil {
-		return errResult(fmt.Sprintf("could not create directory for output_file: %v", err))
-	}
-	if err := os.WriteFile(outputFile, []byte(strings.Join(unique, "\n")+"\n"), 0o644); err != nil {
-		return errResult(fmt.Sprintf("could not write output_file: %v", err))
+	clean, reason := writeConfinedFile(outputFile, []byte(strings.Join(unique, "\n")+"\n"))
+	if reason != "" {
+		return errResult(fmt.Sprintf("output_file %q was not written: %s", outputFile, reason))
 	}
 
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: consolidateSummary(args, domain, outputFile, linesRead, len(unique), dropped, unreadable, unique)}}}, nil, nil
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: consolidateSummary(args, domain, clean, linesRead, len(unique), dropped, unreadable, unique)}}}, nil, nil
 }
 
 // looksHighConfidence rejects the same class of machine-generated-looking
