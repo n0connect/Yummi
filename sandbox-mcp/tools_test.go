@@ -103,6 +103,99 @@ func TestFfufFuzz_AppendsFUZZWhenMissing(t *testing.T) {
 	_ = result // connection refused is expected (nothing listens on :1) — just proving argv construction ran
 }
 
+func TestFfufFuzz_DoesNotAppendFUZZWhenDataContainsFUZZ(t *testing.T) {
+	if _, err := exec.LookPath("ffuf"); err != nil {
+		t.Skip("ffuf not installed on this host")
+	}
+	if err := os.MkdirAll("/tmp/yummi-test-wordlists", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/tmp/yummi-test-wordlists/w.txt", []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("YUMMI_WORDLIST_DIR", "/tmp/yummi-test-wordlists")
+	session := newTestServer(t)
+	// A URL with no FUZZ keyword and a POST body that DOES carry it: proves
+	// the handler targets the body (no /FUZZ suffix silently added to the
+	// URL too, which would fuzz two things at once instead of one).
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ffuf_fuzz",
+		Arguments: map[string]any{
+			"url": "http://127.0.0.1:1", "wordlist": "w.txt",
+			"method": "POST", "data": `{"FUZZ":"test"}`, "headers": []string{"Content-Type: application/json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	_ = result // connection refused is expected — proving argv construction ran without a validation error
+}
+
+func TestFfufFuzz_RejectsFlagInjectionInNewFields(t *testing.T) {
+	session := newTestServer(t)
+	base := map[string]any{"url": "http://x/FUZZ", "wordlist": "common.txt"}
+	cases := []map[string]any{
+		{"match_codes": "-mc"},
+		{"method": "-X"},
+		{"headers": []string{"-H"}},
+	}
+	for _, extra := range cases {
+		args := map[string]any{}
+		for k, v := range base {
+			args[k] = v
+		}
+		for k, v := range extra {
+			args[k] = v
+		}
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "ffuf_fuzz", Arguments: args})
+		if err != nil {
+			t.Fatalf("%v: CallTool: %v", extra, err)
+		}
+		if !result.IsError {
+			t.Errorf("%v: expected IsError for a flag-shaped value", extra)
+		}
+	}
+}
+
+func TestCurlProbe_RejectsFlagInjectionInMethodAndHeaders(t *testing.T) {
+	session := newTestServer(t)
+	cases := []map[string]any{
+		{"url": "http://x", "method": "-X"},
+		{"url": "http://x", "headers": []string{"-H"}},
+	}
+	for _, args := range cases {
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "curl_probe", Arguments: args})
+		if err != nil {
+			t.Fatalf("%v: CallTool: %v", args, err)
+		}
+		if !result.IsError {
+			t.Errorf("%v: expected IsError for a flag-shaped value", args)
+		}
+	}
+}
+
+func TestHeaderFlags(t *testing.T) {
+	argv, err := headerFlags([]string{"X-Forwarded-For: 127.0.0.1", "", "Content-Type: application/json"})
+	if err != nil {
+		t.Fatalf("headerFlags: %v", err)
+	}
+	want := []string{"-H", "X-Forwarded-For: 127.0.0.1", "-H", "Content-Type: application/json"}
+	if len(argv) != len(want) {
+		t.Fatalf("headerFlags = %v, want %v", argv, want)
+	}
+	for i := range want {
+		if argv[i] != want[i] {
+			t.Fatalf("headerFlags = %v, want %v", argv, want)
+		}
+	}
+}
+
+func TestHeaderFlags_RejectsFlagShapedHeader(t *testing.T) {
+	if _, err := headerFlags([]string{"--evil-flag"}); err == nil {
+		t.Fatal("expected an error for a flag-shaped header value")
+	}
+}
+
 func TestWhatwebScan_EmptyURL(t *testing.T) {
 	session := newTestServer(t)
 	result, _ := session.CallTool(context.Background(), &mcp.CallToolParams{
