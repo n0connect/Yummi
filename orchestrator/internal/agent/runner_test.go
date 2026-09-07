@@ -296,6 +296,86 @@ func TestRunnerE2E_AutoModeStillGatesOnDestructiveCommand(t *testing.T) {
 	}
 }
 
+// TestRunnerE2E_AutoApproveNonCriticalSkipsGateForLowRisk proves the
+// per-task override (Task.AutoApproveNonCritical, set via
+// Runner.SetTaskAutoApprove): in ask_permission mode — which normally gates
+// EVERY command — a task with the override enabled runs a medium-risk
+// command straight through to completion with no approval wait at all,
+// unlike TestRunnerE2E_ApprovalGate's identical setup without the override.
+func TestRunnerE2E_AutoApproveNonCriticalSkipsGateForLowRisk(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	es := realShellStore(t)
+	validator := conductor.NewValidator()
+	ollama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"run a scan"}]}`,
+		"[RUN_COMMAND]\n{\"command\":\"echo scanning\",\"step_id\":\"s1\",\"risk_level\":\"medium\"}",
+		"[FINISH]\n{\"summary\":\"scan auto-approved and done\"}",
+	)
+
+	cfg := fastRetryCfg()
+	cfg.ApprovalMode = ModeAskPermission
+	runner := NewRunner(store, ollama, validator, NewStoreExecer(es, 5*time.Second), cfg)
+
+	task, err := runner.CreateAndPlan(context.Background(), "test-session", "scan without bothering the operator")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if err := runner.SetTaskAutoApprove(task.ID, true); err != nil {
+		t.Fatalf("SetTaskAutoApprove: %v", err)
+	}
+	if err := runner.Start(task.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
+	if !strings.Contains(got.Summary, "scan auto-approved and done") {
+		t.Fatalf("summary mismatch: %q", got.Summary)
+	}
+}
+
+// TestRunnerE2E_AutoApproveNonCriticalStillGatesHighRisk proves the
+// override's own floor: even with it enabled, a "high" risk_level command
+// still pauses awaiting_approval in ask_permission mode — only below-high
+// risk is ever auto-approved by this toggle.
+func TestRunnerE2E_AutoApproveNonCriticalStillGatesHighRisk(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	es := realShellStore(t)
+	validator := conductor.NewValidator()
+	ollama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"brute force a login"}]}`,
+		"[RUN_COMMAND]\n{\"command\":\"hydra -l admin -P rockyou.txt 10.0.0.5 ssh\",\"step_id\":\"s1\",\"risk_level\":\"high\"}",
+		"[FINISH]\n{\"summary\":\"brute force approved and done\"}",
+	)
+
+	cfg := fastRetryCfg()
+	cfg.ApprovalMode = ModeAskPermission
+	runner := NewRunner(store, ollama, validator, NewStoreExecer(es, 5*time.Second), cfg)
+
+	task, err := runner.CreateAndPlan(context.Background(), "test-session", "brute force with the override on")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if err := runner.SetTaskAutoApprove(task.ID, true); err != nil {
+		t.Fatalf("SetTaskAutoApprove: %v", err)
+	}
+	if err := runner.Start(task.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	pending := waitForStatus(t, store, task.ID, StatusAwaitingApproval, 5*time.Second)
+	if pending.PendingRisk != "high" {
+		t.Fatalf("expected high risk to still gate despite AutoApproveNonCritical, got %q", pending.PendingRisk)
+	}
+
+	if err := runner.Approve(task.ID, pending.PendingProposalID, true, ""); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
+	if !strings.Contains(got.Summary, "brute force approved and done") {
+		t.Fatalf("summary mismatch: %q", got.Summary)
+	}
+}
+
 // TestResumeAfterAskOperatorInjectsMessageAndContinues is a regression test
 // for a bug found via live stress-testing: once a task paused via
 // [ASK_OPERATOR], resuming it (POST /api/v1/tasks/{id}/start) just re-entered

@@ -975,6 +975,16 @@ func (r *EinoRunner) SetApprovalMode(mode agent.ApprovalMode) error {
 	return nil
 }
 
+// SetTaskAutoApprove flips one task's AutoApproveNonCritical override. One
+// store.Update call suffices regardless of whether taskID names this
+// runner's own top-level task or a delegated sub-agent's (SubAgents are
+// *agent.Runner graph instances, per this package's documented design) —
+// every Runner in the whole hierarchy shares the SAME *agent.Store instance
+// (wired identically in cmd/orchestrator/main.go).
+func (r *EinoRunner) SetTaskAutoApprove(taskID string, enable bool) error {
+	return r.store.Update(taskID, func(t *agent.Task) { t.AutoApproveNonCritical = enable })
+}
+
 // ResumeRecovered reconstructs a fresh native conversation from durable task
 // state. It cannot restore Eino's private token history, so the recovery
 // message explicitly requires side-effect verification before repetition.

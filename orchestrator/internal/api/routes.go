@@ -124,6 +124,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Post("/tasks/{id}/start", HandleStartTask(taskRunner))
 		r.Post("/tasks/{id}/stop", HandleStopTask(taskRunner))
 		r.Post("/tasks/{id}/approve", HandleApproveTask(taskRunner, taskStore))
+		r.Post("/tasks/{id}/auto-approve", HandleSetTaskAutoApprove(taskRunner))
 	})
 
 	// WebSocket

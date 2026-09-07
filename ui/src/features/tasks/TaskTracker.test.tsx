@@ -159,6 +159,89 @@ describe('TaskTracker concurrent sub-agent approvals', () => {
   })
 })
 
+describe('TaskTracker per-task auto-approve toggle', () => {
+  const gatedTask: AgentTask = {
+    id: 'task-gated',
+    session_id: 'session-1',
+    goal: 'Recon target',
+    status: 'awaiting_approval',
+    pending_proposal_id: 'prop-1',
+    pending_command: 'cat a.txt | sort -u',
+    pending_risk: 'medium',
+    steps_used: 3,
+    step_budget: 10
+  }
+
+  it('offers a third "approve & auto-approve" action only when the handler is wired, and it both approves and enables the toggle', () => {
+    const onApprove = vi.fn()
+    const onToggleAutoApprove = vi.fn()
+
+    render(
+      <TaskTracker
+        liveTask={gatedTask}
+        onClose={() => {}}
+        onApprove={onApprove}
+        onStop={() => {}}
+        onResume={() => {}}
+        onToggleAutoApprove={onToggleAutoApprove}
+      />
+    )
+
+    const btn = screen.getByText('Onayla & bu görevde gerisini otomatik onayla')
+    fireEvent.click(btn)
+    expect(onApprove).toHaveBeenCalledWith('prop-1', true)
+    expect(onToggleAutoApprove).toHaveBeenCalledWith(true)
+  })
+
+  it('does not render the third action at all when no toggle handler is provided', () => {
+    render(
+      <TaskTracker
+        liveTask={gatedTask}
+        onClose={() => {}}
+        onApprove={() => {}}
+        onStop={() => {}}
+        onResume={() => {}}
+      />
+    )
+    expect(screen.queryByText('Onayla & bu görevde gerisini otomatik onayla')).toBeNull()
+  })
+
+  it('shows the "auto-approve is on" badge once the task has the flag set, and turning it off calls the handler with false', () => {
+    const onToggleAutoApprove = vi.fn()
+    const task: AgentTask = { ...gatedTask, status: 'running', pending_proposal_id: undefined, auto_approve_non_critical: true }
+
+    render(
+      <TaskTracker
+        liveTask={task}
+        onClose={() => {}}
+        onApprove={() => {}}
+        onStop={() => {}}
+        onResume={() => {}}
+        onToggleAutoApprove={onToggleAutoApprove}
+      />
+    )
+
+    expect(screen.getByText('Bu görevde düşük/orta risk otomatik onaylanıyor')).toBeTruthy()
+    fireEvent.click(screen.getByText('Kapat'))
+    expect(onToggleAutoApprove).toHaveBeenCalledWith(false)
+  })
+
+  it('does not show the badge once the task is terminal, even with the flag still set', () => {
+    const task: AgentTask = { ...gatedTask, status: 'completed', pending_proposal_id: undefined, auto_approve_non_critical: true }
+    render(
+      <TaskTracker
+        liveTask={task}
+        onClose={() => {}}
+        onApprove={() => {}}
+        onStop={() => {}}
+        onResume={() => {}}
+        onToggleAutoApprove={() => {}}
+      />
+    )
+    expect(screen.queryByText('Bu görevde düşük/orta risk otomatik onaylanıyor')).toBeNull()
+  })
+})
+
 describe('TaskTracker persistent task tree', () => {
   it('keeps terminal and running specialist branches visible together', () => {
     const parent: AgentTask = { id: 'p', session_id: 's', goal: 'Assess target', status: 'running', steps_used: 1, step_budget: 5 }
