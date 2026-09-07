@@ -350,11 +350,6 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 			return "", fmt.Errorf("invalid mcp args: %w", err)
 		}
 	}
-	target, ok := sandboxmcp.Target(rec.MCPTool, args)
-	if !ok {
-		return "", fmt.Errorf("mcp tool %q: no target found in arguments", rec.MCPTool)
-	}
-
 	execFn := func(ctx context.Context) (*sandbox.Result, error) {
 		start := time.Now()
 		callResult, err := e.sandboxMCP.CallTool(ctx, rec.MCPTool, args)
@@ -364,7 +359,22 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 		return mcpResultToSandboxResult(rec.Command, callResult, time.Since(start)), nil
 	}
 
-	result, err := runScopedTarget(ctx, e.gateway, target, nil, rec.Command, execFn)
+	// A tool with no target field at all (checksec_audit, radare2_disasm,
+	// consolidate_hosts) touches no network — nothing for the gateway to
+	// scope-check, and requiring one anyway made every such tool fail every
+	// real dispatch (see sandboxmcp.NeedsTarget's doc comment). Every other
+	// tool keeps the exact same scope-check-then-exec path as before.
+	var result *sandbox.Result
+	var err error
+	if sandboxmcp.NeedsTarget(rec.MCPTool) {
+		target, ok := sandboxmcp.Target(rec.MCPTool, args)
+		if !ok {
+			return "", fmt.Errorf("mcp tool %q: no target found in arguments", rec.MCPTool)
+		}
+		result, err = runScopedTarget(ctx, e.gateway, target, nil, rec.Command, execFn)
+	} else {
+		result, err = execFn(ctx)
+	}
 	if err != nil {
 		return handleExecError(ctx, e.knowledge, rec.Command, result, err)
 	}
@@ -403,6 +413,41 @@ func mcpResultToSandboxResult(command string, result *mcp.CallToolResult, dur ti
 	}
 }
 
+// maxRuleDescription mirrors the gateway's hard cap on AddTemporaryRule's
+// description field (gateway/src/ipc/mod.rs) — a longer string doesn't just
+// get logged oddly, the whole request is rejected and the nftables rule is
+// never installed. Agent-generated recon commands are frequently long
+// multi-step shell pipelines, so this is reachable in practice, not
+// theoretical: an untruncated 485-char command plus an 18-21 char label
+// exceeds it. See [[project_conductor_cloud_and_live_verification]] memory —
+// found live against example.com's candidate-consolidation step.
+const maxRuleDescription = 500
+
+// ruleDescription builds an AddTemporaryRule description from a label and the
+// triggering command, truncating (on a rune boundary) so the combined string
+// never exceeds maxRuleDescription.
+func ruleDescription(label, command string) string {
+	desc := label + command
+	if len(desc) <= maxRuleDescription {
+		return desc
+	}
+	const ellipsis = "...(truncated)"
+	budget := maxRuleDescription - len(label) - len(ellipsis)
+	if budget <= 0 {
+		r := []rune(label)
+		if len(r) > maxRuleDescription {
+			r = r[:maxRuleDescription]
+		}
+		return string(r)
+	}
+	runes := []rune(command)
+	kept := 0
+	for kept < len(runes) && len(string(runes[:kept+1])) <= budget {
+		kept++
+	}
+	return label + string(runes[:kept]) + ellipsis
+}
+
 // openAllowRules installs a 1-hour temporary gateway allow rule for each
 // resolved IP of target (or target's own /32·/128 when it is already an IP and
 // ips is empty). It never fails the caller — a rule-install problem is returned
@@ -418,7 +463,7 @@ func openAllowRules(pc *gateway.Client, target string, ips []string, command str
 	}
 	var warnings []string
 	for _, network := range networks {
-		if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
+		if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, ruleDescription("approved execution: ", command)); nftErr != nil {
 			slog.Warn("executor: gateway nftables unlock failed (proceeding — check gateway logs)",
 				"target", target, "network", network, "error", nftErr)
 			warnings = append(warnings, fmt.Sprintf("gateway nftables unlock for %s failed (%v)", network, nftErr))
@@ -510,7 +555,7 @@ func UnlockEgressTarget(pc *gateway.Client, target, command string, pinnedIPs ..
 	var firstErr error
 	opened := 0
 	for _, network := range networks {
-		if _, _, _, err := pc.AddTemporaryRule(network, 3600, "egress approved: "+command); err != nil {
+		if _, _, _, err := pc.AddTemporaryRule(network, 3600, ruleDescription("egress approved: ", command)); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
