@@ -48,6 +48,7 @@ func HandleGenerateReport(ks *knowledge.Store, sm *session.Manager) http.Handler
 		var targets []knowledge.Target
 		var findings []knowledge.Finding
 		var assets []knowledge.AssetNode
+		var scopeRules []knowledge.ScopeRule
 
 		if ks != nil {
 			targets = ks.ListTargets(sessionID)
@@ -58,6 +59,11 @@ func HandleGenerateReport(ks *knowledge.Store, sm *session.Manager) http.Handler
 				// Non-fatal, log or continue with empty assets
 				assets = nil
 			}
+			scopeRules, err = ks.ListScopeRules(r.Context(), sessionID)
+			if err != nil {
+				// Non-fatal — report still generates without scope classification.
+				scopeRules = nil
+			}
 		}
 
 		data := report.ReportData{
@@ -66,6 +72,7 @@ func HandleGenerateReport(ks *knowledge.Store, sm *session.Manager) http.Handler
 			Targets:     targets,
 			Findings:    findings,
 			Assets:      assets,
+			ScopeRules:  scopeRules,
 		}
 
 		out, contentType, err := report.Generate(data, repFmt)

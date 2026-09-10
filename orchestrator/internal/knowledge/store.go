@@ -22,6 +22,7 @@ type Store struct {
 	tactics    map[string]Tactic
 	contexts   map[string]PersistentContext
 	assets     map[string]AssetNode
+	scopeRules map[string]ScopeRule
 	embeddings map[string]embeddingRow // key: embeddingKey(sourceTable, sourceID, model)
 	embedder   Embedder                // optional; set via SetEmbedder, used by RecordTactic's embed-on-write hook
 	embedModel string
@@ -85,6 +86,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 		tactics:    make(map[string]Tactic),
 		contexts:   make(map[string]PersistentContext),
 		assets:     make(map[string]AssetNode),
+		scopeRules: make(map[string]ScopeRule),
 		embeddings: make(map[string]embeddingRow),
 		db:         db,
 	}
@@ -97,6 +99,9 @@ func NewStore(db *sql.DB) (*Store, error) {
 		}
 		if _, err := db.Exec(assetsSchema); err != nil {
 			return nil, fmt.Errorf("knowledge assets schema: %w", err)
+		}
+		if _, err := db.Exec(scopeRulesSchema); err != nil {
+			return nil, fmt.Errorf("knowledge scope rules schema: %w", err)
 		}
 		// Migrate databases whose findings table predates provenance columns.
 		_, _ = db.Exec(`ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`)
