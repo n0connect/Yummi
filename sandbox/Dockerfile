@@ -39,6 +39,10 @@ RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest && \
     go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
     go install github.com/projectdiscovery/alterx/cmd/alterx@latest && \
     go install github.com/projectdiscovery/katana/cmd/katana@latest && \
+    go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
+    go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest && \
+    go install github.com/LukaSikic/subzy@latest && \
+    go install github.com/BishopFox/jsluice/cmd/jsluice@latest && \
     go install github.com/hahwul/dalfox/v2@latest && \
     go install github.com/lc/gau/v2/cmd/gau@latest
 
@@ -59,6 +63,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       amass \
+      arjun \
       binutils \
       binwalk \
       ca-certificates \
@@ -78,6 +83,7 @@ RUN apt-get update && \
       iptables \
       iproute2 \
       jq \
+      jwt-tool \
       libcap2-bin \
       ltrace \
       medusa \
@@ -165,11 +171,11 @@ COPY --from=mcpbuilder /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
 RUN chmod 0755 /usr/local/bin/yummi-sandbox-mcp
 
 # Modern recon/web binaries (see the recontools stage) —
-# httpx/dnsx/alterx/katana/dalfox/gau. Verify they landed and are runnable, so
+# httpx/dnsx/alterx/katana/dalfox/gau/naabu/tlsx/subzy/jsluice. Verify they landed and are runnable, so
 # a broken install fails the build rather than surfacing as a mysterious
 # "command not found" mid-engagement.
 COPY --from=recontools /out/ /usr/local/bin/
-RUN for tool in httpx dnsx alterx gau katana dalfox; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
+RUN for tool in httpx dnsx alterx gau katana dalfox naabu tlsx subzy jsluice; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
 
 # Pentest commands from orchestrator run as UID 1000 via docker exec --user;
 # the operator's Bash tab attaches a tmux session as the same user. The

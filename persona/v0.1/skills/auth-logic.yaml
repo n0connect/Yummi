@@ -1,0 +1,45 @@
+schema_version: 1
+version: 1.0.0
+name: auth-logic
+description: Penetration testing of JSON Web Tokens (JWT), session state machines, OAuth2 flows, and authentication logic.
+triggers:
+  - auth logic
+  - jwt tool
+  - jwt
+  - token tampering
+  - oauth
+  - session hijacking
+  - none algorithm
+  - privilege escalation
+tools:
+  - jwt_tool
+  - curl
+knowledge: |
+  Audit JSON Web Tokens, session tokens, and authentication logic for cryptographic and implementation flaws.
+
+  TOOLING: Prefer `jwt_tool_inspect` for decoding, analyzing, and tampering with JWT tokens.
+  Use `curl_probe` to send manipulated tokens to protected endpoints.
+
+  1. JWT DECODING & ANALYSIS:
+     - Decode header, payload, and signature: `jwt_tool_inspect(jwt="<token>", mode="decode")`.
+     - Inspect claims: `alg`, `typ`, `kid`, `jku`, `iss`, `sub`, `exp`, `role`.
+
+  2. COMMON JWT ATTACK VECTORS:
+     - None Algorithm Attack: Forge token with `"alg": "none"` or `"alg": "None"`:
+       `jwt_tool_inspect(jwt="<token>", mode="tamper", tamper_claims="role=admin", key="")`.
+     - Key Confusion (RS256 to HS256): Sign token using public key as HMAC secret:
+       `jwt_tool_inspect(jwt="<token>", mode="tamper", tamper_claims="role=admin", key="<public_key_pem>")`.
+     - Weak HMAC Secret Brute-forcing: Test signature against standard wordlists.
+
+  3. OAUTH2 & SESSION LOGIC:
+     - Test OAuth2 `redirect_uri` validation against open redirects and parameter pollution.
+     - Check state parameter validation against CSRF in auth flows.
+     - Test session invalidation upon password reset or logout.
+
+  4. REPORTING:
+     - Record original token, forged token, endpoint tested, and proof of elevated access.
+references:
+  - persona:auth-logic-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/auth-logic.yaml

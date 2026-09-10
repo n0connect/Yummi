@@ -520,6 +520,188 @@ func radare2Handler(ctx context.Context, _ *mcp.CallToolRequest, args radare2Arg
 	return runCaptured(ctx, "r2", "-q", "-c", cmd, file)
 }
 
+type arjunArgs struct {
+	URL        string `json:"url" jsonschema:"the target URL to discover query/body parameters for"`
+	Method     string `json:"method,omitempty" jsonschema:"HTTP method to test: GET, POST, or JSON (default: GET)"`
+	Wordlist   string `json:"wordlist,omitempty" jsonschema:"optional custom parameter wordlist name under /wordlists"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func arjunHandler(ctx context.Context, _ *mcp.CallToolRequest, args arjunArgs) (*mcp.CallToolResult, any, error) {
+	url := strings.TrimSpace(args.URL)
+	if url == "" {
+		return errResult("url is required")
+	}
+	argv := []string{"-u", url}
+	if m := strings.TrimSpace(args.Method); m != "" {
+		if err := rejectIfFlagLike("method", m); err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-m", m)
+	}
+	if args.Wordlist != "" {
+		wl, err := resolveWordlist(args.Wordlist)
+		if err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-w", wl)
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "arjun", argv...)
+}
+
+type naabuArgs struct {
+	Target     string `json:"target" jsonschema:"the target host or IP to scan for open ports"`
+	Ports      string `json:"ports,omitempty" jsonschema:"port range or list, e.g. 80,443 or top-100 or 1-1000"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func naabuHandler(ctx context.Context, _ *mcp.CallToolRequest, args naabuArgs) (*mcp.CallToolResult, any, error) {
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return errResult("target is required")
+	}
+	argv := []string{"-host", target, "-silent"}
+	if p := strings.TrimSpace(args.Ports); p != "" {
+		if err := rejectIfFlagLike("ports", p); err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-p", p)
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "naabu", argv...)
+}
+
+type tlsxArgs struct {
+	Target     string `json:"target" jsonschema:"the target host or URL to probe for TLS/SSL information"`
+	SAN        bool   `json:"san,omitempty" jsonschema:"pass -san to extract Subject Alternative Names from the certificate"`
+	Jarm       bool   `json:"jarm,omitempty" jsonschema:"pass -jarm to compute the JARM fingerprint"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func tlsxHandler(ctx context.Context, _ *mcp.CallToolRequest, args tlsxArgs) (*mcp.CallToolResult, any, error) {
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return errResult("target is required")
+	}
+	argv := []string{"-u", target, "-silent"}
+	if args.SAN {
+		argv = append(argv, "-san")
+	}
+	if args.Jarm {
+		argv = append(argv, "-jarm")
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "tlsx", argv...)
+}
+
+type cloudEnumArgs struct {
+	Keyword    string `json:"keyword" jsonschema:"keyword or company/brand name to search for across AWS, Azure, and GCP"`
+	QuickScan  bool   `json:"quick_scan,omitempty" jsonschema:"pass -q to run quick scan with second-level mutations disabled"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func cloudEnumHandler(ctx context.Context, _ *mcp.CallToolRequest, args cloudEnumArgs) (*mcp.CallToolResult, any, error) {
+	kw := strings.TrimSpace(args.Keyword)
+	if kw == "" {
+		return errResult("keyword is required")
+	}
+	if err := rejectIfFlagLike("keyword", kw); err != nil {
+		return errResult(err.Error())
+	}
+	argv := []string{"-k", kw}
+	if args.QuickScan {
+		argv = append(argv, "-q")
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "cloud_enum", argv...)
+}
+
+type jwtToolArgs struct {
+	Token      string `json:"token" jsonschema:"the raw JWT token string to inspect and test"`
+	Mode       string `json:"mode,omitempty" jsonschema:"test mode (e.g. 'at' for All Tests / tampering, 't' for tamper, 'b' for dictionary brute-force)"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func jwtToolHandler(ctx context.Context, _ *mcp.CallToolRequest, args jwtToolArgs) (*mcp.CallToolResult, any, error) {
+	tok := strings.TrimSpace(args.Token)
+	if tok == "" {
+		return errResult("token is required")
+	}
+	if err := rejectIfFlagLike("token", tok); err != nil {
+		return errResult(err.Error())
+	}
+	argv := []string{tok}
+	if m := strings.TrimSpace(args.Mode); m != "" {
+		if err := rejectIfFlagLike("mode", m); err != nil {
+			return errResult(err.Error())
+		}
+		argv = append(argv, "-M", m)
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "jwt_tool", argv...)
+}
+
+type subzyArgs struct {
+	Target     string `json:"target" jsonschema:"the target domain or path to a targets list file"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func subzyHandler(ctx context.Context, _ *mcp.CallToolRequest, args subzyArgs) (*mcp.CallToolResult, any, error) {
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return errResult("target is required")
+	}
+	argv := []string{"run", "--target", target}
+	return runCapturedToFile(ctx, args.OutputFile, "subzy", argv...)
+}
+
+type jsluiceArgs struct {
+	URL        string `json:"url" jsonschema:"the target JavaScript file URL or local file path"`
+	Mode       string `json:"mode,omitempty" jsonschema:"extraction mode: 'urls' (extract paths and endpoints) or 'secrets' (extract API keys and tokens). Default is 'urls'"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func jsluiceHandler(ctx context.Context, _ *mcp.CallToolRequest, args jsluiceArgs) (*mcp.CallToolResult, any, error) {
+	url := strings.TrimSpace(args.URL)
+	if url == "" {
+		return errResult("url is required")
+	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
+	}
+	mode := strings.TrimSpace(args.Mode)
+	if mode != "secrets" {
+		mode = "urls"
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "jsluice", mode, url)
+}
+
+type graphqlCopArgs struct {
+	URL        string `json:"url" jsonschema:"the target GraphQL endpoint URL (e.g. https://example.com/graphql)"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func graphqlCopHandler(ctx context.Context, _ *mcp.CallToolRequest, args graphqlCopArgs) (*mcp.CallToolResult, any, error) {
+	url := strings.TrimSpace(args.URL)
+	if url == "" {
+		return errResult("url is required")
+	}
+	if err := rejectIfFlagLike("url", url); err != nil {
+		return errResult(err.Error())
+	}
+	return runCapturedToFile(ctx, args.OutputFile, "graphql-cop", "-t", url)
+}
+
+type corsyArgs struct {
+	URL        string `json:"url" jsonschema:"the target URL to analyze for CORS misconfigurations"`
+	OutputFile string `json:"output_file,omitempty" jsonschema:"optional absolute path to also save this tool's raw output to"`
+}
+
+func corsyHandler(ctx context.Context, _ *mcp.CallToolRequest, args corsyArgs) (*mcp.CallToolResult, any, error) {
+	url := strings.TrimSpace(args.URL)
+	if url == "" {
+		return errResult("url is required")
+	}
+	argv := []string{"-u", url}
+	return runCapturedToFile(ctx, args.OutputFile, "corsy", argv...)
+}
+
 // registerExtendedTools wires the second wave of cataloged tools. Called
 // from registerTools in tools.go.
 func registerExtendedTools(server *mcp.Server) {
@@ -611,4 +793,40 @@ func registerExtendedTools(server *mcp.Server) {
 		Name:        "radare2_disasm",
 		Description: "Analyze and disassemble binaries non-interactively with radare2 (r2).",
 	}, radare2Handler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "arjun_scan",
+		Description: "Discover hidden HTTP parameters for a URL with arjun.",
+	}, arjunHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "naabu_scan",
+		Description: "Fast port discovery on a target host or IP with naabu.",
+	}, naabuHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "tlsx_scan",
+		Description: "Probe TLS/SSL certificates, extract SAN hostnames, and calculate JARM fingerprints with tlsx.",
+	}, tlsxHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "cloud_enum_scan",
+		Description: "Enumerate multi-cloud assets in AWS S3, Azure Blob Storage, and Google Cloud Storage with cloud_enum.",
+	}, cloudEnumHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "jwt_tool_inspect",
+		Description: "Analyze, tamper, and audit JSON Web Tokens (JWT) with jwt_tool.",
+	}, jwtToolHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "subzy_scan",
+		Description: "Check a domain or target list for subdomain takeover vulnerabilities with subzy.",
+	}, subzyHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "jsluice_scan",
+		Description: "Extract URLs, endpoints, and secrets from JavaScript files with jsluice.",
+	}, jsluiceHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "graphql_cop_scan",
+		Description: "Audit GraphQL endpoints for security flaws, introspection, and misconfigurations with graphql-cop.",
+	}, graphqlCopHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "corsy_scan",
+		Description: "Analyze and detect CORS misconfigurations on a URL with corsy.",
+	}, corsyHandler)
 }

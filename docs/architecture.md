@@ -1,220 +1,192 @@
-← [Back to README](../README.md) · [Docs index](README.md)
+[Back to Project README](../README.md) · [Documentation Index](README.md)
 
-# Architecture
+# System Architecture
 
-Yummi is **five runtime components** working across **three build ecosystems** (Go, Rust, Node/React). This page explains what each component is, why it exists as a *separate* process rather than a library call, and exactly how a command travels from an operator's intent to a real command running against a real target.
+Yummi operates across **five runtime components** organized within **three build ecosystems** (Go, Rust, and Node/React). This document details the component responsibilities, process isolation model, network boundaries, and execution pathways.
 
-If you take away one sentence from this whole page, take this one: **the model proposes commands; non-LLM code owns approval state, target checks, execution, and network enforcement.**
+Core Invariant: **The LLM proposes actions; deterministic software controls approval, target validation, command execution, and network policy.**
 
-## Table of contents
+## Table of Contents
 
-- [The five components](#five-components)
-- [brain/ — an alternate agent surface](#brain)
-- [Why five processes and not one binary](#why-separate-processes)
-- [Network topology](#network-topology)
-- [Data flow: a single chat command](#flow-single-command)
-- [Data flow: an agentic task](#flow-agentic-task)
-- [Data flow: the approval gate](#flow-approval-gate)
-- [Where each build ecosystem lives](#build-ecosystems)
-- [What is *not* in this repository](#not-in-scope)
+- [Component Topology](#the-five-components)
+- [LangGraph Brain Integration](#brain)
+- [Process Isolation Model](#why-separate-processes)
+- [Network Segmentation](#network-topology)
+- [Data Flows](#data-flows)
+  - [Single Command Execution](#flow-single-command)
+  - [Autonomous Agent Task](#flow-agentic-task)
+  - [Approval Gate Lifecycle](#flow-approval-gate)
+- [Ecosystem Organization](#build-ecosystems)
+- [Non-Goals and Out-of-Scope Boundaries](#not-in-scope)
 
 ---
 
-## The five components <a id="five-components"></a>
+## Component Topology <a id="five-components"></a>
 
-```
-                         ┌─────────────────────┐
-        operator ───────▶│   ui (React/nginx)   │  :3000
-                         └──────────┬───────────┘
-                                    │ /api, /ws (proxied)
-                         ┌──────────▼───────────┐
-        CLI ────────────▶│  orchestrator (Go)   │  :9080 (127.0.0.1 only)
-                         │  conductor + agent    │
-                         └─────┬────────┬────────┘
-                                │        │
-                    IPC (Unix socket,    │ docker exec (via docker-proxy)
-                    length-prefixed JSON)│
-                                │        │
-                         ┌──────▼──────┐ │
-                         │gateway (Rust)│ │
-                         │fail-closed   │ │
-                         │  nftables    │ │
-                         └──────┬───────┘ │
-                                │         │
-                    FORWARD chain         │
-                    (allow/deny)          │
-                                │         │
-                         ┌──────▼─────────▼─────┐
-                         │     sandbox (Kali)     │  no direct internet route;
-                         │                        │  network egress gated by
-                         │                        │  gateway's FORWARD chain
-                         └────────────────────────┘
+```text
+                        +----------------------+
+       Operator ------->|   ui (React/nginx)   |  :3000
+                        +----------+-----------+
+                                   | /api, /ws (proxied)
+                        +----------v-----------+
+       CLI ------------>|  orchestrator (Go)   |  :9080 (127.0.0.1 only)
+                        |  conductor + agent   |
+                        +----+------------+----+
+                             |            |
+                 IPC Socket  |            | Docker Exec (via docker-proxy)
+        (Length-prefixed)    |            |
+                        +----v-------+    |
+                        | gateway    |    |
+                        | (Rust)     |    |
+                        | nftables   |    |
+                        +----+-------+    |
+                             |            |
+               FORWARD Chain |            |
+                (Allow/Deny) |            |
+                        +----v------------v----+
+                        |    sandbox (Kali)    |  No direct internet route;
+                        |                      |  egress gated by gateway's
+                        |                      |  FORWARD chain.
+                        +----------------------+
 ```
 
-Two independent arrows reach `sandbox`, and they do two different jobs: `docker exec` (via `docker-proxy`) is *how a command gets run inside the container*; gateway's `FORWARD` chain is *what that command is allowed to reach once it's running*. The two never substitute for each other — a command still executes even if gateway would eventually block its network target; gateway just stops that specific connection when the command tries to make it.
+Two distinct control channels reach the sandbox container:
+1. **Execution Channel**: Orchestrator issues commands into the sandbox via `docker exec` (proxied and constrained by `docker-proxy`).
+2. **Network Channel**: Gateway manages kernel `FORWARD` rules in the network namespace, determining which external destinations the sandbox may reach.
 
-| # | Component | Language / runtime | Primary responsibility | Capability boundary in the shipped stack |
-|---|---|---|---|---|
-| 1 | **orchestrator** | Go binary (built with `CGO_ENABLED=1` for the SQLite driver, so it links against the host's C library — not a fully static binary) | Talk to the LLM, run the agent's state machine, serve the REST/WS API, ask gateway "is this target in scope?" | Open a raw socket to the internet, or write an nftables rule itself |
-| 2 | **gateway** | Rust binary | Install/enforce nftables `FORWARD` rules, decide egress verdicts, hash-chain an audit log | Run a pentest tool, talk to the LLM, know anything about chat/tasks |
-| 3 | **sandbox** | Kali container (writable rootfs, always-on) | Run pentest tools when `docker exec`'d into by orchestrator, and host the operator's Bash (tmux) and graphical Desktop (noVNC/XFCE) sessions — one unified environment | Initiate outbound connections that gateway hasn't allowed — it has no route out except through gateway |
-| 4 | **docker-proxy** | `tecnativa/docker-socket-proxy` | Forward exactly `docker exec`/`docker inspect`-shaped Docker API calls from orchestrator to the host socket | Start, stop, kill, build, or otherwise manage *any* container — every other Docker API resource family is explicitly zeroed |
-| 5 | **ui** | React 18 + Vite, served by nginx | Render operator-facing dashboards, proxy `/api` and `/ws` to orchestrator | Talk to gateway or sandbox directly — it only ever talks to orchestrator |
+| Component | Language / Runtime | Primary Responsibility | Isolation & Enforcement Boundary |
+|---|---|---|---|
+| **orchestrator** | Go binary (`CGO_ENABLED=1`) | AI conductor, agent graph/Eino state machine, REST/WebSocket API, execution pipeline. | Cannot open raw network sockets to target networks or modify firewall rules. |
+| **gateway** | Rust binary (`yummi-gateway`) | Installs fail-closed `nftables` FORWARD rules, evaluates egress scope, logs tamper-evident audit trail. | Isolated from LLM logic and direct command execution; manages network filter only. |
+| **sandbox** | Kali Linux container | Unified environment for tool execution, operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
+| **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; lifecycle mutations are blocked. |
+| **ui** | React 18 + TypeScript (nginx) | Single-page operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
 
-Yummi is managed entirely from this web UI — there is deliberately no alternative front-end (a native desktop shell and a terminal UI both existed at one point and were removed in favor of a single, simpler operator surface). The root-module `yummi` binary ([CLI](modules/cli.md)) only handles Docker lifecycle, diagnostics, and opening this same web UI in an app-style browser window; it is not a second client of the API.
+The web interface is the exclusive operator dashboard. The root `yummi` CLI binary manages local Docker service lifecycles and launches the browser interface.
 
-> These are defense-in-depth boundaries, not universal impossibility claims. Linux capabilities, a non-root execution UID, the Docker API proxy, and network topology constrain the normal shipped processes. The sandbox rootfs is **writable** — a deliberate trade so one container serves both the agent's tool execution and the operator's graphical Desktop with zero environment drift (see [Security Model § The unified sandbox trade-off](security-model.md#unified-sandbox)); the network trust boundary is unaffected by it. Container-root compromise, host compromise, an `insecure-bridge` run, or operator reconfiguration changes that threat model. See [Security Model](security-model.md) for the enforcement chain and residual limits.
+### Docker Socket Proxy (`docker-proxy`) <a id="docker-proxy"></a>
 
-### docker-proxy — the component most documentation forgets <a id="docker-proxy"></a>
-
-`docker-proxy` is a real fifth runtime component in `docker-compose.yml`. It exists because mounting `/var/run/docker.sock` directly into orchestrator would expose a root-equivalent host control surface.
-
-Instead, `docker-proxy` sits between orchestrator and the real socket and is configured (`docker-compose.yml`, `docker-proxy` service) to allow only:
+To prevent exposing the host `/var/run/docker.sock` directly to the Go orchestrator, `docker-proxy` mediates all container API communication:
 
 ```yaml
-CONTAINERS: 1   # GET /containers/* (needed to resolve the sandbox container)
-EXEC:       1   # POST /containers/{id}/exec (this is `docker exec` itself)
-POST:       1   # required for EXEC — creating+starting an exec instance are POST calls
-# Every other resource family is explicitly 0: ALLOW_START, ALLOW_STOP,
-# ALLOW_RESTARTS, BUILD, COMMIT, IMAGES, NETWORKS, SECRETS, SWARM, SYSTEM,
-# VOLUMES, ...
+CONTAINERS: 1       # Read-only container inspection (GET /containers/*)
+EXEC: 1             # Execution attachment (POST /containers/{id}/exec)
+POST: 1             # Required for exec instance creation
+# All other API resource families explicitly set to 0:
+# ALLOW_START, ALLOW_STOP, ALLOW_RESTARTS, BUILD, COMMIT, IMAGES, NETWORKS, VOLUMES...
 ```
 
-`POST: 1` combined with `CONTAINERS: 1` would, on its own, also unlock generic container *lifecycle* control (start/stop/restart/kill/rename/prune) on every container reachable on the Docker network — that's why `ALLOW_START`/`ALLOW_STOP`/`ALLOW_RESTARTS` are explicitly zeroed alongside it. The allowlist is deliberately spelled out in full in `docker-compose.yml` (every resource family listed, even the ones set to `0`) rather than relying on the image's own defaults, so the permission surface is something you can read in one screen, not something you have to go verify against `tecnativa/docker-socket-proxy`'s changelog.
+### LangGraph Agent Brain (`brain/`) <a id="brain"></a>
 
-If you're auditing this repository for a security review: this is one of the first things worth checking still matches the compose file, since it is a narrow, security-critical allowlist that a careless future edit ("just add `IMAGES: 1`, I need it for something") could quietly widen.
+The `brain/` directory houses an optional Python runtime using LangGraph. It provides a multi-agent supervisor/specialist architecture powered by frontier cloud models (via OpenRouter or OpenAI-compatible endpoints). 
 
-### brain/ — an alternate agent surface, not a sixth component <a id="brain"></a>
+From a security architecture perspective, `brain/` acts as an external REST and MCP client to the orchestrator. Every command dispatched by `brain/` flows through the standard `executor.RunScopedCommand` pipeline and remains subject to the gateway's fail-closed network policies.
 
-`brain/` is a separate, optional Python/LangGraph process (`uv`-managed, outside `docker-compose.yml` entirely) that drives Yummi with a frontier model (via OpenRouter or OpenAI-compatible endpoints) instead of the orchestrator's local-model `graph`/`eino` backends. It doesn't add a sixth box to the diagram above: from the trust boundary's point of view it's just another external REST client of orchestrator, the same role `CLI` and `ui` already play in that diagram — it never opens a connection to gateway's socket or the sandbox container itself. Its MCP server (`brain/src/yummi_brain/mcp_server.py`) wraps `POST /api/v1/...` calls one-to-one, so every tool call still goes through `executor.RunScopedCommand`'s gateway scope check like any other execution path in this repo. See [brain/README.md](../brain/README.md) for the architecture and setup; `make conf` offers to configure it.
+### Web Pentest and Bug Bounty Architecture <a id="redteam-architecture"></a>
 
-### Web Pentest & Bug Bounty (Red Team) Architecture <a id="redteam-architecture"></a>
-
-Yummi is purpose-built as an autonomous Red Team and Bug Bounty conductor:
-- **Target-First Launcher**: Operators input an IP, domain, or URL in the UI and launch automated reconnaissance (subdomain enumeration, live HTTP probing, CMS fingerprinting, parameter fuzzing, nuclei template scans) with a single click.
-- **30 Sandbox-Resident MCP Tools (`sandbox-mcp`)**: 6 typed tools (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`), 22 cataloged pentest tools (`httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `wafw00f`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `snmpwalk`, `dirb`, `hydra`, `medusa`, `checksec`, `radare2`), and 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`).
-- **Output Chaining & Reflex Actions**: Reconnaissance findings are automatically piped into subsequent fuzzing or vulnerability assessment steps via file output capturing under `/home/pentester/` and `/workspace/`.
-- **Integrated Desktop GUI**: The sandbox includes pre-configured Burp Suite, Wireshark, and Firefox instances accessible directly via the noVNC/XFCE Desktop tab.
+Yummi is built specifically for autonomous offensive security workflows:
+- **Target-First Launcher**: Operators submit a target domain, URL, or CIDR to trigger automated reconnaissance and assessment playbooks.
+- **30 Sandbox-Resident MCP Tools (`sandbox-mcp`)**: 6 typed tools (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`), 22 cataloged tools (`httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `wafw00f`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `snmpwalk`, `dirb`, `hydra`, `medusa`, `checksec`, `radare2`), and 2 concurrency utilities (`consolidate_hosts`, `passive_recon_batch`).
+- **Artifact Pipeline**: Findings from discovery tools are structured under `/workspace/` and fed forward into subsequent assessment stages.
+- **Integrated Desktop GUI**: The sandbox environment includes Burp Suite, Wireshark, and Firefox accessible directly via the noVNC/XFCE desktop tab.
 
 ---
 
-## Why separate processes, not one binary <a id="why-separate-processes"></a>
+## Process Isolation Model <a id="why-separate-processes"></a>
 
-It would be *simpler* to build one Go binary that both talks to the LLM and manages iptables/nftables rules. Yummi separates them so a failure in model-facing Go code does not automatically share the gateway's privileges or mutable state.
+Firewall management and AI reasoning are deliberately split across distinct OS processes and programming languages:
 
-Consider what happens if the AI-facing code has a bug — a bad prompt injection, a parsing error, a genuinely malicious jailbreak that gets the model to try something it shouldn't. If firewall logic lives in the *same process*, that bug is one panic, one memory corruption, or one clever function call away from also compromising network policy. If firewall logic lives in a **separate, minimal, memory-safe (Rust) process that installs deny-all rules before it even opens its control socket**, then the AI-facing process crashing, hanging, or being tricked changes nothing about what the sandbox can reach — the rules gateway already installed keep applying whether or not gateway itself is still running.
-
-This is also why gateway is written in **Rust** rather than Go, and why it is deliberately small (`gateway/src/` is a handful of tightly-scoped modules — `policy/`, `network/`, `ipc/`, `audit/`, `observer/`, `watchdog.rs`). To be precise about *why* Rust specifically, rather than reaching for a vague "memory-safe language" claim that would apply to Go too (Go is garbage-collected and bounds-checked — it doesn't have C-style buffer overflows either): the two concrete advantages that matter for a component managing kernel firewall rules are (1) no garbage collector, so there's no GC-pause jitter in the one process the sandbox's network connectivity depends on moment-to-moment, and (2) the borrow checker rules out a class of data races **at compile time** that Go can only catch with the `-race` detector at runtime, on code paths that happen to get exercised by a test. Neither point makes gateway "unbreakable" — it means the class of bug most likely to matter in a small, concurrent, kernel-adjacent process is caught earlier and more completely than Go's own memory model catches it. That, plus staying small enough that a human can actually read all of it in one sitting, is the actual argument — not a blanket "Rust is safer than Go."
-
----
-
-## Network topology <a id="network-topology"></a>
-
-```
-yummi_internal (172.20.0.0/24, driver: bridge, internal: true — NO external route)
-  ├─ gateway         172.20.0.2   (sandbox's configured default gateway)
-  ├─ orchestrator    172.20.0.3
-  ├─ ui              172.20.0.4
-  ├─ docker-proxy    172.20.0.5
-  └─ sandbox         172.20.0.10  (ONLY network membership — no yummi_external)
-
-yummi_external (driver: bridge, normal — has a route to the internet)
-  ├─ gateway
-  ├─ orchestrator    (reaches Ollama / OpenRouter / Cloud endpoints)
-  └─ ui
-```
-
-The load-bearing detail: **`sandbox` is a member of `yummi_internal` only.** `internal: true` removes Docker's ordinary external gateway. The sandbox entrypoint then deliberately replaces its default route with the multi-homed `gateway` container (`172.20.0.2`), so external packets must traverse gateway's forwarding namespace and nftables rules. If that router disappears, the configured next hop is unavailable rather than transparently falling back to Docker's normal bridge gateway. The opt-in `insecure-bridge` Compose overlay weakens this property by restoring ordinary bridge egress and is documented as a compatibility workaround, not the default posture.
-
-DNS deserves its own callout because it's a common point of confusion: sandbox's `dns:` is set to Cloudflare (`1.1.1.1`, `1.0.0.1`) in `docker-compose.yml`, and orchestrator resolves hostnames through the same resolver (`orchestrator/internal/dnsresolve`) before ever calling gateway. **DNS resolution itself is not a trust boundary** — knowing that `example.com` is `93.184.216.34` grants nothing. The trust boundary is the *connection* to that resolved IP, which still has to cross gateway's `FORWARD` chain. Both sides using the same resolver exists purely so they *agree* on which IP a name means — if orchestrator resolved via one resolver and sandbox via another (e.g. Docker's embedded DNS), a hostname could round-robin to a different IP between the moment orchestrator opens an allow rule and the moment sandbox actually connects, silently reintroducing the exact class of bug this design avoids.
+1. **Failure Containment**: A prompt injection vulnerability, malformed parser input, or unexpected LLM output cannot alter kernel packet rules.
+2. **Fail-Closed Guarantee**: The Rust gateway daemon establishes DROP-all firewall rules at startup before binding its IPC socket. If the AI orchestrator or the gateway daemon crashes, the kernel-level DROP rules remain active in the network namespace.
+3. **Memory Safety and Concurrency**: Rust's compile-time borrow checker and absence of garbage collection jitter ensure reliable, deterministic rule evaluation.
 
 ---
 
-## Data flow: a single chat command <a id="flow-single-command"></a>
+## Network Segmentation <a id="network-topology"></a>
 
-The simplest path — an operator asks for one thing in chat and the model proposes exactly one command:
+```text
+yummi_internal (172.20.0.0/24, internal: true, no default Docker gateway)
+  ├── gateway         172.20.0.2   (Default router for sandbox)
+  ├── orchestrator    172.20.0.3
+  ├── ui              172.20.0.4
+  ├── docker-proxy    172.20.0.5
+  └── sandbox         172.20.0.10  (Connected only to yummi_internal)
 
-```
-1. UI  →  POST /api/v1/chat                       {"message": "scan 10.0.0.5 for open ports"}
-2. orchestrator: conductor.Engine.ChatWithHistory() calls the LLM (Ollama or Cloud provider)
-3. LLM replies → ChatResponse{ intent: "suggest_command", proposals: [...] }
-4. UI shows a proposal bar; in ask_permission the operator clicks Approve (auto resolves it immediately)
-5. POST /api/v1/chat/approve
-6. execution.Store.Enqueue()  →  executor.ProcessFunc drains it
-7. executor.RunScopedCommand():
-     a. scope.ExtractTargets(command)  →  ["10.0.0.5"]
-     b. for hostnames: gateway.CheckHostname(), then Cloudflare DNS resolution
-     c. gateway.CheckEgress(IP) for every resolved/explicit target  → allow | block | needs_approval
-     d. only if all allow: gateway.AddTemporaryRule("10.0.0.5/32", ttl=3600s)
-     e. sandbox.Bridge.Exec()  →  `docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"`
-8. WS /ws/events fires execution.status events the whole way through (queued → running → done)
+yummi_external (Bridge driver with external network connectivity)
+  ├── gateway         (Performs NAT/routing subject to nftables policy)
+  ├── orchestrator    (Reaches LLM endpoints / APIs)
+  └── ui
 ```
 
-Step 7e is a single blocking call — `sandbox.Bridge.Exec` retains at most 1 MiB from each stdout/stderr stream and returns only once the process exits; there is no incremental output streaming. For a command that legitimately runs for a long time, `execution.Store.runWithHeartbeat` republishes `"execution.running"` every few seconds with `ElapsedSecs` set. This is liveness feedback, not output streaming; the retained bytes arrive only at completion.
-
-`executor.RunScopedCommand` is the shared decision point for scheduled commands from chat, agent tasks, and direct exec. The human PTY terminal is the documented exception: it reaches the same sandbox but does not run pre-exec target extraction. See [Sandbox Execution](agent/sandbox-execution.md).
+Key Architectural Properties:
+- **Isolated Sandbox**: `sandbox` has no interface on `yummi_external`. Its default routing table directs all external traffic through `gateway` (`172.20.0.2`).
+- **Deterministic DNS**: Both `sandbox` and `orchestrator` resolve hostnames against Cloudflare DNS (`1.1.1.1`, `1.0.0.1`). DNS queries pass through the gateway on UDP port 53, while all TCP/UDP connections to resolved IPs require explicit gateway allow rules.
 
 ---
 
-## Data flow: an agentic task <a id="flow-agentic-task"></a>
+## Data Flows <a id="data-flows"></a>
 
-The richer path — the operator gives a goal, and the agent plans and executes multiple steps autonomously (subject to approval gates):
+### Single Command Execution <a id="flow-single-command"></a>
 
+```text
+1. UI -> POST /api/v1/chat {"message": "scan target 10.0.0.5"}
+2. Orchestrator conductor evaluates intent and drafts command proposal.
+3. Operator reviews proposal and submits approval: POST /api/v1/chat/approve
+4. execution.Store enqueues command -> executor.ProcessFunc picks up execution.
+5. executor.RunScopedCommand:
+   a. Extracts target IPs and hostnames.
+   b. Evaluates name-level policy via gateway.CheckHostname.
+   c. Queries gateway.CheckEgress for target IP addresses.
+   d. Adds temporary scoped nftables allow rule via gateway.AddTemporaryRule.
+   e. Dispatches execution to sandbox: docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"
+6. Command output is returned and broadcast via WebSocket /ws/events.
 ```
-1. UI  →  POST /api/v1/chat   (conductor detects a start_task intent from the goal)
-2. agent.Runner.CreateAndPlan()   — one LLM call produces a numbered plan
-3. agent.Runner.Start()  →  r.loop()  →  graph.Execute(state, nodeStep)
-4. The graph state machine walks nodes via a routing table (node → edge → next node)
-   until it reaches a terminal node: finish or ask. A single step can request up to
-   four depth-1 `HANDOFF`s, bounded by a shared process-local concurrency quota
-   (default 3 running specialists at once, regardless of how many are requested);
-   child tasks share the parent's Knowledge Store and return sanitized summaries.
-5. `finish` emits a server-recorded evidence digest and persists per-finding
-   verdicts alongside the legacy flat findings list.
-6. WS /ws/events fires task.status events throughout; the completion summary is
-   returned to chat once the task reaches a terminal node.
+
+### Autonomous Agent Task <a id="flow-agentic-task"></a>
+
+```text
+1. UI -> POST /api/v1/chat (Conductor identifies goal requiring a task plan)
+2. agent.Runner.CreateAndPlan generates structured numbered plan steps.
+3. agent.Runner.Start initiates the graph execution engine (graph.Execute).
+4. State machine evaluates nodes:
+   - step: LLM selects next action based on current observations and playbooks.
+   - tool: Validates and executes scheduled commands through the scoped executor.
+   - handoff: Dispatches sub-tasks to concurrent specialist sub-agents.
+   - threat_hold: Pauses execution if tool output triggers threat patterns.
+   - finish / ask: Terminates task or solicits operator input.
+5. Task status, evidence digests, and structured findings stream live via /ws/events.
 ```
 
-The graph is the real engine here, and it's detailed in full — every node, every edge, why it's a state machine and not a loop — in [The Agent Graph](agent/graph-and-nodes.md). The short version: `step` asks the model what to do next, and depending on what comes back, the state machine can route to running a tool, delegating to a sub-agent, persisting a memory, pausing for an operator decision, compressing context, or recovering from an LLM hiccup — each of those is a distinct node, not a branch buried inside one giant function.
+### Approval Gate Lifecycle <a id="flow-approval-gate"></a>
+
+```text
+Command risk classified (medium/high/critical) or mode set to ask_permission:
+  -> gate.Request blocks the task's execution goroutine.
+  -> Task status transitions to awaiting_approval.
+  -> WebSocket broadcasts pending_command and pending_risk metadata to UI.
+  -> Operator resolves via POST /api/v1/tasks/{id}/approve or /api/v1/chat/approve.
+  -> gate.Resolve unblocks execution channel; command proceeds to scoped executor.
+```
 
 ---
 
-## Data flow: the approval gate <a id="flow-approval-gate"></a>
+## Ecosystem Organization <a id="build-ecosystems"></a>
 
-Command approval is mode-driven. In `ask_permission`, every agent-task command pauses; in `auto`, agent-task commands proceed without this gate. Risk classification remains visible metadata and the single-command validator still computes `requires_approval`, but the UI's `auto` mode resolves arriving proposals immediately through the same approval endpoint.
-
-```
-ask_permission → gate.Request() blocks the task's own goroutine (not the whole server)
-              →  task/proposal status becomes "awaiting_approval"
-              →  WS pushes { pending_command, pending_risk } to every connected UI
-              →  operator resolves: POST /api/v1/tasks/{id}/approve  (agent path)
-                                  or POST /api/v1/chat/approve        (single-command path)
-              →  gate.Resolve(verdict)  →  the blocked goroutine wakes up and resumes
-```
-
-The agent-task gate (`orchestrator/internal/agent/gate.go`) is intentionally *just* a Go channel wrapped in a small struct — there is no message queue, polling, or separate approval microservice. Single-command chat proposals use `conductor.ApprovalStore`; its 20-minute TTL purger removes stale proposals a UI never resolved.
-
----
-
-## Where each build ecosystem lives <a id="build-ecosystems"></a>
-
-Yummi's code is organized by **implementation stack**, and this documentation set mirrors that split deliberately — see [Modules](modules/) for the deep-dive on each:
-
-| Ecosystem | Component(s) | Entry point for reading the code | Docs page |
+| Ecosystem | Component | Path | Entry Point |
 |---|---|---|---|
-| **Go — three separate modules** | CLI (root `go.mod`) + orchestrator (`orchestrator/go.mod`) + sandbox-mcp (`sandbox-mcp/go.mod`) | `cmd/yummi/main.go`, `orchestrator/cmd/orchestrator/main.go`, `sandbox-mcp/main.go` | [Orchestrator module](modules/orchestrator.md), [CLI](modules/cli.md) |
-| **Rust** | gateway | `gateway/src/main.rs` | [Gateway module](modules/gateway.md) |
-| **Node / React** | ui | `ui/src/main.tsx` | [UI module](modules/ui.md) |
-| **Shell / declarative** | sandbox image, persona YAML | `sandbox/Dockerfile`, `persona/v0.1/` | [Sandbox execution](agent/sandbox-execution.md), [Persona & Skills](persona/persona-and-skills.md) |
+| **Go Module (CLI)** | `yummi` | `./` | `cmd/yummi/main.go` |
+| **Go Module (Orchestrator)** | `yummi-orchestrator` | `orchestrator/` | `cmd/orchestrator/main.go` |
+| **Go Module (Sandbox MCP)** | `yummi-sandbox-mcp` | `sandbox-mcp/` | `main.go` |
+| **Rust Crate** | `yummi-gateway` | `gateway/` | `src/main.rs` |
+| **Node / React** | `ui` | `ui/` | `src/main.tsx` |
+| **Python Package** | `yummi-brain` | `brain/` | `src/yummi_brain/cli.py` |
 
-**Why three Go modules and not one?** `go.mod` at the repo root (`github.com/n0connect/yummi`) is the CLI only — a deliberately tiny surface (Docker lifecycle, diagnostics, launching the web UI) with no business importing the server's heavy dependency set. `orchestrator/go.mod` (`.../orchestrator`) is everything AI/API/execution-related, with its own dependencies (`chi`, `mattn/go-sqlite3`, the agent engine, etc.). `sandbox-mcp/go.mod` (`.../sandbox-mcp`) is the MCP server that compiles *into the Kali container image* — kept a separate module precisely so it can be built independently inside that image and can **never** link against `orchestrator/` (a structural guarantee, not a discipline: it's simply not in orchestrator's dependency graph). The practical consequence: `go test ./...` from the repo root **silently skips every orchestrator and sandbox-mcp test** — they're different modules, so you must `cd` into the module (or prefix `cd <module> &&`) first. This is a common first surprise; see the [Installation](installation.md) and [Development](development.md) pages for the exact commands.
+The three separate Go modules ensure clean dependency boundaries: the CLI remains lightweight without server dependencies, and `sandbox-mcp` compiles directly into the Kali container without linking against the orchestrator.
 
 ---
 
-## What is *not* in this repository <a id="not-in-scope"></a>
+## Non-Goals and Out-of-Scope Boundaries <a id="not-in-scope"></a>
 
-Being explicit about scope is part of being an honest architecture document:
-
-- **Model Weights**: Yummi ships zero model weights. In local mode, Ollama downloads and runs models locally on your machine. In cloud mode, frontier models are reached via OpenRouter or OpenAI-compatible APIs using operator-provided API keys.
-- **`internal/mcp`** (`orchestrator/internal/mcp/client.go`) is real, compiles, and is tested — but it is not imported by any production code path today. It is a dormant JSON-RPC 2.0 stdio client for external host-spawned MCP servers, kept for a future integration. It is completely distinct from `internal/sandboxmcp`, which is the active client connecting to `sandbox-mcp` inside the Kali container.
-- **A cross-platform network controller for gateway** does not exist by design. `gateway/src/network/mod.rs` states outright that the old cross-platform trait and a macOS no-op stub were removed — `nftables.rs` is the *only* concrete controller, and it requires a genuine Linux kernel with `nf_tables` support. See [Installation § Platform support](installation.md#platform-support) for exactly what this means on macOS and Windows.
+- **Model Weight Bundling**: Yummi ships zero model weights. Local inference is provided by an external Ollama daemon; cloud inference uses external API endpoints.
+- **Dormant Host MCP Client**: `internal/mcp` contains a standalone stdio MCP client that is currently dormant and not integrated into the production agent loop.
+- **Cross-Platform Host Network Control**: Gateway network enforcement is strictly Linux `nftables`-based. On macOS and Windows, gateway runs within a Linux VM provided by the container runtime.

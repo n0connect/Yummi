@@ -14,13 +14,13 @@ gateway is the Rust daemon that installs and manages the nftables policy between
                                   │  (if the gateway dies, the   │  add_temporary_rule
                                   │   DROP rules persist) ───┐   ▼
                                   ▼                          │  evaluate target
-                              ⛔ DROP  ◀────────────────────┴── always-blocked floor
-                              (always wins)                      (loopback · link-local
+                                 DROP  ◀─────────────────────┴── always-blocked floor
+                             (Fail-closed)                       (loopback · link-local
                                   ▲                               · multicast · unspecified)
               Block rule matches  │                              │
               ────────────────────┘                              │ Allow rule + egress mode
                                                                  ▼
-                                                          ✅ forward + audit
+                                                          FORWARD + AUDIT
 ```
 
 The always-blocked floor (`is_always_blocked`) sits before every egress mode. It covers IPv4/IPv6 loopback, link-local, multicast, and unspecified addresses, including the link-local cloud-metadata address `169.254.169.254`. RFC1918 private ranges are not part of this unconditional floor; they are controlled by configured block rules and narrowly scoped manual overrides.

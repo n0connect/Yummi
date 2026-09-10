@@ -226,11 +226,21 @@ func TestExtendedCatalog_TargetAndRender(t *testing.T) {
 			map[string]any{"target": "10.0.0.5", "community": "private", "oid": "1.3.6.1.2.1.1"},
 			"10.0.0.5", "snmpwalk -v2c -c private 10.0.0.5 1.3.6.1.2.1.1",
 		},
+		{"arjun_scan", map[string]any{"url": "https://example.com/api", "method": "POST"}, "https://example.com/api", "arjun -u https://example.com/api -m POST"},
+		{"naabu_scan", map[string]any{"target": "example.com", "ports": "80,443"}, "example.com", "naabu -host example.com -silent -p 80,443"},
+		{"tlsx_scan", map[string]any{"target": "example.com", "san": true, "jarm": true}, "example.com", "tlsx -u example.com -silent -san -jarm"},
+		{"cloud_enum_scan", map[string]any{"keyword": "acme", "quick_scan": true}, "acme", "cloud_enum -k acme -q"},
+		{"jwt_tool_inspect", map[string]any{"token": "eyJhbGciOi...", "mode": "at"}, "", "jwt_tool eyJhbGciOi... -M at"},
+		{"subzy_scan", map[string]any{"target": "example.com"}, "example.com", "subzy run --target example.com"},
+		{"jsluice_scan", map[string]any{"url": "https://example.com/app.js", "mode": "secrets"}, "https://example.com/app.js", "jsluice secrets https://example.com/app.js"},
+		{"graphql_cop_scan", map[string]any{"url": "https://example.com/graphql"}, "https://example.com/graphql", "graphql-cop -t https://example.com/graphql"},
+		{"corsy_scan", map[string]any{"url": "https://example.com"}, "https://example.com", "corsy -u https://example.com"},
 	}
 	for _, c := range cases {
 		gotTarget, ok := Target(c.tool, c.args)
-		if !ok || gotTarget != c.wantTarget {
-			t.Errorf("%s: Target = (%q, %v), want (%q, true)", c.tool, gotTarget, ok, c.wantTarget)
+		wantOk := c.wantTarget != ""
+		if ok != wantOk || gotTarget != c.wantTarget {
+			t.Errorf("%s: Target = (%q, %v), want (%q, %v)", c.tool, gotTarget, ok, c.wantTarget, wantOk)
 		}
 		if gotRender := RenderCommand(c.tool, c.args); gotRender != c.wantRender {
 			t.Errorf("%s: RenderCommand = %q, want %q", c.tool, gotRender, c.wantRender)

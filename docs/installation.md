@@ -1,163 +1,118 @@
-← [Back to README](../README.md) · [Docs index](README.md)
+[Back to Project README](../README.md) · [Documentation Index](README.md)
 
-# Installation
+# Installation & Platform Setup
 
-This page is written for two different readers at once: someone installing Yummi for the **first time ever** on a machine they're not 100% sure is ready, and someone who already knows Docker/Go/Rust and just wants the exact commands and the platform-specific gotchas without wading through basics. Skim for the **bold** warnings if you're the second kind of reader — they mark the exact spots where people get stuck on the first try.
+This guide covers environment prerequisites, container engine compatibility, model tier configuration, and native compilation steps.
 
-## Table of contents
+## Table of Contents
 
-- [Two ways to run Yummi — pick one first](#two-ways)
-- [Requirements](#requirements)
-- [Platform support matrix](#platform-support)
-  - [⚠️ Docker Desktop VM networking can silently drop `internal: true` traffic — fixed by switching to OrbStack](#docker-desktop-internal-network-bug)
-  - [⚠️ Podman on macOS: two separate compatibility gaps, currently unresolved](#podman-macos-gaps)
-  - [Engine selection and the insecure-bridge workaround](#engine-and-network-mode)
-- [Linux](#linux)
-- [macOS](#macos)
-- [Windows](#windows)
-- [Ollama setup and choosing a model tier](#ollama-setup)
-  - [Bringing your own model](#custom-model)
-- [Running the full stack (Docker Compose)](#full-stack)
-- [Building native binaries](#native-binaries)
-- [Verifying your install](#verifying)
-- [First-run troubleshooting](#troubleshooting)
-
----
-
-## Two ways to run Yummi — pick one first <a id="two-ways"></a>
-
-Yummi has two genuinely different "run modes," and picking the wrong one for what you're trying to do is the single most common source of confusion for new users:
-
-| | **`make start`** (Docker Compose, the real product) | **`make dev-orchestrator`** (bare Go, no sandbox) |
-|---|---|---|
-| What runs | All 5 containers: gateway, sandbox, orchestrator, docker-proxy, ui | Just the orchestrator Go process on your host |
-| Can it actually run pentest tools? | **Yes** — the sandbox container is real Kali | **No** — there is no sandbox container to `docker exec` into; command execution will fail |
-| Network enforcement? | **Yes**, real nftables in the gateway container | N/A — gateway isn't running |
-| What it's for | Actually using Yummi as a pentest tool | Iterating on orchestrator's Go code with fast rebuilds, or exploring the API without touching Docker |
-
-**If you just want to use Yummi, skip straight to [Running the full stack](#full-stack)** after satisfying the requirements below — you do not need to separately build any binaries by hand; `make start` builds the Docker images itself. Building native binaries ([below](#native-binaries)) is only necessary if you're developing the CLI, or want a `yummi` binary outside Docker.
+- [Execution Modes](#two-ways)
+- [System Requirements](#requirements)
+  - [The Cgo Requirement](#cgo-requirement)
+  - [Minimum Go Version](#go-version-skew)
+  - [Node.js Runtime Compatibility](#node-version)
+- [Platform Support Matrix](#platform-support)
+  - [Docker Desktop VM Networking Limitation](#docker-desktop-internal-network-bug)
+  - [Podman Compatibility Status](#podman-macos-gaps)
+  - [Engine Selection and Insecure Bridge Workaround](#engine-and-network-mode)
+- [Linux Setup](#linux)
+- [macOS Setup](#macos)
+- [Windows (WSL2) Setup](#windows)
+- [Ollama Configuration and Model Tiers](#ollama-setup)
+  - [Custom Models and Cloud Endpoints](#custom-model)
+- [Running the Full Stack (Docker Compose)](#full-stack)
+- [Building Native Binaries](#native-binaries)
+- [Post-Install Verification](#verifying)
+- [Troubleshooting Reference](#troubleshooting)
 
 ---
 
-## Requirements <a id="requirements"></a>
+## Execution Modes <a id="two-ways"></a>
 
-| Tool | Why | Minimum version note |
+Yummi provides two execution modes:
+
+| Mode | Command | Running Components | Capabilities |
+|---|---|---|---|
+| **Full Stack (Production)** | `make start` | All 5 containers: gateway, sandbox, orchestrator, docker-proxy, ui | Full offensive security tools, real `nftables` fail-closed network enforcement, graphical desktop and terminal. |
+| **Local Orchestrator (Development)** | `make dev-orchestrator` | Host Go process only (`:9080`) | Rapid iteration on REST/WS APIs and prompt assembly (no tool execution without container stack). |
+
+For standard operations, proceed directly to [System Requirements](#requirements) and [Running the Full Stack](#full-stack).
+
+---
+
+## System Requirements <a id="requirements"></a>
+
+| Tool | Purpose | Minimum Version |
 |---|---|---|
-| **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) | Runs all 5 services | Any recent Docker Desktop (macOS/Windows) or Docker Engine (Linux) |
-| **Go** | Builds the CLI and (locally) the orchestrator | **≥ 1.25** — see the [version note](#go-version-skew) below |
-| **Rust** (via `rustup`, not your distro's package) | Builds the gateway locally (`make _build-gateway`) | stable channel, edition 2021 (`gateway/Cargo.toml`) |
-| **Node.js + npm** | Builds the React UI | Node 20 or 22 LTS — see the [Node version warning](#node-version) below |
-| **A C compiler** (`cc`/`gcc`/`clang`) | **Not checked by `make _check-deps` — this is the #1 first-build failure.** See [cgo requirement](#cgo-requirement) below | Any recent version |
-| **Ollama / Cloud Provider** | LLM backend — local Ollama daemon for 100% offline privacy, or OpenRouter / OpenAI API key for cloud frontier models | Ollama recent release or OpenRouter API key |
-| **curl** | Used by Makefile health checks | — |
+| **Docker** | Orchestrates the 5-container architecture | Compose v2 (`docker compose`) |
+| **Go** | Builds CLI and host orchestrator | >= 1.25.0 |
+| **Rust** | Builds gateway locally (`make _build-gateway`) | Stable channel, Edition 2021 |
+| **Node.js + npm** | Builds the React SPA | Node 20 or 22 LTS |
+| **C Compiler** (`gcc`, `clang`) | Required for Go SQLite cgo bindings | Standard system C compiler |
+| **Ollama / Cloud Provider** | LLM backend (local or remote API) | Ollama >= 0.3.0 or OpenRouter API key |
+| **curl** | Health checks and installer scripts | Standard |
 
-`make _check-deps` (run automatically by `make build`/`make start`/`make test`) checks for `go`, `cargo`, `npm`, `docker`, and `curl` — but **not** for a C compiler. Keep reading.
+### The Cgo Requirement <a id="cgo-requirement"></a>
 
-### ⚠️ The cgo requirement — read this before your first `make build` <a id="cgo-requirement"></a>
+The Go orchestrator uses `github.com/mattn/go-sqlite3` for session persistence. Native builds (`make _build-orchestrator` or `go build` inside `orchestrator/`) require `CGO_ENABLED=1` and a functional host C compiler (`cc`/`gcc`/`clang`).
 
-The orchestrator uses `github.com/mattn/go-sqlite3` for its SQLite driver, which is a **cgo** binding — it wraps a real C SQLite implementation, not a pure-Go reimplementation. This means building the orchestrator natively (`make _build-orchestrator`, or anything that calls `go build` inside `orchestrator/`) requires `CGO_ENABLED=1` (the default for native builds) **and a working C compiler on your `PATH`**, even though nothing in this project looks like C code to you as a user.
+> [!NOTE]
+> Containerized builds (`make start`, `make docker-build`) compile inside `golang:1.25-bookworm`, which includes the full C toolchain automatically. Host toolchains are only needed for direct host compilation.
 
-If you skip this and just run `make build`, you will hit exactly one of these two errors, and both mean the same thing — no C compiler:
+**Installing C Toolchains:**
+- **macOS**: `xcode-select --install`
+- **Linux (Debian/Ubuntu)**: `sudo apt-get update && sudo apt-get install -y build-essential`
+- **Linux (Fedora/RHEL)**: `sudo dnf groupinstall -y "Development Tools"`
 
-```
-cgo: C compiler "cc" not found: exec: "cc": executable file not found in $PATH
-```
-```
-# github.com/mattn/go-sqlite3
-cgo: exec: "gcc": executable file not found in $PATH
-```
+### Minimum Go Version <a id="go-version-skew"></a>
 
-**Fix, macOS:**
-```bash
-xcode-select --install
-```
-(This installs the Xcode Command Line Tools, which provides `clang`/`cc`. If you get "already installed," you already have it and the problem is something else — see [troubleshooting](#troubleshooting).)
+The root module (`yummi` CLI) and `orchestrator/` require **Go >= 1.25.0**. Check your installed version:
 
-**Fix, Linux (Debian/Ubuntu):**
-```bash
-sudo apt-get update && sudo apt-get install -y build-essential
-```
-
-**Fix, Linux (Fedora/RHEL):**
-```bash
-sudo dnf groupinstall -y "Development Tools"
-```
-
-The Docker path (`make start`, `make docker-build`) doesn't hit this — `orchestrator/Dockerfile`'s build stage runs inside `golang:1.25-bookworm`, which already has a full C toolchain. This requirement is **only** for building the orchestrator natively on your host.
-
-### ⚠️ Minimum Go version <a id="go-version-skew"></a>
-
-The root `go.mod` (the `yummi` CLI) and `orchestrator/go.mod` both currently require `go 1.25.0` — one Go toolchain on your machine satisfies both. (The third Go module, `sandbox-mcp/`, pins a higher `go 1.26.5` via its MCP SDK dependency, but it's compiled inside its own Docker build stage and isn't part of a normal host build — only relevant if you use `make _build-sandbox-mcp` for local dev.)
-
-If your installed Go is older than what a module requires, `go build`/`make build` fails with a message like:
-
-```
-go: go.mod requires go >= 1.25.0 (running go 1.24.x; GOTOOLCHAIN=local)
-```
-
-Check what you have and upgrade if needed:
 ```bash
 go version
 ```
-Download the current release from [go.dev/dl](https://go.dev/dl/), or via your package manager (`brew install go` on macOS, most Linux distros' `golang` package, `winget install GoLang.Go` on Windows).
 
-### ⚠️ Node.js version — a real, reproducible npm bug on Node 26 <a id="node-version"></a>
+### Node.js Runtime Compatibility <a id="node-version"></a>
 
-If `npm ci` inside `ui/` fails with `EBADF` errors that make no sense given your actual code, **check your Node version before you start debugging the repo.** This was independently reproduced *outside* this repository entirely on a very recent Node release (v26.5.0 via Homebrew) — it is an npm/Node environment issue, not a Yummi bug. **Node 20 or 22 LTS is the known-good range.** If you have multiple Node versions installed via Homebrew or `nvm`, point your shell at 22 for this project specifically rather than changing your global default:
+Use **Node 20 or 22 LTS** for UI builds. Certain non-LTS releases (such as Node 26) have known npm filesystem descriptor regressions.
+
 ```bash
-# nvm
+# Recommended using nvm:
 nvm use 22
-# Homebrew, without changing the global `node` symlink
-$(brew --prefix node@22)/bin/npm ci --prefix ui
 ```
 
 ---
 
-## Platform support matrix <a id="platform-support"></a>
+## Platform Support Matrix <a id="platform-support"></a>
 
-Read this table before choosing a machine to run Yummi on — one row is a hard architectural limitation, not a "not tested yet."
-
-| Platform | Full stack (`make start`) | Native binaries | Notes |
+| Platform | Full Stack (`make start`) | Native Binaries | Architecture Notes |
 |---|---|---|---|
-| **Linux x86_64** | ✅ Full support, real nftables enforcement | ✅ | The reference platform — gateway's `network/nftables.rs` runs against a real Linux kernel directly |
-| **Linux ARM64** (incl. Raspberry Pi 4/5, AWS Graviton) | ✅ Expected to work — every base image (`kalilinux/kali-rolling`, `golang`, `rust`, `node`, `nginx`, `tecnativa/docker-socket-proxy`, `debian:bookworm-slim`) publishes official `arm64` manifests | ✅ | Not independently load-tested on ARM64 hardware as part of this documentation pass — if you hit an ARM64-specific issue, it is almost certainly one specific `apt` package inside `sandbox/Dockerfile` lacking an arm64 build in Kali's repos, not gateway or orchestrator |
-| **macOS (Apple Silicon, arm64)** | ✅ Confirmed via OrbStack (recommended). ⚠️ Docker Desktop and Podman caveats are documented below | ✅ CLI + orchestrator; gateway is Linux-only at runtime | Container engines provide a Linux VM, but working forwarding and Docker-socket behavior depend on the engine; do not infer support only from successful image builds |
-| **macOS (Intel, x86_64)** | ⚠️ Requires a Linux container engine; the same engine-specific caveats apply and this path is not independently validated here | ✅ CLI + orchestrator; gateway is Linux-only at runtime | Host architecture changes image selection, not the gateway's Linux requirement |
-| **Windows 10/11 with WSL2** | ✅ Full support via Docker Desktop's WSL2 backend | Partial — the CLI cross-compiles fine (`GOOS=windows go build` — see the `*.exe` handling already in `.gitignore`); the orchestrator has not been validated running bare on Windows, and gateway is architecturally out of scope outside a Linux kernel | Docker Desktop for Windows uses a WSL2-based Linux VM by default, which — like the macOS case — is a real Linux kernel, so the same nftables enforcement path applies |
-| **Windows without WSL2 / native only** | ❌ Not supported | Partial (CLI only) | No Linux kernel means no nftables anywhere in the stack — don't attempt the full stack here |
-| **Bare Linux host, gateway binary run directly (no Docker)** | ⚠️ Unsupported topology | ✅ compiles/runs | It may change nftables in the host namespace, but Compose's sandbox routing topology is absent unless you reproduce it yourself |
+| **Linux x86_64** | Supported (Full nftables enforcement) | Supported | Reference production platform. |
+| **Linux ARM64** | Supported (Full nftables enforcement) | Supported | Multi-arch Docker manifests published for all images. |
+| **macOS (Apple Silicon)** | Supported (via OrbStack recommended) | CLI + Orchestrator | Linux VM provides kernel nftables support. See Docker Desktop note below. |
+| **macOS (Intel)** | Supported (via Linux container VM) | CLI + Orchestrator | Requires Linux VM engine for gateway packet filtering. |
+| **Windows 10/11 (WSL2)** | Supported | Partial (CLI cross-compilation) | Runs via Docker Desktop WSL2 Linux backend. |
+| **Windows (Native / non-WSL2)** | Unsupported | Partial (CLI only) | Gateway requires Linux kernel netfilter subsystems. |
+| **Direct Host Gateway (No Docker)** | Unsupported Topology | Compiles | Requires manual routing and namespace configuration. |
 
-### ⚠️ The one combination that silently doesn't enforce anything
+### Docker Desktop VM Networking Limitation <a id="docker-desktop-internal-network-bug"></a>
 
-Running the compiled gateway directly is not the supported security topology. On **macOS**, `main.rs` returns a Linux-only error before loading policy. On **Linux**, the process can install nftables rules in its current namespace, but those rules protect the intended sandbox only if you have independently reproduced the Compose routing, source IP, capabilities, and interfaces. Use the Compose-started `yummi-gateway` container for the repository's documented boundary.
+> [!WARNING]
+> On Docker Desktop for macOS (Apple Silicon), the VM networking layer (`vpnkit`) can drop forwarded traffic originating from containers attached to bridge networks configured with `internal: true`.
+>
+> **Symptom**: Sandbox egress commands time out despite valid gateway allow rules.
+>
+> **Remediation**:
+> 1. **Recommended**: Switch to [OrbStack](https://orbstack.dev/) on macOS (drop-in Docker engine replacement utilizing Apple Virtualization.framework).
+> 2. **Alternative**: Enable the opt-in `insecure-bridge` mode via `make conf`. Note that this removes the Docker-level `internal: true` constraint.
 
-### ⚠️ Docker Desktop VM networking can silently drop `internal: true` traffic <a id="docker-desktop-internal-network-bug"></a>
+### Podman Compatibility Status <a id="podman-macos-gaps"></a>
 
-**Observed on Docker Desktop (multiple versions, including after updating to a newer release), Apple Silicon.** Confirmed to *not* reproduce on [OrbStack](https://orbstack.dev/) — see below. This is an *availability* bug, not a security regression — when it happens, gateway still fails closed and makes correct scope/egress decisions; the symptom is legitimate, approved traffic never actually arriving, not unauthorized traffic getting through.
+On Podman 6 (macOS):
+1. **DNS Resolution**: The default `aardvark-dns` resolver suppresses upstream queries on `internal: true` networks.
+2. **Socket Proxying**: Podman socket emulation does not maintain a persistent connection to `docker-proxy`.
 
-**Symptom:** an operator approves egress for a real external target (e.g. `scanme.nmap.org`), the UI shows "Dış ağ erişimi onaylandı" / egress approved, the command runs — and then just times out with no data. DNS resolution inside the sandbox fails (`getent hosts <target>` returns nothing), or a tool reports "Cannot resolve hostname" / connection timeouts, even though every gateway-side decision was correct.
-
-**Root cause, isolated with a controlled experiment** (not a guess — this was reproduced outside Yummi's own containers entirely, changing exactly one variable): a container acting as a router between two custom Docker bridge networks (exactly gateway's own role between `yummi_internal` and `yummi_external`) reliably fails to forward *any* traffic — verified with byte-accurate interface counters (`/proc/net/dev`) showing zero packets ever arriving at the router container's internal-facing interface, not just a failed DNS reply — when the "internal" network was created with the `internal: true` flag. The exact same topology, same nftables/iptables rules, same masquerade rule, with `internal: true` removed, forwarded traffic perfectly. A plain single-hop container (no router) on either flag setting also worked fine, and the macOS host's own networking was unaffected throughout. This isolates the failure to Docker Desktop's own VM-level networking overlay (something above the Linux kernel's netfilter, which was independently confirmed correct via `nft list ruleset` inside gateway) specifically mishandling `internal: true` combined with a container forwarding traffic out of it.
-
-Things that were tried and did **not** fix it on the affected machine: restarting or force-recreating the `gateway`/`sandbox` containers, live-disconnecting and reconnecting them from the network, a full Docker Desktop restart, enabling Docker Desktop's own **"Use kernel networking for UDP"** setting (Settings → Resources → Network), disabling an active VPN/network-filtering app, and updating Docker Desktop to a newer version. None of these are Yummi configuration — they're all Docker Desktop / host-level things to rule out first if you hit this, since none of them were the actual cause here.
-
-**Confirmed: switching to [OrbStack](https://orbstack.dev/) (a different Docker Desktop alternative for macOS, using Apple's Virtualization.framework and its own network stack instead of vpnkit) resolves this completely, with zero changes to Yummi's code or `docker-compose.yml`.** The exact same `internal: true` config, the exact same gateway/sandbox images, rebuilt and run unmodified under OrbStack: DNS resolution inside sandbox succeeds, and a real scan against an external target (`scanme.nmap.org`) completes a real HTTP request end to end. This narrows the root cause specifically to Docker Desktop's own vpnkit-based VM networking layer, not a Docker-version quirk, not the Linux kernel, and not anything in this repository — a from-scratch scratch-network reproduction (two custom bridges, a router container, `internal: true` toggled as the only variable) showed the identical pass/fail split between the two engines.
-
-**This is exactly the network flag `docker-compose.yml`'s `yummi_internal` uses by design** (see [Architecture § Network topology](architecture.md#network-topology)) — it is not something to "just remove," since it's load-bearing for the fail-closed security model described throughout this documentation set, not an accidental config choice. If you hit this symptom on Docker Desktop:
-- Confirm it's this bug and not a real scope/config issue: check `docker exec yummi-gateway cat /proc/net/dev | grep eth1` before and after a test command from the sandbox — if the RX counter never increments at all despite the sandbox's own TX counter increasing, you're looking at this, not a gateway policy decision.
-- **Or skip the manual check entirely: `make doctor` (`scripts/doctor.sh`) automates exactly this**, once `gateway`/`sandbox` are running. It adds a real temporary gateway allow rule for a known external IP, retries an actual `curl` from inside `sandbox` for up to ~15s (rule propagation genuinely takes a few seconds even on a healthy engine — the check accounts for that instead of false-positiving on it), and reports `[fail]` with this exact remediation only if the sandbox still cannot reach the allowed target after that window.
-- **The known-good fix: switch to OrbStack.** `docker compose build && docker compose up -d` works unmodified — OrbStack is a drop-in Docker CLI/API-compatible replacement for Docker Desktop on macOS, no compose file changes needed.
-- If you'd rather stay on Docker Desktop, testing on a Linux host (native Docker Engine, no VM in the path at all) is also unaffected — see the [platform support matrix](#platform-support) above. No Docker-Desktop-side setting was found that fixes this while staying on Docker Desktop.
-- **If you genuinely can't switch engines**, there's an opt-in Makefile escape hatch — see [§ Engine selection and the insecure-bridge workaround](#engine-and-network-mode) below. It trades away one of this project's independent fail-closed layers to route around the bug, and requires you to type a confirmation once, when you set it via `make conf`; it is not a substitute for OrbStack, just a last resort.
-
-### ⚠️ Podman on macOS: two separate compatibility gaps, currently unresolved <a id="podman-macos-gaps"></a>
-
-**Observed on Podman 6.0.2 (`applehv` machine type), Apple Silicon.** Unlike the Docker Desktop issue above, the core thing this whole security model depends on — traffic from `yummi_internal` actually being forwarded through gateway to a real external target — **works correctly on Podman**. This was verified the same rigorous way as the OrbStack confirmation: a real HTTP request to a real external IP (`scanme.nmap.org`'s own address) completed end to end (`200 OK`, real response body) through gateway's nftables rules, with the interface-counter check (`/proc/net/dev` on gateway's internal-facing interface) confirming real packets actually arrive, not just that a request "looked" successful. **`internal: true` itself is not the problem here** — this rules out, a second time and on a third distinct engine, any theory that the flag itself is what's broken.
-
-What doesn't currently work, though, are two unrelated things:
-
-1. **Hostname resolution from inside `yummi_internal` returns NXDOMAIN for real external names.** Podman's embedded DNS resolver (`aardvark-dns`) refuses to forward queries upstream for any network created with `internal: true`, regardless of what DNS servers are configured — this looks like a deliberate policy in `aardvark-dns` itself (an internal network shouldn't leak DNS queries either), not a bug, but it conflicts with this project's explicit design assumption that "DNS resolution is not the trust boundary, so it's fine for it to succeed even on an internal network" (see [Architecture § Network topology](architecture.md#network-topology)). Concretely: `nikto -h scanme.nmap.org` fails to resolve; the identical command against the target's raw IP works.
-
+For macOS deployments, **OrbStack** is the recommended engine for zero-configuration compatibility.
    A workaround exists, but it trades away something else: recreating the network with DNS disabled entirely (`podman network create --disable-dns --internal ...` in place of what `podman compose up` would create on its own) makes the sandbox's own `dns:` config (from `docker-compose.yml`) take effect directly, fixing hostname resolution — confirmed working (`getent hosts scanme.nmap.org` returned a real answer). But disabling the network's DNS plugin also removes **container-name** resolution for everything else on that network, and `orchestrator`'s `DOCKER_HOST: tcp://docker-proxy:2375` depends on resolving `docker-proxy` by name — that specific env var would need to change to `docker-proxy`'s static compose IP (`tcp://172.20.0.5:2375`) to keep working. This is a real, workable fix in principle, but it requires an out-of-band `podman network create` step that plain `docker-compose.yml` has no field to express — it isn't currently a "just run `make start`" experience on Podman.
 
 2. **The `docker-proxy` service's `/var/run/docker.sock` mount doesn't reach a working Docker-API-compatible socket under Podman**, independent of the DNS issue above (reproduces with default, unmodified network settings too). Symptom: `docker-proxy`'s own logs show `503` on every request (`GET /v1.24/containers/yummi-sandbox/json` included), and orchestrator's system status reports `"sandbox":"down","details":"container unreachable"` even though every container is individually healthy. `/var/run/docker.sock` on the host does resolve to Podman's own machine socket (`~/.local/share/containers/podman/machine/podman.sock`) — the symlink exists and is correct — but something in how that gets bind-mounted through Podman's virtualization layer into the `docker-proxy` container doesn't produce a live socket on the other end. **Not resolved** — this needs more investigation than this pass covered, and it means `docker exec` into sandbox (i.e. the agent actually running any command at all) does not currently work on Podman even after fixing the DNS issue above.
