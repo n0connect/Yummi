@@ -71,6 +71,10 @@ Yummi is managed entirely from that web UI. First run pulls the default model
 (Linux/macOS/Windows, x86_64/ARM64), the exact hardware sizing per model tier,
 and the specific first-run errors people actually hit.
 
+## Optional: the LangGraph brain
+
+Yummi's default agent backends (`graph`/`eino`, in the Go orchestrator) are built to make local models reliably complete pentest goals. If you'd rather point a frontier model (via OpenRouter or any OpenAI-compatible endpoint) at the same fail-closed substrate, [`brain/`](brain/README.md) is a separate Python/LangGraph process that does that over MCP — the exact same gateway-enforced execution path, no new attack surface, nothing local-model-only about it. Optional, off by default; `make conf` offers to set it up. See [brain/README.md](brain/README.md).
+
 ## Development
 
 ```bash

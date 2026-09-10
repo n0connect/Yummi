@@ -9,6 +9,7 @@ If you take away one sentence from this whole page, take this one: **the model p
 ## Table of contents
 
 - [The five components](#five-components)
+- [brain/ — an alternate agent surface](#brain)
 - [Why five processes and not one binary](#why-separate-processes)
 - [Network topology](#network-topology)
 - [Data flow: a single chat command](#flow-single-command)
@@ -82,6 +83,10 @@ POST:       1   # required for EXEC — creating+starting an exec instance are P
 `POST: 1` combined with `CONTAINERS: 1` would, on its own, also unlock generic container *lifecycle* control (start/stop/restart/kill/rename/prune) on every container reachable on the Docker network — that's why `ALLOW_START`/`ALLOW_STOP`/`ALLOW_RESTARTS` are explicitly zeroed alongside it. The allowlist is deliberately spelled out in full in `docker-compose.yml` (every resource family listed, even the ones set to `0`) rather than relying on the image's own defaults, so the permission surface is something you can read in one screen, not something you have to go verify against `tecnativa/docker-socket-proxy`'s changelog.
 
 If you're auditing this repository for a security review: this is one of the first things worth checking still matches the compose file, since it is a narrow, security-critical allowlist that a careless future edit ("just add `IMAGES: 1`, I need it for something") could quietly widen.
+
+### brain/ — an alternate agent surface, not a sixth component <a id="brain"></a>
+
+`brain/` is a separate, optional Python/LangGraph process (`uv`-managed, outside `docker-compose.yml` entirely) that drives Yummi with a frontier model instead of the orchestrator's local-model `graph`/`eino` backends. It doesn't add a sixth box to the diagram above: from the trust boundary's point of view it's just another external REST client of orchestrator, the same role `CLI` and `ui` already play in that diagram — it never opens a connection to gateway's socket or the sandbox container itself. Its MCP server (`brain/src/yummi_brain/mcp_server.py`) wraps `POST /api/v1/...` calls one-to-one, so every tool call still goes through `executor.RunScopedCommand`'s gateway scope check like any other execution path in this repo. See [brain/README.md](../brain/README.md) for the architecture and setup; it's MVP status and off by default — `make conf` offers to configure it.
 
 ---
 

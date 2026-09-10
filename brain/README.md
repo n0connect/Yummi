@@ -22,12 +22,13 @@ underneath.
 ## Architecture
 
 ```
-LangGraph (supervisor + specialist roster)
-  recon / web / osint / exploiter / source_analysis / reverser
+LangGraph (supervisor + specialist roster, loaded from persona/v0.1/subagents/*.yaml)
+  recon / web / osint / exploiter / source-analysis / reverser
         │  MCP (stdio)
         ▼
 mcp_server.py  — yummi_exec, yummi_get_scope, yummi_request_egress,
                   yummi_record_finding, yummi_list_findings,
+                  yummi_list_skills, yummi_list_tactics, yummi_get_context,
                   yummi_read_gateway_audit
         │  HTTP (existing REST API, unchanged)
         ▼
@@ -76,11 +77,25 @@ uv run yummi-mcp-server
 
 ## Status
 
-MVP. `graph.py`'s roster is hand-mirrored from
-`persona/v0.1/subagents/*.yaml` (not generated from it yet). No memory
-layer beyond LangGraph's own checkpointer (Yummi's Go-side
-`internal/knowledge` two-layer memory/procedural-tactics store is not yet
-exposed as an MCP tool — findings are, procedural memory isn't). The
-`graph`/`eino` Go backends remain available and untouched
-(`YUMMI_AGENT_BACKEND=graph|eino`) — this is an additional way to drive the
-same substrate, not a replacement.
+MVP. `graph.py`'s specialist roster is loaded at runtime from
+`persona/v0.1/subagents/*.yaml` (`persona.py`'s `load()`, same source of
+truth the `graph`/`eino` Go backends read) — `_FALLBACK_ROLES` is a
+hardcoded 6-role stand-in used only if that directory fails to load, not
+the normal path. Yummi's Go-side `internal/knowledge` two-layer memory
+(persistent context + procedural tactics) and its declarative skills are
+exposed as MCP tools (`yummi_list_skills`/`yummi_list_tactics`/
+`yummi_get_context`) and folded into the planner's prompt once per run
+(`_planner_node`) — a one-shot injection at planning time, not LangGraph's
+own per-turn checkpointer.
+
+Two real, current limitations: reads only — there's no tool for a
+specialist to write new persistent context or promote a skill mid-run
+(`rest_client.py` is deliberately read-only there: those writes stay
+in-process in Go's own `agent`/`skillcurator` packages, behind their
+sanitize+threatscan+operator-approval pipeline; `yummi_record_finding` is
+this agent's actual durable output). And unlike the `graph`/`eino` Go
+backends, a brain-driven task's trajectory is never handed to
+`skillcurator` for auto-drafting, so a run here doesn't grow Yummi's skill
+library the way a `graph`/`eino` run does. The `graph`/`eino` Go backends
+remain available and untouched (`YUMMI_AGENT_BACKEND=graph|eino`) — this is
+an additional way to drive the same substrate, not a replacement.

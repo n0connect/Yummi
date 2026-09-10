@@ -34,6 +34,8 @@ docs/
     persona-and-skills.md   The two independent personas (conductor vs. agent), safety boundaries
 ```
 
+`brain/` (repo root, not under `docs/`) is a separate, optional Python/LangGraph agent surface with its own doc: **[brain/README.md](../brain/README.md)**. It drives the same fail-closed substrate as `graph`/`eino` but through the orchestrator's existing REST API + an MCP server instead of an in-process Go backend — see the [Architecture](architecture.md) page for where it sits, and CLAUDE.md's "brain" section for the source-level summary.
+
 ## Reading paths
 
 **"I just want to run it."** → [Installation](installation.md), then [Usage Guide](usage-guide.md).
