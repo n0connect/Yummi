@@ -22,6 +22,13 @@ The Eino backend reuses the graph engine's own security primitives directly rath
 
 The Eino backend also exposes a three-tier tool strategy backed by a genuine MCP server running inside the Kali sandbox container (`sandbox-mcp/`, a standalone Go module with zero dependency on the orchestrator, reached via a persistent `docker exec -i` session — see [Sandbox Execution § MCP-backed pentest tools](sandbox-execution.md#mcp)): six individually-typed tools (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`) with real per-tool JSON schemas for the highest-value programs; `search_pentest_tools`/`run_pentest_tool` for the other twenty-four cataloged tools (`amass`, `hydra`, `sqlmap`, `wpscan`, `snmpwalk`, the modern web/bug-bounty set `httpx`/`dnsx`/`alterx`/`gau`/`katana`/`dalfox`, the pure-Go `consolidate_hosts`/`passive_recon_batch`, and more) via MCP's own `tools/list` discovery, so the catalog can keep growing without new Eino code; and `run_command` as the free-text fallback for anything that isn't a cataloged pentest tool at all. The graph backend does not gain any of this — the tag-protocol design targets small models that don't benefit from a second tool-calling surface.
 
+## Frontier Cloud & Multi-Agent Architecture: The LangGraph Brain <a id="langgraph-brain"></a>
+
+Beyond the Go orchestrator's native engines, Yummi supports a third agent surface in [`brain/`](../../brain/README.md):
+- **LangGraph Supervisor + Specialists**: Built in Python with LangGraph, it implements a high-level planner delegating to specialized agents (`recon`, `web`, `osint`, `exploiter`, `source-analysis`, `reverser`).
+- **Frontier Cloud Reasoning**: Seamlessly uses frontier models (Claude 3.5 Sonnet, GPT-4o, DeepSeek-V3) via OpenRouter or OpenAI APIs.
+- **Fail-Closed Integration**: Interacts with the orchestrator solely via REST API and MCP endpoints, maintaining strict gateway nftables boundaries.
+
 ## The five pieces, and where to read about each
 
 | Piece | What it is | Page |

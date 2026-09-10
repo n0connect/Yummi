@@ -48,7 +48,7 @@ Yummi has two genuinely different "run modes," and picking the wrong one for wha
 | **Rust** (via `rustup`, not your distro's package) | Builds the gateway locally (`make _build-gateway`) | stable channel, edition 2021 (`gateway/Cargo.toml`) |
 | **Node.js + npm** | Builds the React UI | Node 20 or 22 LTS — see the [Node version warning](#node-version) below |
 | **A C compiler** (`cc`/`gcc`/`clang`) | **Not checked by `make _check-deps` — this is the #1 first-build failure.** See [cgo requirement](#cgo-requirement) below | Any recent version |
-| **Ollama** | The LLM backend — Yummi makes zero cloud LLM calls | Any recent release |
+| **Ollama / Cloud Provider** | LLM backend — local Ollama daemon for 100% offline privacy, or OpenRouter / OpenAI API key for cloud frontier models | Ollama recent release or OpenRouter API key |
 | **curl** | Used by Makefile health checks | — |
 
 `make _check-deps` (run automatically by `make build`/`make start`/`make test`) checks for `go`, `cargo`, `npm`, `docker`, and `curl` — but **not** for a C compiler. Keep reading.
@@ -367,15 +367,32 @@ Or interactively: `make conf` → model choice → **Custom** → type the exact
 
 2. **Backend choice matters more for a custom model than for the gpt-oss tiers.** The **Eino backend** (`YUMMI_AGENT_BACKEND=eino`, or `make conf`'s backend question) doesn't wrap the model in any tier profile at all — no context cap, no thinking-mode toggle from Yummi's side — it just talks to whatever `YUMMI_OLLAMA_MODEL` names via Ollama's OpenAI-compatible endpoint, so a big model's own context window (set via its Modelfile's `PARAMETER num_ctx`, or Ollama's own `OLLAMA_CONTEXT_LENGTH` env var) applies unmodified. Eino was specifically built for larger models with **native, reliable tool-calling** (see [Agent Overview § Two engines](agent/overview.md#two-engines)) — if the model you're bringing supports function-calling well, Eino is very likely the better fit over the graph engine's tag-protocol design, which targets smaller/weaker models that can't be trusted with structured tool-calling output.
 
-3. **Pointing the Eino loop at a server that isn't Ollama at all.** `YUMMI_EINO_MODEL_BASE_URL`/`YUMMI_EINO_MODEL_NAME`/`YUMMI_EINO_MODEL_NUM_CTX` are a separate override from the two points above — they redirect *only* the Eino ReAct loop to any OpenAI-compatible `/v1/chat/completions` server (e.g. a local LM Studio instance serving a model Ollama doesn't have), independent of `YUMMI_OLLAMA_MODEL`:
+3. **Cloud & Frontier Models via OpenRouter or OpenAI Endpoints.** You can point the Eino agent backend directly at OpenRouter or any OpenAI-compatible `/v1/chat/completions` endpoint:
    ```bash
    YUMMI_AGENT_BACKEND=eino \
+   YUMMI_EINO_PROVIDER=openrouter \
+   YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1 \
+   YUMMI_EINO_MODEL_NAME=anthropic/claude-3.5-sonnet \
+   YUMMI_EINO_MODEL_API_KEY=sk-or-v1-... \
+   make start
+   ```
+   Or for a local OpenAI-compatible inference server (LM Studio, vLLM, Ollama OpenAI endpoint):
+   ```bash
+   YUMMI_AGENT_BACKEND=eino \
+   YUMMI_EINO_PROVIDER=openai \
    YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1 \
    YUMMI_EINO_MODEL_NAME=openai/gpt-oss-20b \
    YUMMI_EINO_MODEL_NUM_CTX=32768 \
    make start
    ```
-   All three are blank by default (falling back to the same URL/model/context the conductor already resolves) — zero effect unless you set them. The conductor's own chat/intent classification is untouched either way; it always stays on Ollama regardless of this override, so a task can run on the overridden model while ordinary chat keeps working normally.
+
+4. **Multi-Agent Frontier Framework: The LangGraph Brain (`brain/`).** If you want a supervisor + specialist multi-agent architecture running Claude 3.5 Sonnet or GPT-4o through LangGraph over the same fail-closed execution substrate:
+   ```bash
+   make brain-install
+   # Set your API keys in brain/.env (or export YUMMI_BRAIN_MODEL_API_KEY)
+   make brain-run GOAL="Enumerate example.com and report all subdomains, live web endpoints, and potential XSS/SQLi vulnerabilities"
+   ```
+   See [brain/README.md](../brain/README.md) for full details.
 
 ---
 
