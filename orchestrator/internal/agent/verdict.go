@@ -44,13 +44,16 @@ type OracleKind string
 
 const (
 	// OracleToolEvidence: the claimed Evidence is a literal substring of the
-	// real, stored output of the PlanStep the finding cites. This is
-	// evidence-grounding, not exploit-reproduction — Yummi does not (yet)
-	// re-run an exploit to prove code execution; it only proves the model's
-	// claim is actually traceable to real tool output rather than invented.
-	// Future oracle kinds (active replay, OAST callback, etc.) get their own
-	// value here if Yummi grows that capability.
+	// real, stored output of the PlanStep the finding cites.
 	OracleToolEvidence OracleKind = "tool_evidence"
+	// OracleActivePoC: machine-verified HTTP status/header/payload reproduction.
+	OracleActivePoC OracleKind = "active_poc"
+	// OracleDOMExecution: verified client-side DOM or script execution indicator.
+	OracleDOMExecution OracleKind = "dom_execution"
+	// OracleOOBInteraction: verified Out-of-Band (OOB) DNS or HTTP canary callback.
+	OracleOOBInteraction OracleKind = "oob_interaction"
+	// OracleDifferential: verified statistical response/timing delta (e.g. SQLi).
+	OracleDifferential OracleKind = "differential"
 )
 
 // FindingRecord is the persisted, structured form of one finding: the
@@ -121,7 +124,7 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 	if stepID == currentStepID && liveContent != "" {
 		if matchEvidence(liveContent, evidence) {
 			rec.Verdict = VerdictVerified
-			rec.OracleKind = OracleToolEvidence
+			rec.OracleKind = ClassifyOracleKind(title, evidence, liveContent)
 			return rec
 		}
 		rec.Reason = "could not confirm — claimed evidence not found verbatim in this step's actual output"
@@ -143,7 +146,7 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 		return rec
 	}
 	rec.Verdict = VerdictVerified
-	rec.OracleKind = OracleToolEvidence
+	rec.OracleKind = ClassifyOracleKind(title, evidence, step.Result)
 	return rec
 }
 

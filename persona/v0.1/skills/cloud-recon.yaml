@@ -1,0 +1,45 @@
+schema_version: 1
+version: 1.0.0
+name: cloud-recon
+description: Multi-cloud asset enumeration, cloud storage bucket permission auditing, and subdomain takeover verification.
+triggers:
+  - cloud recon
+  - cloud enum
+  - s3 buckets
+  - gcs buckets
+  - azure blob
+  - subdomain takeover
+  - subzy
+  - cname takeover
+tools:
+  - cloud_enum
+  - subzy
+  - tlsx
+  - naabu
+knowledge: |
+  Enumerate public cloud infrastructure, storage assets, and dangling DNS records across cloud providers.
+
+  TOOLING: Prefer `cloud_enum_scan` for AWS/GCP/Azure storage bucket discovery, `subzy_scan`
+  for subdomain takeover verification, and `tlsx_scan` for SAN/TLS reconnaissance.
+
+  1. MULTI-CLOUD STORAGE ENUMERATION:
+     - Enumerate Amazon S3, Google Cloud Storage, and Azure Blob containers based on target keywords:
+       `cloud_enum_scan(keyword="<target_keyword>", mutator="cloudenum_mutations.txt")`.
+     - Check public read permissions (anonymous listing) and public write permissions safely.
+
+  2. SUBDOMAIN TAKEOVER AUDITING:
+     - Scan discovered subdomains for dangling DNS CNAME records pointing to deprovisioned services:
+       `subzy_scan(targets=["sub1.target.com", "sub2.target.com"])`.
+     - Check vulnerable services: GitHub Pages, AWS S3, Heroku, Azure Apps, Shopify, Fastly.
+
+  3. TLS & CERTIFICATE SAN ENUMERATION:
+     - Extract Subject Alternative Names (SANs) and TLS configuration:
+       `tlsx_scan(targets=["<target>"], san=true)`.
+
+  4. REPORTING:
+     - Record identified cloud asset URI, cloud provider, access permissions, and DNS verification records.
+references:
+  - persona:cloud-recon-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/cloud-recon.yaml

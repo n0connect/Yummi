@@ -60,6 +60,13 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sessions/{sessionID}/findings", HandleListFindings(ks))
 		r.Post("/sessions/{sessionID}/findings", HandleCreateFinding(ks))
 
+		// Assets (ASM & Asset Matrix)
+		r.Get("/sessions/{sessionID}/assets", HandleListAssets(ks))
+		r.Post("/sessions/{sessionID}/assets", HandleCreateAsset(ks))
+
+		// Reports (Multi-format Pentest & Bug Bounty Report Generator)
+		r.Get("/sessions/{sessionID}/report", HandleGenerateReport(ks, sm))
+
 		// TRACE observability — read-only views of the agent's world model.
 		r.Get("/sessions/{sessionID}/activity", HandleListActivity(taskStore))
 		r.Get("/sessions/{sessionID}/context", HandleListContext(ks))
@@ -102,6 +109,10 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		// sandbox status & direct exec
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))
 		r.Post("/sandbox/exec", HandleSandboxExec(bridge, pc, sm))
+
+		// Proxy & traffic ingestion bridge
+		r.Get("/proxy/status", HandleProxyStatus())
+		r.Post("/proxy/inject", HandleProxyInject(ks, sm))
 
 		// System aggregated status, metrics & debug log stream
 		r.Get("/system/status", HandleSystemStatus(bridge, pc, cfg.DockerSocket, assistant))

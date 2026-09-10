@@ -1,0 +1,42 @@
+schema_version: 1
+version: 1.0.0
+name: parameter-discovery
+description: Advanced HTTP parameter discovery and fuzzing for hidden GET, POST, JSON, and XML parameters.
+triggers:
+  - parameter discovery
+  - arjun
+  - hidden params
+  - query fuzzing
+  - post fuzzing
+  - json fuzzing
+  - param miner
+  - hidden parameters
+tools:
+  - arjun
+  - ffuf
+  - curl
+knowledge: |
+  Discover hidden request parameters across endpoints to uncover unlinked functionality,
+  debug switches, administrative overrides, and injection entry points.
+
+  TOOLING: Prefer `arjun_scan` for heuristic parameter discovery across HTTP methods.
+  Use `ffuf_fuzz` or `curl_probe` for follow-up parameter validation.
+
+  1. AUTOMATED HEURISTIC PARAMETER DISCOVERY:
+     - Discover hidden query parameters: `arjun_scan(url, method="GET")`.
+     - Discover hidden body parameters: `arjun_scan(url, method="POST")`.
+     - Discover hidden JSON payload keys: `arjun_scan(url, method="JSON")`.
+     - Discover hidden XML payload attributes: `arjun_scan(url, method="XML")`.
+
+  2. PARAMETER BEHAVIOR VALIDATION:
+     - Test discovered parameters for differential response handling (status codes, body length, reflected values).
+     - Check common administrative and debug parameters: `debug`, `test`, `admin`, `role`, `impersonate`, `redirect_to`.
+     - Probe discovered parameters for injection vulnerabilities (SQLi, XSS, SSRF, IDOR).
+
+  3. STRUCTURED REPORTING:
+     - Record endpoint, HTTP method, discovered parameter name, parameter type, and proof of response deviation.
+references:
+  - persona:parameter-discovery-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/parameter-discovery.yaml

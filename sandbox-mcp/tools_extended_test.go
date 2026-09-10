@@ -36,6 +36,15 @@ func TestExtendedTools_EmptyRequiredFieldsRejected(t *testing.T) {
 		{"dalfox_scan", map[string]any{"url": ""}},
 		{"checksec_audit", map[string]any{"file": ""}},
 		{"radare2_disasm", map[string]any{"file": ""}},
+		{"arjun_scan", map[string]any{"url": ""}},
+		{"naabu_scan", map[string]any{"target": ""}},
+		{"tlsx_scan", map[string]any{"target": ""}},
+		{"cloud_enum_scan", map[string]any{"keyword": ""}},
+		{"jwt_tool_inspect", map[string]any{"token": ""}},
+		{"subzy_scan", map[string]any{"target": ""}},
+		{"jsluice_scan", map[string]any{"url": ""}},
+		{"graphql_cop_scan", map[string]any{"url": ""}},
+		{"corsy_scan", map[string]any{"url": ""}},
 	}
 	for _, c := range cases {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: c.tool, Arguments: c.args})
@@ -89,6 +98,10 @@ func TestExtendedTools_RejectsFlagInjection(t *testing.T) {
 		{"gau_fetch", map[string]any{"domain": "--json"}},
 		{"dalfox_scan", map[string]any{"url": "--silence"}},
 		{"radare2_disasm", map[string]any{"file": "-w"}},
+		{"cloud_enum_scan", map[string]any{"keyword": "-q"}},
+		{"jwt_tool_inspect", map[string]any{"token": "-M"}},
+		{"jsluice_scan", map[string]any{"url": "-f"}},
+		{"graphql_cop_scan", map[string]any{"url": "-f"}},
 	}
 	for _, c := range cases {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: c.tool, Arguments: c.args})

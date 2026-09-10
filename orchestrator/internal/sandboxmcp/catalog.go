@@ -44,6 +44,15 @@ var catalog = map[string]ToolSpec{
 	"radare2_disasm":      {TargetField: "", Render: renderRadare2},
 	"consolidate_hosts":   {TargetField: "", Render: renderConsolidate},
 	"passive_recon_batch": {TargetField: "domain", Render: renderPassiveReconBatch},
+	"arjun_scan":          {TargetField: "url", Render: renderArjun},
+	"naabu_scan":          {TargetField: "target", Render: renderNaabu},
+	"tlsx_scan":           {TargetField: "target", Render: renderTlsx},
+	"cloud_enum_scan":     {TargetField: "keyword", Render: renderCloudEnum},
+	"jwt_tool_inspect":    {TargetField: "", Render: renderJwtTool},
+	"subzy_scan":          {TargetField: "target", Render: renderSubzy},
+	"jsluice_scan":        {TargetField: "url", Render: renderJsluice},
+	"graphql_cop_scan":    {TargetField: "url", Render: renderGraphqlCop},
+	"corsy_scan":          {TargetField: "url", Render: renderCorsy},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -430,3 +439,78 @@ func renderPassiveReconBatch(a map[string]any) string {
 // the caller omitted "sources" — the two are independent copies since this
 // package never imports sandbox-mcp's main package.
 var passiveReconAllSources = []string{"subfinder", "amass", "theharvester", "gau"}
+
+func renderArjun(a map[string]any) string {
+	url, _ := a["url"].(string)
+	cmd := "arjun -u " + url
+	if m, _ := a["method"].(string); m != "" {
+		cmd += " -m " + m
+	}
+	if w, _ := a["wordlist"].(string); w != "" {
+		cmd += " -w " + w
+	}
+	return renderSaveNote(a, cmd)
+}
+
+func renderNaabu(a map[string]any) string {
+	target, _ := a["target"].(string)
+	cmd := "naabu -host " + target + " -silent"
+	if p, _ := a["ports"].(string); p != "" {
+		cmd += " -p " + p
+	}
+	return renderSaveNote(a, cmd)
+}
+
+func renderTlsx(a map[string]any) string {
+	target, _ := a["target"].(string)
+	cmd := "tlsx -u " + target + " -silent"
+	if b, _ := a["san"].(bool); b {
+		cmd += " -san"
+	}
+	if b, _ := a["jarm"].(bool); b {
+		cmd += " -jarm"
+	}
+	return renderSaveNote(a, cmd)
+}
+
+func renderCloudEnum(a map[string]any) string {
+	kw, _ := a["keyword"].(string)
+	cmd := "cloud_enum -k " + kw
+	if b, _ := a["quick_scan"].(bool); b {
+		cmd += " -q"
+	}
+	return renderSaveNote(a, cmd)
+}
+
+func renderJwtTool(a map[string]any) string {
+	tok, _ := a["token"].(string)
+	cmd := "jwt_tool " + tok
+	if m, _ := a["mode"].(string); m != "" {
+		cmd += " -M " + m
+	}
+	return renderSaveNote(a, cmd)
+}
+
+func renderSubzy(a map[string]any) string {
+	target, _ := a["target"].(string)
+	return renderSaveNote(a, "subzy run --target "+target)
+}
+
+func renderJsluice(a map[string]any) string {
+	url, _ := a["url"].(string)
+	mode, _ := a["mode"].(string)
+	if mode != "secrets" {
+		mode = "urls"
+	}
+	return renderSaveNote(a, "jsluice "+mode+" "+url)
+}
+
+func renderGraphqlCop(a map[string]any) string {
+	url, _ := a["url"].(string)
+	return renderSaveNote(a, "graphql-cop -t "+url)
+}
+
+func renderCorsy(a map[string]any) string {
+	url, _ := a["url"].(string)
+	return renderSaveNote(a, "corsy -u "+url)
+}
