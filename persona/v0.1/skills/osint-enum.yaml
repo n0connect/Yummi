@@ -1,5 +1,5 @@
 schema_version: 1
-version: 2.3.0
+version: 2.4.0
 name: osint-enum
 description: Complete senior subdomain + attack-surface enumeration for a domain (bug-bounty recon).
 triggers:
@@ -24,12 +24,22 @@ triggers:
   - gau
   - wayback
   - permutation
+  - wildcard
 knowledge: |
   Map the FULL attack surface of a domain like a senior bug-bounty hunter — be
   exhaustive, then triage. Never stop at one tool: every source finds names the
   others miss, and the win is the UNION, resolved and probed. Run passive first
   (no packets to the target), then active, then resolve, then probe, then
   fingerprint. Work on the authorized in-scope domain only.
+
+  THIS IS PHASE 0 for any domain-shaped goal, not one recon option among
+  several: an engagement's entire value depends on how complete this
+  subdomain list is — a host discovered late, or never discovered at all,
+  is a host every later tool (web, vuln-scanning, exploiter) never even
+  sees. Run this methodology through step 7's takeover check BEFORE handing
+  off to web/vuln-scanning/exploiter sub-agents on this domain — don't probe
+  the first couple of obvious hosts and move on early; a shallow subdomain
+  pass undermines everything built on top of it.
 
   TOOLING: prefer `run_pentest_tool` over a raw shell command for every step
   below that names one — `subfinder_enum`, `amass_enum`, `theharvester_scan`,
@@ -50,6 +60,28 @@ knowledge: |
   mistake a tool's own banner/progress-bar noise for real data (a live
   session did exactly that with amass's own report header before this tool
   existed). Only crt.sh has no dedicated tool and stays raw shell.
+
+  0. WILDCARD DNS CHECK — run this FIRST, before trusting any later resolve
+     result, and it costs one DNS query. Many domains configure a wildcard
+     record (`*.<domain>` → some IP), which makes EVERY made-up hostname
+     "resolve" — silently turning step 3's permutation guesses into hundreds
+     of false positives that eat the rest of this pipeline's time and get
+     reported as fake findings if missed. Detect it with a name that cannot
+     legitimately exist:
+     `dig +short random-wc-probe-<6-8 random chars>.<domain>`
+     (`host random-wc-probe-<random>.<domain>` if `dig` isn't available).
+     - NXDOMAIN / no answer → no wildcard. Every resolve in step 4 is a real
+       signal, proceed normally.
+     - An IP comes back → wildcard DNS is active. Record that IP as the
+       WILDCARD SIGNATURE and carry it into step 4: a candidate that
+       resolves to EXACTLY the wildcard signature (same IP, no CNAME of its
+       own) is UNCONFIRMED, not a genuine subdomain — exclude it from step
+       5's live-probe and step 6's findings. A candidate resolving
+       differently from the signature (its own distinct IP, or a CNAME the
+       wildcard doesn't have) is still a real find. This one check prevents
+       the single most common failure mode in permutation-heavy
+       enumeration: a wall of fabricated subdomains because the domain's
+       DNS says yes to everything.
 
   1. PASSIVE subdomain sources (no direct contact with the target — safe to
      run immediately, in parallel). PREFER
@@ -108,7 +140,10 @@ knowledge: |
      (`awk '{print $1}' resolved_full.txt | sort -u > resolved_hosts.txt`).
      Expect most permutation guesses to NOT resolve — that's normal, not a
      failure; a domain's real subdomain count is usually a small fraction of
-     its permutation-generated candidate count.
+     its permutation-generated candidate count. If step 0 found a wildcard
+     signature, filter it here: drop any resolved host whose only record is
+     that exact signature IP before it reaches `resolved_hosts.txt` — those
+     are the false positives step 0 warned about, not real subdomains.
 
   5. LIVE-PROBE the resolved hosts — this is the step most people skip and
      the one that turns a name list into targets:
@@ -144,8 +179,19 @@ knowledge: |
      budget — report explicitly which set was actually covered rather than
      silently only covering the smaller one.
 
-  Noise discipline: steps 1–2 are passive and always safe; 3–5 touch DNS/HTTP
+  Noise discipline: steps 0–2 are passive and always safe; 3–5 touch DNS/HTTP
   and should respect the engagement's rate/scope rules.
+
+  OPERATOR TIP — passive source completeness depends on API keys:
+  `subfinder`/`amass` each query far more sources (Shodan, Censys,
+  SecurityTrails, VirusTotal, GitHub, Chaos, ...) once their own config
+  files inside the sandbox (`~/.config/subfinder/provider-config.yaml`,
+  `~/.config/amass/config.ini`) carry API keys — unauthenticated, both fall
+  back to a smaller free-tier source set. Without keys this methodology
+  still finds a solid surface via crt.sh + gau + theHarvester + permutation;
+  with them, it finds meaningfully more. If those config files are empty,
+  say so in the triage output rather than silently under-reporting the
+  surface as if the free-tier result were the ceiling.
 references:
   - persona:osint-enum-v2
 provenance:
