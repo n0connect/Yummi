@@ -27,6 +27,7 @@ type ReportData struct {
 	Findings    []knowledge.Finding           `json:"findings"`
 	Assets      []knowledge.AssetNode         `json:"assets"`
 	Contexts    []knowledge.PersistentContext `json:"contexts"`
+	ScopeRules  []knowledge.ScopeRule         `json:"scope_rules,omitempty"`
 }
 
 // Generate formats the collected session intelligence into the desired report string.
@@ -64,6 +65,7 @@ func generateHackerOne(d ReportData) string {
 		}
 		sb.WriteString("\n")
 	}
+	sb.WriteString(scopeClassificationSection(d))
 
 	sb.WriteString("## 2. Executive Summary\n\n")
 	critCount, highCount, medCount, lowCount, infoCount := countSeverities(d.Findings)
@@ -197,6 +199,51 @@ func severityToPriority(sev string) int {
 	default:
 		return 5
 	}
+}
+
+// scopeClassificationSection renders a per-asset program-scope check for
+// every discovered domain/subdomain asset, so a submitter can catch an
+// out-of-scope host before filing — reporting a finding outside a program's
+// declared scope is a policy violation, not just noise, so this check
+// belongs in the submission-critical report, not buried in the UI. Returns
+// "" when there's nothing to show (no scope rules AND no domain/subdomain
+// assets), so a session that never used program scope gets an unchanged
+// report.
+func scopeClassificationSection(d ReportData) string {
+	var hosts []knowledge.AssetNode
+	for _, a := range d.Assets {
+		if a.Type == knowledge.AssetDomain || a.Type == knowledge.AssetSubdomain {
+			hosts = append(hosts, a)
+		}
+	}
+	if len(d.ScopeRules) == 0 && len(hosts) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("### Program Scope Classification\n\n")
+	if len(d.ScopeRules) == 0 {
+		sb.WriteString("_No program-scope rules were configured for this session — every discovered host below is shown as in-scope by default. Configure scope rules (`POST /sessions/{id}/scope-rules`) before relying on this section._\n\n")
+	}
+	if len(hosts) == 0 {
+		sb.WriteString("_No domain/subdomain assets recorded for this session yet._\n\n")
+		return sb.String()
+	}
+
+	sb.WriteString("| Host | In Scope | Reason |\n|---|---|---|\n")
+	outOfScope := 0
+	for _, h := range hosts {
+		v := knowledge.ClassifyScope(d.ScopeRules, h.Value)
+		if !v.InScope {
+			outOfScope++
+		}
+		fmt.Fprintf(&sb, "| `%s` | %v | %s |\n", h.Value, v.InScope, v.Reason)
+	}
+	sb.WriteString("\n")
+	if outOfScope > 0 {
+		fmt.Fprintf(&sb, "**WARNING: %d discovered host(s) classify as OUT OF SCOPE. Verify any finding tied to them is excluded before submission.**\n\n", outOfScope)
+	}
+	return sb.String()
 }
 
 func estimateCVSSAndCWE(severity, title string) (string, string) {

@@ -64,6 +64,13 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sessions/{sessionID}/assets", HandleListAssets(ks))
 		r.Post("/sessions/{sessionID}/assets", HandleCreateAsset(ks))
 
+		// Program scope (bug-bounty program scope bookkeeping — distinct from
+		// the gateway's own network-egress scope; never gates execution)
+		r.Get("/sessions/{sessionID}/scope-rules", HandleListScopeRules(ks))
+		r.Post("/sessions/{sessionID}/scope-rules", HandleCreateScopeRules(ks))
+		r.Delete("/sessions/{sessionID}/scope-rules/{ruleID}", HandleDeleteScopeRule(ks))
+		r.Post("/sessions/{sessionID}/scope-rules/classify", HandleClassifyScope(ks))
+
 		// Reports (Multi-format Pentest & Bug Bounty Report Generator)
 		r.Get("/sessions/{sessionID}/report", HandleGenerateReport(ks, sm))
 

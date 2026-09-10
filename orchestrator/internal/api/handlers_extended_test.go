@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,10 @@ func setupTestRouter(ks *knowledge.Store, sm *session.Manager) *chi.Mux {
 	r.Get("/api/v1/sessions/{sessionID}/report", HandleGenerateReport(ks, sm))
 	r.Get("/api/v1/proxy/status", HandleProxyStatus())
 	r.Post("/api/v1/proxy/inject", HandleProxyInject(ks, sm))
+	r.Get("/api/v1/sessions/{sessionID}/scope-rules", HandleListScopeRules(ks))
+	r.Post("/api/v1/sessions/{sessionID}/scope-rules", HandleCreateScopeRules(ks))
+	r.Delete("/api/v1/sessions/{sessionID}/scope-rules/{ruleID}", HandleDeleteScopeRule(ks))
+	r.Post("/api/v1/sessions/{sessionID}/scope-rules/classify", HandleClassifyScope(ks))
 	return r
 }
 
@@ -157,5 +162,83 @@ func TestProxyHandlers(t *testing.T) {
 	}
 	if len(assets) == 0 {
 		t.Fatalf("expected assets to be created from proxy inject, got 0")
+	}
+}
+
+func TestScopeRuleHandlers(t *testing.T) {
+	ks, err := knowledge.NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	r := setupTestRouter(ks, nil)
+	sessionID := "sess-scope-1"
+
+	// 1. Bulk-import a program's published scope in one call.
+	bulkBody := strings.NewReader(`{"rules":[
+		{"pattern":"*.example.com","kind":"include"},
+		{"pattern":"internal.example.com","kind":"exclude","note":"staging, out of program scope"}
+	]}`)
+	reqBulk := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/"+sessionID+"/scope-rules", bulkBody)
+	wBulk := httptest.NewRecorder()
+	r.ServeHTTP(wBulk, reqBulk)
+	if wBulk.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", wBulk.Code, wBulk.Body.String())
+	}
+	var saved []knowledge.ScopeRule
+	if err := json.Unmarshal(wBulk.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode bulk response: %v", err)
+	}
+	if len(saved) != 2 {
+		t.Fatalf("want 2 saved rules, got %d: %s", len(saved), wBulk.Body.String())
+	}
+
+	// 2. List.
+	reqList := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID+"/scope-rules", nil)
+	wList := httptest.NewRecorder()
+	r.ServeHTTP(wList, reqList)
+	if wList.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", wList.Code, wList.Body.String())
+	}
+	if !strings.Contains(wList.Body.String(), "internal.example.com") {
+		t.Fatalf("expected rule in list, got: %s", wList.Body.String())
+	}
+
+	// 3. Classify — exclude must win over the broader include.
+	classifyBody := strings.NewReader(`{"hostnames":["app.example.com","internal.example.com","unrelated.com"]}`)
+	reqClassify := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/"+sessionID+"/scope-rules/classify", classifyBody)
+	wClassify := httptest.NewRecorder()
+	r.ServeHTTP(wClassify, reqClassify)
+	if wClassify.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", wClassify.Code, wClassify.Body.String())
+	}
+	var verdicts map[string]knowledge.ScopeVerdict
+	if err := json.Unmarshal(wClassify.Body.Bytes(), &verdicts); err != nil {
+		t.Fatalf("decode classify response: %v", err)
+	}
+	if !verdicts["app.example.com"].InScope {
+		t.Fatalf("app.example.com should be in scope: %+v", verdicts)
+	}
+	if verdicts["internal.example.com"].InScope {
+		t.Fatalf("internal.example.com should be excluded: %+v", verdicts)
+	}
+	if verdicts["unrelated.com"].InScope {
+		t.Fatalf("unrelated.com should be out of scope (whitelist miss): %+v", verdicts)
+	}
+
+	// 4. Delete.
+	reqDel := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/"+sessionID+"/scope-rules/"+saved[0].ID, nil)
+	wDel := httptest.NewRecorder()
+	r.ServeHTTP(wDel, reqDel)
+	if wDel.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content, got %d: %s", wDel.Code, wDel.Body.String())
+	}
+
+	// 5. Malformed rule is rejected, not silently dropped.
+	badBody := strings.NewReader(`{"pattern":"","kind":"include"}`)
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/"+sessionID+"/scope-rules", badBody)
+	wBad := httptest.NewRecorder()
+	r.ServeHTTP(wBad, reqBad)
+	if wBad.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty pattern, got %d: %s", wBad.Code, wBad.Body.String())
 	}
 }

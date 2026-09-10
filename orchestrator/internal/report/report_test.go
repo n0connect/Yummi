@@ -83,6 +83,41 @@ func TestGenerate_Executive(t *testing.T) {
 	}
 }
 
+func TestGenerate_HackerOne_ScopeClassificationOmittedWithNothingToShow(t *testing.T) {
+	d := ReportData{SessionID: "sess", GeneratedAt: time.Now()}
+	out, _, err := Generate(d, FormatHackerOne)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(out, "Program Scope Classification") {
+		t.Errorf("expected no scope section with no rules and no host assets, got:\n%s", out)
+	}
+}
+
+func TestGenerate_HackerOne_ScopeClassificationFlagsOutOfScopeHost(t *testing.T) {
+	d := sampleData() // has example.com (domain) + api.example.com (subdomain), no scope rules
+	d.ScopeRules = []knowledge.ScopeRule{
+		{Pattern: "*.example.com", Kind: knowledge.ScopeInclude},
+		{Pattern: "api.example.com", Kind: knowledge.ScopeExclude, Note: "internal staging API"},
+	}
+	out, _, err := Generate(d, FormatHackerOne)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !strings.Contains(out, "Program Scope Classification") {
+		t.Fatalf("expected scope classification section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "| `api.example.com` | false |") {
+		t.Errorf("expected api.example.com flagged out of scope, got:\n%s", out)
+	}
+	if !strings.Contains(out, "| `example.com` | true |") {
+		t.Errorf("expected example.com flagged in scope, got:\n%s", out)
+	}
+	if !strings.Contains(out, "WARNING: 1 discovered host(s) classify as OUT OF SCOPE") {
+		t.Errorf("expected out-of-scope warning banner, got:\n%s", out)
+	}
+}
+
 func TestGenerate_JSON(t *testing.T) {
 	d := sampleData()
 	out, ct, err := Generate(d, FormatJSON)
