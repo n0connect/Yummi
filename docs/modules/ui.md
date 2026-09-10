@@ -21,10 +21,12 @@ ui/src/
 │                   first are React.lazy-loaded behind a Suspense boundary)
 ├── entities/       types.ts — shared TypeScript types mirroring orchestrator's JSON shapes
 ├── pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/
-├── features/       One directory per data concern: chat/, gateway/, health/, sessions/,
-│                   skills/, system/, tasks/, terminal/, trace/, assistant/, debuglog/
+├── features/       One directory per data concern: assistant/, chat/, debuglog/, desktop/,
+│                   gateway/, health/, operator/, sessions/, skills/, statusbar/,
+│                   system/, tasks/, terminal/, trace/
 ├── shared/         api/http.ts (the one fetch wrapper everything else uses), api/runtime.ts
-│                   (apiURL/websocketURL — see below), lib/ (operatorText.ts,
+│                   (apiURL/websocketURL — see below), i18n/ (strings.ts translation dictionary,
+│                   driven by YUMMI_LANG build time variable), lib/ (operatorText.ts,
 │                   activityPresentation.ts — client-side counterparts of the server's
 │                   model-text sanitization, see Security Model), reusable components
 │                   (StatusBadge, ModuleCard, MetricRow, LogLine), assets
@@ -39,7 +41,7 @@ A `pages/*` component (e.g. `GatewayPage.tsx`) is presentation — layout, the t
 
 ## State management: no global store, one hook per data source <a id="state-management"></a>
 
-There's no Redux/Zustand/Context-based global store here — each `features/*` hook independently owns its slice of server state (usually via a combination of polling and the shared `/ws/events` WebSocket for push updates), and a page composes exactly the hooks it needs. This is a deliberate simplicity choice matching the actual complexity of the app: six largely-independent tabs, each backed by its own REST/WS concern, don't benefit much from a shared client-side store the way a deeply cross-linked single-page app would — and it avoids the specific class of bug where an unrelated tab's state update triggers a re-render somewhere it shouldn't.
+There's no Redux/Zustand/Context-based global store here — each `features/*` hook independently owns its slice of server state (usually via a combination of polling and the shared `/ws/events` WebSocket for push updates), and a page composes exactly the hooks it needs. This is a deliberate simplicity choice matching the actual complexity of the app: seven largely-independent tabs, each backed by its own REST/WS concern, don't benefit much from a shared client-side store the way a deeply cross-linked single-page app would — and it avoids the specific class of bug where an unrelated tab's state update triggers a re-render somewhere it shouldn't.
 
 ## The one "mock"-adjacent file — and what it deliberately doesn't cover <a id="legitimate-mocks"></a>
 

@@ -86,7 +86,15 @@ If you're auditing this repository for a security review: this is one of the fir
 
 ### brain/ — an alternate agent surface, not a sixth component <a id="brain"></a>
 
-`brain/` is a separate, optional Python/LangGraph process (`uv`-managed, outside `docker-compose.yml` entirely) that drives Yummi with a frontier model instead of the orchestrator's local-model `graph`/`eino` backends. It doesn't add a sixth box to the diagram above: from the trust boundary's point of view it's just another external REST client of orchestrator, the same role `CLI` and `ui` already play in that diagram — it never opens a connection to gateway's socket or the sandbox container itself. Its MCP server (`brain/src/yummi_brain/mcp_server.py`) wraps `POST /api/v1/...` calls one-to-one, so every tool call still goes through `executor.RunScopedCommand`'s gateway scope check like any other execution path in this repo. See [brain/README.md](../brain/README.md) for the architecture and setup; it's MVP status and off by default — `make conf` offers to configure it.
+`brain/` is a separate, optional Python/LangGraph process (`uv`-managed, outside `docker-compose.yml` entirely) that drives Yummi with a frontier model (via OpenRouter or OpenAI-compatible endpoints) instead of the orchestrator's local-model `graph`/`eino` backends. It doesn't add a sixth box to the diagram above: from the trust boundary's point of view it's just another external REST client of orchestrator, the same role `CLI` and `ui` already play in that diagram — it never opens a connection to gateway's socket or the sandbox container itself. Its MCP server (`brain/src/yummi_brain/mcp_server.py`) wraps `POST /api/v1/...` calls one-to-one, so every tool call still goes through `executor.RunScopedCommand`'s gateway scope check like any other execution path in this repo. See [brain/README.md](../brain/README.md) for the architecture and setup; `make conf` offers to configure it.
+
+### Web Pentest & Bug Bounty (Red Team) Architecture <a id="redteam-architecture"></a>
+
+Yummi is purpose-built as an autonomous Red Team and Bug Bounty conductor:
+- **Target-First Launcher**: Operators input an IP, domain, or URL in the UI and launch automated reconnaissance (subdomain enumeration, live HTTP probing, CMS fingerprinting, parameter fuzzing, nuclei template scans) with a single click.
+- **30 Sandbox-Resident MCP Tools (`sandbox-mcp`)**: 6 typed tools (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`), 22 cataloged pentest tools (`httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `wafw00f`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `snmpwalk`, `dirb`, `hydra`, `medusa`, `checksec`, `radare2`), and 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`).
+- **Output Chaining & Reflex Actions**: Reconnaissance findings are automatically piped into subsequent fuzzing or vulnerability assessment steps via file output capturing under `/home/pentester/` and `/workspace/`.
+- **Integrated Desktop GUI**: The sandbox includes pre-configured Burp Suite, Wireshark, and Firefox instances accessible directly via the noVNC/XFCE Desktop tab.
 
 ---
 
@@ -112,7 +120,7 @@ yummi_internal (172.20.0.0/24, driver: bridge, internal: true — NO external ro
 
 yummi_external (driver: bridge, normal — has a route to the internet)
   ├─ gateway
-  ├─ orchestrator    (reaches Ollama on the host via host.docker.internal)
+  ├─ orchestrator    (reaches Ollama / OpenRouter / Cloud endpoints)
   └─ ui
 ```
 
@@ -128,7 +136,7 @@ The simplest path — an operator asks for one thing in chat and the model propo
 
 ```
 1. UI  →  POST /api/v1/chat                       {"message": "scan 10.0.0.5 for open ports"}
-2. orchestrator: conductor.Engine.ChatWithHistory() calls the LLM (Ollama)
+2. orchestrator: conductor.Engine.ChatWithHistory() calls the LLM (Ollama or Cloud provider)
 3. LLM replies → ChatResponse{ intent: "suggest_command", proposals: [...] }
 4. UI shows a proposal bar; in ask_permission the operator clicks Approve (auto resolves it immediately)
 5. POST /api/v1/chat/approve
@@ -207,6 +215,6 @@ Yummi's code is organized by **implementation stack**, and this documentation se
 
 Being explicit about scope is part of being an honest architecture document:
 
-- **Ollama itself** is not part of this repo — it's a separate, independently-installed LLM runtime that orchestrator calls over HTTP. Yummi ships zero model weights and makes zero cloud LLM calls; everything stays on the operator's own machine. See [Installation § Ollama setup](installation.md#ollama-setup).
-- **`internal/mcp`** (`orchestrator/internal/mcp/client.go`) is real, compiles, and is tested — but it is not imported by any production code path today. It is a dormant JSON-RPC 2.0 stdio client for external MCP servers, kept for a future integration that hasn't landed yet. Its existence does not currently expand the agent's capabilities or its attack surface.
+- **Model Weights**: Yummi ships zero model weights. In local mode, Ollama downloads and runs models locally on your machine. In cloud mode, frontier models are reached via OpenRouter or OpenAI-compatible APIs using operator-provided API keys.
+- **`internal/mcp`** (`orchestrator/internal/mcp/client.go`) is real, compiles, and is tested — but it is not imported by any production code path today. It is a dormant JSON-RPC 2.0 stdio client for external host-spawned MCP servers, kept for a future integration. It is completely distinct from `internal/sandboxmcp`, which is the active client connecting to `sandbox-mcp` inside the Kali container.
 - **A cross-platform network controller for gateway** does not exist by design. `gateway/src/network/mod.rs` states outright that the old cross-platform trait and a macOS no-op stub were removed — `nftables.rs` is the *only* concrete controller, and it requires a genuine Linux kernel with `nf_tables` support. See [Installation § Platform support](installation.md#platform-support) for exactly what this means on macOS and Windows.

@@ -42,6 +42,7 @@ This page is a map of `orchestrator/`'s packages by **implementation boundary** 
 | **`internal/llm`** | Ollama HTTP client (`client.go`), embedding calls (`embed.go` — backs [semantic memory retrieval](../agent/memory-and-knowledge.md#retrieval)), a resilience wrapper (`resilient.go`) | Personas, prompts — pure transport |
 | **`internal/dnsresolve`** | Resolves hostnames via Cloudflare (1.1.1.1), the same resolver the sandbox container itself is configured to use | Scope decisions — resolution only maps name→IP, gateway still decides reachability |
 | **`internal/mcp`** | A JSON-RPC 2.0 stdio client for external MCP servers — real, tested, **dormant** (not imported by any production path today; see [Architecture § What is not in this repository](../architecture.md#not-in-scope)) | — |
+| **`internal/retention`** | Background worker running daily prune of sessions/messages/executions older than `YUMMI_DATA_RETENTION_DAYS` (when > 0) | — |
 | **`internal/tlsutil`** | ECDSA P-256 certificate generation for an opt-in gateway-TLS path. The Rust IPC server currently supports Unix-socket framing only, so this is dormant infrastructure rather than an end-to-end transport option | — |
 | **`internal/config`** | Env var loading (`YUMMI_*`) | — |
 
