@@ -41,8 +41,12 @@ RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest && \
     go install github.com/projectdiscovery/katana/cmd/katana@latest && \
     go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
     go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest && \
-    go install github.com/LukaSikic/subzy@latest && \
-    go install github.com/BishopFox/jsluice/cmd/jsluice@latest && \
+    go install github.com/PentestPad/subzy@latest && \
+    # jsluice pulls in go-tree-sitter, whose per-language bindings are cgo —
+    # the stage's own CGO_ENABLED=0 default excludes them entirely ("build
+    # constraints exclude all Go files"), so this one install needs cgo back
+    # on. The golang:*-bookworm builder image ships gcc for exactly this.
+    CGO_ENABLED=1 go install github.com/BishopFox/jsluice/cmd/jsluice@latest && \
     go install github.com/hahwul/dalfox/v2@latest && \
     go install github.com/lc/gau/v2/cmd/gau@latest
 
@@ -84,7 +88,6 @@ RUN apt-get update && \
       iptables \
       iproute2 \
       jq \
-      jwt-tool \
       libcap2-bin \
       ltrace \
       medusa \
@@ -126,6 +129,34 @@ RUN apt-get update && \
       if [ -f /usr/lib/nmap/nmap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/lib/nmap/nmap; fi && \
       for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium; do command -v "$tool" >/dev/null; done && \
       rm -rf /var/lib/apt/lists/*
+
+# GitHub-sourced Python pentest tools with no Kali apt package: jwt_tool,
+# cloud_enum, graphql-cop, corsy. Each is referenced by name in
+# sandbox-mcp/tools_extended.go's jwt_tool_inspect/cloud_enum_scan/
+# graphql_cop_scan/corsy_scan handlers (plain exec.Command("jwt_tool", ...)
+# style calls) — a bare `apt-get install jwt-tool` was tried here and fails
+# outright (no such package; jwt_tool is a GitHub-only Python script, never
+# packaged for Debian/Kali), and cloud_enum/graphql-cop/corsy were never
+# provisioned at all, so all four would fail at runtime with "command not
+# found" even once the image built. Cloned to /opt, deps pip-installed with
+# --break-system-packages (Kali's system Python is PEP 668-managed; nothing
+# else in this image runs Python that could conflict), then wrapped as a
+# thin argv-forwarding script on PATH under each tool's own exec name.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip && \
+    rm -rf /var/lib/apt/lists/* && \
+    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool && \
+    git clone --depth 1 https://github.com/initstring/cloud_enum.git /opt/cloud_enum && \
+    git clone --depth 1 https://github.com/dolevf/graphql-cop.git /opt/graphql-cop && \
+    git clone --depth 1 https://github.com/s0md3v/Corsy.git /opt/corsy && \
+    pip3 install --break-system-packages --no-cache-dir \
+      termcolor cprint pycryptodomex requests ratelimit simplejson PySocks \
+      dnspython requests-futures && \
+    printf '#!/bin/sh\nexec python3 /opt/jwt_tool/jwt_tool.py "$@"\n' > /usr/local/bin/jwt_tool && \
+    printf '#!/bin/sh\nexec python3 /opt/cloud_enum/cloud_enum.py "$@"\n' > /usr/local/bin/cloud_enum && \
+    printf '#!/bin/sh\nexec python3 /opt/graphql-cop/graphql-cop.py "$@"\n' > /usr/local/bin/graphql-cop && \
+    printf '#!/bin/sh\nexec python3 /opt/corsy/corsy.py "$@"\n' > /usr/local/bin/corsy && \
+    chmod +x /usr/local/bin/jwt_tool /usr/local/bin/cloud_enum /usr/local/bin/graphql-cop /usr/local/bin/corsy && \
+    for tool in jwt_tool cloud_enum graphql-cop corsy; do command -v "$tool" >/dev/null || { echo "git-sourced tool missing: $tool" >&2; exit 1; }; done
 
 RUN groupadd --gid 1000 pentester && \
     useradd --uid 1000 --gid pentester --create-home --shell /bin/bash pentester && \
