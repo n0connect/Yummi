@@ -1,5 +1,5 @@
 schema_version: 1
-version: 2.4.0
+version: 2.5.0
 name: osint-enum
 description: Complete senior subdomain + attack-surface enumeration for a domain (bug-bounty recon).
 triggers:
@@ -25,6 +25,7 @@ triggers:
   - wayback
   - permutation
   - wildcard
+  - screenshot
 knowledge: |
   Map the FULL attack surface of a domain like a senior bug-bounty hunter — be
   exhaustive, then triage. Never stop at one tool: every source finds names the
@@ -43,7 +44,8 @@ knowledge: |
 
   TOOLING: prefer `run_pentest_tool` over a raw shell command for every step
   below that names one — `subfinder_enum`, `amass_enum`, `theharvester_scan`,
-  `gau_fetch`, `alterx_mutate`, `dnsx_resolve`, `httpx_probe`, `nuclei_scan`.
+  `gau_fetch`, `alterx_mutate`, `dnsx_resolve`, `httpx_probe`, `nuclei_scan`,
+  `screenshot_triage`.
   Each already runs with this methodology's proven flags baked in (no need to
   reconstruct or guess CLI flags yourself), returns clean parsed text instead
   of a shell pipeline's raw output, and — as ONE tool call instead of a
@@ -152,6 +154,19 @@ knowledge: |
      technologies, server header, IP, content length, and redirect target.
      Now you know which subdomains are actually serving HTTP(S) and running
      what.
+
+  5.5. VISUAL TRIAGE for a large live-host set (roughly 15+ from step 5) —
+     reading a text table doesn't scale the way a glance at a screenshot
+     does. `screenshot_triage(target=<path to resolved_hosts.txt>,
+     output_dir="/home/pentester/work/<domain>/shots")` screenshots every
+     live host with headless Chrome (reusing httpx, not a separate tool) and
+     returns the same status/title/tech line step 5 gives alongside where
+     each image landed. Use it to spot the handful of hosts worth deeper
+     work (an actual login/admin panel, an unfamiliar app) without opening
+     each one by hand — this is what makes autonomous exploration past this
+     point tractable instead of the operator manually reviewing every host.
+     Skip it for a small set (a handful of hosts) where reading step 5's
+     table is already fast enough.
 
   6. TRIAGE like a professional — do NOT dump raw tool output. Present:
      - the count found vs resolved vs live (surface size at each stage),

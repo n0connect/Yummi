@@ -45,6 +45,7 @@ func TestExtendedTools_EmptyRequiredFieldsRejected(t *testing.T) {
 		{"jsluice_scan", map[string]any{"url": ""}},
 		{"graphql_cop_scan", map[string]any{"url": ""}},
 		{"corsy_scan", map[string]any{"url": ""}},
+		{"screenshot_triage", map[string]any{"target": "", "output_dir": ""}},
 	}
 	for _, c := range cases {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: c.tool, Arguments: c.args})

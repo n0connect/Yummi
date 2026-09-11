@@ -53,6 +53,7 @@ var catalog = map[string]ToolSpec{
 	"jsluice_scan":        {TargetField: "url", Render: renderJsluice},
 	"graphql_cop_scan":    {TargetField: "url", Render: renderGraphqlCop},
 	"corsy_scan":          {TargetField: "url", Render: renderCorsy},
+	"screenshot_triage":   {TargetField: "target", Render: renderScreenshotTriage},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -513,4 +514,14 @@ func renderGraphqlCop(a map[string]any) string {
 func renderCorsy(a map[string]any) string {
 	url, _ := a["url"].(string)
 	return renderSaveNote(a, "corsy -u "+url)
+}
+
+func renderScreenshotTriage(a map[string]any) string {
+	target, _ := a["target"].(string)
+	outDir, _ := a["output_dir"].(string)
+	s := "httpx -l " + target + " -ss -system-chrome -sc -title -td -server"
+	if outDir != "" {
+		s += "  [screenshots saved to " + outDir + "]"
+	}
+	return s
 }
