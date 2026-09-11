@@ -235,6 +235,12 @@ func TestExtendedCatalog_TargetAndRender(t *testing.T) {
 		{"jsluice_scan", map[string]any{"url": "https://example.com/app.js", "mode": "secrets"}, "https://example.com/app.js", "jsluice secrets https://example.com/app.js"},
 		{"graphql_cop_scan", map[string]any{"url": "https://example.com/graphql"}, "https://example.com/graphql", "graphql-cop -t https://example.com/graphql"},
 		{"corsy_scan", map[string]any{"url": "https://example.com"}, "https://example.com", "corsy -u https://example.com"},
+		{
+			"screenshot_triage",
+			map[string]any{"target": "/home/pentester/work/example.com/resolved_hosts.txt", "output_dir": "/home/pentester/work/example.com/shots"},
+			"/home/pentester/work/example.com/resolved_hosts.txt",
+			"httpx -l /home/pentester/work/example.com/resolved_hosts.txt -ss -system-chrome -sc -title -td -server  [screenshots saved to /home/pentester/work/example.com/shots]",
+		},
 	}
 	for _, c := range cases {
 		gotTarget, ok := Target(c.tool, c.args)

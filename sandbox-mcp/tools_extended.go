@@ -829,4 +829,8 @@ func registerExtendedTools(server *mcp.Server) {
 		Name:        "corsy_scan",
 		Description: "Analyze and detect CORS misconfigurations on a URL with corsy.",
 	}, corsyHandler)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "screenshot_triage",
+		Description: "Screenshot a list of resolved hosts/URLs with headless Chrome (via httpx) for fast visual bug-bounty triage, alongside the same status/title/tech summary httpx_probe gives.",
+	}, screenshotTriageHandler)
 }
