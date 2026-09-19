@@ -245,6 +245,11 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		for _, spec := range pentestToolSpecs {
 			tools = append(tools, newPentestTool(spec, pentestDeps))
 		}
+		// Terminal-session verbs share the exact same pentestTool machinery;
+		// their catalog entries mark them target-free (see terminal_tools.go).
+		for _, spec := range terminalToolSpecs {
+			tools = append(tools, newPentestTool(spec, pentestDeps))
+		}
 		if r.cfg.MCPList != nil {
 			tools = append(tools, newSearchPentestToolsTool(r.cfg.MCPList), newRunPentestTool(pentestDeps))
 		}

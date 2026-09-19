@@ -54,6 +54,19 @@ var catalog = map[string]ToolSpec{
 	"graphql_cop_scan":    {TargetField: "url", Render: renderGraphqlCop},
 	"corsy_scan":          {TargetField: "url", Render: renderCorsy},
 	"screenshot_triage":   {TargetField: "target", Render: renderScreenshotTriage},
+	// Terminal-session control verbs (sandbox-mcp/terminal.go). None name a
+	// network target — a session's reachability is enforced at the packet
+	// layer by the gateway, not per-call here — so all carry TargetField ""
+	// (NeedsTarget()=false, processMCP skips the scope check). term_run's
+	// render surfaces the actual command so risk classification and the
+	// approval prompt operate on what really runs inside the session.
+	"term_open":  {TargetField: "", Render: renderTermOpen},
+	"term_run":   {TargetField: "", Render: renderTermRun},
+	"term_read":  {TargetField: "", Render: renderTermRead},
+	"term_wait":  {TargetField: "", Render: renderTermWait},
+	"term_keys":  {TargetField: "", Render: renderTermKeys},
+	"term_list":  {TargetField: "", Render: renderTermList},
+	"term_close": {TargetField: "", Render: renderTermClose},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -524,4 +537,79 @@ func renderScreenshotTriage(a map[string]any) string {
 		s += "  [screenshots saved to " + outDir + "]"
 	}
 	return s
+}
+
+// ---- terminal-session verbs (see sandbox-mcp/terminal.go) ----
+//
+// These render the control action for the execution record, approval prompt,
+// and audit trail. renderTermRun deliberately embeds the raw command so the
+// validator's classifyRisk (shell-chaining floor) and the operator's approval
+// prompt both see exactly what will execute inside the session.
+
+func renderTermOpen(a map[string]any) string {
+	label, _ := a["label"].(string)
+	if label == "" {
+		label = "(auto)"
+	}
+	s := "term_open " + label
+	cols, okc := renderIntField(a, "cols")
+	rows, okr := renderIntField(a, "rows")
+	if okc && okr && cols > 0 && rows > 0 {
+		s += fmt.Sprintf(" (%dx%d)", cols, rows)
+	}
+	return s
+}
+
+func renderTermRun(a map[string]any) string {
+	id, _ := a["id"].(string)
+	cmd, _ := a["command"].(string)
+	s := fmt.Sprintf("term_run[%s]: %s", id, cmd)
+	// wait defaults to true; only annotate the fire-and-return case.
+	if w, ok := a["wait"].(bool); ok && !w {
+		s += "  (no-wait)"
+	}
+	return s
+}
+
+func renderTermRead(a map[string]any) string {
+	id, _ := a["id"].(string)
+	if b, _ := a["full"].(bool); b {
+		return fmt.Sprintf("term_read[%s] (full scrollback)", id)
+	}
+	if n, ok := renderIntField(a, "lines"); ok && n > 0 {
+		return fmt.Sprintf("term_read[%s] (last %d lines)", id, n)
+	}
+	return fmt.Sprintf("term_read[%s]", id)
+}
+
+func renderTermWait(a map[string]any) string {
+	id, _ := a["id"].(string)
+	s := fmt.Sprintf("term_wait[%s]", id)
+	if p, _ := a["pattern"].(string); p != "" {
+		s += " pattern=" + p
+	}
+	if n, ok := renderIntField(a, "idle_secs"); ok && n > 0 {
+		s += fmt.Sprintf(" idle=%ds", n)
+	}
+	return s
+}
+
+func renderTermKeys(a map[string]any) string {
+	id, _ := a["id"].(string)
+	keys, _ := a["keys"].(string)
+	s := fmt.Sprintf("term_keys[%s]: %s", id, keys)
+	if b, _ := a["literal"].(bool); b {
+		s += "  (literal)"
+	}
+	if b, _ := a["enter"].(bool); b {
+		s += "  +Enter"
+	}
+	return s
+}
+
+func renderTermList(_ map[string]any) string { return "term_list" }
+
+func renderTermClose(a map[string]any) string {
+	id, _ := a["id"].(string)
+	return fmt.Sprintf("term_close[%s]", id)
 }
