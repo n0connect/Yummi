@@ -17,7 +17,7 @@ This directory is the capture queue for future documentation screenshots. The Ma
 | `usage-guide/agent-tab.png` | [usage-guide.md § Agent](../../usage-guide.md#tab-agent) | Same shape as the hero shot, or a task-loop plan in progress (numbered plan + a running step) |
 | `usage-guide/bash-tab.png` | [usage-guide.md § Bash](../../usage-guide.md#tab-bash) | The live terminal mid-command, showing it's a real shell in the sandbox |
 | `usage-guide/desktop-tab.png` | [usage-guide.md § Desktop](../../usage-guide.md#tab-desktop) | The graphical XFCE/noVNC desktop canvas connected to the sandbox container |
-| `usage-guide/trace-tab.png` | [usage-guide.md § Trace](../../usage-guide.md#tab-trace) | Activity timeline with a few different icon kinds visible (◇ plan, › command, ! finding at minimum) — ideally with one nested `└` sub-agent event so the nesting is visible too |
+| `usage-guide/trace-tab.png` | [usage-guide.md § Trace](../../usage-guide.md#tab-trace) | Activity timeline with a few different icon kinds visible ([*] plan, [>] command, [!] finding at minimum) — ideally with one nested sub-agent event so the nesting is visible too |
 | `usage-guide/logs-tab.png` | [usage-guide.md § Logs](../../usage-guide.md#tab-logs) | The live SSE debug log stream with a few real lines scrolled into view |
 | `usage-guide/gateway-tab.png` | [usage-guide.md § Gateway](../../usage-guide.md#tab-gateway) | The whole tab: status, active-rules table (with at least one `agent`-sourced and one `manual`-sourced rule so the `source` tag column is visible), and the Block/Allow/Ask egress selector |
 | `usage-guide/health-tab.png` | [usage-guide.md § Health](../../usage-guide.md#tab-health) | The time-series charts (heap, Ollama latency, goroutines) plus the module status panel |

@@ -1,45 +1,55 @@
-← [Back to README](../../README.md) · [Docs index](../README.md)
+[Back to Project README](../../README.md) · [Docs index](../README.md)
 
 # The Agent — Overview
 
-Everything else in this repository — the gateway's nftables enforcement, the sandbox's hardened container, the UI's seven tabs — exists to **serve the agent**. The agent is the actual product: it is what turns "enumerate this host and tell me what's exploitable" into a sequence of real decisions, real commands, and a real report. This section of the documentation (`docs/agent/`) is about the agent *as a system* — its reasoning loop, its memory, its delegation model, its relationship with the sandbox — as distinct from [Modules](../modules/) which documents *where the code lives* per implementation language.
+The agent is the autonomous offensive security engine of Yummi. It translates high-level natural language goals ("audit the authentication API and discover hidden parameters") into structured execution plans, tool dispatches, active vulnerability verification, and comprehensive reports.
 
-## What makes this agent different from a plain LLM loop
+---
 
-Three design choices recur throughout this section, and they're worth naming up front because they explain a lot of otherwise-surprising code:
+## Three Agent Engines Behind One Substrate
 
-**1. It's a state machine, not a `while` loop.** The obvious way to build an agent is a loop: ask the model what to do, do it, feed the result back, repeat. Yummi's agent (`orchestrator/internal/agent/graph.go`) is instead an explicit **graph** — named nodes (`step`, `tool`, `consult`, `retry`, `summarize`, `approval`, `finish`, `ask`, `handoff`, `remember`, `threat_hold`) connected by a routing table of named edges. See [The Agent Graph](graph-and-nodes.md) for why this matters in practice: a plain loop's control flow lives implicitly in `if`/`else` branches scattered across a function; a graph's control flow is a *data structure* you can read, test, and reason about independently of the logic inside any one node.
+```text
++-----------------------------------------------------------------------------------+
+|                            AGENT ENGINE ARCHITECTURES                             |
+|                                                                                   |
+|   1. Graph State Machine (Go)        2. Eino ADK Backend (Go)      3. Brain (Py)  |
+|   [YUMMI_AGENT_BACKEND=graph]        [YUMMI_AGENT_BACKEND=eino]    [LangGraph]    |
+|   - 11-node State Machine            - Native Tool Calling         - Multi-Agent  |
+|   - Tag Protocol ([TOOL], [FINISH])  - 39 Typed/Cataloged MCPs     - Supervisor   |
+|   - Optimized for local 8B models    - Scaled for 14B+ models      - Frontier LLM |
+|        |                                  |                             |         |
+|        +----------------------------------+-----------------------------+         |
+|                                           |                                       |
+|                                           v                                       |
+|                  Shared Scoped Executor & Fail-Closed Gateway                     |
++-----------------------------------------------------------------------------------+
+```
 
-**2. Every message between the agent and the model carries a closed vocabulary tag.** The model never gets raw text back from a tool — it gets `[TOOL_RESPONSE]`, `[TOOL_FAILED]`, `[REPEATED_FAILURE]`, or one of a fixed, documented set of other tags, each with a specific meaning the model has been told about in its own system prompt. See [The Tag Protocol](tag-protocol.md) — this exists specifically because small local models (Yummi's whole design targets models like `qwen3:8b`, not a frontier cloud model) benefit enormously from a rigid, learnable format over free-form prose they might parse inconsistently turn to turn.
+---
 
-**3. The core is deliberately brain-agnostic.** Nothing in the graph, the protocol, or the memory system assumes a *specific* model's quirks — the design target is "any model good enough to follow the tag protocol," with `qwen3` as today's reference, swappable via `YUMMI_OLLAMA_MODEL`/`YUMMI_OLLAMA_TIER` without touching the agent's own code. Where a weak-model-specific accommodation *does* exist (like `finishNode`'s synthesis fallback for a model that never emits `FINISH` on its own — see [Graph & Nodes](graph-and-nodes.md#finish-node)), it's built as graceful degradation the strongest model also benefits from, not a hack that only makes sense for one tier.
+## Core System Architecture Principles
 
-## Two engines behind one interface: graph vs. Eino <a id="two-engines"></a>
+1. **Explicit Graph State Machine**: Control flow lives in an explicit data structure (`graphEdges`) rather than nested procedural loops, providing deterministic routing across step, tool execution, operator consultation, retry, and finish nodes.
+2. **Strict Tag Protocol**: For local models, interaction is governed by closed-vocabulary control tags (`[TOOL]`, `[HANDOFF]`, `[REMEMBER]`, `[FINDING]`, `[FINISH]`, `[ASK]`), ensuring reliable parsing turn to turn.
+3. **Model-Agnostic Core**: Designed to operate with local models via Ollama (`gpt-oss:20b`, `gpt-oss:120b`, `qwen3`) or cloud reasoning models via OpenRouter without code changes.
+4. **Active Verification Exploit Oracles**: Findings require concrete proof (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) before being accepted as valid.
+5. **Attack Surface Management (ASM)**: Discovered infrastructure is structured into a hierarchical asset graph (Domain -> Subdomain -> IP -> Port -> Endpoint -> Parameter).
 
-The tag protocol above is the right call for small/local models with unreliable structured output — but a larger local model with genuine native tool-calling support (e.g. `qwen3:14b`, confirmed working) doesn't need it. Rather than bolt that onto the graph engine, `orchestrator/internal/agent/task_runner.go` defines a `TaskRunner` interface (`CreateAndPlan`/`Start`/`Stop`/`Approve`/`ApprovalMode`/`Roles`/`DelegationRuns`/... — the full surface `internal/api` needs) that the graph `Runner` and a second implementation, `internal/agent/eino.EinoRunner` (built on [CloudWeGo's Eino ADK](https://github.com/cloudwego/eino)), both satisfy. `cmd/orchestrator/main.go` picks one at startup via `YUMMI_AGENT_BACKEND=graph|eino` (`make conf`, default `graph`) — `internal/api` never knows which is wired in.
+---
 
-The Eino backend reuses the graph engine's own security primitives directly rather than reimplementing them: its `run_command` tool calls the same `Execer`/`Verify`/`threatscan.Banner`/`Gate`/`conductor.Validator` the graph's `toolNode` uses, so the single exec path, risk-gated approval, and content-layer scan all hold identically regardless of which engine is running. It now has full parity with the graph engine on agent/memory/skill capability: memory retrieval (`Config.Retrieval`) and skill selection (`Config.Skills`) are folded into the task's `Instruction` once, at `Run()` start — a deliberate one-shot injection rather than graph's per-step re-render, since Eino's `ChatModelAgent` already keeps its own native chat history across tool-calling turns; sub-agent `HANDOFF` delegation is a `handoff` tool that calls straight into the same graph-based specialist `Runner`s and `DelegationCoordinator` the graph backend's `node_handoff.go` uses (`Roles`/`DelegationRuns`/`InterruptDelegation` all work identically); `finish` and `ask_operator` are registered via the ADK's `ReturnDirectly` so they end the ReAct turn immediately instead of just feeding an acknowledgement back for another model round — `ask_operator` pauses the task (`StatusPaused` + `Question`, matching graph's `askNode`) and a resume via `Start()` folds the operator's answer into the next run's opening message (full mid-conversation continuity isn't possible without checkpointing, so this is a fresh conversation that carries the question/answer forward, not a true resume); auto-skill-creation (`Config.SkillCurator`) fires the same non-blocking curator worker from a trajectory assembled out of tool-call outcomes tracked during the run; and `StepBudget` now genuinely bounds the loop via `MaxIterations` (previously unwired — the ADK's own hardcoded default of 20 governed regardless of what a task was configured for), scaled to the goal's own detected complexity rather than left at a flat default (`agent.ScaledStepBudget`, shared with the graph engine — see [Graph & Nodes § step budget](graph-and-nodes.md#step-budget)) and persisted onto the task before the ReAct loop starts so the operator-visible ceiling matches what's actually enforced; `StepsUsed` likewise increments once per real ChatModel turn (`Role == schema.Assistant` in Eino's event stream), not per dispatched tool call, so a turn whose tool call never reaches the pipeline still counts toward the budget it actually consumed. Reaching finish early on a multi-part goal is caught too, but by a different mechanism than the graph engine's plan-based check: Eino has no structured per-part plan to inspect, so `auditFinishCoverage` asks a narrow, single-purpose LLM call (the same `Config.PlanLLM` `AuditGoalParts` uses) whether the finish summary and the trace of tool calls actually attempted every detected part, bounded to one bounce like the graph's guard. This replaced an earlier heuristic (total tool-call count vs. part count) that stopped firing the moment a task made more calls than it had parts — true almost immediately on any real multi-step task — and live-observed to let an 8-part goal finish with an entire requested part (a credential check) never attempted, at 58 real tool calls against a part count of 8. What it still does **not** have: the graph's stuck/duplicate/tool-thrash loop-prevention heuristics (aimed at small-model failure modes this backend's target models are less prone to — `MaxIterations` is its analogous bound) and checkpoint/crash-recovery (a restart interrupts an in-flight Eino task the same way it would any other unrecovered task; this is the same limitation the ask_operator resume above works around for the common in-session case, not a fix for it). `internal/security/invariants` locks the Eino package to the same "never imports `os/exec`" invariant as the graph engine.
+## Agent Subsystem Documentation Index
 
-The Eino backend also exposes a three-tier tool strategy backed by a genuine MCP server running inside the Kali sandbox container (`sandbox-mcp/`, a standalone Go module with zero dependency on the orchestrator, reached via a persistent `docker exec -i` session — see [Sandbox Execution § MCP-backed pentest tools](sandbox-execution.md#mcp)): six individually-typed tools (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`) with real per-tool JSON schemas for the highest-value programs; `search_pentest_tools`/`run_pentest_tool` for the other twenty-four cataloged tools (`amass`, `hydra`, `sqlmap`, `wpscan`, `snmpwalk`, the modern web/bug-bounty set `httpx`/`dnsx`/`alterx`/`gau`/`katana`/`dalfox`, the pure-Go `consolidate_hosts`/`passive_recon_batch`, and more) via MCP's own `tools/list` discovery, so the catalog can keep growing without new Eino code; and `run_command` as the free-text fallback for anything that isn't a cataloged pentest tool at all. The graph backend does not gain any of this — the tag-protocol design targets small models that don't benefit from a second tool-calling surface.
-
-## Frontier Cloud & Multi-Agent Architecture: The LangGraph Brain <a id="langgraph-brain"></a>
-
-Beyond the Go orchestrator's native engines, Yummi supports a third agent surface in [`brain/`](../../brain/README.md):
-- **LangGraph Supervisor + Specialists**: Built in Python with LangGraph, it implements a high-level planner delegating to specialized agents (`recon`, `web`, `osint`, `exploiter`, `source-analysis`, `reverser`).
-- **Frontier Cloud Reasoning**: Seamlessly uses frontier models (Claude 3.5 Sonnet, GPT-4o, DeepSeek-V3) via OpenRouter or OpenAI APIs.
-- **Fail-Closed Integration**: Interacts with the orchestrator solely via REST API and MCP endpoints, maintaining strict gateway nftables boundaries.
-
-## The five pieces, and where to read about each
-
-| Piece | What it is | Page |
+| Subsystem | Scope & Contents | Reference |
 |---|---|---|
-| **The graph state machine** | 11 nodes, a routing table, stuck/thrash/duplicate detection, checkpointing | [Graph & Nodes](graph-and-nodes.md) |
-| **The tag protocol** | The closed agent↔LLM vocabulary and how replies get parsed even from a model that doesn't format perfectly | [Tag Protocol](tag-protocol.md) |
-| **Memory & the Knowledge Store** | Targets, findings, target-scrubbed tactics, persistent context, and how they're recalled into future prompts | [Memory & Knowledge](memory-and-knowledge.md) |
-| **Skills & sub-agents** | Declarative YAML playbooks, and depth-1 delegation to specialist personas sharing the same Knowledge Store | [Skills & Sub-agents](skills-and-subagents.md) |
-| **Sandbox execution** | The scoped scheduled-command path, plus the distinct operator terminal path | [Sandbox Execution](sandbox-execution.md) |
-| **Quality & evaluation** | Deterministic persona boundaries, server-side finding verdicts, and assertion-bearing live scenarios | [Quality & Evaluation](quality-and-evaluation.md) |
+| **Graph & Nodes** | 11 state machine nodes, transition routing table, loop prevention heuristics, and plan checkpointing. | [Graph & Nodes](graph-and-nodes.md) |
+| **Tag Protocol** | Closed agent-LLM tag vocabulary, robust token parsers, and prompt construction. | [Tag Protocol](tag-protocol.md) |
+| **Memory & Knowledge Store** | Factual targets, findings, target-scrubbed procedural tactics, persistent context, and ASM asset tree. | [Memory & Knowledge](memory-and-knowledge.md) |
+| **Skills & Sub-Agents** | 22 declarative offensive playbooks and 10 specialist sub-agents with depth-1 delegation bounding. | [Skills & Sub-agents](skills-and-subagents.md) |
+| **Sandbox Execution & MCP** | The 39 sandbox MCP tools across 3 tiers, direct argv execution, and network gating. | [Sandbox Execution](sandbox-execution.md) |
+| **Quality & Evaluation** | Assertion-bearing golden test fixtures, persona boundary assertions, and live benchmark harnesses. | [Quality & Evaluation](quality-and-evaluation.md) |
 
-## The one execution invariant that spans the runtime pieces
+---
 
-Read together, these pages describe a structural rule: **the agent package never spawns a command itself.** `agent/exec.go` enqueues into `execution.Store`; `executor.ProcessFunc` drains the store, calls `RunScopedCommand`, obtains gateway verdicts, and only then invokes `sandbox.Bridge.Exec`. See [Sandbox Execution](sandbox-execution.md) and [Security Model](../security-model.md) for the exact boundary and its limits.
+## Architectural Invariant: Single Execution Path
+
+`orchestrator/internal/agent` contains **zero** calls to `os/exec` or process spawning functions. Every command requested by any agent engine enqueues into `execution.Store`, passes through `executor.RunScopedCommand`, checks gateway `nftables` policy over IPC, and executes inside the Kali sandbox as an unprivileged user (`UID 1000:1000`).

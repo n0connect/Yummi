@@ -1,8 +1,8 @@
-← [Back to README](../README.md) · [Docs index](README.md)
+<- [Back to README](../README.md) · [Docs index](README.md)
 
 # Development
 
-This page assumes you've already completed [Installation](installation.md) — a working Go ≥1.24 toolchain with a C compiler, Rust via rustup, and Node 20/22. It covers the fast, granular workflows for iterating on one piece of Yummi without rebuilding everything.
+This page assumes you've already completed [Installation](installation.md) - a working Go >= 1.25 toolchain with a C compiler, Rust via rustup, and Node 20/22. It covers the fast, granular workflows for iterating on one piece of Yummi without rebuilding everything.
 
 ## Table of contents
 

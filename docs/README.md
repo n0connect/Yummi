@@ -16,17 +16,17 @@ docs/
   api-reference.md          REST API endpoints and WebSocket event specifications
 
   agent/                    Agent design and execution behavior
-    overview.md             Agent architecture: graph state machine vs. Eino ADK
-    graph-and-nodes.md      11-node state machine, routing table, cycle detection
+    overview.md             Agent architecture: graph state machine vs. Eino ADK vs. Brain
+    graph-and-nodes.md      11-node state machine, routing table, active verification oracles
     tag-protocol.md         Closed tag vocabulary for deterministic agent-LLM protocol
-    memory-and-knowledge.md Targets, findings, procedural tactics, context retrieval
-    skills-and-subagents.md Playbook selection, depth-1 delegation, skill curation
-    quality-and-evaluation. Objective quality metrics and assertion-bearing benchmarks
-    sandbox-execution.md    Single scoped execution path and MCP tool catalog
+    memory-and-knowledge.md Targets, findings, procedural tactics, ASM hierarchical asset graph
+    skills-and-subagents.md 22 red team playbooks, 10 specialist subagents, depth-1 delegation
+    quality-and-evaluation.md Objective quality metrics and assertion-bearing benchmarks
+    sandbox-execution.md    Single scoped execution path and 39 MCP tools catalog
 
   modules/                  Component maps organized by implementation stack
-    orchestrator.md         Go orchestrator packages and subsystem boundaries
-    gateway.md              Rust gateway daemon and fail-closed firewall management
+    orchestrator.md         Go orchestrator packages, ASM/report/proxy handlers, API routes
+    gateway.md              Rust gateway daemon and fail-closed nftables firewall management
     cli.md                  Root Go CLI module (lifecycle and UI launcher)
     ui.md                   React 18 + Vite dashboard structure and state management
 
@@ -36,13 +36,24 @@ docs/
 
 The `brain/` directory (located at the repository root) contains an optional Python/LangGraph agent runtime: **[brain/README.md](../brain/README.md)**. It provides a supervisor-specialist multi-agent workflow driving the orchestrator via REST API and MCP.
 
+## Key Subsystems & Features
+
+- **Attack Surface Management (ASM)**: Automatic discovery and maintenance of hierarchical asset graphs (Domain -> Subdomain -> IP -> Port -> Endpoint -> Parameter, Cloud Buckets, Secrets). See [Memory & Knowledge](agent/memory-and-knowledge.md#asm-matrix) and [API Reference](api-reference.md#asm-endpoints).
+- **Active Exploit Verification**: Finding validation using deterministic oracles (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`). See [Graph & Nodes](agent/graph-and-nodes.md#finding-verification).
+- **Multi-Format Report Engine**: One-click generation of professional penetration testing and bug bounty reports in HackerOne Markdown, Bugcrowd VRT, Executive Summary, or structured JSON. See [Usage Guide](usage-guide.md#reporting-engine) and [API Reference](api-reference.md#report-endpoints).
+- **HTTP Proxy Traffic Ingestion**: Live interception and injection of web requests and responses from Burp Suite, OWASP ZAP, or Caido directly into the agent's target scope and parameter catalog. See [API Reference](api-reference.md#proxy-endpoints).
+- **Fail-Closed Execution Sandbox**: Kali Linux container operating behind an isolated Rust gateway enforcing packet-level `nftables` policy rules with tamper-evident SHA-256 hash chains. See [Security Model](security-model.md) and [Sandbox Execution](agent/sandbox-execution.md).
+
 ## Recommended Reading Paths
 
-- **Quick Start and Setup**: [Installation](installation.md) -> [Usage Guide](usage-guide.md)
-- **Security and Architecture Review**: [Architecture](architecture.md) -> [Security Model](security-model.md)
-- **Agent Internals and Customization**: [Agent Overview](agent/overview.md) -> [Graph & Nodes](agent/graph-and-nodes.md) -> [Tag Protocol](agent/tag-protocol.md)
-- **Codebase Orientation**: [Modules](modules/) (organized by Go, Rust, and TypeScript stacks)
-- **API and Tool Integration**: [API Reference](api-reference.md)
+- **Operator / Pentester Path**:
+  [Installation](installation.md) -> [Usage Guide](usage-guide.md) -> [API Reference](api-reference.md)
+- **Security & Architecture Review Path**:
+  [Architecture](architecture.md) -> [Security Model](security-model.md) -> [Sandbox Execution](agent/sandbox-execution.md)
+- **Agent & AI Developer Path**:
+  [Agent Overview](agent/overview.md) -> [Graph & Nodes](agent/graph-and-nodes.md) -> [Tag Protocol](agent/tag-protocol.md) -> [Skills & Subagents](agent/skills-and-subagents.md)
+- **Codebase Orientation Path**:
+  [Development Guide](development.md) -> [Modules Map](modules/) (Go Orchestrator, Rust Gateway, CLI, UI)
 
 ## Documentation Maintenance
 
