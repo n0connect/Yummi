@@ -1,5 +1,110 @@
 # Changelog
 
+## [2.0.0](https://github.com/n0connect/Yummi/compare/v1.0.0...v2.0.0) (2026-09-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove the Tauri desktop shell and terminal UI
+
+### Features
+
+* **agent/eino:** first-class terminal-session tools ([a7f4624](https://github.com/n0connect/Yummi/commit/a7f4624b12f2ed6227438196ccfcd1dbe6999dfa))
+* **agent:** backend capabilities contract; Eino reconstructive crash-recovery ([24de423](https://github.com/n0connect/Yummi/commit/24de423862862be97d126032c72558af69597ad3))
+* **agent:** per-task auto-approve override for ask_permission mode; fix Eino's missing destructiveFloor gate ([e875f9e](https://github.com/n0connect/Yummi/commit/e875f9e8428ac3d5f5177055bd47938c563f9890))
+* **agent:** per-turn budget-regime guidance in the step prompt, replacing the dead BUDGET_WARNING tag ([14c4fe4](https://github.com/n0connect/Yummi/commit/14c4fe4bb14aff16aede1bee8c8292289ed53639))
+* **api,ui:** sequenced event hub with replay-based WS resync; per-session turn identity ([dce43e0](https://github.com/n0connect/Yummi/commit/dce43e004fca8afc6a8907a9955329e360a5520e))
+* **api:** operator briefing — accumulated knowledge, surfaced for the operator ([7bcd88e](https://github.com/n0connect/Yummi/commit/7bcd88e0c7aca90d7fdf671a5c1cb8ec2a2be999))
+* **assistant:** target-first launcher for bug-bounty/web-pentest reflex ([933fd25](https://github.com/n0connect/Yummi/commit/933fd25f50fb15f003b3a8ca1e750d002fb32d15))
+* **brain:** LangGraph agent brain over MCP, driving Yummi's substrate ([7696d5c](https://github.com/n0connect/Yummi/commit/7696d5c7c395678bf05be57a2d952e2607f57234))
+* **brain:** planner node, plan-aware routing, and a synthesized final report ([6839eeb](https://github.com/n0connect/Yummi/commit/6839eeb200b02545e4d64ad5c1defd4591dd185a))
+* **brain:** wire skill/tactic/memory read access into the LangGraph brain ([f0ace74](https://github.com/n0connect/Yummi/commit/f0ace74618eefcfc0178abd1b9157b4b6ee432fa))
+* bug-bounty/web-pentest expansion — active-proof oracle, multi-format reports, asset matrix, proxy ingest, 4 new specialists ([10c1a34](https://github.com/n0connect/Yummi/commit/10c1a346b44e49ef45fb841ef473bc70383fbe62))
+* **chat:** stream display tokens for the single-command chat path ([f34dd60](https://github.com/n0connect/Yummi/commit/f34dd60430f22ca56fd279388fcd3de5da4b59b3))
+* **conductor:** mandatory cloud replacement — no redundant local model ([dcaf966](https://github.com/n0connect/Yummi/commit/dcaf966708fa1dd29899df86268070a0c9c36b34))
+* **config:** switch default model and tier system from qwen3 to gpt-oss ([9ce9a91](https://github.com/n0connect/Yummi/commit/9ce9a9164fe8c2ec88e8cd046e83a0c49177a70a))
+* **desktop:** professional custom-OS branding — Burp Suite, wallpaper, fullscreen ([3f484fe](https://github.com/n0connect/Yummi/commit/3f484fe99a05198a7f744199c5c8cdb06201239c))
+* **desktop:** Stage 2 — a real browser-accessible Linux desktop (Pwnbox-style) ([8f9c2c5](https://github.com/n0connect/Yummi/commit/8f9c2c5fbce0ec1d11b70ac413d19605e7f5e5a2))
+* **eino:** native OpenRouter/OpenAI-compatible provider support ([28ca31e](https://github.com/n0connect/Yummi/commit/28ca31ed9a7f90bfea372436c2df7c716b2e87f7))
+* **eino:** support pointing the ReAct loop at a different OpenAI-compatible model server ([1a033b5](https://github.com/n0connect/Yummi/commit/1a033b5a25ecfb0894837a312155f24c98aaaccf))
+* **exec:** stream live command output alongside the existing heartbeat ([8d45db3](https://github.com/n0connect/Yummi/commit/8d45db34808b5babcc8d9b43546fff359eb45155))
+* **gateway:** add bounded retry to the IPC client's send path ([3b8ce56](https://github.com/n0connect/Yummi/commit/3b8ce5617354b223a2bb00d3a0eabadf6398d55e))
+* **gateway:** kernel-first atomic policy commits with self-healing reconciliation ([50436a9](https://github.com/n0connect/Yummi/commit/50436a9ab869898201417f6d232a0e162b47d99f))
+* **knowledge:** program-scope rules — bug-bounty scope bookkeeping + report gate ([45c7f0e](https://github.com/n0connect/Yummi/commit/45c7f0e0863247d578eda6047df6b33db36e5325))
+* **persona:** route web/bugbounty/RE skills through MCP tools instead of raw shell ([83211d7](https://github.com/n0connect/Yummi/commit/83211d7a583d846120229d90e9a27affdfad1c79))
+* **persona:** wildcard-DNS detection as a mandatory Phase 0 in osint-enum ([a1f80f0](https://github.com/n0connect/Yummi/commit/a1f80f07e4184f14bc151cebc5abe88c0cb226e5))
+* **recon:** senior-level attack-surface methodology + modern recon tooling ([3b6fec5](https://github.com/n0connect/Yummi/commit/3b6fec5ba2fb1f476ac86f496bc6aaa2fe294474))
+* **recon:** senior-level attack-surface methodology + reflex chaining ([f1a7100](https://github.com/n0connect/Yummi/commit/f1a7100a93b82132b37e6d529d1b9ee2064e8930))
+* **sandbox-mcp:** consolidate_hosts + passive_recon_batch tools; fix no-target MCP dispatch bug ([97e926f](https://github.com/n0connect/Yummi/commit/97e926fa2bb56092917c57e75211d73d4513ef29))
+* **sandbox-mcp:** output_file chaining + richer schemas for recon tools ([dbc143f](https://github.com/n0connect/Yummi/commit/dbc143f9a86279ccff9e39ff34e2918d9809a8d8))
+* **sandbox-mcp:** persistent tmux terminal sessions ([b9bce92](https://github.com/n0connect/Yummi/commit/b9bce92b83969bde3bab8bb00be4b9676e4fa6ae))
+* **sandbox-mcp:** screenshot_triage — visual bug-bounty triage over httpx ([9482e00](https://github.com/n0connect/Yummi/commit/9482e0047698eed68f7097330bad9a9b9d9d94ea))
+* **sandbox:** modern web/bugbounty MCP toolchain + nuclei templates + fixes ([b2ba5e4](https://github.com/n0connect/Yummi/commit/b2ba5e4e658512b94ea0a5d8e608c0df74541360))
+* **sandbox:** unify agent exec and desktop into one container ([138cc36](https://github.com/n0connect/Yummi/commit/138cc362b3bd89ab6b04c6ef5b93a44288a15151))
+* **skills:** push-update pending-skill review queue and surface audit trail ([546cc93](https://github.com/n0connect/Yummi/commit/546cc9321d2cf56d97c9cccd4b68a2ea82db40c7))
+* **terminal:** tmux-backed persistent sessions — Stage 1 of the browser-Linux workbench ([709ae26](https://github.com/n0connect/Yummi/commit/709ae2605fd3b5cc69a77aa46ebc6021226d7c26))
+* **ui:** "same box" cohesion — mini sandbox preview + cross-tab session context ([31b4493](https://github.com/n0connect/Yummi/commit/31b44934a47b08034270e2f5edd533695dfa0691))
+* **ui:** accessibility pass across all six tabs ([914a06e](https://github.com/n0connect/Yummi/commit/914a06e50952a05b897dbf1c456b7caec520bc53))
+* **ui:** add a light theme with OS auto-detect and manual toggle ([b29da0d](https://github.com/n0connect/Yummi/commit/b29da0d6de94d21a566fee90c67d65766cab4a3e))
+* **ui:** add ASM asset tree, pentest report generator, and proxy bridge panels ([486c966](https://github.com/n0connect/Yummi/commit/486c96658c3002a47461cfc551311b41b84d318e))
+* **ui:** add program scope rules management and live classifier panel ([49b61ec](https://github.com/n0connect/Yummi/commit/49b61ec1169026c469921f4d4b529c0006ff5870))
+* **ui:** operator briefing panel — the visible half of "operator drives, AI assists" ([8f5111f](https://github.com/n0connect/Yummi/commit/8f5111fbb78a2f83f7b5531cda183e7909550c64))
+* **ui:** operator trust rail surfacing event/gateway/agent state at a glance ([54934bf](https://github.com/n0connect/Yummi/commit/54934bf6594063a350d4a2de2296d1711088121c))
+* **ui:** severity-aware, filterable findings view in TRACE tab ([81fc797](https://github.com/n0connect/Yummi/commit/81fc797e35725cd25b5b7f6c8fdee30711372a4d))
+
+
+### Bug Fixes
+
+* **agent:** bound Eino tool output before it enters model history ([004fb12](https://github.com/n0connect/Yummi/commit/004fb12cb8f6f459112a74089b192403af3a8cdf))
+* **agent:** Eino approval-race + persona parity; conductor evidence discipline ([ad17272](https://github.com/n0connect/Yummi/commit/ad172720917998e4647453989919c28164df6439))
+* **agent:** eino backend survives real recon-chain tasks — accurate step accounting, complexity-scaled budget, resilient recovery ([6ce7ebf](https://github.com/n0connect/Yummi/commit/6ce7ebfead379487f59ff8c31d0900667f0968b0))
+* **agent:** eino multi-part goals — preserve structure, show checklist, re-audit every finish ([de3878f](https://github.com/n0connect/Yummi/commit/de3878f9a7d1844a96233fb68b14cd6b47367500))
+* **agent:** Eino num_ctx/timeout/instruction gaps; empty-summary fallback ([623074b](https://github.com/n0connect/Yummi/commit/623074bd2415f2044c44b2b66c9d6f9e486dcae1))
+* **agent:** graph backend detects natural-language multi-part goals and guards against premature FINISH ([5e29142](https://github.com/n0connect/Yummi/commit/5e291420be07ce699c56658ed281d63ed4cdc261))
+* **agent:** multi-part goals collapsed to one step at planning time ([f688bbb](https://github.com/n0connect/Yummi/commit/f688bbb4218f6c0ca74d4a9a41cd20c2d15bedf2))
+* **agent:** share step-budget scaling formula between graph and eino backends, apply to graph ([5ae6767](https://github.com/n0connect/Yummi/commit/5ae6767bd1f97b2536b38f25c84421141924b25a))
+* **api:** wire the desktop WS bridge's keepalive ping ([5798fa9](https://github.com/n0connect/Yummi/commit/5798fa94d3dbc9e547ed9da66dfd22675722aa58))
+* **brain:** actually load Yummi's persona instead of a hand-written stand-in ([60a40a6](https://github.com/n0connect/Yummi/commit/60a40a657bef3f436b31a54cfa54fab1fe7820cc))
+* **brain:** harden persona parsing + step-budget crash, add real test suite ([07f7a0f](https://github.com/n0connect/Yummi/commit/07f7a0f16035d71d2cf4bdf43b284f8569b3bcc4))
+* **brain:** real bugs found live + a full static-review pass on the rest ([aeeabef](https://github.com/n0connect/Yummi/commit/aeeabef9fc9e7c4efee9b4e50b73e1628ca35737))
+* **brain:** retry transient upstream LLM failures instead of crashing the run ([48a95b4](https://github.com/n0connect/Yummi/commit/48a95b44015f836c290ded74c9430991a0041410))
+* **brain:** stop a specialist from executing an unrelated skill as if it were the task ([6003035](https://github.com/n0connect/Yummi/commit/6003035ec7c2e7e90cbda8b99aa993a799b2717f))
+* **brain:** stop retrying a target the operator hasn't opened egress for ([765827a](https://github.com/n0connect/Yummi/commit/765827a3739890ee56c3fedb65e593e2d8a83e10))
+* **brain:** the operator's goal never actually reached the specialist ([e40785e](https://github.com/n0connect/Yummi/commit/e40785e4fbc04462157460aa1b432bb93acc578a))
+* **conductor:** stop mislabeling safe local pipelines as critical risk ([d2b31c8](https://github.com/n0connect/Yummi/commit/d2b31c8492efc0e677c7aad57c2814bc7c8187c0))
+* **conductor:** stop streaming raw JSON to the chat live-typing preview ([8d7cd82](https://github.com/n0connect/Yummi/commit/8d7cd821fb4b0e006a7f06380d7880fb2541692c))
+* **eino:** replace the premature-FINISH guard's weak tool-count heuristic with an LLM coverage audit ([ef11f31](https://github.com/n0connect/Yummi/commit/ef11f318dd8eb8a15de5bedaeacf67d37988d5dd))
+* **gateway:** clamp audit log limit — usize::MAX wrapped to unbounded LIMIT ([5c853e2](https://github.com/n0connect/Yummi/commit/5c853e290942c3f6563ab638d9c5a01a302c5ff8))
+* **gateway:** revoke nftables kernel rule when a policy rule is removed ([f2039f1](https://github.com/n0connect/Yummi/commit/f2039f1433e8de1c9ccae3958af38d377a8b7a4c))
+* **llm:** fall back to Ollama's thinking field when content is empty ([e3fc990](https://github.com/n0connect/Yummi/commit/e3fc990b3802ee86f821df066b481ee82dbc1b42))
+* **llm:** stop forcing format:json — broke gpt-oss:20b when combined with Think=false ([4d4498f](https://github.com/n0connect/Yummi/commit/4d4498f5939c267aa0c033ca119cee20f7e7160c))
+* **makefile:** close/force-restart leave orphaned llama-server runners alive ([1565d2b](https://github.com/n0connect/Yummi/commit/1565d2b63729a271408ad0b467fa0a0d1e1f1134))
+* **makefile:** stop re-asking insecure-bridge confirmation on every command ([415fc14](https://github.com/n0connect/Yummi/commit/415fc1447f9097af1b2017e00eafcce40904ac64))
+* **sandbox-mcp:** amass_enum crashed every time via a Kali packaging quirk ([0c970da](https://github.com/n0connect/Yummi/commit/0c970da6e0fee45c1c43704d592d5805869263aa))
+* **sandbox-mcp:** close consolidate_hosts confinement gap; fix home-root write edge case ([0465e8d](https://github.com/n0connect/Yummi/commit/0465e8d5dd2385be1b31e456a88d57c6860d95d3))
+* **sandbox-mcp:** confine output_file writes to the pentester home tree ([93bd41b](https://github.com/n0connect/Yummi/commit/93bd41b8ae50c6292a9d1df14f876455597b125c))
+* **sandbox-mcp:** dnsx/alterx were broken, gau was unbounded — found live ([dabfd46](https://github.com/n0connect/Yummi/commit/dabfd46ce84e3ee3a2c9ea2fce71c038298339bb))
+* **sandbox-mcp:** fall back to dirb's bundled common.txt when the wordlist mount is empty ([88683f4](https://github.com/n0connect/Yummi/commit/88683f49e3df900efd2ed4fc672f23b4de92355a))
+* **sandbox-mcp:** reject flag-shaped values in bare-positional tool arguments ([b19fd02](https://github.com/n0connect/Yummi/commit/b19fd021bd5064744b3389879eb23db95416f17a))
+* **sandbox:** 4 real build/runtime breaks found via actual make start ([6a8bc86](https://github.com/n0connect/Yummi/commit/6a8bc86ef504ca158ebfc741cf6235656df93e6f))
+* **sandbox:** add missing dnsutils package (dig/host/nslookup) ([94aeab8](https://github.com/n0connect/Yummi/commit/94aeab807c7b1d01778f6d0a959f2c89baa3176c))
+* **sandbox:** don't leak past-cap bytes to the live output stream ([53afec8](https://github.com/n0connect/Yummi/commit/53afec8076b1b6df364cc2b7aa1eac18477bd0fd))
+* **ui:** 3 async handlers missing the session-isolation guard ([9c3b9f8](https://github.com/n0connect/Yummi/commit/9c3b9f88d742d62fc0790d1ca0bebd7d0f269114))
+* **ui:** chat analysis failures were silently swallowed — add Stop + turn status ([a82ffc3](https://github.com/n0connect/Yummi/commit/a82ffc346bb315760fa564cf73823bda63c7eb48))
+* **ui:** command output panel — preserve columns, follow the tail live ([14e4e45](https://github.com/n0connect/Yummi/commit/14e4e45c160f0577c633e0b4dd2bb88c0fed66b1))
+* **ui:** desktop resize — actually resize the remote display, not letterbox it ([df64a46](https://github.com/n0connect/Yummi/commit/df64a4651c49b8a0c8be1d4dd29cad844b4ae005))
+* **ui:** fix invisible light-theme washes in SessionRail and HealthPage ([59cd558](https://github.com/n0connect/Yummi/commit/59cd5587c4afe8e6064db2285333c0a08dac4414))
+* **ui:** recover in-flight tasks and approval holds on the default session ([9a3f561](https://github.com/n0connect/Yummi/commit/9a3f561a70ed2540166392881c311a812f510411))
+* **ui:** resync agent/gateway state on WS reconnect; track every concurrent sub-agent ([88a4960](https://github.com/n0connect/Yummi/commit/88a496038adefbd311238704d6cba8be1d5326ce))
+* **ui:** three real bugs — execution cancel button, tiny status text, stale index.html cache ([a81877a](https://github.com/n0connect/Yummi/commit/a81877a4864803bc0114796dd7394595cf8ef2c8))
+* **ui:** three real layout bugs — Trace page can't scroll, logo clips, status overflows silently ([041fa66](https://github.com/n0connect/Yummi/commit/041fa66c7e4de441878a76e2701ad874ad7458f5))
+* **ui:** translate section headers left as raw English in the tr locale ([72ca185](https://github.com/n0connect/Yummi/commit/72ca185313936c625352ce3700f1661e139c7c23))
+
+
+### Code Refactoring
+
+* remove the Tauri desktop shell and terminal UI ([91c75da](https://github.com/n0connect/Yummi/commit/91c75da870b85c2ccf74235e81ffecc0db151c0f))
+
 ## 1.0.0 (2026-08-16)
 
 
