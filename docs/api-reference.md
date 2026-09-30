@@ -1,166 +1,213 @@
-← [Back to README](../README.md) · [Docs index](README.md)
+[Back to Project README](../README.md) · [Documentation Index](README.md)
 
-# API Reference
+# REST & WebSocket API Reference
 
-The full REST + WebSocket surface orchestrator exposes, as wired in `orchestrator/internal/api/routes.go` — this page is a map of *what exists and why*, not a request/response schema dump (read the handler source in `orchestrator/internal/api/handlers_*.go` for exact JSON shapes when you're integrating against a specific endpoint). Every route below is served under **`http://127.0.0.1:9080`** by default — bound to localhost only, not exposed to your LAN, by design.
-
-## Table of contents
-
-- [Conventions](#conventions)
-- [Sessions](#sessions)
-- [Targets & findings](#targets-findings)
-- [TRACE — observability (read-only)](#trace)
-- [Chat](#chat)
-- [Agent tasks](#agent-tasks)
-- [Executions](#executions)
-- [Gateway management](#gateway)
-- [Sandbox](#sandbox)
-- [System](#system)
-- [WebSockets](#websockets)
+The full HTTP REST and WebSocket interface exposed by the `orchestrator` service (`http://127.0.0.1:9080`). All endpoints are bound strictly to localhost by default.
 
 ---
 
-## Conventions <a id="conventions"></a>
+## Table of Contents
 
-- Every route lives under `/api/v1`, except the three WebSocket upgrade endpoints (`/ws/terminal`, `/ws/desktop`, `/ws/events`) and the plain health check (`/healthz`).
-- Errors follow **RFC 7807** problem-detail JSON (`Content-Type: application/problem+json`) — expect `{"type":"about:blank","title":"...","status":<code>,"detail":"..."}`, not a bespoke error format per endpoint. `type` is always the literal string `"about:blank"` today — no per-error-kind URIs are defined yet, so don't write client code that branches on it.
-- `{id}` / `{sessionID}` path segments are validated (`isValidSessionID`) before touching any store — a malformed ID is a `400`, not a store lookup that happens to fail.
-- Browser CORS and WebSocket origins are restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`). WebSocket clients without an `Origin` header, such as non-browser scripts or `curl`, are accepted (a real browser always sends one).
-
----
-
-## Sessions <a id="sessions"></a>
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/sessions` | List all sessions |
-| `POST` | `/sessions` | Create a session |
-| `GET` | `/sessions/{id}` | Get one session |
-| `GET` | `/sessions/{id}/messages` | Chat history for a session |
-| `PATCH` | `/sessions/{id}` | Update session metadata |
-| `DELETE` | `/sessions/{id}` | Delete a session |
-
-## Targets & findings <a id="targets-findings"></a>
-
-Owned by the [Knowledge Store](agent/memory-and-knowledge.md), not by the session manager directly:
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/sessions/{sessionID}/targets` | List declared/discovered in-scope targets |
-| `POST` | `/sessions/{sessionID}/targets` | Declare a target |
-| `GET` | `/sessions/{sessionID}/findings` | List structured findings |
-| `POST` | `/sessions/{sessionID}/findings` | Add a finding manually (operator-entered, `source: "manual"`) |
-
-## TRACE — observability (read-only) & Operator <a id="trace"></a>
-
-Backs the [Trace tab](usage-guide.md#tab-trace) and operator briefing surfaces. Most endpoints are read-only; explicit context deletion, skill decisions, and delegation interruption are operator control actions.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/sessions/{sessionID}/activity` | Full activity timeline (plan/command/result/memory/skill/handoff/finding/ask/finish events) |
-| `GET` | `/sessions/{sessionID}/context` | Persistent `REMEMBER`-written memory for this session |
-| `DELETE` | `/sessions/{sessionID}/context/{key}` | Explicitly forget one session memory entry and its embedding |
-| `GET` | `/tactics` | Target-scrubbed procedural memory (cross-session) |
-| `GET` | `/skills` | Currently loaded skill registry |
-| `GET` | `/skills/pending` | Curator-drafted skills awaiting operator review |
-| `POST` | `/skills/pending/{id}/approve` | Atomically activate a re-scanned draft through the writable `YUMMI_AUTO_SKILL_DIR`; failures return it to `pending` |
-| `POST` | `/skills/pending/{id}/reject` | Reject a drafted skill |
-| `GET` | `/operator/briefing` | Surfaced matching skills, tactics, and findings for the operator's manual workflow |
-| `GET` | `/agent/roles` | Available specialist sub-agent roles |
-| `GET` | `/agent/capabilities` | Runtime capabilities and active execution backend (e.g. native / Eino) |
-| `GET` | `/agent/delegations` | Active and recent addressable specialist runs |
-| `POST` | `/agent/delegations/{id}/interrupt` | Interrupt one specialist without stopping its parent/siblings |
-| `GET` | `/sessions/{sessionID}/audit` | Session-level audit trail (distinct from gateway's own network audit log below) |
-
-Delegation records are addressable lifecycle objects, not just log lines. A record exposes the parent task, role, subgoal, child task ID when planning succeeded, and one of `running`, `completed`, `failed`, or `interrupted`. The interrupt endpoint is idempotence-aware and only cancels the selected child; the parent's graph and sibling specialists continue.
-
-## Chat <a id="chat"></a>
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/chat` | Send a message; may return a single command proposal or start an agent task |
-| `POST` | `/chat/approve` | Approve a single-command proposal. This route has no deny body/operation; clients dismiss or expire an unapproved proposal |
-
-## Agent tasks <a id="agent-tasks"></a>
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/agent/mode` | Get the agent's approval mode (`auto` / `ask_permission`) |
-| `POST` | `/agent/mode` | Set the agent's approval mode |
-| `POST` | `/tasks` | Create a task (goal → plan, does not start it) |
-| `GET` | `/tasks/{id}` | Get task state |
-| `GET` | `/sessions/{sessionID}/tasks` | List tasks for a session |
-| `POST` | `/tasks/{id}/start` | Start executing a planned task |
-| `POST` | `/tasks/{id}/stop` | Stop a running task |
-| `POST` | `/tasks/{id}/approve` | Resolve a task's pending approval gate (command risk, or threat-scan hold) |
-| `POST` | `/tasks/{id}/auto-approve` | Set per-task auto-approval toggle (overrides session default for this specific task) |
-
-## Executions <a id="executions"></a>
-
-The lower-level record of every individual command run (both from single-command chat approvals and from inside agent tasks):
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/sessions/{sessionID}/executions` | List executions for a session |
-| `GET` | `/executions/{id}` | Get one execution record |
-| `POST` | `/executions/{id}/cancel` | Cancel a running/queued execution |
-| `POST` | `/executions/{id}/resolve-egress` | Resolve an **Ask-mode** egress hold — see [Security Model § Egress modes](security-model.md#egress-modes) |
-| `POST` | `/executions/{id}/resolve-threat` | Resolve a flagged single-command output hold — body `{approved: true|false}`; approval releases the sanitized result to the chat feedback flow, denial keeps it out of the LLM context |
-
-## Gateway management <a id="gateway"></a>
-
-Backs the [Gateway tab](usage-guide.md#tab-gateway) — every one of these is an orchestrator REST endpoint that internally speaks the gateway's own IPC protocol (Unix socket, length-prefixed JSON) on your behalf; the browser never talks to gateway directly:
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/gateway/status` | Reachability, security level, active-rule flag, and uptime |
-| `GET` | `/gateway/rules` | List active nftables allow/block rules (tagged by `source`) |
-| `POST` | `/gateway/rules` | Add a manual temporary rule — body `{network, ttl_secs, reason}` (`reason` is required) |
-| `DELETE` | `/gateway/rules/{id}` | Remove a rule |
-| `GET` | `/gateway/audit` | Gateway's own tamper-evident audit log — `?limit=N` |
-| `GET` | `/gateway/fingerprint` | Current fingerprint-masking config (TTL normalize / MAC randomization) |
-| `GET` | `/gateway/egress-mode` | Current egress mode |
-| `POST` | `/gateway/egress-mode` | Set egress mode (`block` / `allow` / `ask`) — **does not persist across gateway restarts** |
-| `GET` | `/gateway/hostname-policy` | Current `hostname_allow`/`hostname_block` glob lists |
-| `POST` | `/gateway/hostname-policy` | Add a pattern to the `allow` or `block` list — body `{list, pattern}`. **In-memory only, resets to `gateway/config/default.yaml`'s lists on gateway restart** — same non-persistence contract as egress mode |
-| `DELETE` | `/gateway/hostname-policy` | Remove a pattern — same body shape, same non-persistence caveat |
-
-## Sandbox <a id="sandbox"></a>
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/sandbox/status` | Sandbox container reachability |
-| `POST` | `/sandbox/exec` | Direct exec, **still routed through `executor.RunScopedCommand`** — the gateway scope check applies exactly as it does to an agent-proposed command; this endpoint is not a bypass |
-
-## System <a id="system"></a>
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/system/status` | Aggregated status: Docker, gateway, sandbox, conductor/LLM |
-| `GET` | `/system/health-metrics` | Time-series metrics backing the [Health tab](usage-guide.md#tab-health) |
-| `GET` | `/system/logs` | Server-sent-events debug log stream |
-| `GET` | `/llm/status` | Ollama reachability + resilient-client state |
-| `GET` | `/healthz` | Plain container/CLI health probe (outside `/api/v1`) |
+- [Conventions & Error Format](#conventions)
+- [Sessions API](#sessions)
+- [Targets & Findings API](#targets-findings)
+- [Attack Surface Management (ASM) & Assets API](#assets)
+- [Multi-Format Report Generator API](#reports)
+- [Proxy & Traffic Ingestion Bridge API](#proxy)
+- [TRACE Observability & Operator API](#trace)
+- [Chat & Command Proposals API](#chat)
+- [Agent Tasks & Lifecycle API](#agent-tasks)
+- [Command Executions API](#executions)
+- [Gateway Management API](#gateway)
+- [Sandbox Direct Exec API](#sandbox)
+- [System & Health Diagnostics API](#system)
+- [WebSocket Streams & Events](#websockets)
 
 ---
 
-## WebSockets <a id="websockets"></a>
+## Conventions & Error Format <a id="conventions"></a>
+
+- **Base Path**: All REST routes are under `/api/v1` (except WebSocket upgrade paths and `/healthz`).
+- **Error Standard**: Responses follow **RFC 7807** problem-detail JSON (`Content-Type: application/problem+json`):
+  ```json
+  {
+    "type": "about:blank",
+    "title": "Invalid session ID format",
+    "status": 400,
+    "detail": "Session IDs must match ^[a-zA-Z0-9-]{1,64}$"
+  }
+  ```
+- **Validation**: Path variables `{sessionID}`, `{id}` are strictly validated before store access.
+- **CORS & Origin Security**: Restricted strictly to loopback origins (`localhost`, `127.0.0.1`, `::1`).
+
+---
+
+## Sessions API <a id="sessions"></a>
+
+| Method | Endpoint | Request Body | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/sessions` | None | List all sessions. |
+| `POST` | `/api/v1/sessions` | `{"name": "string"}` | Create a new engagement session. |
+| `GET` | `/api/v1/sessions/{id}` | None | Retrieve session details. |
+| `GET` | `/api/v1/sessions/{id}/messages` | None | Retrieve chat history for the session. |
+| `PATCH` | `/api/v1/sessions/{id}` | `{"name": "string"}` | Update session metadata. |
+| `DELETE` | `/api/v1/sessions/{id}` | None | Delete session and associated transient state. |
+
+---
+
+## Targets & Findings API <a id="targets-findings"></a>
+
+| Method | Endpoint | Request Body | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/sessions/{sessionID}/targets` | None | List declared and discovered targets for the session. |
+| `POST` | `/api/v1/sessions/{sessionID}/targets` | `{"value": "10.0.0.5", "in_scope": true}` | Declare a new in-scope target. |
+| `GET` | `/api/v1/sessions/{sessionID}/findings` | None | List structured security findings. |
+| `POST` | `/api/v1/sessions/{sessionID}/findings` | `{"title": "...", "severity": "high", "description": "...", "evidence": "..."}` | Add a manual finding. |
+
+---
+
+## Attack Surface Management (ASM) & Assets API <a id="assets"></a>
+
+| Method | Endpoint | Query / Body | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/sessions/{sessionID}/assets` | `?format=tree` or `?format=flat` (default) | Retrieve hierarchical asset tree or flat inventory list. |
+| `POST` | `/api/v1/sessions/{sessionID}/assets` | `{"parent_id": "...", "type": "endpoint", "value": "GET /v1/users", "metadata": {...}}` | Record a discovered asset node. |
+
+### Asset Types:
+- `domain`, `subdomain`, `ip`, `port`, `endpoint`, `parameter`, `technology`, `cloud_bucket`, `secret`.
+
+---
+
+## Multi-Format Report Generator API <a id="reports"></a>
+
+| Method | Endpoint | Query Parameters | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/sessions/{sessionID}/report` | `?format=hackerone` (default)<br>`?format=bugcrowd`<br>`?format=executive`<br>`?format=json` | Generates full penetration test and bug bounty reports from session findings and assets. |
+
+### Export Formats:
+- **`hackerone`**: HackerOne Markdown with CVSS v3.1 calculation, CWE categorization, PoC steps, and impact.
+- **`bugcrowd`**: Bugcrowd VRT Markdown format with priority tiers (P1 to P5).
+- **`executive`**: High-level management summary, asset inventory, and severity risk matrix.
+- **`json`**: Structured JSON export for SIEM, SOAR, or automated pipelines.
+
+---
+
+## Proxy & Traffic Ingestion Bridge API <a id="proxy"></a>
+
+| Method | Endpoint | Request Body | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/proxy/status` | None | Returns operational status, CA certificate readiness, and supported proxy tools. |
+| `POST` | `/api/v1/proxy/inject` | `{"session_id": "...", "method": "GET", "url": "https://api.target.com/users?id=1", "status_code": 200, ...}` | Ingests raw HTTP flows from Burp Suite, Caido, or Mitmproxy into the ASM knowledge graph. |
+
+---
+
+## TRACE Observability & Operator API <a id="trace"></a>
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/sessions/{sessionID}/activity` | Stream of activity trace events (`?limit=N`). |
+| `GET` | `/api/v1/sessions/{sessionID}/context` | List persistent session memory entries. |
+| `DELETE` | `/api/v1/sessions/{sessionID}/context/{key}` | Explicitly remove a persistent memory entry and embedding. |
+| `GET` | `/api/v1/tactics` | List cross-session target-scrubbed procedural tactics. |
+| `GET` | `/api/v1/skills` | List all active red team skills. |
+| `GET` | `/api/v1/skills/pending` | List curator-drafted skills awaiting operator approval. |
+| `POST` | `/api/v1/skills/pending/{id}/approve` | Approve and atomically persist a drafted skill. |
+| `POST` | `/api/v1/skills/pending/{id}/reject` | Reject and purge a drafted skill candidate. |
+| `GET` | `/api/v1/operator/briefing` | Surface relevant skills, tactics, and findings for the operator. |
+| `GET` | `/api/v1/agent/roles` | List available specialist sub-agent roles. |
+| `GET` | `/api/v1/agent/capabilities` | Return agent runtime engine and tool capabilities. |
+| `GET` | `/api/v1/agent/delegations` | List active and historical specialist sub-agent runs. |
+| `POST` | `/api/v1/agent/delegations/{id}/interrupt` | Selectively interrupt one sub-agent run without halting the parent task. |
+| `GET` | `/api/v1/sessions/{sessionID}/audit` | Retrieve session event audit log. |
+
+---
+
+## Chat & Command Proposals API <a id="chat"></a>
+
+| Method | Endpoint | Request Body | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/chat` | `{"message": "...", "session_id": "..."}` | Send natural language input; returns command proposals or initiates agent tasks. |
+| `POST` | `/api/v1/chat/approve` | `{"proposal_id": "...", "session_id": "..."}` | Approve a single-command proposal for immediate execution. |
+
+---
+
+## Agent Tasks & Lifecycle API <a id="agent-tasks"></a>
+
+| Method | Endpoint | Request Body | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/agent/mode` | None | Get agent approval mode (`auto` / `ask_permission`). |
+| `POST` | `/api/v1/agent/mode` | `{"mode": "auto"}` | Set global agent approval mode. |
+| `POST` | `/api/v1/tasks` | `{"goal": "...", "session_id": "..."}` | Plan a multi-step task (does not start execution). |
+| `GET` | `/api/v1/tasks/{id}` | None | Get task execution state and step list. |
+| `GET` | `/api/v1/sessions/{sessionID}/tasks` | None | List tasks associated with a session. |
+| `POST` | `/api/v1/tasks/{id}/start` | None | Begin execution of a planned task. |
+| `POST` | `/api/v1/tasks/{id}/stop` | None | Stop execution of an active task. |
+| `POST` | `/api/v1/tasks/{id}/approve` | `{"verdict": "approved"}` | Resolve an approval gate on a pending step. |
+| `POST` | `/api/v1/tasks/{id}/auto-approve` | `{"auto_approve": true}` | Toggle auto-approval for a specific task. |
+
+---
+
+## Command Executions API <a id="executions"></a>
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/sessions/{sessionID}/executions` | List command executions for a session. |
+| `GET` | `/api/v1/executions/{id}` | Get execution details and output buffers. |
+| `POST` | `/api/v1/executions/{id}/cancel` | Cancel a running command execution. |
+| `POST` | `/api/v1/executions/{id}/resolve-egress` | Resolve an Ask-mode network egress hold. |
+| `POST` | `/api/v1/executions/{id}/resolve-threat` | Resolve a threat-scan content hold (`{"approved": true}`). |
+
+---
+
+## Gateway Management API <a id="gateway"></a>
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/gateway/status` | Retrieve gateway reachability, uptime, and security state. |
+| `GET` | `/api/v1/gateway/rules` | List active `nftables` allow/block rules. |
+| `POST` | `/api/v1/gateway/rules` | Add temporary firewall rule (`{"network": "10.0.0.5/32", "ttl_secs": 3600, "reason": "..."}`). |
+| `DELETE` | `/api/v1/gateway/rules/{id}` | Manually delete an active firewall rule. |
+| `GET` | `/api/v1/gateway/audit` | Query tamper-evident SHA-256 audit chain (`?limit=N`). |
+| `GET` | `/api/v1/gateway/fingerprint` | Retrieve TTL normalization and MAC randomization state. |
+| `GET` | `/api/v1/gateway/egress-mode` | Get current egress mode (`block`, `allow`, `ask`). |
+| `POST` | `/api/v1/gateway/egress-mode` | Set egress mode (resets to `block` on daemon restart). |
+| `GET` | `/api/v1/gateway/hostname-policy` | Retrieve hostname allow/block glob rules. |
+| `POST` | `/api/v1/gateway/hostname-policy` | Add pattern to hostname policy (`{"list": "block", "pattern": "*.internal"}`). |
+| `DELETE` | `/api/v1/gateway/hostname-policy` | Remove pattern from hostname policy. |
+
+---
+
+## Sandbox Direct Exec API <a id="sandbox"></a>
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/sandbox/status` | Check Kali sandbox container health and reachability. |
+| `POST` | `/api/v1/sandbox/exec` | Direct command exec (`{"command": "nmap -sV 10.0.0.5"}`). **Subject to full gateway scope check.** |
+
+---
+
+## System & Health Diagnostics API <a id="system"></a>
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/system/status` | Aggregated health status across Docker, Gateway, Sandbox, and LLM. |
+| `GET` | `/api/v1/system/health-metrics` | Ring-buffer latency and error rate metrics. |
+| `GET` | `/api/v1/system/logs` | Server-Sent Events (SSE) stream of internal debug logs. |
+| `GET` | `/api/v1/llm/status` | Ollama connection and resilient circuit-breaker state. |
+| `GET` | `/healthz` | Unauthenticated readiness and liveness container probe. |
+
+---
+
+## WebSocket Streams & Events <a id="websockets"></a>
 
 | Path | Purpose |
 |---|---|
-| `/ws/terminal` | Bridges to a real interactive shell in the sandbox container — backs the [Bash tab](usage-guide.md#tab-bash) |
-| `/ws/desktop` | Proxies noVNC / websockify stream to the sandbox's graphical desktop session — backs the [Desktop tab](usage-guide.md#tab-desktop) |
-| `/ws/events` | Monotonic, replayable fan-out event stream subscribed to by UI tabs |
+| `/ws/terminal` | Interactive PTY shell bridge to the sandbox container (Bash tab). |
+| `/ws/desktop` | Proxy to noVNC / websockify graphical desktop stream (Desktop tab). |
+| `/ws/events` | High-throughput, typed JSON event bus for UI state synchronization. |
 
-`/ws/events` delivers an initial `control.hello` handshake followed by typed event envelopes:
-
-| `type` | Fired when | Drives |
-|---|---|---|
-| `execution.status` | An execution's status changes (`queued` → `running` → `completed`/`failed`/`canceled`/`awaiting_egress_approval`/`awaiting_threat_approval`) — also re-fired periodically with elapsed time while a command runs | Live command status and elapsed time in the Agent/Bash tabs |
-| `task.status` | An agent task's status changes (running → awaiting_approval → completed/failed/stopped, etc.) | The Agent tab's live task tracker |
-| `agent.activity` | The graph records a public TRACE event (plan, command, result, memory, skill, handoff, finding, ask, finish) | The Trace timeline |
-| `gateway.status` | Gateway rules or mode differ from the previous health poll | The Gateway tab's live rule table |
-| `skill.status` | A skill curation draft transitions state (`drafted`, `approved`, `rejected`) | The Trace tab's skill proposals |
-| `chat.stream` | Conductor streams live LLM response delta chunks (`chat.delta`, `chat.done`) | Live token streaming in Chat |
-
-All WebSocket endpoints reject non-loopback browser origins. Non-browser clients that omit `Origin` remain supported.
+### Key `/ws/events` Message Types:
+- `execution.status`: Live status transitions (`queued`, `running`, `completed`, `failed`, `awaiting_approval`).
+- `task.status`: Agent state machine transitions and plan step progress.
+- `gateway.status`: Real-time network policy and egress hold notifications.
+- `health.tick`: Periodic component health heartbeats.

@@ -1,123 +1,185 @@
-← [Back to README](../README.md) · [Docs index](README.md)
+[Back to Project README](../README.md) · [Documentation Index](README.md)
 
-# Usage Guide
+# Operator Usage Guide
 
-Yummi is managed entirely through **one web UI** (nginx-served React app, port 3000) talking to the orchestrator's REST/WS API (see [API Reference](api-reference.md)) — there is no alternative operator surface. This page walks the web UI's seven tabs, then the CLI helper binary, in the order you'll actually use them.
-
-## Table of contents
-
-- [Starting a session](#starting-a-session)
-- [The seven UI tabs](#seven-tabs)
-  - [Agent](#tab-agent)
-  - [Bash](#tab-bash)
-  - [Desktop](#tab-desktop)
-  - [Trace](#tab-trace)
-  - [Logs](#tab-logs)
-  - [Gateway](#tab-gateway)
-  - [Health](#tab-health)
-- [Approval flows — what you'll actually be asked to decide](#approval-flows)
-- [The CLI](#the-cli)
+Yummi is managed through a single web UI served on port 3000 (`http://localhost:3000`), backed by the orchestrator REST and WebSocket APIs.
 
 ---
 
-## Starting a session <a id="starting-a-session"></a>
+## Table of Contents
 
-The preferred local operator workflow is just **`make start`** (see
-[Installation](installation.md#full-stack)): it starts the runtime and the UI
-is served at **http://localhost:3000**. The root-module `yummi` binary's
-default (no-flag) behavior opens that same URL in an app-style browser window
-for convenience — see [The CLI](#the-cli) — but the web UI at that URL is the
-one operator surface either way. Every conversation and task belongs to a
-**session** — a session groups the chat history, discovered targets,
-findings, and the agent tasks run within it.
-Creating one is implicit the first time you send a message; you don't need to
-explicitly provision it first.
-
----
-
-## The seven UI tabs <a id="seven-tabs"></a>
-
-The top status bar has seven tabs, all talking to the same orchestrator: **Agent · Bash · Desktop · Trace · Logs · Gateway · Health**.
-
-### Agent <a id="tab-agent"></a>
-
-This is where you direct Yummi in natural language or launch automated security workflows:
-
-- **Target-First Launcher**: Quick-start buttons allowing you to drop an IP, domain, or URL (e.g. `example.com`, `10.10.10.5`) and immediately launch:
-  - **Bug Bounty Recon**: Subdomain enumeration (`subfinder`, `amass`), DNS resolution (`dnsx`), permutation generation (`alterx`), URL harvesting (`gau`), and live web probing (`httpx`).
-  - **Web Application Pentest**: Web crawling (`katana`), technology fingerprinting (`whatweb`, `wafw00f`), XSS scanning (`dalfox`), SQL injection checks (`sqlmap`), CMS assessment (`wpscan`), and vulnerability template scans (`nuclei`).
-- A **specific, narrow ask** ("run an nmap scan against 10.0.0.5") typically gets you a single **proposal** — one exact command, with its rationale and risk level shown before it runs. You approve or reject it directly from the chat.
-- A **broader goal** ("enumerate this host and tell me what's exploitable") triggers the agent's **task loop** — a numbered plan appears, and you watch it work through steps. In `ask_permission` it pauses before every command; in `auto` it runs commands without that gate. It can still pause for egress, suspicious output, or a decision it cannot make. See [The Agent Graph](agent/graph-and-nodes.md) for exactly what's happening under the hood while a task runs.
-
-**Agent approval mode** (a small toggle, not to be confused with gateway's egress mode — they're genuinely different axes, see [Security Model § Egress modes](security-model.md#egress-modes) for the full distinction): `auto` runs command proposals without waiting for a click; `ask_permission` gates every command regardless of risk. Risk remains displayed for operator context. Read/set the mode via `GET`/`POST /api/v1/agent/mode`.
-
-### Bash <a id="tab-bash"></a>
-
-A live, WebSocket-backed terminal directly into the sandbox container (`/ws/terminal`) — for when you want to type commands yourself rather than asking the agent to. It is `docker exec` under the hood and its packets still cross gateway's nftables policy, but it does **not** run orchestrator's pre-exec target extraction or hostname-policy check. When hostname restrictions matter, prefer agent/direct-exec paths and keep gateway in `block` or `ask`; input files and shell-expanded targets are opaque to name-level policy. The session is `tmux`-backed, so closing the tab or reconnecting reattaches the *same* shell rather than starting a fresh one — and it's the **same container** the Desktop tab and the agent use.
-
-### Desktop <a id="tab-desktop"></a>
-
-A full **graphical Kali desktop** (XFCE) inside that same sandbox container, streamed to the browser over noVNC through orchestrator's `/ws/desktop` bridge — the Pwnbox/Hackviser-style experience, but self-hosted and local. Use it when a task wants a GUI tool the terminal can't give you: **Burp Suite** (pre-installed), **Wireshark**, a web browser for manual verification, a file manager. It is the *same environment* as the Bash tab and the agent's tool runs — same filesystem, same installed tools, same hostname — so anything you set up by hand in the Desktop is visible to the agent and vice versa; there is deliberately zero environment drift between them. The desktop is for **you**, the operator: the agent drives the sandbox through `docker exec`, not by moving the mouse. A **Fullscreen** button resizes the remote display to your viewport (no letterboxing). The browser only ever talks to orchestrator — the sandbox's VNC port is never published to the host — so this surface inherits Yummi's local, single-operator trust model (see [Security Model § The unified sandbox trade-off](security-model.md#unified-sandbox)). If the tab shows "unreachable," the sandbox container simply isn't up yet — `make start` brings it, and everything else, online.
-
-### Trace <a id="tab-trace"></a>
-
-The observability window into what the agent has done and learned. Reading Trace top to bottom reconstructs the public task/activity story for a session:
-
-| Section | What it shows | Backend source |
-|---|---|---|
-| **Activity timeline** | Every plan update, command, command result, memory recall, skill application, sub-agent handoff (in/out), finding, ask, and finish — nested under their parent task when a hand-off produced them | `GET /sessions/{id}/activity` |
-| **Findings** | Structured security findings, color-coded by severity (info → critical) | `GET /sessions/{id}/findings` |
-| **Tactics** | Target-scrubbed procedural memory — "this command shape worked / failed / was inconclusive," reusable across sessions since it carries no target value | `GET /tactics` |
-| **Context** | Persistent session memory the agent explicitly chose to `REMEMBER`; operators can explicitly forget an entry | `GET /sessions/{id}/context`, `DELETE /sessions/{id}/context/{key}` |
-| **Skills** | The currently loaded declarative playbooks (see [Skills & Sub-agents](agent/skills-and-subagents.md)), plus any **pending** curator-drafted skills awaiting your explicit approve/reject | `GET /skills`, `GET /skills/pending` |
-| **Roles** | The available specialist sub-agent roles the model can hand off to | `GET /agent/roles` |
-
-The activity feed uses a small glyph per event kind (◇ plan, › command, ✓ result, ○ memory recalled, ◆ skill applied, ↗ handoff started, ↙ handoff completed, ! finding, · context saved, ? ask, ■ finish) — a nested `└` prefix marks an event that happened inside a sub-agent's delegated subtask rather than the top-level agent. Command/handoff/memory-recall rows show a small, fixed vocabulary ("Command dispatched", "Relevant session context applied", ...) rather than the raw command text or model rationale — that detail is intentionally not surfaced on the public activity feed (see [Security Model § Content layer](security-model.md#layer-content)); findings, asks, and the finish summary are the rows that do show the actual model-authored text.
-
-**Pending skills need your explicit decision.** Drafts remain quarantined until an operator approves or rejects them. Approval re-scans the YAML, atomically persists it under `YUMMI_AUTO_SKILL_DIR`, and hot-loads it into the current registry. The shipped Compose deployment keeps the source `./persona` mount read-only and gives the orchestrator a separate writable `orchestrator_data` volume for approved generated skills; an activation or file-write failure returns the draft to retryable `pending` instead of marking it approved. Review the draft as carefully as a code change—the automated content scan is only a floor.
-
-### Logs <a id="tab-logs"></a>
-
-A live server-sent-events stream of orchestrator's own debug log (`GET /api/v1/system/logs`) — useful when something doesn't look right in the UI and you want to see what orchestrator itself logged around that moment, without shelling into the container to tail a file.
-
-### Gateway <a id="tab-gateway"></a>
-
-The operator console for the network trust boundary — this tab exists specifically because gateway runs isolated inside its own container with no UI of its own, and an operator needs a way to see and manage it without dropping to `docker exec`. It shows:
-
-- **Status** — whether gateway is reachable; the displayed egress mode is read separately from `GET /api/v1/gateway/egress-mode`.
-- **Active rules table** — every currently-installed nftables allow/block rule, tagged by source (`config` / `agent` / `manual` — see [Security Model § Rule sources](security-model.md#rule-sources)), with a manual add-rule form (network, TTL, and a **mandatory reason** — friction that's intentional, so a manual rule always carries a paper trail of why it exists).
-- **Audit log** — the tamper-evident, hash-chained record of every scope decision and rule change (see [Security Model § Audit](security-model.md#layer-audit)).
-- **Fingerprint card** — shows whether TTL normalization / MAC randomization are currently enabled (config-level, read-only from this tab — see [Security Model § Fingerprint minimization](security-model.md#fingerprint-masking)).
-- **Egress-mode selector** — the live Block/Allow/Ask 3-way switch. **Remember this resets to Block on every gateway restart** — don't be surprised to find it back at the safe default after a `make start`.
-
-### Health <a id="tab-health"></a>
-
-Time-series charts (5-minute / 15-minute / 1-hour windows) of orchestrator's own runtime vitals: Go heap size, Ollama round-trip latency (shown as "offline" rather than a bogus number when Ollama can't be reached), and live goroutine count — plus a module status panel summarizing whether each backing component (Docker, gateway, sandbox, Ollama) currently looks healthy. This is the tab to check first if something feels slow or stuck, before assuming it's a bug rather than, say, Ollama being genuinely under-resourced for the tier you've selected (see [Installation § Ollama setup](installation.md#ollama-setup)).
+- [Starting an Engagement Session](#starting-a-session)
+- [Target-First Offensive Launcher](#target-launcher)
+- [The Seven UI Tabs](#seven-tabs)
+  - [1. Agent (Chat & Task Engine)](#tab-agent)
+  - [2. Bash (Interactive Terminal)](#tab-bash)
+  - [3. Desktop (Graphical XFCE/noVNC)](#tab-desktop)
+  - [4. Trace (ASM, Findings & Observability)](#tab-trace)
+  - [5. Logs (Real-time SSE Debug Stream)](#tab-logs)
+  - [6. Gateway (Firewall & Scope Control)](#tab-gateway)
+  - [7. Health (Vitals & Telemetry)](#tab-health)
+- [Attack Surface Management & Asset Matrix](#asm-usage)
+- [Generating Multi-Format Reports](#reports-usage)
+- [Proxy Traffic Bridge (Burp / Caido / Mitmproxy)](#proxy-usage)
+- [Approval Flows & Decision Moments](#approval-flows)
+- [CLI Reference](#the-cli)
 
 ---
 
-## Approval flows — what you'll actually be asked to decide <a id="approval-flows"></a>
+## Starting an Engagement Session <a id="starting-a-session"></a>
 
-You'll encounter three distinct kinds of "please decide" moments, and they look similar but mean different things:
-
-1. **Command approval** (`ask_permission` mode) — a specific command is about to run; you see it, its rationale, and its risk level, and approve or deny. In `auto`, the UI resolves the proposal without waiting for a click. This is the [approval gate](architecture.md#flow-approval-gate) described in Architecture. On any agent task's own gate, a third button — **"Approve & auto-approve the rest"** — approves this one command and also flips that task's own auto-approve override (`Task.AutoApproveNonCritical`, see [Security Model](security-model.md#egress-modes)): every later proposal in *that same task* below `high` risk then runs without asking, while `high`/`critical` and destructive-pattern commands still always gate. It shows up as a small badge in the task header once on, with a one-click way to turn it back off — this only ever affects the one task it was set on, not the runner-wide mode.
-
-2. **Threat-scan hold** — a command already ran and its **output** tripped a content-layer threat pattern (see [Security Model § Content layer](security-model.md#layer-content)); you're shown the flagged output before it is allowed back into the model's context. This is a different situation from #1 — the command wasn't risky, its *result* looked suspicious. Agent tasks pause in the graph's threat hold; a single-command proposal pauses in an explicit output-review card where you either release its sanitized output to the agent or keep it out of the model context.
-
-3. **Egress approval** (Ask mode only) — the gateway itself wants your sign-off before a *new* destination becomes reachable, independent of whether the command targeting it was risky. See [Security Model § Egress modes](security-model.md#egress-modes).
-
-If a single-command chat proposal sits too long, it expires after a 20-minute TTL (`conductor.ApprovalStore`'s purger) rather than lingering as something you might accidentally approve much later without context. Agent-task gates instead live with their task/context lifecycle.
+Start the full stack with:
+```bash
+make start
+```
+The interface opens at `http://localhost:3000`. Every engagement is scoped to a **Session** that tracks conversation history, target scope, the hierarchical asset matrix, structured findings, and background tasks.
 
 ---
 
-## The CLI <a id="the-cli"></a>
+## Target-First Offensive Launcher <a id="target-launcher"></a>
+
+```text
++-----------------------------------------------------------------------------+
+|                          TARGET-FIRST LAUNCHER                              |
+|                                                                             |
+|   Target Input: [ https://api.example.com ]                                 |
+|                                                                             |
+|   [ Quick Recon ]          [ Web Pentest ]         [ API Audit ]            |
+|   - subfinder, amass       - katana, whatweb       - arjun, ffuf            |
+|   - dnsx, httpx, alterx    - nuclei, sqlmap        - graphql_cop, jwt_tool  |
++-----------------------------------------------------------------------------+
+```
+
+1. **Reconnaissance**: Subdomain discovery (`subfinder`, `amass`), DNS resolution (`dnsx`), URL scraping (`gau`), live web probing (`httpx`).
+2. **Web Application Assessment**: Crawler mapping (`katana`), fingerprinting (`whatweb`, `wafw00f`), XSS testing (`dalfox`), SQL injection checks (`sqlmap`), CMS assessment (`wpscan`), template scans (`nuclei`).
+3. **API & Logic Testing**: Parameter discovery (`arjun`), GraphQL security (`graphql_cop`), JWT auditing (`jwt_tool`), client-side secret mining (`jsluice`).
+
+---
+
+## The Seven UI Tabs <a id="seven-tabs"></a>
+
+### 1. Agent <a id="tab-agent"></a>
+Direct Yummi using natural language or initiate autonomous red-team tasks:
+- **Single Command Proposals**: Narrow queries ("run nmap on 10.0.0.5") yield structured proposals with risk ratings.
+- **Autonomous Multi-Step Tasks**: Broad goals trigger the state machine graph, generating structured plans and executing steps.
+- **Approval Toggle**:
+  - `auto`: Executes non-critical steps autonomously.
+  - `ask_permission`: Pauses at every command for explicit operator confirmation.
+
+### 2. Bash <a id="tab-bash"></a>
+Interactive PTY web terminal directly into the Kali container over `/ws/terminal`:
+- Backed by `tmux` so session state persists across reconnections.
+- Operates in the exact same container environment as the AI agent (`UID 1000:1000`).
+
+### 3. Desktop <a id="tab-desktop"></a>
+Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
+- Pre-installed with **Burp Suite**, **Wireshark**, and **Firefox**.
+- Shares the sandbox filesystem and network namespace with the agent.
+
+### 4. Trace <a id="tab-trace"></a>
+Observability and intelligence window into the active engagement:
+- **Activity Timeline**: Sequential events (plans, commands, results, sub-agent handoffs, findings).
+- **Attack Surface Management (ASM)**: Hierarchical domain/endpoint/parameter tree.
+- **Findings Matrix**: Verified vulnerabilities with severity ratings and PoC evidence.
+- **Tactics**: Target-scrubbed procedural memories applied to the current session.
+- **Pending Skills**: Quarantine queue for curator-drafted skills awaiting operator sign-off.
+
+### 5. Logs <a id="tab-logs"></a>
+Live Server-Sent Events (SSE) stream of internal orchestrator debug logs.
+
+### 6. Gateway <a id="tab-gateway"></a>
+Operator control panel for the fail-closed network trust boundary:
+- **Active Rules**: Live `nftables` FORWARD rules with TTL expiration.
+- **Audit Chain**: Cryptographic SHA-256 tamper-evident log of all scope decisions.
+- **Egress Mode Switch**: 3-way toggle (`block`, `allow`, `ask`).
+
+### 7. Health <a id="tab-health"></a>
+Real-time telemetry showing Go heap, goroutine count, and LLM round-trip latencies.
+
+---
+
+## Attack Surface Management & Asset Matrix <a id="asm-usage"></a>
+
+The Knowledge Store automatically constructs a hierarchical asset graph during task execution:
+
+```text
+example.com (Domain)
+  |-- api.example.com (Subdomain)
+  |     |-- 10.0.0.5:443 (IP / Port)
+  |     \-- POST /v1/auth/login (Endpoint)
+  |           |-- username (Parameter)
+  |           \-- password (Parameter)
+  \-- s3://backups-example (Cloud Bucket)
+```
+
+Operators can query the full asset tree via:
+```bash
+curl -s "http://localhost:9080/api/v1/sessions/<session_id>/assets?format=tree" | jq .
+```
+
+---
+
+## Generating Multi-Format Reports <a id="reports-usage"></a>
+
+Yummi compiles all session intelligence into industry-standard vulnerability reports:
 
 ```bash
-./bin/yummi            # launches the web browser to the UI (default, no subcommand)
-./bin/yummi --start     # start the configured sandbox Compose service (and its dependencies)
-./bin/yummi --stop      # stop that configured sandbox service
-./bin/yummi --status    # check status
-./bin/yummi --doctor    # run diagnostics (same checks as `make doctor`)
-./bin/yummi --version   # print build metadata (semver, git SHA, build date)
-./bin/yummi --help      # usage
+# 1. HackerOne Markdown Report
+curl -s "http://localhost:9080/api/v1/sessions/<session_id>/report?format=hackerone"
+
+# 2. Bugcrowd VRT Markdown Report
+curl -s "http://localhost:9080/api/v1/sessions/<session_id>/report?format=bugcrowd"
+
+# 3. Executive Management Summary
+curl -s "http://localhost:9080/api/v1/sessions/<session_id>/report?format=executive"
+
+# 4. Machine-Readable JSON Export
+curl -s "http://localhost:9080/api/v1/sessions/<session_id>/report?format=json"
+```
+
+---
+
+## Proxy Traffic Bridge (Burp / Caido / Mitmproxy) <a id="proxy-usage"></a>
+
+Forward intercepted HTTP traffic directly into Yummi's Knowledge Graph:
+
+```bash
+curl -X POST http://localhost:9080/api/v1/proxy/inject \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "<session_id>",
+    "method": "POST",
+    "url": "https://api.target.com/v2/tokens?app=mobile",
+    "status_code": 200,
+    "response_body": "{\"token\": \"eyJ...\"}"
+  }'
+```
+Discovered hosts, endpoints, and query parameters are automatically mapped into the ASM asset tree.
+
+---
+
+## Approval Flows & Decision Moments <a id="approval-flows"></a>
+
+```text
++-----------------------------------------------------------------------------+
+|                          OPERATOR APPROVAL FLOWS                            |
+|                                                                             |
+|   1. Command Risk Gate   -> Gated in `ask_permission` or if risk >= Medium  |
+|   2. Egress Approval     -> Gated when Gateway is in `ask` mode             |
+|   3. Threat-Scan Hold    -> Gated if command output matches threat patterns |
+|   4. Skill Quarantine    -> Gated before drafted skills become active       |
++-----------------------------------------------------------------------------+
+```
+
+---
+
+## CLI Reference <a id="the-cli"></a>
+
+```bash
+./bin/yummi            # Launches web UI in default browser
+./bin/yummi --start     # Starts all docker services
+./bin/yummi --stop      # Stops docker services
+./bin/yummi --status    # Displays runtime status
+./bin/yummi --doctor    # Runs dev & environment diagnostic checks
+./bin/yummi --version   # Displays build metadata
 ```

@@ -1,164 +1,163 @@
-← [Back to README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
+[Back to Project README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
 
-# Skills & Sub-agents
+# Skills & Sub-Agents
 
-Two related but distinct mechanisms make the agent "smarter" without touching its core reasoning loop: **skills** (declarative, trigger-matched knowledge injected into the prompt) and **sub-agents** (bounded delegation to a differently-specialized persona). Built-in definitions are plain YAML under `persona/v0.1/`; operator-approved generated skills are loaded from the separate writable `YUMMI_AUTO_SKILL_DIR`. Both paths are data-driven, so adding a hand-authored skill or role does not require a code change.
-
-## Table of contents
-
-- [Skills — knowledge only, never an execution path](#skills)
-- [How a skill gets selected](#skill-selection)
-- [A real skill, read in full](#real-skill)
-- [Sub-agents — bounded delegation](#subagents)
-- [Concurrent hand-off — the fan-out](#concurrent-handoff)
-- [Why delegation depth is capped at 1](#depth-cap)
-- [Auto-skill-creation — drafted, never auto-loaded](#auto-skill)
+Two complementary mechanisms extend the agent's problem-solving capabilities without altering its deterministic execution core: **skills** (declarative, trigger-matched methodology injected into prompts) and **sub-agents** (bounded delegation to specialized personas).
 
 ---
 
-## Skills — knowledge only, never an execution path <a id="skills"></a>
+## Table of Contents
 
-`internal/skill`'s own doc comment states the constraint plainly: a skill "introduces no execution path; every command the agent runs still flows through the single fail-closed sandbox exec path" (see [Sandbox Execution](sandbox-execution.md)). A `Skill` is exactly four fields:
+- [Skills: Declarative Offensive Methodology](#skills)
+- [Mechanical Skill Selection Algorithm](#skill-selection)
+- [The 22 Built-in Red Team Skills](#builtin-skills)
+- [Sub-Agents: Bounded Role Delegation](#subagents)
+- [The 10 Specialized Sub-Agents](#builtin-subagents)
+- [Concurrent Delegation Fan-Out](#concurrent-handoff)
+- [Architectural Guard: Depth Capped at 1](#depth-cap)
+- [Automated Skill Curator & Sanitization](#auto-skill)
+
+---
+
+## Skills: Declarative Offensive Methodology <a id="skills"></a>
+
+A `Skill` contains knowledge and methodology for the LLM to reason over, not an executable script:
 
 ```go
 type Skill struct {
-    Name        string
-    Description string
-    Triggers    []string // lowercase keywords matched against goal + tools
-    Tools       []string // recommended sandbox tools (informational)
-    Knowledge   string    // rendered verbatim into the prompt when selected
+    Name        string   `yaml:"name"`
+    Description string   `yaml:"description"`
+    Triggers    []string `yaml:"triggers"`
+    Tools       []string `yaml:"tools"`
+    Knowledge   string   `yaml:"knowledge"`
 }
 ```
 
-There's no field here that *runs* anything — `Tools` is informational (a hint about what the skill is about), and `Knowledge` is prose the model reads, not a script the agent executes. This is the same "knowledge-only" discipline the Knowledge Store's memory layers follow (see [Memory & Knowledge](memory-and-knowledge.md)) — every piece of learned or curated content in this system is something the *model* reasons over, never something the *agent* blindly acts on without the model's own decision in between.
-
-## How a skill gets selected <a id="skill-selection"></a>
-
-`Registry.Select(goal, tools, max)` scores every loaded skill by how many of its `Triggers` appear as a case-insensitive substring in `goal + " " + tools joined` — a purely mechanical, deterministic match (score descending, then name ascending as a tiebreak), not an LLM call. This matters for two reasons: it's essentially free (no extra model round-trip per step), and it's fully deterministic, so the same goal always surfaces the same skills in the same order — useful when you're trying to reason about *why* the model behaved a certain way after the fact.
-
-Up to `max` (default 3) selected skills get rendered into the step prompt via `Registry.Render()`:
-```
-SKILLS (relevant playbooks — apply the matching approach):
-- recon: Enumerate before you exploit. Start passive/light, escalate only as needed: ...
-```
-
-### The 17 Built-in Red Team Skills
-
-Yummi includes 17 specialized YAML playbooks located in `persona/v0.1/skills/`:
-
-| Skill | Focus / Methodology | Key Tools Mentioned |
-|---|---|---|
-| **`recon`** | Host & network enumeration, sequencing discipline | `nmap` |
-| **`web`** | Web application fingerprinting, header analysis, directories | `whatweb`, `curl`, `gobuster`, `nikto` |
-| **`js-recon`** | JS file discovery, endpoint extraction, hidden API routes | `katana`, `gau`, `curl` |
-| **`parameter-fuzzing`** | Query & body parameter discovery, hidden debug flags | `ffuf` |
-| **`api-pentest`** | REST/GraphQL API enumeration, broken object auth, IDOR probing | `curl`, `ffuf` |
-| **`sql-injection`** | Error-based, boolean-blind, and time-based SQLi verification | `sqlmap`, `curl` |
-| **`wordpress-assessment`** | CMS detection, plugin enumeration, known CVE verification | `wpscan` |
-| **`vuln-scanning`** | Automated template-based vulnerability assessment | `nuclei`, `nikto` |
-| **`osint-enum`** | Passive reconnaissance, subdomain discovery, certificate search | `subfinder`, `amass`, `theHarvester` |
-| **`credential-attack`** | Service authentication testing, brute-force & credential spraying | `hydra`, `medusa` |
-| **`smb-enum`** | Null sessions, share listing, user enumeration | `enum4linux` |
-| **`snmp-enum`** | SNMP community string bruteforcing, MIB walk | `onesixtyone`, `snmpwalk` |
-| **`reverse-engineering`** | Binary header inspection, mitigation audit, disassembly triage | `checksec`, `radare2` |
-| **`source-analysis`** | Static source code review, dangerous function pattern matching | `grep`, `find` |
-| **`system-inspection`** | Linux privilege triage, SUID/GUID enumeration, cron inspection | `find`, `ls` |
-| **`software-presence`** | Installed package & binary audit on local host/container | `dpkg`, `which` |
-| **`largest-files`** | Disk triage, log dump inspection, large backup discovery | `find`, `du` |
-
-## A real skill, read in full <a id="real-skill"></a>
-
-`persona/v0.1/skills/recon.yaml`, verbatim:
-
-```yaml
-name: recon
-description: Host and network enumeration — discover what is alive and what it runs.
-triggers:
-  - recon
-  - reconnaissance
-  - enumerate
-  - enumeration
-  - scan
-  - ports
-  - port
-  - nmap
-  - discover
-  - footprint
-tools:
-  - nmap
-knowledge: |
-  Enumerate before you exploit. Start passive/light, escalate only as needed:
-  1. Confirm reachability, then `nmap -sV -sC <target>` for service + version + default scripts.
-  2. For wide ranges, start with an nmap discovery/port sweep, then targeted -sV on open ports.
-  3. Record every open port and service version as a structured finding (it becomes shared memory).
-  4. Avoid `-A`/aggressive timing on production unless the engagement allows it — it is loud.
+```text
++-----------------------------------------------------------------------------+
+|                          SKILL SELECTION PIPELINE                           |
+|                                                                             |
+|   Goal String + Recent Tools                                                |
+|       |                                                                     |
+|       v                                                                     |
+|   Registry.Select(goal, tools, max=3)                                       |
+|       |                                                                     |
+|       +---> Substring Trigger Matching (Deterministic Scoring)              |
+|       |                                                                     |
+|       v                                                                     |
+|   Top Matches Rendered into Step Prompt:                                    |
+|   "SKILLS (relevant playbooks — apply the matching approach): ..."          |
++-----------------------------------------------------------------------------+
 ```
 
-Notice what this file is actually teaching: not "run `nmap`" (the model already knows nmap exists — `persona/v0.1/agent.yaml`'s own identity prose is explicit that the model is "given no catalogue and need[s] none" of *tool* knowledge), but a specific **sequencing discipline** ("confirm reachability, then service+version, escalate breadth-first") and an explicit **operational judgment call** ("avoid aggressive timing on production unless the engagement allows it"). Skills exist to encode this kind of house methodology and judgment, not tool syntax.
+Every skill file is strictly scanned with `threatscan.ScanContent` at `ScopeStrict` upon loading to prevent prompt injection payloads.
 
-**Every skill file is content-scanned at load time**, same [threatscan](../security-model.md#layer-content) at `ScopeStrict` applied to `name+description+knowledge` together. A skill that trips a pattern is simply not loaded (logged as a warning, never a hard crash of the whole registry) — a sensible posture given a skill file is user-curated content that gets rendered verbatim into every matching step's prompt.
+---
 
-Skills use schema version `1` and receive a semantic version (legacy files default to `1.0.0`), provenance (`builtin`, `operator`, or `auto`), source metadata, and a SHA-256 artifact digest. Validation bounds names, triggers, tools, references, prompt content, and optional structured constraints before activation. `plan_step_limit` is a reviewed capability constraint: when a selected atomic skill defines it, planning is bounded server-side as well as explained in the prompt. The live registry is an atomic name-based upsert: approving a newer version replaces the prior entry instead of accumulating duplicate prompt blocks.
+## The 22 Built-in Red Team Skills <a id="builtin-skills"></a>
 
-## Sub-agents — bounded delegation <a id="subagents"></a>
+| Skill | Category | Key Focus & Methodology | Primary Tools |
+|---|---|---|---|
+| **`recon`** | Network Recon | Host discovery, port scanning, service versioning | `nmap` |
+| **`web`** | Web Application | Web fingerprinting, security headers, WAF triage, directory fuzzing | `whatweb`, `curl`, `gobuster`, `nikto` |
+| **`js-recon`** | Web Application | JavaScript endpoint harvesting and route mapping | `katana`, `gau`, `curl` |
+| **`parameter-fuzzing`** | Web Application | Query and body parameter fuzzing, hidden debug parameters | `ffuf` |
+| **`parameter-discovery`** | Web Application | Deep heuristic parameter discovery across GET, POST, JSON, XML | `arjun`, `ffuf`, `curl` |
+| **`secret-mining`** | Web Application | AST parsing of JavaScript bundles for hardcoded secrets and API keys | `jsluice`, `curl`, `katana` |
+| **`api-pentest`** | API Security | REST/GraphQL API testing, BOLA/IDOR object enumeration, method tampering | `curl`, `ffuf`, `katana` |
+| **`graphql-pentest`** | API Security | GraphQL introspection, query batching, alias overload, depth limits | `graphql_cop`, `curl`, `ffuf` |
+| **`auth-logic`** | Identity / Auth | JWT tampering (none alg, key confusion), OAuth2 redirection, session audit | `jwt_tool`, `curl` |
+| **`cloud-recon`** | Cloud / ASM | S3/GCS/Azure storage bucket discovery, subdomain takeover auditing | `cloud_enum`, `subzy`, `tlsx` |
+| **`sql-injection`** | Injection | Error-based, boolean-blind, and time-based SQL injection validation | `sqlmap`, `curl` |
+| **`wordpress-assessment`** | CMS Assessment | WordPress plugin/theme enumeration, known vulnerability verification | `wpscan` |
+| **`vuln-scanning`** | Vulnerability Scan | Template-based automated vulnerability detection | `nuclei`, `nikto` |
+| **`osint-enum`** | OSINT / Recon | Passive reconnaissance, subdomain discovery, certificate transparency | `subfinder`, `amass`, `theHarvester` |
+| **`credential-attack`** | Authentication | Password brute-forcing, service authentication testing | `hydra`, `medusa` |
+| **`smb-enum`** | Network / OS | SMB share enumeration, null sessions, user listing | `enum4linux`, `smbclient` |
+| **`snmp-enum`** | Network / OS | SNMP community string enumeration, MIB tree walking | `onesixtyone`, `snmpwalk` |
+| **`reverse-engineering`** | Binary Analysis | Binary header analysis, exploit mitigations, disassembly triage | `checksec`, `radare2` |
+| **`source-analysis`** | Code Review | Static analysis of source trees, dangerous function pattern matching | `grep`, `find` |
+| **`system-inspection`** | Linux Privilege | Privilege escalation triage, SUID/GUID binaries, cron job auditing | `find`, `ls` |
+| **`software-presence`** | Host Inspection | Installed package and binary presence audit | `dpkg`, `which` |
+| **`largest-files`** | Disk Triage | Large backup files, log dump inspection, disk space mapping | `find`, `du` |
 
-A `SubAgentDef` (`persona/v0.1/subagents/*.yaml`) is a full alternate persona — `role`, `identity`, `principles`, `planning` prose, plus a `skills` list scoping which skills that role can see. At wiring time each becomes its own `agent.Runner` — **the same graph state machine** described in [Graph & Nodes](graph-and-nodes.md), just specialized by a different persona and skill subset, sharing the parent's `Store` and `Knowledge` — not a different, simpler mechanism bolted on for delegation.
+---
 
-The current roster (`persona/v0.1/subagents/`): `recon`, `web`, `osint`, `exploiter`, `source-analysis`, `reverser` — network/service enumeration, HTTP(S) assessment, passive domain/subdomain OSINT, confirming an already-identified weakness (injection/credentials), source-code review, and binary reverse engineering, respectively. Adding a new specialist is purely declarative: a new YAML file under this directory, no Go code change.
+## Sub-Agents: Bounded Role Delegation <a id="subagents"></a>
 
-`persona/v0.1/subagents/recon.yaml`, verbatim:
+A `SubAgentDef` defines an autonomous specialist. At runtime, each becomes a standalone `agent.Runner` running the same graph state machine, scoped to specific skills and sharing the same Knowledge Store.
 
-```yaml
-role: recon
-routing_hint: >-
-  Enumerate hosts, ports, and running services on a target before anything
-  else touches it — the usual first handoff on a new target.
-identity: |
-  You are a reconnaissance specialist sub-agent inside an isolated Kali sandbox.
-  You enumerate hosts and services thoroughly and report structured findings.
-  You do exactly the focused subtask handed to you, then finish — you do not
-  expand scope or start exploitation.
-principles: |
-  - Enumerate before anything else; breadth first, then depth on what is open.
-  - Every open port/service version is a structured finding (it becomes shared memory).
-  - Stay light and quiet unless the subtask explicitly calls for aggressive scanning.
-planning: |
-  Produce a short ordered plan that discovers reachability, then services, then
-  versions for the handed subtask. Keep it to a few concrete steps.
-skills:
-  - recon
-  - smb-enum
-  - snmp-enum
+```text
+                               +-----------------------------+
+                               |     PARENT AGENT TASK       |
+                               +--------------+--------------+
+                                              |
+                                     [HANDOFF] Control Tag
+                                              |
+                     +------------------------+------------------------+
+                     |                                                 |
+         +-----------v------------+                       +------------v-----------+
+         | SUB-AGENT: api-hunter  |                       |  SUB-AGENT: js-miner   |
+         | (Graph State Machine)  |                       | (Graph State Machine)  |
+         +-----------+------------+                       +------------+-----------+
+                     |                                                 |
+                     +------------------------+------------------------+
+                                              |
+                                              v
+                              +-------------------------------+
+                              |    SHARED KNOWLEDGE STORE     |
+                              |  (Findings, Assets, Memory)   |
+                              +-------------------------------+
 ```
 
-The identity prose's last line — *"you do exactly the focused subtask handed to you, then finish — you do not expand scope or start exploitation"* — is the behavioral contract that makes delegation safe to use at all: a recon sub-agent is explicitly told not to wander into exploitation even if it notices something exploitable mid-task, keeping the blast radius of a single hand-off narrow and predictable.
+---
 
-`routing_hint` is the one field written from the *delegator's* point of view rather than the specialist's own: `identity`/`principles`/`planning` shape how the sub-agent behaves once a task is already running, but `routing_hint` is what the top-level agent (or the model driving the Eino backend's `handoff` tool) actually reads *before* deciding whom to hand work to. Both `buildDelegation()` (graph, `node_step.go`) and `buildDelegationBlock()` (Eino, `eino/context_blocks.go`) render each configured role's hint next to its name in the DELEGATION prompt block:
+## The 10 Specialized Sub-Agents <a id="builtin-subagents"></a>
 
+| Role | Domain | Primary Responsibilities | Default Scoped Skills |
+|---|---|---|---|
+| **`recon`** | Network Recon | Host discovery, port scanning, and service version enumeration. | `recon`, `smb-enum`, `snmp-enum` |
+| **`web`** | Web Applications | Full-spectrum web assessment, fingerprinting, directory & parameter fuzzing. | `web`, `vuln-scanning`, `wordpress-assessment`, `api-pentest`, `parameter-fuzzing`, `js-recon` |
+| **`api-hunter`** | API Pentesting | REST, GraphQL, and microservice testing; BOLA/IDOR and schema analysis. | `api-pentest`, `parameter-discovery`, `graphql-pentest`, `web` |
+| **`js-miner`** | Client-Side Code | JavaScript bundle AST parsing, endpoint extraction, hardcoded secret mining. | `secret-mining`, `js-recon`, `web` |
+| **`auth-auditor`** | Authentication | JWT analysis, token tampering, OAuth2 redirection, session validation. | `auth-logic`, `api-pentest`, `web` |
+| **`cloud-recon`** | Cloud & Perimeter | Multi-cloud storage enumeration, subdomain takeover, perimeter auditing. | `cloud-recon`, `recon`, `osint-enum` |
+| **`osint`** | Passive Recon | Domain intelligence, certificate search, passive subdomain gathering. | `osint-enum` |
+| **`exploiter`** | Exploit Verification | Focused verification of identified vulnerabilities (SQLi, credentials). | `sql-injection`, `credential-attack` |
+| **`source-analysis`** | Static Analysis | Source code pattern matching, hardcoded credential and logic audits. | `source-analysis` |
+| **`reverser`** | Binary Analysis | Binary mitigation auditing, ELF/PE header analysis, disassembly triage. | `reverse-engineering` |
+
+---
+
+## Concurrent Delegation Fan-Out <a id="concurrent-handoff"></a>
+
+A task can delegate work to multiple sub-agents in parallel:
+```json
+[HANDOFF] {
+  "handoffs": [
+    {"role": "api-hunter", "subgoal": "Extract Swagger schema and audit user endpoints for IDOR"},
+    {"role": "js-miner", "subgoal": "Extract hardcoded API keys and hidden routes from app.bundle.js"}
+  ]
+}
 ```
-DELEGATION: hand a focused subtask to a specialist with [HANDOFF] {"role":"<role>","subgoal":"<one clear sentence>"}. ...
-Available roles:
-  - recon: Enumerate hosts, ports, and running services on a target before anything else touches it — the usual first handoff on a new target.
-  - web: Fingerprint, map, and probe a specific HTTP(S) target (known web port/URL) for content, headers, and known-issue signatures.
-  ...
-```
 
-A role with no hint (or an empty one) still appears, just as a bare name — `routing_hint` is optional and purely presentational, it never gates whether a role is delegable.
+### Delegation Lifecycle:
+1. `DelegationCoordinator` enforces concurrency bounds (default max 4 per fan-out, 3 globally concurrent).
+2. Each sub-agent runs asynchronously in its own goroutine.
+3. Structured findings and discovered asset nodes are saved directly into the shared `knowledge.Store`.
+4. An ANSI-stripped, threat-scanned concise summary is returned to the parent agent's observation history.
 
-## Concurrent hand-off — the fan-out <a id="concurrent-handoff"></a>
+---
 
-`HANDOFF` supports a single target (`{"role","subgoal"}`) or a concurrent fan-out (`{"handoffs":[...]}`). A fan-out accepts at most four targets by default, while one shared `DelegationCoordinator` enforces a global default of three running specialists across concurrent parent tasks. Every child receives an addressable lifecycle record (`running/completed/failed/interrupted`), a persisted child task ID, and an individual cancel function. Operators can inspect `GET /agent/delegations` and interrupt one child through `POST /agent/delegations/{id}/interrupt` without stopping its parent or siblings.
+## Architectural Guard: Depth Capped at 1 <a id="depth-cap"></a>
 
-Every sub-agent shares the same Knowledge Store as the parent — a finding a recon sub-agent records is immediately visible to the parent's own memory queries, with no separate merge step required, because there was only ever one store to begin with. Only a **human-readable summary** (not the sub-agent's full internal reasoning trace) gets threaded back into the parent's next prompt — this keeps a hand-off cheap in context-window terms regardless of how much work the sub-agent actually did internally.
+Sub-agents are initialized with an **empty** sub-agent registry. A sub-agent cannot issue a `HANDOFF` to spawn another sub-agent. This structural constraint guarantees zero risk of unbounded recursive task creation or runaway API costs.
 
-A sub-agent's summary text passes through the exact same content-layer defense as any other tool output before it reaches the parent's prompt (`threatscan.StripANSI` + `Banner()` at `ScopeContext`) — because a sub-agent's own LLM output can itself echo injected content it read from a target while doing its delegated work, which is exactly the same risk class regular tool output carries. This is deliberately built directly into `handoffNode`, not inherited automatically from `observeResult` — a hand-off's merged observation is assembled by hand (`handoffNode` builds `s.lastObs` directly), so without this explicit step, sub-agent output would reach the parent's prompt completely raw.
+---
 
-## Why delegation depth is capped at 1 <a id="depth-cap"></a>
+## Automated Skill Curator & Sanitization <a id="auto-skill"></a>
 
-A sub-agent's own `Runner` is built with an **empty** `SubAgents` map — so a sub-agent that itself tries to `HANDOFF` simply has nowhere to delegate to. This isn't a runtime check catching infinite recursion after the fact; it's structurally impossible for recursion to happen at all, because the data a second-level hand-off would need to route through was never populated. A recon specialist genuinely cannot accidentally (or via a successful prompt injection) spawn a chain of nested delegations that could balloon cost or complexity unpredictably — the depth-1 limit is a property of the object graph, not a policy someone remembered to enforce.
-
-## Auto-skill-creation — drafted, never auto-loaded <a id="auto-skill"></a>
-
-When a task completes, it submits a sanitized trajectory to a bounded, shutdown-aware curator worker. Targets, URLs, email addresses, and credential-shaped values are redacted; hostile observations are dropped; observations and queue depth are bounded. The worker gives each curator LLM call a deadline and writes clean drafts to the quarantined pending-skills store.
-
-**No draft is auto-loaded.** Approval performs `pending → activating`, atomically writes the YAML to the separate writable `YUMMI_AUTO_SKILL_DIR`, validates/hot-upserts the registry, and only then commits `approved`. A file or activation failure rolls the row back to retryable `pending` with an error instead of creating a false approval. The shipped Compose configuration stores approved skills under the persistent orchestrator data volume while keeping the source persona mount read-only.
+When a task trajectory succeeds, the `skillcurator` drafts a candidate skill:
+1. **Sanitization (`sanitize.go`)**: Strips client-specific targets, IP addresses, credentials, and API keys into generic placeholders (`<TARGET>`, `<TOKEN>`).
+2. **Threat Scan**: Scans the drafted YAML for prompt injection patterns.
+3. **Quarantine (`pending_skills`)**: Placed into a pending queue requiring explicit operator review (`POST /api/v1/skills/pending/{id}/approve`) before activation.
