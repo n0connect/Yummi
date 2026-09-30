@@ -24,7 +24,7 @@ describe('ScopeRulesPanel', () => {
       },
     ]
 
-    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((url: unknown) => {
       const urlStr = String(url)
       if (urlStr.includes('/scope-rules/classify')) {
         return Promise.resolve({
@@ -68,7 +68,7 @@ describe('ScopeRulesPanel', () => {
   })
 
   it('rejects bare wildcard pattern submission with validation alert', async () => {
-    vi.spyOn(global, 'fetch').mockImplementation(() =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
       Promise.resolve({
         ok: true,
         json: () => Promise.resolve([]),
@@ -90,7 +90,7 @@ describe('ScopeRulesPanel', () => {
 
   it('handles 1000-character input in live classifier without issue', async () => {
     const longHostname = 'a'.repeat(980) + '.example.com'
-    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((url: unknown) => {
       const urlStr = String(url)
       if (urlStr.includes('/scope-rules/classify')) {
         return Promise.resolve({

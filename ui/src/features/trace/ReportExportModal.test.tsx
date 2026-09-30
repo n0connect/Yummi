@@ -6,7 +6,7 @@ import { ReportExportModal } from './ReportExportModal'
 describe('ReportExportModal', () => {
   it('renders report modal and loads report markdown content', async () => {
     const fakeMarkdown = '# Vulnerability Assessment Report\n\nTarget: example.com'
-    vi.spyOn(global, 'fetch').mockImplementationOnce(() =>
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() =>
       Promise.resolve({
         ok: true,
         text: () => Promise.resolve(fakeMarkdown)
