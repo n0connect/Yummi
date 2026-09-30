@@ -4,6 +4,7 @@ import { presentActivity } from '../../shared/lib/activityPresentation'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
 import { FindingsPanel } from '../../features/trace/FindingsPanel'
 import { AssetTreePanel } from '../../features/trace/AssetTreePanel'
+import { ScopeRulesPanel } from '../../features/trace/ScopeRulesPanel'
 import { ReportExportModal } from '../../features/trace/ReportExportModal'
 import { ProxyBridgePanel } from '../../features/trace/ProxyBridgePanel'
 import { usePendingSkills } from '../../features/skills/usePendingSkills'
@@ -187,7 +188,7 @@ function Section({
   live = false
 }: {
   title: string
-  count: number
+  count?: number
   children: React.ReactNode
   // live sections stream new items over the agent.activity websocket (see
   // useTraceData) without any user action — mark them as a polite,
@@ -199,7 +200,7 @@ function Section({
     <div className="trace-section">
       <div className="trace-section-head">
         <span className="trace-section-title">{title}</span>
-        <span className="trace-section-count">{count}</span>
+        {typeof count === 'number' && <span className="trace-section-count">{count}</span>}
       </div>
       {count === 0 ? (
         <div className="trace-empty">{t('trace.emptyDash')}</div>
@@ -278,6 +279,11 @@ export function TracePage(): JSX.Element {
         {/* Attack Surface Management (ASM) & Hierarchical Asset Tree */}
         <Section title={t('trace.sectionAssets')} count={assets.length}>
           <AssetTreePanel assets={assets} />
+        </Section>
+
+        {/* Bug Bounty Program Scope Rules & Classifier */}
+        <Section title={t('trace.sectionScopeRules')}>
+          <ScopeRulesPanel sessionID={sessionID} />
         </Section>
 
         {/* Procedural memory */}

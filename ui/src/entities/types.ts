@@ -277,6 +277,23 @@ export type ProxyStatus = {
   supported_sources: string[]
 }
 
+export type ScopeRuleKind = 'include' | 'exclude'
+
+export type ScopeRule = {
+  id: string
+  session_id: string
+  pattern: string
+  kind: ScopeRuleKind
+  note?: string
+  created_at: number
+}
+
+export type ScopeVerdict = {
+  in_scope: boolean
+  reason: string
+  matched_rule?: string
+}
+
 // A structured security finding (from /api/v1/sessions/{id}/findings).
 export type Finding = {
   id: string
