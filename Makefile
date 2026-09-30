@@ -145,6 +145,7 @@ endef
 	build start rebase stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
 	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
+	lab-target-up lab-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
 	app \
 	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain \
@@ -527,6 +528,19 @@ bench-target-down:
 		rm -sf eval-target eval-target-db || true
 	@$(call log_pass,bench target,eval-target stopped.)
 
+## lab-target-up       Start the two-stage exploitation lab (RCE + SUID privesc, see lab-target/)
+lab-target-up: _check-deps
+	@$(call log_section,Exploitation Lab)
+	@docker compose -f docker-compose.yml -f docker-compose.override.lab-target.yml \
+		up -d --build gateway sandbox orchestrator docker-proxy lab-target || { $(call log_error,lab target,Failed to start.); exit 1; }
+	@$(call log_pass,lab target,lab-target is up at 198.51.100.10 (see docker-compose.override.lab-target.yml).)
+
+## lab-target-down     Stop and remove the exploitation lab
+lab-target-down:
+	@docker compose -f docker-compose.yml -f docker-compose.override.lab-target.yml \
+		rm -sf lab-target || true
+	@$(call log_pass,lab target,lab-target stopped.)
+
 ## test-agent-benchmark  Prove the agent finds a REAL, known vulnerability on the local benchmark target
 test-agent-benchmark: _check-deps
 	@$(call log_section,Agent Vulnerability-Finding Benchmark)
@@ -809,6 +823,8 @@ help:
 	@printf "  $(CYAN)make test-agent-live$(RESET) Agentic loop e2e vs. real model + sandbox\n"
 	@printf "  $(CYAN)make bench-target-up$(RESET) Start the intentionally-vulnerable local benchmark target\n"
 	@printf "  $(CYAN)make test-agent-benchmark$(RESET) Prove the agent finds a REAL vulnerability on it\n"
+	@printf "  $(CYAN)make lab-target-up$(RESET)   Start the two-stage exploitation lab (RCE + SUID privesc)\n"
+	@printf "  $(CYAN)make lab-target-down$(RESET) Stop and remove the exploitation lab\n"
 	@printf "  $(CYAN)make lint$(RESET)        Static analysis (golangci-lint)\n"
 	@printf "  $(CYAN)make vuln$(RESET)        Supply-chain vuln scan (govulncheck)\n"
 	@printf "  $(CYAN)make doctor$(RESET)      Environment diagnostics\n"

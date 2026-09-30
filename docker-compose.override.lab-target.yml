@@ -1,0 +1,49 @@
+# ── Opt-in multi-stage exploitation lab — NOT part of the default stack ─────
+#
+# Only applied when explicitly requested via
+# `-f docker-compose.override.lab-target.yml` (see `make lab-target-up` /
+# `make lab-target-down` in the Makefile).
+#
+# Unlike docker-compose.override.eval-target.yml (a single, known-vulnerable
+# WordPress instance used by the automated agent.QualitySpec benchmark), this
+# is a hand-built TWO-STAGE box: an unauthenticated RCE foothold (Apache
+# 2.4.49's CVE-2021-41773/-42013 path-traversal-via-mod_cgid bug) chained to
+# a local privilege-escalation vector (a SUID-root python3 binary). Built for
+# open-ended, exploratory full-autonomy agent runs and live operator-steering
+# sessions, not a scripted pass/fail gate — see lab-target/Dockerfile for the
+# exact vulnerability chain and lab-target/README.md for what "success" means
+# (user.txt then root.txt).
+#
+# Same TEST-NET isolation pattern as eval-target, on a DIFFERENT RFC 5737
+# range (198.51.100.0/24, TEST-NET-2) so the two opt-in targets can run
+# side by side without colliding. Reachable from the sandbox only through
+# gateway's fail-closed default — egress mode must be set to allow (or a
+# temporary per-IP rule added) before the agent can reach it at all, exactly
+# like a real external target.
+services:
+  gateway:
+    networks:
+      lab_target_net: {}
+
+  lab-target:
+    image: yummi-lab-target:local
+    build:
+      context: ./lab-target
+    restart: "no"
+    networks:
+      lab_target_net:
+        ipv4_address: 198.51.100.10
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  lab_target_net:
+    name: yummi_lab_target_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 198.51.100.0/24
+          gateway: 198.51.100.1
