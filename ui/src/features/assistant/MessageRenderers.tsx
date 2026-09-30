@@ -4,6 +4,7 @@ import { TaskTracker } from '../tasks/TaskTracker'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 import { t, LANG } from '../../shared/i18n/strings'
 import type { MessageRole } from './messageTypes'
+import { YummiLogo } from '../../shared/components/YummiLogo'
 
 // ─── Message row renderers ──────────────────────────────────────────────────
 // Pure presentational pieces of the message thread — each takes only the
@@ -153,7 +154,7 @@ export function EmptyWorkspace({
   return (
     <div className="chat-empty">
       <div className="chat-empty-mark" aria-hidden="true">
-        Y
+        <YummiLogo height={28} className="chat-empty-logo" />
       </div>
       <span className="chat-empty-eyebrow">{t('assistant.emptyEyebrow')}</span>
       <h1>{t('assistant.emptyTitle')}</h1>

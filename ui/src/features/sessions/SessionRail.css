@@ -83,6 +83,20 @@
   border-bottom: 1px solid var(--border-subtle);
   min-height: 68px;
 }
+.rail-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+.rail-brand-logo {
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+.rail-brand-text {
+  display: flex;
+  flex-direction: column;
+}
 .rail-eyebrow { display: block; color: var(--accent-hover); font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.12em; }
 .rail-title {
   display: block;
