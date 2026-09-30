@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { ReportFormat } from '../../entities/types'
 import { t } from '../../shared/i18n/strings'
+import { YummiLogo } from '../../shared/components/YummiLogo'
 import './ReportExportModal.css'
 
 interface ReportExportModalProps {
@@ -73,7 +74,10 @@ export function ReportExportModal({ sessionID, onClose }: ReportExportModalProps
     <div className="report-modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
       <div className="report-modal" onClick={e => e.stopPropagation()}>
         <div className="report-modal-head">
-          <span className="report-modal-title">{t('trace.reports.modalTitle')}</span>
+          <div className="report-modal-title-wrap">
+            <YummiLogo height={16} className="report-modal-logo" />
+            <span className="report-modal-title">{t('trace.reports.modalTitle')}</span>
+          </div>
           <button type="button" className="small-button" onClick={onClose} aria-label="Close modal">
             X
           </button>
