@@ -92,12 +92,17 @@ function TreeNodeItem({
   )
 }
 
+const MAX_ROOT_NODES = 500
+
 export function AssetTreePanel({ assets }: { assets: AssetTree[] }): JSX.Element {
   const [filter, setFilter] = useState('')
 
   if (!assets || assets.length === 0) {
     return <div className="trace-empty">{t('trace.assets.empty')}</div>
   }
+
+  const isCapped = !filter && assets.length > MAX_ROOT_NODES
+  const displayedRoots = isCapped ? assets.slice(0, MAX_ROOT_NODES) : assets
 
   return (
     <div className="asm-panel">
@@ -109,8 +114,13 @@ export function AssetTreePanel({ assets }: { assets: AssetTree[] }): JSX.Element
         onChange={e => setFilter(e.target.value)}
         aria-label="Filter assets"
       />
+      {isCapped && (
+        <div className="asm-capped-notice" style={{ fontSize: '10px', color: 'var(--text-muted, #888)', fontStyle: 'italic', padding: '2px 4px' }}>
+          {t('trace.assets.cappedNotice').replace('%d', String(MAX_ROOT_NODES)).replace('%d', String(assets.length))}
+        </div>
+      )}
       <div className="asm-tree">
-        {assets.map(rootNode => (
+        {displayedRoots.map(rootNode => (
           <TreeNodeItem key={rootNode.id} node={rootNode} filter={filter} isRoot />
         ))}
       </div>

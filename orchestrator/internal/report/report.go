@@ -116,15 +116,18 @@ func generateBugcrowd(d ReportData) string {
 		fmt.Fprintf(&sb, "- `%s`\n", t.Value)
 	}
 	sb.WriteString("\n## Submissions\n\n")
-
-	for i, f := range d.Findings {
-		_, cwe := estimateCVSSAndCWE(f.Severity, f.Title)
-		fmt.Fprintf(&sb, "### Finding #%d: %s\n", i+1, f.Title)
-		fmt.Fprintf(&sb, "**VRT Category:** %s  \n", cwe)
-		fmt.Fprintf(&sb, "**Priority:** P%d (%s)  \n\n", severityToPriority(f.Severity), strings.ToUpper(f.Severity))
-		fmt.Fprintf(&sb, "**Description:**\n%s\n\n", f.Description)
-		if f.Evidence != "" {
-			sb.WriteString("**Evidence / Validation:**\n```\n" + f.Evidence + "\n```\n\n")
+	if len(d.Findings) == 0 {
+		sb.WriteString("No vulnerability submissions recorded during this session.\n\n")
+	} else {
+		for i, f := range d.Findings {
+			_, cwe := estimateCVSSAndCWE(f.Severity, f.Title)
+			fmt.Fprintf(&sb, "### Finding #%d: %s\n", i+1, f.Title)
+			fmt.Fprintf(&sb, "**VRT Category:** %s  \n", cwe)
+			fmt.Fprintf(&sb, "**Priority:** P%d (%s)  \n\n", severityToPriority(f.Severity), strings.ToUpper(f.Severity))
+			fmt.Fprintf(&sb, "**Description:**\n%s\n\n", f.Description)
+			if f.Evidence != "" {
+				sb.WriteString("**Evidence / Validation:**\n```\n" + f.Evidence + "\n```\n\n")
+			}
 		}
 	}
 	return sb.String()
@@ -155,13 +158,17 @@ func generateExecutive(d ReportData) string {
 	fmt.Fprintf(&sb, "| Critical | %d |\n| High | %d |\n| Medium | %d |\n| Low | %d |\n| Info | %d |\n\n", critCount, highCount, medCount, lowCount, infoCount)
 
 	sb.WriteString("## 3. Detailed Findings Matrix\n\n")
-	for _, f := range d.Findings {
-		fmt.Fprintf(&sb, "### [%s] %s\n\n", strings.ToUpper(f.Severity), f.Title)
-		if f.Description != "" {
-			sb.WriteString(f.Description + "\n\n")
-		}
-		if f.Evidence != "" {
-			sb.WriteString("**Authoritative Evidence Digest:**\n```\n" + f.Evidence + "\n```\n\n")
+	if len(d.Findings) == 0 {
+		sb.WriteString("No vulnerability findings recorded during this session.\n\n")
+	} else {
+		for _, f := range d.Findings {
+			fmt.Fprintf(&sb, "### [%s] %s\n\n", strings.ToUpper(f.Severity), f.Title)
+			if f.Description != "" {
+				sb.WriteString(f.Description + "\n\n")
+			}
+			if f.Evidence != "" {
+				sb.WriteString("**Authoritative Evidence Digest:**\n```\n" + f.Evidence + "\n```\n\n")
+			}
 		}
 	}
 

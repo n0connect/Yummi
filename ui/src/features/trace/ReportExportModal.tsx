@@ -55,13 +55,14 @@ export function ReportExportModal({ sessionID, onClose }: ReportExportModalProps
   }
 
   const handleDownload = () => {
-    const sid = sessionID || 'default'
+    const rawSid = sessionID || 'default'
+    const safeSid = rawSid.replace(/[^a-zA-Z0-9_-]/g, '_') || 'default'
     const ext = format === 'json' ? 'json' : 'md'
     const blob = new Blob([content], { type: format === 'json' ? 'application/json' : 'text/markdown' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `pentest-report-${sid}-${format}.${ext}`
+    a.download = `pentest-report-${safeSid}-${format}.${ext}`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

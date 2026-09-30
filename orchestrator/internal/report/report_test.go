@@ -131,3 +131,22 @@ func TestGenerate_JSON(t *testing.T) {
 		t.Errorf("expected session_id in JSON output, got:\n%s", out)
 	}
 }
+
+func TestGenerate_ZeroFindings(t *testing.T) {
+	d := sampleData()
+	d.Findings = nil
+
+	formats := []ReportFormat{FormatHackerOne, FormatBugcrowd, FormatExecutive, FormatJSON}
+	for _, fmt := range formats {
+		out, _, err := Generate(d, fmt)
+		if err != nil {
+			t.Fatalf("Generate(%s) with 0 findings failed: %v", fmt, err)
+		}
+		if len(out) == 0 {
+			t.Errorf("Generate(%s) produced empty output", fmt)
+		}
+		if fmt != FormatJSON && !strings.Contains(out, "No vulnerability") {
+			t.Errorf("Generate(%s) expected meaningful zero-findings notice, got:\n%s", fmt, out)
+		}
+	}
+}
