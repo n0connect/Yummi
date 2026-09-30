@@ -301,6 +301,18 @@ body::before {
 .skip-link:focus { top: var(--space-sm); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -415,6 +427,8 @@ body::before {
   font-size: var(--text-lg);
   letter-spacing: 0.14em;
   color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -948,12 +962,17 @@ body::before {
   animation: messageSlide 0.5s var(--transition-spring);
 }
 .chat-empty-mark {
-  width: 42px; height: 42px; margin-bottom: var(--space-lg);
-  display: grid; place-items: center;
-  border: 1px solid rgba(45, 212, 191, 0.36); border-radius: 14px;
+  height: 52px;
+  width: auto;
+  padding: 0 var(--space-lg);
+  margin-bottom: var(--space-lg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(45, 212, 191, 0.36);
+  border-radius: 16px;
   background: linear-gradient(145deg, rgba(45, 212, 191, 0.19), rgba(45, 212, 191, 0.05));
   box-shadow: 0 10px 28px -14px var(--accent-glow);
-  color: var(--accent-hover); font-size: var(--text-lg); font-weight: 700; letter-spacing: -0.04em;
 }
 .chat-empty-eyebrow {
   color: var(--accent-hover); font-family: var(--font-mono); font-size: 10px;

@@ -1,0 +1,26 @@
+.yummi-logo {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+  height: auto;
+  width: auto;
+  user-select: none;
+}
+
+/* Theme adaptation:
+   The SVG has built-in media queries for prefers-color-scheme: dark/light.
+   When the user overrides the app theme via data-theme on :root:
+   - If OS is dark but app is set to light: invert colors to match light theme.
+   - If OS is light but app is set to dark: invert colors to match dark theme.
+*/
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="light"] .yummi-logo {
+    filter: invert(1) hue-rotate(180deg);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="dark"] .yummi-logo {
+    filter: invert(1) hue-rotate(180deg);
+  }
+}
