@@ -962,17 +962,10 @@ body::before {
   animation: messageSlide 0.5s var(--transition-spring);
 }
 .chat-empty-mark {
-  height: 52px;
-  width: auto;
-  padding: 0 var(--space-lg);
   margin-bottom: var(--space-lg);
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(45, 212, 191, 0.36);
-  border-radius: 16px;
-  background: linear-gradient(145deg, rgba(45, 212, 191, 0.19), rgba(45, 212, 191, 0.05));
-  box-shadow: 0 10px 28px -14px var(--accent-glow);
 }
 .chat-empty-eyebrow {
   color: var(--accent-hover); font-family: var(--font-mono); font-size: 10px;
