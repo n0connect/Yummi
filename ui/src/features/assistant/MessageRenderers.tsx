@@ -154,7 +154,7 @@ export function EmptyWorkspace({
   return (
     <div className="chat-empty">
       <div className="chat-empty-mark" aria-hidden="true">
-        <YummiLogo height={28} className="chat-empty-logo" />
+        <YummiLogo height={36} className="chat-empty-logo" />
       </div>
       <span className="chat-empty-eyebrow">{t('assistant.emptyEyebrow')}</span>
       <h1>{t('assistant.emptyTitle')}</h1>
