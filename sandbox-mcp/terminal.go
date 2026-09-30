@@ -53,6 +53,11 @@ const (
 	// completion sentinel or a wait pattern. 250ms is imperceptible for a
 	// pentest tool and keeps CPU near zero.
 	pollInterval = 250 * time.Millisecond
+	// settleDelay is the grace period after first seeing the END sentinel
+	// before the final, authoritative re-capture (see termRunHandler) —
+	// closes a real render-ordering gap found live-testing against the
+	// actual sandbox container, not a theoretical concern.
+	settleDelay = 60 * time.Millisecond
 	// defaultRunTimeout applies when the caller does not set timeout_secs on
 	// a waiting term_run. Long scans should pass a larger value or use
 	// wait=false + term_wait.
@@ -82,6 +87,28 @@ type terminalManager struct {
 
 var terminals = &terminalManager{labels: map[string]string{}}
 
+// tmuxMu serializes every tmux CLI invocation this process makes. tmux runs
+// as a single server process shared by every session; live-testing this
+// package against a real sandbox container under real concurrency (5
+// sessions opened and driven in parallel, matching how an agent actually
+// uses this feature) reproducibly showed dropped/misdirected command output
+// — a command's own echo line would appear in one pane's scrollback with no
+// result line following it, or a variable set in one session would appear to
+// leak into another — when multiple goroutines issued send-keys/capture-pane
+// against the shared tmux server truly simultaneously (as separate OS
+// processes). This is a tmux-server contention race, not an MCP or Go-level
+// bug: reproduced identically with plain concurrent shell invocations of the
+// tmux CLI, no Go code involved at all.
+//
+// Each individual tmux CLI call is single-digit milliseconds, so serializing
+// them adds no perceptible latency, and it does NOT serialize the actual
+// business the agent cares about: the shells/tools running inside each pty
+// keep running fully independently and concurrently — only the brief act of
+// "type these keys" / "read this screen" is queued. Without this, "the agent
+// opens and drives N terminals at once" — the entire point of this feature —
+// was not reliable under real concurrent use.
+var tmuxMu sync.Mutex
+
 func nonceHex() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
@@ -96,6 +123,8 @@ func tmuxName(id string) string { return tmuxSessionPrefix + id }
 // writes its diagnostics ("can't find session", "no server running") to
 // stderr and they are the useful part of the failure.
 func runTmux(ctx context.Context, args ...string) (string, error) {
+	tmuxMu.Lock()
+	defer tmuxMu.Unlock()
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -231,16 +260,15 @@ func termRunHandler(ctx context.Context, _ *mcp.CallToolRequest, args termRunArg
 	endPrefix := "__YUMMI_END_" + nonce + "__"
 	endRe := regexp.MustCompile(regexp.QuoteMeta(endPrefix) + `(-?\d+)__`)
 
-	// Emit BEG marker, the real command, then an END marker carrying $?.
-	// Each is a separate typed line so $? in the END printf reflects the
-	// command's exit status (nothing else runs between them).
-	if err := sendLine(ctx, id, "printf '"+begMark+"\\n'"); err != nil {
-		return errResult(err.Error())
-	}
-	if err := sendLine(ctx, id, args.Command); err != nil {
-		return errResult(err.Error())
-	}
-	if err := sendLine(ctx, id, "printf '\\n"+endPrefix+"%d__\\n' \"$?\""); err != nil {
+	// Emit BEG marker, the real command, then an END marker carrying $?, as
+	// ONE combined literal write (see sendLines) — each is still its own
+	// shell line (real \n between them), so $? in the END printf still
+	// reflects the command's exit status; nothing else runs between them.
+	if err := sendLines(ctx, id,
+		"printf '"+begMark+"\\n'",
+		args.Command,
+		"printf '\\n"+endPrefix+"%d__\\n' \"$?\"",
+	); err != nil {
 		return errResult(err.Error())
 	}
 
@@ -252,6 +280,33 @@ func termRunHandler(ctx context.Context, _ *mcp.CallToolRequest, args termRunArg
 			return errResult(err.Error())
 		}
 		if m := endRe.FindStringSubmatch(pane); m != nil {
+			// Settle-and-recapture: the END sentinel appearing in this
+			// snapshot only proves bash has already run the trailing printf,
+			// not that tmux's own pane/grid has finished applying every byte
+			// the command itself wrote a moment earlier. Live-testing against
+			// the real sandbox reproducibly showed the command's own output
+			// line occasionally missing from THIS EXACT capture even though
+			// the END marker (written after it, by the same shell, on the
+			// very next line) was already present — i.e. a real ordering gap
+			// between "bash has run the next command" and "tmux has fully
+			// rendered the previous command's output into the buffer
+			// capture-pane reads from". A short grace period plus one more
+			// capture closes that gap without needing to understand tmux's
+			// internal buffering in detail. Re-checks the sentinel is still
+			// there (it always will be — nothing types over it) purely so a
+			// context cancellation during the sleep is handled cleanly.
+			select {
+			case <-ctx.Done():
+				return errResult("context cancelled while waiting for command")
+			case <-time.After(settleDelay):
+			}
+			settled, err := capturePane(ctx, id, true, 0)
+			if err != nil {
+				return errResult(err.Error())
+			}
+			if m2 := endRe.FindStringSubmatch(settled); m2 != nil {
+				pane, m = settled, m2
+			} // else: extremely unlikely (sentinel can't un-render); fall back to the first capture.
 			code, _ := strconv.Atoi(m[1])
 			out := extractBetween(pane, begMark, endPrefix, nonce)
 			status := "completed"
@@ -436,6 +491,35 @@ func sendLine(ctx context.Context, id, line string) error {
 		return err
 	}
 	_, err := runTmux(ctx, "send-keys", "-t", tmuxName(id), "--", "Enter")
+	return err
+}
+
+// sendLines types several complete lines into the pane as ONE literal
+// send-keys invocation, with a real newline byte embedded between (and
+// after) each line, instead of one send-keys-plus-Enter pair per line.
+//
+// This matters specifically for termRunHandler's three-line BEG/command/END
+// sentinel sequence. Sending each line as a SEPARATE tmux send-keys call
+// (text, then a separate Enter, repeated) opens a real race against bash's
+// own interactive line editor: readline does not necessarily finish
+// "accepting" one Enter (parsing the line, running it, printing output, and
+// redrawing a fresh prompt) before the NEXT line's raw bytes arrive at the
+// pty, especially under real load (tmux server handling several sessions,
+// virtualized/containerized CPU scheduling jitter). When that happens,
+// readline treats the new bytes as still-being-typed input for the CURRENT
+// line rather than a new command — live-testing against the real sandbox
+// reproducibly showed a later line's text getting echoed onto the same
+// screen row as an earlier command's own sentinel output, and the earlier
+// command's real output line going missing from the captured pane entirely.
+//
+// Sending everything as ONE literal write (mirroring how pasting several
+// lines of text into an interactive terminal works, which is reliable
+// precisely because the shell receives the whole paste as one contiguous
+// byte stream) avoids the gap: there is no window between lines for another
+// event to land in.
+func sendLines(ctx context.Context, id string, lines ...string) error {
+	payload := strings.Join(lines, "\n") + "\n"
+	_, err := runTmux(ctx, "send-keys", "-t", tmuxName(id), "-l", "--", payload)
 	return err
 }
 
