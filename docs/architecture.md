@@ -2,125 +2,177 @@
 
 # System Architecture
 
-Yummi operates across **five runtime components** organized within **three build ecosystems** (Go, Rust, and Node/React). This document details the component responsibilities, process isolation model, network boundaries, and execution pathways.
+Yummi operates across **five runtime components** organized within **three build ecosystems** (Go, Rust, and Node/React), with an optional Python LangGraph multi-agent runtime. This document details component responsibilities, process isolation, network boundaries, execution pipelines, and data flows.
 
 Core Invariant: **The LLM proposes actions; deterministic software controls approval, target validation, command execution, and network policy.**
+
+---
 
 ## Table of Contents
 
 - [Component Topology](#the-five-components)
-- [LangGraph Brain Integration](#brain)
-- [Process Isolation Model](#why-separate-processes)
-- [Network Segmentation](#network-topology)
+- [Control Plane & Execution Channels](#control-channels)
+- [Attack Surface Management & Web Pentest Engine](#redteam-architecture)
+- [Process Isolation & Security Boundaries](#why-separate-processes)
+- [Network Topology & Routing](#network-topology)
 - [Data Flows](#data-flows)
   - [Single Command Execution](#flow-single-command)
-  - [Autonomous Agent Task](#flow-agentic-task)
-  - [Approval Gate Lifecycle](#flow-approval-gate)
-- [Ecosystem Organization](#build-ecosystems)
+  - [Autonomous Agent Task Execution](#flow-agentic-task)
+  - [Sub-Agent Delegation Fan-Out](#flow-delegation)
+  - [Verification Oracle Pipeline](#flow-oracle)
+  - [Proxy & Traffic Ingestion Bridge](#flow-proxy)
+- [Ecosystem Organization & Modules](#build-ecosystems)
 - [Non-Goals and Out-of-Scope Boundaries](#not-in-scope)
 
 ---
 
-## Component Topology <a id="five-components"></a>
+## Component Topology <a id="the-five-components"></a>
 
 ```text
-                        +----------------------+
-       Operator ------->|   ui (React/nginx)   |  :3000
-                        +----------+-----------+
-                                   | /api, /ws (proxied)
-                        +----------v-----------+
-       CLI ------------>|  orchestrator (Go)   |  :9080 (127.0.0.1 only)
-                        |  conductor + agent   |
-                        +----+------------+----+
-                             |            |
-                 IPC Socket  |            | Docker Exec (via docker-proxy)
-        (Length-prefixed)    |            |
-                        +----v-------+    |
-                        | gateway    |    |
-                        | (Rust)     |    |
-                        | nftables   |    |
-                        +----+-------+    |
-                             |            |
-               FORWARD Chain |            |
-                (Allow/Deny) |            |
-                        +----v------------v----+
-                        |    sandbox (Kali)    |  No direct internet route;
-                        |                      |  egress gated by gateway's
-                        |                      |  FORWARD chain.
-                        +----------------------+
++-----------------------------------------------------------------------------------+
+|                                 OPERATOR WORKSPACE                                |
+|                                                                                   |
+|   +---------------------------------------------------------------------------+   |
+|   |                        ui (React 18 + TypeScript SPA)                     |   |
+|   |   Agent (Chat) | Bash (tmux) | Desktop (XFCE) | Trace | Logs | Gateway    |   |
+|   +-------------------------------------+-------------------------------------+   |
+|                                         | HTTP / REST (:3000 -> :9080)            |
+|                                         | WebSocket (/ws/events, /ws/terminal)    |
++-----------------------------------------|-----------------------------------------+
+                                          v
++-----------------------------------------------------------------------------------+
+|                               ORCHESTRATOR SUBSTRATE                              |
+|                                                                                   |
+|   +---------------------------------------------------------------------------+   |
+|   |                     orchestrator (Go Service :9080)                       |   |
+|   |                                                                           |   |
+|   |   +-------------------+  +--------------------+  +--------------------+   |   |
+|   |   | Conductor Engine  |  | Graph / Eino Agent |  | Knowledge Store    |   |   |
+|   |   | (Chat & Personas) |  | (State Machine)    |  | (Memory, ASM, PoC) |   |   |
+|   |   +---------+---------+  +---------+----------+  +---------+----------+   |   |
+|   |             |                      |                       |              |   |
+|   |             +----------------------+-----------------------+              |   |
+|   |                                    v                                      |   |
+|   |                     executor.RunScopedCommand                             |   |
+|   |                     (Target Extraction & Verification)                    |   |
+|   +--------------------+--------------------------------+---------------------+   |
+|                        |                                |                         |
++------------------------|--------------------------------|-------------------------+
+                         | Unix IPC Socket                | docker exec (proxied)
+                         v                                v
++---------------------------------------+  +----------------------------------------+
+|           GATEWAY DAEMON              |  |            SANDBOX CONTAINER           |
+|                                       |  |                                        |
+|   +-------------------------------+   |  |   +--------------------------------+   |
+|   | yummi-gateway (Rust)          |   |  |   | sandbox (Hardened Kali Linux)  |   |
+|   |                               |   |  |   | UID 1000 (pentester user)      |   |
+|   | - nftables FORWARD Rules      |   |  |   |                                |   |
+|   | - Fail-Closed DROP Policy     |   |  |   | - 39 Native Pentest MCP Tools  |   |
+|   | - Hostname / IP Scope Engine  |   |  |   | - tmux Terminal Session        |   |
+|   | - SHA-256 Audit Hash Chain    |   |  |   | - XFCE / noVNC Graphical GUI   |   |
+|   +---------------+---------------+   |  |   +----------------+---------------+   |
+|                   |                   |  |                    |                   |
++-------------------|-------------------+  +--------------------|-------------------+
+                    |                                           |
+                    |  nftables FORWARD (Allow / Deny)          | Egress packets
+                    +===========================================+
+                                          |
+                                          v (Target External Network)
 ```
 
-Two distinct control channels reach the sandbox container:
-1. **Execution Channel**: Orchestrator issues commands into the sandbox via `docker exec` (proxied and constrained by `docker-proxy`).
-2. **Network Channel**: Gateway manages kernel `FORWARD` rules in the network namespace, determining which external destinations the sandbox may reach.
+---
+
+## Control Plane & Execution Channels <a id="control-channels"></a>
+
+Two strictly segregated control channels reach the Kali sandbox:
+
+1. **Execution Channel (Control Plane)**:
+   - The Go `orchestrator` issues command executions into the sandbox via `docker exec` (strictly proxied by `docker-proxy`).
+   - Every command executes as an unprivileged user (`UID 1000:1000`), with an isolated subshell environment (`/bin/bash -lc`), a 10-minute timeout ceiling, and a 1 MiB output buffer limit.
+2. **Network Channel (Data Plane)**:
+   - The Rust `gateway` manages Linux kernel `FORWARD` rules in the `nftables` subsystem.
+   - The sandbox has zero direct external interfaces; its default gateway routes strictly through the gateway daemon (`172.20.0.2`).
+   - If the gateway daemon crashes or shuts down, the kernel `DROP` rules persist, guaranteeing a fail-closed boundary.
 
 | Component | Language / Runtime | Primary Responsibility | Isolation & Enforcement Boundary |
 |---|---|---|---|
-| **orchestrator** | Go binary (`CGO_ENABLED=1`) | AI conductor, agent graph/Eino state machine, REST/WebSocket API, execution pipeline. | Cannot open raw network sockets to target networks or modify firewall rules. |
+| **orchestrator** | Go (`CGO_ENABLED=1`) | AI Conductor, Graph / Eino state machine, REST/WebSocket API, execution pipeline, ASM, and reporting engine. | Cannot open raw network sockets to target networks or modify firewall rules. |
 | **gateway** | Rust binary (`yummi-gateway`) | Installs fail-closed `nftables` FORWARD rules, evaluates egress scope, logs tamper-evident audit trail. | Isolated from LLM logic and direct command execution; manages network filter only. |
-| **sandbox** | Kali Linux container | Unified environment for tool execution, operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
-| **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; lifecycle mutations are blocked. |
-| **ui** | React 18 + TypeScript (nginx) | Single-page operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
+| **sandbox** | Kali Linux container | Unified environment for tool execution (39 MCP tools), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
+| **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; container lifecycle mutations are blocked. |
+| **ui** | React 18 + TypeScript (nginx) | Web operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
 
-The web interface is the exclusive operator dashboard. The root `yummi` CLI binary manages local Docker service lifecycles and launches the browser interface.
+---
 
-### Docker Socket Proxy (`docker-proxy`) <a id="docker-proxy"></a>
+## Attack Surface Management & Web Pentest Engine <a id="redteam-architecture"></a>
 
-To prevent exposing the host `/var/run/docker.sock` directly to the Go orchestrator, `docker-proxy` mediates all container API communication:
+Yummi includes a dedicated offensive security and bug bounty substrate:
 
-```yaml
-CONTAINERS: 1       # Read-only container inspection (GET /containers/*)
-EXEC: 1             # Execution attachment (POST /containers/{id}/exec)
-POST: 1             # Required for exec instance creation
-# All other API resource families explicitly set to 0:
-# ALLOW_START, ALLOW_STOP, ALLOW_RESTARTS, BUILD, COMMIT, IMAGES, NETWORKS, VOLUMES...
+```text
++-----------------------------------------------------------------------------------+
+|                        ATTACK SURFACE & RECONNAISSANCE MATRIX                     |
+|                                                                                   |
+|   Root Target (e.g., example.com)                                                 |
+|     |                                                                             |
+|     +---> Subdomains (api.example.com, auth.example.com, vault.example.com)      |
+|     |       |                                                                     |
+|     |       +---> IP Addresses & Open Ports (10.0.0.5:80, 10.0.0.5:443)           |
+|     |               |                                                             |
+|     |               +---> HTTP Endpoints (GET /v1/users, POST /v1/auth/login)     |
+|     |                       |                                                     |
+|     |                       +---> Parameters (?id=1001, ?debug=true, ?token=...)  |
+|     |                               |                                             |
+|     |                               +---> Discovered Secrets & Cloud Storage      |
++-----------------------------------------------------------------------------------+
 ```
 
-### LangGraph Agent Brain (`brain/`) <a id="brain"></a>
-
-The `brain/` directory houses an optional Python runtime using LangGraph. It provides a multi-agent supervisor/specialist architecture powered by frontier cloud models (via OpenRouter or OpenAI-compatible endpoints). 
-
-From a security architecture perspective, `brain/` acts as an external REST and MCP client to the orchestrator. Every command dispatched by `brain/` flows through the standard `executor.RunScopedCommand` pipeline and remains subject to the gateway's fail-closed network policies.
-
-### Web Pentest and Bug Bounty Architecture <a id="redteam-architecture"></a>
-
-Yummi is built specifically for autonomous offensive security workflows:
-- **Target-First Launcher**: Operators submit a target domain, URL, or CIDR to trigger automated reconnaissance and assessment playbooks.
-- **30 Sandbox-Resident MCP Tools (`sandbox-mcp`)**: 6 typed tools (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`), 22 cataloged tools (`httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `wafw00f`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `snmpwalk`, `dirb`, `hydra`, `medusa`, `checksec`, `radare2`), and 2 concurrency utilities (`consolidate_hosts`, `passive_recon_batch`).
-- **Artifact Pipeline**: Findings from discovery tools are structured under `/workspace/` and fed forward into subsequent assessment stages.
-- **Integrated Desktop GUI**: The sandbox environment includes Burp Suite, Wireshark, and Firefox accessible directly via the noVNC/XFCE desktop tab.
-
----
-
-## Process Isolation Model <a id="why-separate-processes"></a>
-
-Firewall management and AI reasoning are deliberately split across distinct OS processes and programming languages:
-
-1. **Failure Containment**: A prompt injection vulnerability, malformed parser input, or unexpected LLM output cannot alter kernel packet rules.
-2. **Fail-Closed Guarantee**: The Rust gateway daemon establishes DROP-all firewall rules at startup before binding its IPC socket. If the AI orchestrator or the gateway daemon crashes, the kernel-level DROP rules remain active in the network namespace.
-3. **Memory Safety and Concurrency**: Rust's compile-time borrow checker and absence of garbage collection jitter ensure reliable, deterministic rule evaluation.
+### Key Subsystems:
+- **39 Sandbox-Resident MCP Tools (`sandbox-mcp`)**:
+  - **6 Typed Tools**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
+  - **31 Cataloged Pentest Tools**: `httpx_probe`, `dnsx_resolve`, `alterx_permute`, `gau_fetch`, `katana_crawl`, `dalfox_xss`, `nuclei_scan`, `wpscan_audit`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_search`, `dnsenum_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_dump`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`.
+  - **2 Concurrency Utilities**: `consolidate_hosts`, `passive_recon_batch`.
+- **Active Verification Exploit Oracles**:
+  - `OracleActivePoC`: Confirms SQL injection errors, command execution, SSRF metadata responses.
+  - `OracleDOMExecution`: Validates XSS and DOM sink execution.
+  - `OracleOOBInteraction`: Confirms out-of-band DNS/HTTP callback markers.
+  - `OracleDifferential`: Evaluates status code, timing, and response body divergence.
+- **Hierarchical Asset Tree Store**: SQLite-persisted graph indexing domains, subdomains, IPs, ports, endpoints, parameters, and metadata.
+- **Multi-Format Report Generator**: Produces HackerOne Markdown, Bugcrowd VRT, Executive Management summaries, and JSON.
+- **Proxy & Traffic Ingestion Bridge**: Ingests HTTP flows from Burp Suite, Caido, and Mitmproxy into the Knowledge Graph.
 
 ---
 
-## Network Segmentation <a id="network-topology"></a>
+## Process Isolation & Security Boundaries <a id="why-separate-processes"></a>
+
+```text
++-----------------------------------------------------------------------------------+
+|                               ISOLATION GUARANTEES                                |
+|                                                                                   |
+|   1. LLM Context Compromise -> Isolated in Orchestrator RAM (Cannot change rules) |
+|   2. Sandbox Escape / Tool Exploit -> Contained in Container (Non-root UID 1000)  |
+|   3. Network Scope Enforcement -> Kernel-Level nftables (Rust Gateway)            |
+|   4. Gateway Daemon Termination -> Kernel DROP-All Rules Persist (Fail-Closed)   |
+|   5. Audit Integrity -> SHA-256 Hash Chain per Decision (Tamper-Evident)          |
++-----------------------------------------------------------------------------------+
+```
+
+---
+
+## Network Topology & Routing <a id="network-topology"></a>
 
 ```text
 yummi_internal (172.20.0.0/24, internal: true, no default Docker gateway)
-  ├── gateway         172.20.0.2   (Default router for sandbox)
-  ├── orchestrator    172.20.0.3
-  ├── ui              172.20.0.4
-  ├── docker-proxy    172.20.0.5
-  └── sandbox         172.20.0.10  (Connected only to yummi_internal)
+  |-- gateway         172.20.0.2   (Default gateway & router for sandbox)
+  |-- orchestrator    172.20.0.3
+  |-- ui              172.20.0.4
+  |-- docker-proxy    172.20.0.5
+  \-- sandbox         172.20.0.10  (Only attached to yummi_internal)
 
 yummi_external (Bridge driver with external network connectivity)
-  ├── gateway         (Performs NAT/routing subject to nftables policy)
-  ├── orchestrator    (Reaches LLM endpoints / APIs)
-  └── ui
+  |-- gateway         (NAT router subject to nftables FORWARD rules)
+  |-- orchestrator    (Reaches LLM API endpoints)
+  \-- ui              (Exposed on host port 3000)
 ```
-
-Key Architectural Properties:
-- **Isolated Sandbox**: `sandbox` has no interface on `yummi_external`. Its default routing table directs all external traffic through `gateway` (`172.20.0.2`).
-- **Deterministic DNS**: Both `sandbox` and `orchestrator` resolve hostnames against Cloudflare DNS (`1.1.1.1`, `1.0.0.1`). DNS queries pass through the gateway on UDP port 53, while all TCP/UDP connections to resolved IPs require explicit gateway allow rules.
 
 ---
 
@@ -129,48 +181,54 @@ Key Architectural Properties:
 ### Single Command Execution <a id="flow-single-command"></a>
 
 ```text
-1. UI -> POST /api/v1/chat {"message": "scan target 10.0.0.5"}
-2. Orchestrator conductor evaluates intent and drafts command proposal.
-3. Operator reviews proposal and submits approval: POST /api/v1/chat/approve
-4. execution.Store enqueues command -> executor.ProcessFunc picks up execution.
-5. executor.RunScopedCommand:
-   a. Extracts target IPs and hostnames.
-   b. Evaluates name-level policy via gateway.CheckHostname.
-   c. Queries gateway.CheckEgress for target IP addresses.
-   d. Adds temporary scoped nftables allow rule via gateway.AddTemporaryRule.
-   e. Dispatches execution to sandbox: docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"
-6. Command output is returned and broadcast via WebSocket /ws/events.
+Operator / UI                Orchestrator                    Gateway Daemon             Sandbox Container
+      |                            |                               |                            |
+      |-- 1. POST /chat ---------->|                               |                            |
+      |   "scan 10.0.0.5"          |-- 2. Conductor Proposes Cmd ->|                            |
+      |<-- 3. Proposal Prompt -----|                               |                            |
+      |                            |                               |                            |
+      |-- 4. POST /chat/approve -->|                               |                            |
+      |                            |-- 5. CheckHostname / Scope -->|                            |
+      |                            |<-- 6. Verdict: "allow" -------|                            |
+      |                            |-- 7. AddTemporaryRule ------->| (Opens nftables rule)      |
+      |                            |                               |                            |
+      |                            |-- 8. docker exec (proxied) ------------------------------->|
+      |                            |      "nmap -sV 10.0.0.5"      |                            | (Executes command)
+      |                            |<-- 9. Command Output (Stdout/Stderr) ----------------------|
+      |<-- 10. WS /ws/events ------|                               |                            |
 ```
 
-### Autonomous Agent Task <a id="flow-agentic-task"></a>
+### Autonomous Agent Task Execution <a id="flow-agentic-task"></a>
 
 ```text
-1. UI -> POST /api/v1/chat (Conductor identifies goal requiring a task plan)
-2. agent.Runner.CreateAndPlan generates structured numbered plan steps.
-3. agent.Runner.Start initiates the graph execution engine (graph.Execute).
-4. State machine evaluates nodes:
-   - step: LLM selects next action based on current observations and playbooks.
-   - tool: Validates and executes scheduled commands through the scoped executor.
-   - handoff: Dispatches sub-tasks to concurrent specialist sub-agents.
-   - threat_hold: Pauses execution if tool output triggers threat patterns.
-   - finish / ask: Terminates task or solicits operator input.
-5. Task status, evidence digests, and structured findings stream live via /ws/events.
+State: [step] ---> [tool] ---> [approval] (if risk >= medium) ---> [verify] ---> [step]
+          |           |                                               |
+          |           +-----> [handoff] (concurrent sub-agents)       |
+          |           |                                               v
+          |           +-----> [threat_hold] (if output flagged)    [finish]
+          v
+       [ask] (solicits operator input)
 ```
 
-### Approval Gate Lifecycle <a id="flow-approval-gate"></a>
+### Sub-Agent Delegation Fan-Out <a id="flow-delegation"></a>
 
 ```text
-Command risk classified (medium/high/critical) or mode set to ask_permission:
-  -> gate.Request blocks the task's execution goroutine.
-  -> Task status transitions to awaiting_approval.
-  -> WebSocket broadcasts pending_command and pending_risk metadata to UI.
-  -> Operator resolves via POST /api/v1/tasks/{id}/approve or /api/v1/chat/approve.
-  -> gate.Resolve unblocks execution channel; command proceeds to scoped executor.
+Parent Agent Task (Top-Level)
+      |
+      +---> [HANDOFF] {"handoffs": [{"role": "api-hunter", ...}, {"role": "js-miner", ...}]}
+              |
+              +---> Child 1: api-hunter (Graph State Machine, Scoped to API skills)
+              |       |---> Records findings -> Shares Knowledge Store
+              |       +---> Emits brief summary -> Merged into Parent Observation
+              |
+              +---> Child 2: js-miner (Graph State Machine, Scoped to JS mining)
+                      |---> Extracts endpoints -> Updates ASM Asset Tree
+                      +---> Emits brief summary -> Merged into Parent Observation
 ```
 
 ---
 
-## Ecosystem Organization <a id="build-ecosystems"></a>
+## Ecosystem Organization & Modules <a id="build-ecosystems"></a>
 
 | Ecosystem | Component | Path | Entry Point |
 |---|---|---|---|
@@ -180,8 +238,6 @@ Command risk classified (medium/high/critical) or mode set to ask_permission:
 | **Rust Crate** | `yummi-gateway` | `gateway/` | `src/main.rs` |
 | **Node / React** | `ui` | `ui/` | `src/main.tsx` |
 | **Python Package** | `yummi-brain` | `brain/` | `src/yummi_brain/cli.py` |
-
-The three separate Go modules ensure clean dependency boundaries: the CLI remains lightweight without server dependencies, and `sandbox-mcp` compiles directly into the Kali container without linking against the orchestrator.
 
 ---
 

@@ -20,6 +20,7 @@ This guide covers environment prerequisites, container engine compatibility, mod
 - [Windows (WSL2) Setup](#windows)
 - [Ollama Configuration and Model Tiers](#ollama-setup)
   - [Custom Models and Cloud Endpoints](#custom-model)
+- [Pre-Build Configuration Wizard (make conf)](#make-conf)
 - [Running the Full Stack (Docker Compose)](#full-stack)
 - [Building Native Binaries](#native-binaries)
 - [Post-Install Verification](#verifying)
@@ -243,7 +244,7 @@ make start
 # 1. Enable WSL2 (PowerShell as Administrator, one-time, requires a reboot)
 wsl --install
 
-# 2. Install Docker Desktop for Windows, and in its Settings → General,
+# 2. Install Docker Desktop for Windows, and in its Settings -> General,
 #    confirm "Use the WSL 2 based engine" is checked (it is the default on
 #    current Docker Desktop releases).
 
@@ -310,7 +311,7 @@ ollama pull <your-model-tag>       # check the exact tag at https://ollama.com/l
 YUMMI_OLLAMA_MODEL=<your-model-tag> make start
 ```
 
-Or interactively: `make conf` → model choice → **Custom** → type the exact tag. This persists to `.yummi.conf` like every other `make conf` choice, so you don't need to set the env var by hand again.
+Or interactively: `make conf` -> model choice -> **Custom** -> type the exact tag. This persists to `.yummi.conf` like every other `make conf` choice, so you don't need to set the env var by hand again.
 
 **Two things worth knowing before you do this:**
 
@@ -351,6 +352,63 @@ Or interactively: `make conf` → model choice → **Custom** → type the exact
 
 ---
 
+## Pre-Build Configuration Wizard (`make conf`) <a id="make-conf"></a>
+
+Before executing `make build` or `make start`, you should run the interactive setup wizard:
+
+```bash
+make conf
+```
+
+`make conf` asks a structured series of questions and persists your decisions to a machine-local, gitignored file: `.yummi.conf`. All subsequent build and start operations automatically inherit these parameters without needing manual environment variables.
+
+### Configuration Decisions Handled by `make conf`:
+
+1. **Container Engine & Network Security Mode**:
+   - `1) OrbStack` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=secure` (recommended on macOS).
+   - `2) Docker Desktop` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=insecure-bridge` (requires typing `I UNDERSTAND` to accept the security trade-off).
+   - `3) Podman` -> `CONTAINER_ENGINE=podman`, `YUMMI_NETWORK_MODE=insecure-bridge`.
+   - `4) Linux native Docker Engine` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=secure` (production default).
+
+2. **UI Display Language (`YUMMI_LANG`)**:
+   - `1) English (en)`
+   - `2) Türkçe (tr)`
+   - **CRITICAL**: The UI language is compiled directly into the React/Vite single-page application at **build time**. It cannot be changed at runtime via an in-app toggle. To switch languages later, run `make conf` and rebuild (`make start` or `make docker-ui`).
+
+3. **Agent Backend Engine (`YUMMI_AGENT_BACKEND`)**:
+   - `1) Graph`: 11-node deterministic state machine using the closed tag protocol (`RUN_COMMAND`, `FINISH`, `HANDOFF`, etc.). Optimized for small local models (`gpt-oss:20b`, `qwen3:8b`).
+   - `2) Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling against larger models running on local Ollama.
+   - `3) Eino Cloud (OpenRouter / OpenAI)`: Cloud frontier models with native tool-calling:
+     - Provider selection: OpenRouter (`https://openrouter.ai/api/v1`), OpenAI (`https://api.openai.com/v1`), or Custom base URL.
+     - Model name: e.g., `anthropic/claude-3.5-sonnet`, `deepseek/deepseek-chat`, `openai/gpt-4o`.
+     - API Key: Hidden input during typing; securely written to `.yummi.conf` (never tracked by git).
+
+4. **Local Intent & Conductor Model (`YUMMI_OLLAMA_MODEL`)**:
+   - The conversational conductor and intent classifier always run on local Ollama for zero API cost:
+     - `1) Standard`: `gpt-oss:20b` (Default, runs comfortably on 16 GB+ RAM).
+     - `2) Expert`: `gpt-oss:120b` (High capability, requires 64 GB+ RAM or 80 GB VRAM).
+     - `3) Custom`: Any pulled Ollama model tag with optional custom context length (`YUMMI_OLLAMA_NUM_CTX`, e.g., 131072).
+
+5. **LangGraph Multi-Agent Brain Setup (`brain/`)**:
+   - Optional Python supervisor + specialist multi-agent topology driving the same Kali sandbox and gateway via MCP. Prompts for provider, model name, and API key.
+
+### Persisted Configuration File (`.yummi.conf`)
+
+`make conf` writes out variables in standard shell format:
+```bash
+CONTAINER_ENGINE=docker
+YUMMI_NETWORK_MODE=secure
+YUMMI_LANG=en
+YUMMI_AGENT_BACKEND=eino
+YUMMI_OLLAMA_MODEL=gpt-oss:20b
+YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1
+YUMMI_EINO_MODEL_NAME=anthropic/claude-3.5-sonnet
+YUMMI_EINO_MODEL_API_KEY=sk-or-v1-...
+YUMMI_EINO_PROVIDER=openrouter
+```
+
+---
+
 ## Running the full stack (Docker Compose) <a id="full-stack"></a>
 
 ```bash
@@ -381,7 +439,7 @@ Only needed if you're developing the CLI or orchestrator outside Docker, or want
 ```bash
 make build
 ```
-Builds, in order: `_build-cli` (→ `./bin/yummi`), `_build-ui` (→ `ui/dist`), `_build-orchestrator` (→ `./bin/yummi-orchestrator`), `_build-gateway` (→ `gateway/target/release/yummi-gateway`).
+Builds, in order: `_build-cli` (-> `./bin/yummi`), `_build-ui` (-> `ui/dist`), `_build-orchestrator` (-> `./bin/yummi-orchestrator`), `_build-gateway` (-> `gateway/target/release/yummi-gateway`).
 
 Or individually, for a faster feedback loop while you're only touching one piece:
 ```bash
@@ -411,18 +469,18 @@ doctor: healthy
 
 These are the specific errors people actually hit on a first install, in the order you're likely to hit them.
 
-**`cgo: C compiler "cc" not found`** → You're missing a C compiler. See [the cgo callout](#cgo-requirement) above — this is not optional, and it is not checked automatically before you build.
-
-**`go: go.mod requires go >= 1.24.2`** → Your Go is too old for the *root* module even though it might be new enough for `orchestrator/`. See [the version-skew callout](#go-version-skew).
-
-**`npm ci` fails with `EBADF`, or other file-descriptor errors that don't mention any of your actual code** → Check `node --version` before debugging anything else. See [the Node version callout](#node-version).
-
-**Docker Compose can't reach Ollama; orchestrator logs show a connection failure to `host.docker.internal:11434`** → On Linux, confirm `docker-compose.yml`'s orchestrator service still has the `extra_hosts: ["host.docker.internal:host-gateway"]` entry (it ships with it as of this writing) and that your Docker Engine is ≥ 20.10. On any platform, confirm Ollama is actually running on the host (`curl http://localhost:11434/api/tags` from your host, not from inside a container) before assuming it's a networking problem.
-
-**`docker compose up` fails with a permission error on Linux, right after a fresh Docker install** → You were added to the `docker` group but haven't started a new login session yet. Log out and back in, or run `newgrp docker` in your current shell, then retry.
-
-**Every chat message gets declined with a bilingual "the model is unavailable" reply** → The conductor has no rule-based fallback. `YUMMI_OLLAMA_URL` defaults to empty for a native orchestrator run, so set it explicitly (usually `http://127.0.0.1:11434`). Compose sets `http://host.docker.internal:11434`. Confirm Ollama is running and the configured URL matches where it is listening.
-
-**A pentest command in chat gets refused with something that sounds like "I don't have permission," even for an ordinary target like a public hostname** → This is a **persona/UX issue that has already been fixed** in this repository's prompt design, not a gateway bug — the model is told explicitly not to pre-judge scope and to report a gateway block/approval-pending result factually rather than framing it as its own lack of permission. If you still see this behavior, check whether `persona/v0.1/safety_boundaries.yaml`'s `scope_enforcement` section and `orchestrator/internal/conductor/engine.go`'s `scopeSection` prompt text match what's described in [Security Model](security-model.md#egress-modes) — a stale or hand-edited persona file is the most likely cause.
-
-**Gateway's own egress mode is `block` (the default) and every external target is refused, even though you expected it to just work** → This is fail-closed **by design** — see [Security Model § Egress modes](security-model.md#egress-modes). Set the mode to `allow` or `ask` from the UI's GATEWAY tab, or via `POST /api/v1/gateway/egress-mode`, and remember it **resets to `block` on every gateway restart** — it is not meant to be a "set once" switch.
+**`cgo: C compiler "cc" not found`** -> You're missing a C compiler. See [the cgo callout](#cgo-requirement) above — this is not optional, and it is not checked automatically before you build.
+ 
+**`go: go.mod requires go >= 1.24.2`** -> Your Go is too old for the *root* module even though it might be new enough for `orchestrator/`. See [the version-skew callout](#go-version-skew).
+ 
+**`npm ci` fails with `EBADF`, or other file-descriptor errors that don't mention any of your actual code`** -> Check `node --version` before debugging anything else. See [the Node version callout](#node-version).
+ 
+**Docker Compose can't reach Ollama; orchestrator logs show a connection failure to `host.docker.internal:11434`** -> On Linux, confirm `docker-compose.yml`'s orchestrator service still has the `extra_hosts: ["host.docker.internal:host-gateway"]` entry (it ships with it as of this writing) and that your Docker Engine is >= 20.10. On any platform, confirm Ollama is actually running on the host (`curl http://localhost:11434/api/tags` from your host, not from inside a container) before assuming it's a networking problem.
+ 
+**`docker compose up` fails with a permission error on Linux, right after a fresh Docker install`** -> You were added to the `docker` group but haven't started a new login session yet. Log out and back in, or run `newgrp docker` in your current shell, then retry.
+ 
+**Every chat message gets declined with a bilingual "the model is unavailable" reply`** -> The conductor has no rule-based fallback. `YUMMI_OLLAMA_URL` defaults to empty for a native orchestrator run, so set it explicitly (usually `http://127.0.0.1:11434`). Compose sets `http://host.docker.internal:11434`. Confirm Ollama is running and the configured URL matches where it is listening.
+ 
+**A pentest command in chat gets refused with something that sounds like "I don't have permission," even for an ordinary target like a public hostname`** -> This is a **persona/UX issue that has already been fixed** in this repository's prompt design, not a gateway bug — the model is told explicitly not to pre-judge scope and to report a gateway block/approval-pending result factually rather than framing it as its own lack of permission. If you still see this behavior, check whether `persona/v0.1/safety_boundaries.yaml`'s `scope_enforcement` section and `orchestrator/internal/conductor/engine.go`'s `scopeSection` prompt text match what's described in [Security Model](security-model.md#egress-modes) — a stale or hand-edited persona file is the most likely cause.
+ 
+**Gateway's own egress mode is `block` (the default) and every external target is refused, even though you expected it to just work`** -> This is fail-closed **by design** — see [Security Model § Egress modes](security-model.md#egress-modes). Set the mode to `allow` or `ask` from the UI's GATEWAY tab, or via `POST /api/v1/gateway/egress-mode`, and remember it **resets to `block` on every gateway restart** — it is not meant to be a "set once" switch.

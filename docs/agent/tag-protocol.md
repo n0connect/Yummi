@@ -1,14 +1,14 @@
-← [Back to README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
+<- [Back to README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
 
 # The Tag Protocol
 
-Every message crossing the agent↔LLM boundary carries a tag from a small, closed vocabulary — `orchestrator/internal/agent/protocol.go`'s `Registry` is the single source of truth for all of it, and both the model's own system prompt and the agent's parser are generated from that one list. This page explains why this exists, what the vocabulary actually is, and how the parser stays robust when a model doesn't format its reply perfectly — which, for a small local model, is the normal case, not the exception.
+Every message crossing the agent<->LLM boundary carries a tag from a small, closed vocabulary — `orchestrator/internal/agent/protocol.go`'s `Registry` is the single source of truth for all of it, and both the model's own system prompt and the agent's parser are generated from that one list. This page explains why this exists, what the vocabulary actually is, and how the parser stays robust when a model doesn't format its reply perfectly — which, for a small local model, is the normal case, not the exception.
 
 ## Table of contents
 
 - [Why a closed vocabulary at all](#why-closed-vocabulary)
-- [Agent → LLM: how observations are framed](#agent-to-llm)
-- [LLM → Agent: the control tags](#llm-to-agent)
+- [Agent -> LLM: how observations are framed](#agent-to-llm)
+- [LLM -> Agent: the control tags](#llm-to-agent)
 - [Parsing a reply that isn't perfectly formatted](#robust-parsing)
 - [Extending the protocol](#extending)
 
@@ -18,9 +18,9 @@ Every message crossing the agent↔LLM boundary carries a tag from a small, clos
 
 A tempting simpler design is to just hand the model raw command output and free-form instructions, and let it figure out from context what kind of message it's looking at. That works fine for a frontier model with a huge context window and strong instruction-following. Yummi's design target is explicitly smaller — `qwen3:8b` running locally on an operator's own hardware, no cloud dependency — and a model that size benefits enormously from **the same shape of message always meaning the same thing.** `[TOOL_FAILED]` always means "a command ran but failed, don't repeat it verbatim." `[REPEATED_FAILURE]` always means "several failures in a row, you must genuinely change approach." The model learns this vocabulary once (from `ProtocolReference()`, rendered once into its system prompt) and then every single turn afterward reuses that exact same shared understanding, rather than the model having to re-infer "is this failure output the kind I should retry or the kind I should give up on" from prose that might phrase it slightly differently each time.
 
-## Agent → LLM: how observations are framed <a id="agent-to-llm"></a>
+## Agent -> LLM: how observations are framed <a id="agent-to-llm"></a>
 
-Every message the agent sends *to* the model is wrapped as `[TAG]\n<content>` by `Wrap()`. The full agent→LLM vocabulary, verbatim from the registry:
+Every message the agent sends *to* the model is wrapped as `[TAG]\n<content>` by `Wrap()`. The full agent->LLM vocabulary, verbatim from the registry:
 
 | Tag | Meaning |
 |---|---|
@@ -44,9 +44,9 @@ Every message the agent sends *to* the model is wrapped as `[TAG]\n<content>` by
 
 `UNKNOWN` deserves a specific callout: `Wrap()` degrades to it automatically whenever an unregistered tag name is passed in. This is a deliberate safety net — **the agent can never emit a label the model hasn't been told about**, so the protocol stays genuinely closed even if a future code change introduces a new internal tag string without also registering it. That's a fail-*visible* default (the model is told explicitly "I don't have a better classification for this, you decide"), not a silent swallow.
 
-**Not every recurring signal is a tag.** Budget pressure used to be a one-shot `BUDGET_WARNING` tag fired via `Wrap()` — it was removed because it was declared in the registry and never actually emitted by any node, so the model's own system prompt described a signal it would never receive. Budget-regime guidance (`BUDGET LOW`/`BUDGET CRITICAL`, ratio-based against `StepBudget`) is instead rendered directly into `BuildStepPrompt` every turn, the same way the plan's ○/✓ status and the goal-parts-still-open list already are — a persistent piece of always-current state belongs in the per-turn prompt render, not in a one-shot observation that would only be true for the single turn it fired on.
+**Not every recurring signal is a tag.** Budget pressure used to be a one-shot `BUDGET_WARNING` tag fired via `Wrap()` — it was removed because it was declared in the registry and never actually emitted by any node, so the model's own system prompt described a signal it would never receive. Budget-regime guidance (`BUDGET LOW`/`BUDGET CRITICAL`, ratio-based against `StepBudget`) is instead rendered directly into `BuildStepPrompt` every turn, the same way the plan's [ ]/[x] status and the goal-parts-still-open list already are — a persistent piece of always-current state belongs in the per-turn prompt render, not in a one-shot observation that would only be true for the single turn it fired on.
 
-## LLM → Agent: the control tags <a id="llm-to-agent"></a>
+## LLM -> Agent: the control tags <a id="llm-to-agent"></a>
 
 Every reply the model sends back is expected to begin with one control tag on its own line, followed by a JSON body:
 
@@ -69,13 +69,13 @@ Every reply the model sends back is expected to begin with one control tag on it
 
 `ParseControl()` is layered specifically because small models frequently *don't* lead with a clean `[TAG]`, even when told to:
 
-1. **Preferred path** — a leading `[TAG_NAME]` matching a known LLM→agent tag, followed by its JSON body.
+1. **Preferred path** — a leading `[TAG_NAME]` matching a known LLM->agent tag, followed by its JSON body.
 2. **Tagless JSON fallback** — if no valid tag is found but the reply contains a JSON object, `inferControlTag()` looks at the *shape* of the decoded payload to guess the tag: a non-empty `command` field means `RUN_COMMAND`, a `role`+`subgoal` pair (or a non-empty `handoffs` list) means `HANDOFF`, `key`+`value` means `REMEMBER`, and so on down a fixed precedence order.
 3. **Bare keyword fallback** — a bodiless reply that's just the literal word `STOP_TASK`, `SEND_FULL`, `CONTINUE`, or `ABORT` with no brackets and no JSON at all still parses correctly.
 
 Only if none of these three succeed does parsing return an error — which the caller's retry path handles, not a hard failure of the task. This tolerance is a direct, pragmatic response to how small models actually behave in practice, not a hypothetical robustness feature: a model that's 95% reliable at the exact format still fails the format 1-in-20 times, and without this fallback chain, that 5% would translate directly into wasted retries or stalled tasks rather than the agent just correctly inferring what was obviously meant.
 
-An **unrecognized control tag** (a real `[SOMETHING_MADE_UP]` the model invented) is treated as an error — distinct from `[UNKNOWN]`, which is agent→LLM only and never something the model is expected to send. The model doesn't get a permissive "anything goes" channel back to the agent; it gets exactly the fixed vocabulary above, with graceful shape-inference as a safety net for formatting slips, not an open door for inventing new commands.
+An **unrecognized control tag** (a real `[SOMETHING_MADE_UP]` the model invented) is treated as an error — distinct from `[UNKNOWN]`, which is agent->LLM only and never something the model is expected to send. The model doesn't get a permissive "anything goes" channel back to the agent; it gets exactly the fixed vocabulary above, with graceful shape-inference as a safety net for formatting slips, not an open door for inventing new commands.
 
 ## Extending the protocol <a id="extending"></a>
 
