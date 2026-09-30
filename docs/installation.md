@@ -20,6 +20,7 @@ This guide covers environment prerequisites, container engine compatibility, mod
 - [Windows (WSL2) Setup](#windows)
 - [Ollama Configuration and Model Tiers](#ollama-setup)
   - [Custom Models and Cloud Endpoints](#custom-model)
+- [Pre-Build Configuration Wizard (make conf)](#make-conf)
 - [Running the Full Stack (Docker Compose)](#full-stack)
 - [Building Native Binaries](#native-binaries)
 - [Post-Install Verification](#verifying)
@@ -348,6 +349,63 @@ Or interactively: `make conf` -> model choice -> **Custom** -> type the exact ta
    make brain-run GOAL="Enumerate example.com and report all subdomains, live web endpoints, and potential XSS/SQLi vulnerabilities"
    ```
    See [brain/README.md](../brain/README.md) for full details.
+
+---
+
+## Pre-Build Configuration Wizard (`make conf`) <a id="make-conf"></a>
+
+Before executing `make build` or `make start`, you should run the interactive setup wizard:
+
+```bash
+make conf
+```
+
+`make conf` asks a structured series of questions and persists your decisions to a machine-local, gitignored file: `.yummi.conf`. All subsequent build and start operations automatically inherit these parameters without needing manual environment variables.
+
+### Configuration Decisions Handled by `make conf`:
+
+1. **Container Engine & Network Security Mode**:
+   - `1) OrbStack` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=secure` (recommended on macOS).
+   - `2) Docker Desktop` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=insecure-bridge` (requires typing `I UNDERSTAND` to accept the security trade-off).
+   - `3) Podman` -> `CONTAINER_ENGINE=podman`, `YUMMI_NETWORK_MODE=insecure-bridge`.
+   - `4) Linux native Docker Engine` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=secure` (production default).
+
+2. **UI Display Language (`YUMMI_LANG`)**:
+   - `1) English (en)`
+   - `2) Türkçe (tr)`
+   - **CRITICAL**: The UI language is compiled directly into the React/Vite single-page application at **build time**. It cannot be changed at runtime via an in-app toggle. To switch languages later, run `make conf` and rebuild (`make start` or `make docker-ui`).
+
+3. **Agent Backend Engine (`YUMMI_AGENT_BACKEND`)**:
+   - `1) Graph`: 11-node deterministic state machine using the closed tag protocol (`RUN_COMMAND`, `FINISH`, `HANDOFF`, etc.). Optimized for small local models (`gpt-oss:20b`, `qwen3:8b`).
+   - `2) Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling against larger models running on local Ollama.
+   - `3) Eino Cloud (OpenRouter / OpenAI)`: Cloud frontier models with native tool-calling:
+     - Provider selection: OpenRouter (`https://openrouter.ai/api/v1`), OpenAI (`https://api.openai.com/v1`), or Custom base URL.
+     - Model name: e.g., `anthropic/claude-3.5-sonnet`, `deepseek/deepseek-chat`, `openai/gpt-4o`.
+     - API Key: Hidden input during typing; securely written to `.yummi.conf` (never tracked by git).
+
+4. **Local Intent & Conductor Model (`YUMMI_OLLAMA_MODEL`)**:
+   - The conversational conductor and intent classifier always run on local Ollama for zero API cost:
+     - `1) Standard`: `gpt-oss:20b` (Default, runs comfortably on 16 GB+ RAM).
+     - `2) Expert`: `gpt-oss:120b` (High capability, requires 64 GB+ RAM or 80 GB VRAM).
+     - `3) Custom`: Any pulled Ollama model tag with optional custom context length (`YUMMI_OLLAMA_NUM_CTX`, e.g., 131072).
+
+5. **LangGraph Multi-Agent Brain Setup (`brain/`)**:
+   - Optional Python supervisor + specialist multi-agent topology driving the same Kali sandbox and gateway via MCP. Prompts for provider, model name, and API key.
+
+### Persisted Configuration File (`.yummi.conf`)
+
+`make conf` writes out variables in standard shell format:
+```bash
+CONTAINER_ENGINE=docker
+YUMMI_NETWORK_MODE=secure
+YUMMI_LANG=en
+YUMMI_AGENT_BACKEND=eino
+YUMMI_OLLAMA_MODEL=gpt-oss:20b
+YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1
+YUMMI_EINO_MODEL_NAME=anthropic/claude-3.5-sonnet
+YUMMI_EINO_MODEL_API_KEY=sk-or-v1-...
+YUMMI_EINO_PROVIDER=openrouter
+```
 
 ---
 

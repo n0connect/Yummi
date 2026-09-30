@@ -102,20 +102,40 @@ The [`docs/`](docs/) directory provides comprehensive reference material. Start 
 ## Quick Start
 
 ```bash
-# 1. Setup dev environment & dependencies (Ollama, Go, Rust, Node, Docker)
+# 1. Bootstrap environment & dependencies (Docker, Go, Rust, Node, Ollama)
 make install
 
-# 2. Start the full stack (UI accessible at http://localhost:3000)
+# 2. Interactive setup wizard (CRITICAL: run before building/starting)
+#    Configures container engine, network mode, UI language (EN/TR),
+#    agent backend (Graph vs Eino), model tiers (Ollama vs OpenRouter API key),
+#    and optional LangGraph brain. Persists to gitignored .yummi.conf.
+make conf
+
+# 3. Start the full stack (rebuilds images with your config, serves UI on :3000)
 make start
 ```
 
 Yummi is managed entirely from the web UI at `http://localhost:3000`. The root `yummi` binary (`./bin/yummi`) is a helper for container lifecycle, diagnostics (`./bin/yummi --doctor`), and opening the web UI in an app-style browser window.
 
-### Cloud Models and OpenRouter (Optional)
+### Pre-Build Configuration (`make conf`)
 
-In addition to local Ollama models (`gpt-oss:20b`, `gpt-oss:120b`), frontier models can be configured via OpenRouter:
-- **Eino Backend (Go Orchestrator)**: Set `YUMMI_AGENT_BACKEND=eino`, `YUMMI_EINO_PROVIDER=openrouter`, and provide your `YUMMI_EINO_MODEL_API_KEY`.
-- **LangGraph Multi-Agent Brain (Python)**: Use `brain/` with `YUMMI_BRAIN_MODEL_API_KEY` for a supervisor and specialist multi-agent topology driving the same fail-closed execution substrate. See [brain/README.md](brain/README.md).
+Running `make conf` once writes your setup to a gitignored `.yummi.conf` file in the repo root, so subsequent `make build` and `make start` invocations automatically inherit all settings without repeating flags:
+
+- **Container Engine & Network Mode**:
+  - `OrbStack` (recommended on macOS — native speed, zero network trade-offs)
+  - `Docker Desktop` or `Podman` (enables `insecure-bridge` workaround if needed)
+  - `Linux native Docker Engine` (reference production platform)
+- **UI Display Language (`YUMMI_LANG`)**:
+  - `English (en)` or `Türkçe (tr)`
+  - **Important**: UI language is compiled into the Vite frontend bundle at **build time**. To switch languages later, run `make conf` and restart (`make start`).
+- **Agent Backend Engine (`YUMMI_AGENT_BACKEND`)**:
+  - `Graph`: Deterministic 11-node state machine with closed tag protocol for local/smaller models (`gpt-oss:20b`, `qwen3:8b`).
+  - `Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling on larger local models via Ollama.
+  - `Eino Cloud (OpenRouter / OpenAI)`: Native tool-calling with frontier models (`anthropic/claude-3.5-sonnet`, `deepseek/deepseek-chat`, `openai/gpt-4o`) via OpenRouter or custom OpenAI-compatible endpoints with hidden API key input (`YUMMI_EINO_MODEL_API_KEY`).
+- **Conductor Local Intent Model (`YUMMI_OLLAMA_MODEL`)**:
+  - Chat and intent classification always run on local Ollama for zero cost and low latency: `standard` (`gpt-oss:20b`), `expert` (`gpt-oss:120b`), or `custom` tags with optional context size (`YUMMI_OLLAMA_NUM_CTX`).
+- **LangGraph Multi-Agent Brain (`brain/`)**:
+  - Optional Python multi-agent supervisor topology with OpenRouter/OpenAI API key integration. See [brain/README.md](brain/README.md).
 
 ## Development
 
