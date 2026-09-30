@@ -31,6 +31,17 @@
   border-bottom: 1px solid var(--border-subtle, #2c2c2e);
 }
 
+.report-modal-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.report-modal-logo {
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
 .report-modal-title {
   font-family: var(--font-mono, monospace);
   font-size: 14px;
