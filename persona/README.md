@@ -9,7 +9,7 @@ YAML and JSON configuration files define conductor behavior, the independent age
 ```
 v0.1/
   core_identity.yaml       Who the assistant is — name, role, operating constraints
-  methodology.yaml         How it approaches pentest tasks — recon → exploit → report
+  methodology.yaml         How it approaches pentest tasks — recon -> exploit -> report
   safety_boundaries.yaml   Hard stops — what the assistant will never do
   output_schema.json       JSON schema for conductor ChatResponse validation
   agent.yaml               Agent-task identity and graph-loop instructions
@@ -17,7 +17,7 @@ v0.1/
   subagents/               Specialist roles available to HANDOFF
   tier_capabilities/       Reference docs for each tier's profile (NOT loaded by Go — see note below)
     standard.yaml / expert.yaml
-  golden_tests/            Regression fixtures — input → expected intent
+  golden_tests/            Regression fixtures — input -> expected intent
     *.yaml
 ```
 

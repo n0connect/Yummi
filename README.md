@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red Team agent drives a hardened Kali sandbox with 30 native pentest tools and specialized web/bug bounty playbooks, while a lightweight Rust gateway enforces the documented network policy independently of the model-facing code.
+Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red Team agent drives a hardened Kali sandbox with 39 native pentest tools, 10 specialized sub-agents, and 22 web/bug bounty playbooks, while a lightweight Rust gateway enforces the documented network policy independently of the model-facing code.
 </p>
 
 ---
@@ -35,9 +35,53 @@ Yummi turns natural language into practical security workflows while keeping tra
 - **Fail-Closed Security Trust Boundary** — Network traffic is strictly gated by a dedicated Rust gateway daemon (`nftables`) with default-deny rules installed at kernel startup. The AI agent never touches firewall rules directly.
 - **Local and Frontier Cloud AI Flexibility** — Run 100% locally with Ollama (`gpt-oss:20b`, `gpt-oss:120b`, `qwen3`), or connect frontier reasoning models (Claude 3.5 Sonnet, GPT-4o, DeepSeek-V3) via OpenRouter or any OpenAI-compatible API using the Eino ADK backend or the LangGraph multi-agent `brain/`.
 - **Target-First Web Pentest and Bug Bounty Engine** — One-click asset reconnaissance, subdomain enumeration, live probing, fuzzing, and vulnerability scanning.
-- **30 Sandbox-Resident MCP Tools** — Typed and cataloged tools inside the Kali container: `nmap`, `httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `ffuf`, `gobuster`, `nikto`, `hydra`, `checksec`, `radare2`, plus pure-Go concurrency utilities like `passive_recon_batch` and `consolidate_hosts`.
+- **39 Sandbox-Resident MCP Tools** — 6 typed tools (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`), 31 cataloged tools (`httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `snmpwalk`, `dirb`, `hydra`, `medusa`, `checksec`, `radare2`, `arjun`, `naabu`, `tlsx`, `cloud_enum`, `jwt_tool`, `subzy`, `jsluice`, `graphql_cop`, `corsy`), and 2 concurrency utilities (`consolidate_hosts`, `passive_recon_batch`).
+- **Active Exploit Oracles & Verification** — Deterministic proof validation (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) that verifies vulnerabilities and prevents false positives before reporting.
+- **Attack Surface Management (ASM) & Asset Matrix** — Hierarchical graph tracking domains, subdomains, IPs, ports, endpoints, query parameters, secrets, and cloud storage buckets.
+- **Multi-Format Pentest & Bug Bounty Reporting** — Export findings in HackerOne Markdown, Bugcrowd VRT, Executive Management summaries, and structured JSON.
+- **Proxy & Traffic Ingestion Bridge** — Ingest HTTP/S traffic streams from external interception proxies (Burp Suite, Caido, Mitmproxy) directly into the knowledge graph.
 - **Unified Operator Workspace** — Web-managed interface (port 3000) featuring AI Chat, tmux-backed Web Terminal (Bash), full XFCE/noVNC Graphical Desktop (Burp Suite, Wireshark, Firefox), Trace timeline, live Gateway policy management, and Health monitoring.
-- **Knowledge and Memory System** — Persistent session context, target-scrubbed procedural tactics, structured security findings, 17 specialized attack playbooks, and automated skill drafting with sanitization.
+- **Knowledge and Memory System** — Persistent session context, target-scrubbed procedural tactics, structured security findings, 22 specialized attack playbooks, 10 specialized sub-agents, and automated skill drafting with sanitization.
+
+---
+
+## Architecture Topology
+
+```text
+                        +----------------------+
+       Operator ------->|   ui (React/nginx)   |  :3000
+                        +----------+-----------+
+                                   | /api, /ws (proxied)
+                        +----------v-----------+
+       CLI ------------>|  orchestrator (Go)   |  :9080 (127.0.0.1 only)
+                        |  conductor + agent   |
+                        +----+------------+----+
+                             |            |
+                 IPC Socket  |            | Docker Exec (via docker-proxy)
+        (Length-prefixed)    |            |
+                        +----v-------+    |
+                        | gateway    |    |
+                        | (Rust)     |    |
+                        | nftables   |    |
+                        +----+-------+    |
+                             |            |
+               FORWARD Chain |            |
+                (Allow/Deny) |            |
+                        +----v------------v----+
+                        |    sandbox (Kali)    |  No direct internet route;
+                        |                      |  egress gated by gateway's
+                        |                      |  FORWARD chain.
+                        +----------------------+
+```
+
+Five runtime components collaborate in a fail-closed architecture:
+1. **orchestrator (Go)** — AI conductor, agentic state machine (Graph / Eino), execution store, and REST/WebSocket API.
+2. **gateway (Rust)** — Fail-closed `nftables` policy engine, IP/hostname scope evaluator, and tamper-evident SHA-256 audit log.
+3. **sandbox (Kali Linux)** — Hardened container running 39 pentest MCP tools, tmux shell, and XFCE/noVNC desktop.
+4. **docker-proxy** — Restricts orchestrator access strictly to container exec/inspect operations; denies host Docker daemon management.
+5. **ui (React 18 + Vite)** — Modern, web-only operator surface served via nginx on port 3000.
+
+**[Read the full architecture documentation ->](docs/architecture.md)**
 
 ---
 
@@ -53,40 +97,45 @@ The [`docs/`](docs/) directory provides comprehensive reference material. Start 
 - **[API Reference](docs/api-reference.md)** — Comprehensive REST endpoints, WebSocket streams, and wire schemas
 - **[Development](docs/development.md)** — Fast build loops, running single tests, and dev harnesses
 
-## Architecture Overview
-
-*The AI proposes, the gateway disposes.* Agent commands flow through a single scoped execution path.
-
-<p align="center">
-  <img src="docs/assets/architecture.svg" alt="Yummi trust-boundary flow diagram: orchestrator executes approved commands into sandbox and requests gateway scope over IPC; gateway nftables rules control external network access." width="720">
-</p>
-
-Five runtime components collaborate in a fail-closed architecture:
-1. **orchestrator (Go)** — AI conductor, agentic state machine (Graph / Eino), execution store, and REST/WebSocket API.
-2. **gateway (Rust)** — Fail-closed `nftables` policy engine, IP/hostname scope evaluator, and tamper-evident SHA-256 audit log.
-3. **sandbox (Kali Linux)** — Hardened container running pentest tools, `sandbox-mcp` server, tmux shell, and XFCE/noVNC desktop.
-4. **docker-proxy** — Restricts orchestrator access strictly to container exec/inspect operations; denies host Docker daemon management.
-5. **ui (React 18 + Vite)** — Modern, web-only operator surface served via nginx on port 3000.
-
-**[Read the full architecture documentation ->](docs/architecture.md)**
+---
 
 ## Quick Start
 
 ```bash
-# 1. Setup dev environment & dependencies (Ollama, Go, Rust, Node, Docker)
+# 1. Bootstrap environment & dependencies (Docker, Go, Rust, Node, Ollama)
 make install
 
-# 2. Start the full stack (UI accessible at http://localhost:3000)
+# 2. Interactive setup wizard (CRITICAL: run before building/starting)
+#    Configures container engine, network mode, UI language (EN/TR),
+#    agent backend (Graph vs Eino), model tiers (Ollama vs OpenRouter API key),
+#    and optional LangGraph brain. Persists to gitignored .yummi.conf.
+make conf
+
+# 3. Start the full stack (rebuilds images with your config, serves UI on :3000)
 make start
 ```
 
 Yummi is managed entirely from the web UI at `http://localhost:3000`. The root `yummi` binary (`./bin/yummi`) is a helper for container lifecycle, diagnostics (`./bin/yummi --doctor`), and opening the web UI in an app-style browser window.
 
-### Cloud Models and OpenRouter (Optional)
+### Pre-Build Configuration (`make conf`)
 
-In addition to local Ollama models (`gpt-oss:20b`, `gpt-oss:120b`), frontier models can be configured via OpenRouter:
-- **Eino Backend (Go Orchestrator)**: Set `YUMMI_AGENT_BACKEND=eino`, `YUMMI_EINO_PROVIDER=openrouter`, and provide your `YUMMI_EINO_MODEL_API_KEY`.
-- **LangGraph Multi-Agent Brain (Python)**: Use `brain/` with `YUMMI_BRAIN_MODEL_API_KEY` for a supervisor and specialist multi-agent topology driving the same fail-closed execution substrate. See [brain/README.md](brain/README.md).
+Running `make conf` once writes your setup to a gitignored `.yummi.conf` file in the repo root, so subsequent `make build` and `make start` invocations automatically inherit all settings without repeating flags:
+
+- **Container Engine & Network Mode**:
+  - `OrbStack` (recommended on macOS — native speed, zero network trade-offs)
+  - `Docker Desktop` or `Podman` (enables `insecure-bridge` workaround if needed)
+  - `Linux native Docker Engine` (reference production platform)
+- **UI Display Language (`YUMMI_LANG`)**:
+  - `English (en)` or `Türkçe (tr)`
+  - **Important**: UI language is compiled into the Vite frontend bundle at **build time**. To switch languages later, run `make conf` and restart (`make start`).
+- **Agent Backend Engine (`YUMMI_AGENT_BACKEND`)**:
+  - `Graph`: Deterministic 11-node state machine with closed tag protocol for local/smaller models (`gpt-oss:20b`, `qwen3:8b`).
+  - `Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling on larger local models via Ollama.
+  - `Eino Cloud (OpenRouter / OpenAI)`: Native tool-calling with frontier models (`anthropic/claude-3.5-sonnet`, `deepseek/deepseek-chat`, `openai/gpt-4o`) via OpenRouter or custom OpenAI-compatible endpoints with hidden API key input (`YUMMI_EINO_MODEL_API_KEY`).
+- **Conductor Local Intent Model (`YUMMI_OLLAMA_MODEL`)**:
+  - Chat and intent classification always run on local Ollama for zero cost and low latency: `standard` (`gpt-oss:20b`), `expert` (`gpt-oss:120b`), or `custom` tags with optional context size (`YUMMI_OLLAMA_NUM_CTX`).
+- **LangGraph Multi-Agent Brain (`brain/`)**:
+  - Optional Python multi-agent supervisor topology with OpenRouter/OpenAI API key integration. See [brain/README.md](brain/README.md).
 
 ## Development
 

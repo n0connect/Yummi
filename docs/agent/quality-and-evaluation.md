@@ -1,4 +1,4 @@
-← [Back to README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
+<- [Back to README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
 
 # Agent Quality & Evaluation
 
@@ -8,7 +8,7 @@ Yummi treats an agent transcript as evidence to inspect, not as proof that the t
 
 ### Deterministic persona boundary fixtures
 
-`persona/v0.1/golden_tests/*.yaml` contains small input → expected-intent fixtures. `conductor.EvaluateGoldenFixtures` runs the deterministic boundary policy before an LLM is involved:
+`persona/v0.1/golden_tests/*.yaml` contains small input -> expected-intent fixtures. `conductor.EvaluateGoldenFixtures` runs the deterministic boundary policy before an LLM is involved:
 
 - unrestricted requests such as “scan the internet” must be declined;
 - execution-shaped requests without an explicit host, URL, or file target must ask for clarification;

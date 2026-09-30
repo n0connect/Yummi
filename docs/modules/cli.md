@@ -1,4 +1,4 @@
-← [Back to README](../../README.md) · [Docs index](../README.md)
+<- [Back to README](../../README.md) · [Docs index](../README.md)
 
 # Module: CLI (Go, root module)
 

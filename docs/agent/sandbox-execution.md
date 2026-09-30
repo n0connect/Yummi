@@ -1,111 +1,140 @@
-← [Back to README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
+[Back to Project README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
 
-# Sandbox Execution
+# Sandbox Execution & MCP Tooling
 
-This page traces the single **scheduled command** path used by agent tasks, approved chat proposals, and `POST /sandbox/exec`. The interactive Bash WebSocket is a separate human-driven PTY path and is documented explicitly below.
-
-## Table of contents
-
-- [The invariant, stated precisely](#the-invariant)
-- [The chain, function by function](#the-chain)
-- [What the agent itself is and isn't allowed to touch](#agent-boundary)
-- [The other agent-reachable exec path: the terminal](#terminal-path)
-- [MCP-backed pentest tools (Eino backend only)](#mcp)
-- [Paths that exist but are not agent-controllable](#non-agent-paths)
-- [What actually happens inside the container](#inside-container)
+This document traces the scoped execution pipeline used by agent tasks, approved chat proposals, direct API calls, and the persistent `sandbox-mcp` server inside the Kali container.
 
 ---
 
-## The invariant, stated precisely <a id="the-invariant"></a>
+## Table of Contents
 
-`agent/exec.go` contains **zero** calls to `os/exec` or anything that spawns a process — it only ever calls `execution.Store.Enqueue()`. This is not a convention the agent package happens to follow; it's a structural fact you can verify by grepping the file. Every node in the graph that appears to "run a command" — `tool`, `approval` (which runs the command inline on operator approval), `threat_hold` (which is about a command's *output*, not running a new one) — ultimately goes through this same enqueue-and-drain path, never a direct call.
+- [The Single Execution Pipeline](#pipeline)
+- [Execution Flow & Gateway Trust Boundary](#execution-flow)
+- [The 39 Sandbox MCP Tools](#mcp-tools)
+  - [Tier 1: Individually-Typed Tools](#tier-1)
+  - [Tier 2: Cataloged Pentest Tools](#tier-2)
+  - [Tier 3: Concurrency & Pure-Go Utilities](#tier-3)
+  - [Fallback: Free-Text Command Execution](#fallback)
+- [Target Scope Resolution & Local Tool Exemption](#scope-resolution)
+- [Argv Execution Safety vs Shell Execution](#argv-safety)
+- [Container Execution Constraints](#container-constraints)
 
-## The chain, function by function <a id="the-chain"></a>
+---
 
-```
-agent (any node)
-  → execution.Store.Enqueue(command)                       [orchestrator/internal/execution/store.go]
-  → executor.ProcessFunc drains the queue                    [orchestrator/internal/executor/executor.go]
-  → executor.RunScopedCommand(ctx, bridge, gatewayClient, command)
-      1. scope.ExtractTargets(command)                       [orchestrator/internal/scope/scope.go]
-      2. for every explicit hostname: gateway.CheckHostname() — name-level policy, BEFORE resolution
-      3. resolve and gateway.CheckEgress() every target       →  "allow" | "block" | "needs_approval"
-      4. only if all allow: AddTemporaryRule(ip/32 or /128, ttl=3600s)
-      5. sandbox.Bridge.Exec(ctx, command)
-           → docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"
-```
+## The Single Execution Pipeline <a id="pipeline"></a>
 
-Every step is real code you can read start to finish — there is no step where "and then the agent just runs it" happens outside this sequence. `RunScopedCommand` is, by its own doc comment, the single call path every Go code path that executes a pentest command must go through — both the agent/chat pipeline (`ProcessFunc`, above) and the API's direct-exec endpoint (`POST /api/v1/sandbox/exec`, see [API Reference](../api-reference.md#sandbox)) converge on this exact function. **Gateway is the only component that decides "is this target reachable" — `RunScopedCommand` never makes that decision itself, only asks and obeys the answer**, including a fail-closed `default:` branch for any verdict string it doesn't recognize (see [Security Model § The core invariant](../security-model.md#fail-closed)).
+Core Invariant: **`orchestrator/internal/agent` contains zero calls to `os/exec`. All commands flow through `execution.Store.Enqueue()` and are executed via `executor.RunScopedCommand()`.**
 
-## What the agent itself is and isn't allowed to touch <a id="agent-boundary"></a>
-
-Looking at this chain end to end, notice what the agent package genuinely has no access to:
-
-- It cannot decide a target is in scope — it can only receive `allow`/`block`/`needs_approval` from the gateway via the executor, and `verify.go`'s `Verify()` translates a `GATEWAY_BLOCKED:`-prefixed error string into `OutcomeBlocked` purely by string-prefix matching, not by re-deciding anything.
-- It cannot open its own nftables rule — `AddTemporaryRule` is called by the executor, using a gateway client the agent package has no reference to.
-- It cannot bypass the 10-minute default timeout or the 1 MiB output cap `sandbox.Bridge` enforces (`defaultTimeout`, `maxOutputBytes` in `sandbox/bridge.go`) — a runaway or extremely verbose command is bounded regardless of what the model asked for. The timeout is an operator-configurable ceiling (`YUMMI_SANDBOX_EXEC_TIMEOUT`, `Bridge.SetTimeout`), not something the model itself can raise or lower.
-
-## The other sandbox exec path: the operator terminal <a id="terminal-path"></a>
-
-The [Bash tab](../usage-guide.md#tab-bash)'s interactive terminal (`api/terminal.go`, backing `/ws/terminal`) is the **one other** path that reaches the sandbox. It is `docker exec` under the hood, but unlike `RunScopedCommand` it does not parse each shell line, call `CheckHostname`, or pre-open target rules. Its network packets still traverse gateway's nftables policy. Consequently, hostname-only rules cannot govern terminal commands or opaque targets loaded from files; use the agent/direct-exec path plus `block`/`ask` when that distinction matters.
-
-## MCP-backed pentest tools (Eino backend only) <a id="mcp"></a>
-
-Thirty cataloged pentest tools — twenty-eight wrapping a real pentest program (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`, `amass`, `subfinder`, `theHarvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `wafw00f`, `wpscan`, `nuclei`, `sqlmap`, `hydra`, `medusa`, `dirb`, `snmpwalk`, `httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `checksec`, `radare2`), plus two pure-Go, no-`exec`-at-all tools added for cross-skill recon efficiency — `consolidate_hosts` (merges/de-duplicates/domain-validates multiple hostname-list files, replacing a hand-written shell pipeline) and `passive_recon_batch` (runs subfinder/amass/theHarvester/gau concurrently in one call instead of four sequential ones) — are also reachable through a **second, deliberate** exec pattern: a real MCP server (`sandbox-mcp/`, a standalone Go module built from the [official `modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk), depending on nothing in `orchestrator/`) compiled into the Kali image and reached via a **persistent** `docker exec -i` session — held open, rather than `sandbox.Bridge.Exec`'s one-shot-buffered model. `internal/sandboxmcp.Client` (`orchestrator/internal/sandboxmcp/client.go`) is the orchestrator-side half: it spawns exactly `docker exec -i --user 1000:1000 <container> /usr/local/bin/yummi-sandbox-mcp` and nothing else — locked by `TestSandboxMCPOnlyExecsDocker` in `internal/security/invariants`, the same AST-walking discipline that guards `sandbox.Bridge.Exec`.
-
-This exists specifically for the [Eino backend](overview.md#two-engines) — the tag-protocol graph engine still routes every command through `run_command`/`RunScopedCommand` above, unchanged. Eino's tool strategy has three tiers, cheapest/most-reliable first:
-
-1. **Six individually-typed tools** (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`) — the highest-value, most commonly used tools get a dedicated, fully-declared JSON schema sent to the model's own function-calling API, so the model picks structured arguments (`target`, `ports`, `service_detection`, ...) with API-level enforcement, rather than inventing flags from its own pretrained knowledge.
-2. **Search-then-dispatch for the rest of the catalog** — `search_pentest_tools(query)` calls `sandboxmcp.Client.ListTools()` (the MCP protocol's own `tools/list`, free discovery — the SDK already provides it, it just wasn't being called before this) and returns name + description + JSON schema as text for anything not individually typed; `run_pentest_tool(tool, args, rationale, risk_level)` then dispatches by name through the exact same `runPentestCall` pipeline (validate → gate → mcp-exec → verify) the six typed tools use. This is what lets the catalog grow — new sandbox-mcp tools need zero Eino-side code changes to become reachable, only a schema-declared handler in `sandbox-mcp/` **and** a matching entry in `orchestrator/internal/sandboxmcp/catalog.go` (its `TargetField`/`Render` map — `run_pentest_tool` refuses to dispatch a tool missing from it, since that's also where target-scope extraction comes from; a tool with a genuinely empty `TargetField`, like `consolidate_hosts`, is exempted from needing one at all via `sandboxmcp.NeedsTarget`, see below). The other twenty-four tools reach the model this way (`amass`, `subfinder`, `theHarvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `wafw00f`, `wpscan`, `nuclei`, `sqlmap`, `hydra`, `medusa`, `dirb`, `snmpwalk`, the six modern web/bug-bounty tools added later — `httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox` — `checksec`/`radare2` for binary triage, and the two pure-Go `consolidate_hosts`/`passive_recon_batch`). The trade-off: args for a dispatched tool aren't enforced by the model's own function-calling layer the way a typed tool's are — but the sandbox-mcp server still validates them against its real per-tool JSON schema on arrival, so a malformed call comes back as a clear, retryable error rather than a silent bad shell string.
-3. **`run_command`** — the free-text fallback for anything that isn't a cataloged pentest tool at all (`git`, `find`, `awk`, ...), unchanged from before this feature existed.
-
-Inside the sandbox-resident server, each tool handler execs the real binary **directly with an argv slice** — `exec.Command("nmap", "-sV", target)`, never `bash -lc`. This is strictly safer than the shell-command path for these tools: no metacharacter injection surface at all, by construction.
-
-The same security machinery still applies, reused rather than duplicated:
-
-```
-Eino pentestTool.InvokableRun / runPentestTool.InvokableRun (both call the shared runPentestCall)
-  → conductor.Validator.ValidateChatResponse (risk classification, unchanged)
-  → agent.Gate (ask_permission mode: blocks on operator approval, same StatusAwaitingApproval dance as run_command)
-  → agent.MCPExecer.RunMCPTool → execution.Store.EnqueueMCP(sessionID, tool, args, displayCommand)
-      → executor.ProcessFunc sees Record.MCPTool != "" → processMCP
-          0. sandboxmcp.NeedsTarget(tool) — false for the handful of tools whose catalog entry
-             has no TargetField at all (checksec_audit/radare2_disasm/consolidate_hosts: pure
-             local file analysis/I/O, nothing for the gateway to decide) — these skip straight
-             to step 3, no scope check attempted or skippable-by-choice, since the catalog
-             itself defines them as having no network target to check
-          1. sandboxmcp.Target(tool, args) — for every other tool, the target comes straight
-             from the structured argument (e.g. args["target"]), no scope.ExtractTargets
-             string-parsing needed
-          2. runScopedTarget(ctx, gatewayClient, target, ...) — the SAME checkTargetScope
-             hostname-policy/egress-verdict/rule-opening logic RunScopedCommand's per-target
-             loop uses, extracted into a shared helper so there is one gateway decision path,
-             not two
-          3. sandboxmcp.Client.CallTool(ctx, tool, args) — the actual MCP call, persistent session
-          4. mcpResultToSandboxResult — adapts the MCP CallToolResult into the same *sandbox.Result
-             shape the shell path returns, so output formatting/threatscan/Verify downstream are
-             byte-for-byte the same code either way
+```text
++-----------------------------------------------------------------------------+
+|                         SINGLE EXECUTION PIPELINE                           |
+|                                                                             |
+|   Agent (Graph / Eino) / Chat / API                                         |
+|       |                                                                     |
+|       v                                                                     |
+|   execution.Store.Enqueue()                                                 |
+|       |                                                                     |
+|       v                                                                     |
+|   executor.ProcessFunc                                                      |
+|       |                                                                     |
+|       +---> executor.RunScopedCommand()                                     |
+|               |                                                             |
+|               |-- 1. Extract targets (IP / Hostname)                        |
+|               |-- 2. gateway.CheckHostname() (Pre-resolution policy)        |
+|               |-- 3. gateway.CheckEgress()   (IP routing policy)            |
+|               |-- 4. gateway.AddTemporaryRule() (If verdict == allow)       |
+|               |-- 5. sandbox.Bridge.Exec() / sandboxmcp.Client.CallTool()   |
+|                       |                                                     |
+|                       v                                                     |
+|               Kali Sandbox Container (UID 1000 pentester user)              |
++-----------------------------------------------------------------------------+
 ```
 
-`execution.Record` carries this uniformly: `MCPTool`/`MCPArgs` are two additional optional columns (empty for every shell-command record), while `Command` still holds a human-readable rendering (`sandboxmcp.RenderCommand`, e.g. `"nmap -sV -sC 10.0.0.5 -p 1-1000"`) for the UI, the approval prompt, and the audit trail — an MCP-backed execution looks identical to an operator approving a shell command, right down to the TRACE tab.
+---
 
-## Paths that exist but are not agent-controllable <a id="non-agent-paths"></a>
+## Execution Flow & Gateway Trust Boundary <a id="execution-flow"></a>
 
-For completeness, here's everywhere else `exec.Command` (or equivalent) appears in the codebase, and why none of them expand the agent's own reach:
-
-- **`internal/cli/*`** (root module) — Docker lifecycle management (`make start`/`stop` equivalents) and browser launching for the CLI's default no-subcommand behavior. Purely operator-invoked, from a human running the `yummi` binary directly — never reachable from anything the model outputs.
-- **`internal/mcp/client.go`** — spawns an MCP server process on the host. This package is real and tested, but **not imported by any production code path today** (see [Architecture § What is not in this repository](../architecture.md#not-in-scope)) — it's dormant, not wired into the agent's decision loop, so it currently expands neither the agent's capabilities nor its attack surface. If this ever changes, it would need its own security review before being treated as covered by anything described on this page.
-
-If you're extending this codebase and find yourself writing a new `exec.Command`/`os.StartProcess` call anywhere reachable from agent or LLM output, that is very likely the wrong design by this project's own standing invariant — route it through `executor.RunScopedCommand` instead, or reconsider whether it needs to be agent-reachable at all.
-
-## What actually happens inside the container <a id="inside-container"></a>
-
-`sandbox.Bridge.Exec` shells out to exactly:
-
-```bash
-docker exec --user 1000:1000 yummi-sandbox /bin/bash -lc "<command>"
+```text
+Orchestrator                      Gateway Daemon                     Kali Sandbox
+     |                                  |                                  |
+     |--- 1. CheckHostname(host) ------>|                                  |
+     |<-- 2. Verdict ("allow"/"block") -|                                  |
+     |                                  |                                  |
+     |--- 3. CheckEgress(resolved_ip) ->|                                  |
+     |<-- 4. Verdict ("allow"/"block") -|                                  |
+     |                                  |                                  |
+     |--- 5. AddTemporaryRule(ip/32) -->|                                  |
+     |<-- 6. Rule Added (Expires 1h) ---| (nftables FORWARD open)          |
+     |                                  |                                  |
+     |--- 7. docker exec / MCP Call -------------------------------------->|
+     |                                  |                                  | (Runs tool)
+     |<-- 8. Execution Result (Stdout, Stderr, ExitCode) ------------------|
 ```
 
-- **`--user 1000:1000`** — every command runs as the unprivileged `pentester` user (`sandbox/Dockerfile` creates it at UID/GID 1000), never root, regardless of what the command itself is. `nmap`'s specific need for raw-socket privileges is handled by a targeted `setcap cap_net_admin,cap_net_raw=eip` on the `nmap` binary itself at image build time — a scalpel, not a blanket root grant.
-- **`/bin/bash -lc`** — a login, non-interactive shell for each invocation. There is no persistent shell session across commands; the container's own entrypoint (`sandbox/entrypoint.sh`) sets the default route through gateway, brings up XFCE desktop session, and executes websockify on port 6080 — every single agent command is a fresh `docker exec`, with no state (environment variables set by a previous command, a `cd` into a directory) carrying over between one command and the next unless the sandbox's filesystem itself was changed.
-- **Output is capped while it is being read at 1 MiB per stream** (stdout/stderr independently); excess bytes are discarded and a truncation marker is appended. The whole call has a **10-minute default timeout** (`YUMMI_SANDBOX_EXEC_TIMEOUT` to override). Both are hard limits in `sandbox/bridge.go`, not configurable per-command by the model. A timeout or cancellation produces a structured `Result` (exit code `-1`, descriptive `Stderr`). Because `Exec` is a single blocking call with no incremental UI streaming, `execution.Store.runWithHeartbeat` republishes a "still running" event with elapsed time every few seconds while a command is in flight — see [Architecture § Data flow: a single chat command](../architecture.md#flow-single-command).
+---
+
+## The 39 Sandbox MCP Tools <a id="mcp-tools"></a>
+
+`sandbox-mcp` is a standalone Go MCP server compiled directly into `/usr/local/bin/yummi-sandbox-mcp` inside the Kali container and accessed via persistent stdio over `docker exec -i`.
+
+### Tier 1: Six Individually-Typed Tools <a id="tier-1"></a>
+These tools expose explicit JSON schema parameters directly to the LLM's native function-calling interface:
+
+1. **`nmap_scan`**: Network host discovery, port scanning, service detection, and OS fingerprinting.
+2. **`whatweb_scan`**: Web application technology, CMS, server, and framework fingerprinting.
+3. **`curl_probe`**: HTTP/S request inspection, header extraction, custom methods, and body payloads.
+4. **`gobuster_dir`**: High-speed web directory and file brute-forcing with wordlists.
+5. **`ffuf_fuzz`**: High-performance HTTP fuzzing for directories, parameters, and virtual hosts.
+6. **`nikto_scan`**: Web server vulnerability scanning, misconfiguration detection, and default files.
+
+### Tier 2: 31 Cataloged Pentest Tools <a id="tier-2"></a>
+Dispatched dynamically via `search_pentest_tools` and `run_pentest_tool`:
+
+- **Web & Bug Bounty**: `httpx_probe`, `dnsx_resolve`, `alterx_permute`, `gau_fetch`, `katana_crawl`, `dalfox_xss`, `nuclei_scan`, `wpscan_audit`, `wafw00f_scan`, `arjun_scan`, `corsy_scan`, `graphql_cop_scan`, `jsluice_scan`.
+- **Reconnaissance & OSINT**: `amass_enum`, `subfinder_enum`, `theharvester_search`, `dnsenum_scan`, `naabu_scan`, `tlsx_scan`, `subzy_scan`, `cloud_enum_scan`.
+- **Authentication & Database**: `sqlmap_scan`, `jwt_tool_inspect`, `hydra_bruteforce`, `medusa_bruteforce`.
+- **Infrastructure & Network**: `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_dump`, `dirb_scan`.
+- **Binary Triage & Reverse Engineering**: `checksec_audit`, `radare2_disasm`.
+
+### Tier 3: Concurrency & Pure-Go Utilities <a id="tier-3"></a>
+1. **`consolidate_hosts`**: Merges, deduplicates, and validates multiple host lists without shell pipes.
+2. **`passive_recon_batch`**: Concurrently triggers `subfinder`, `amass`, `theHarvester`, and `gau` in parallel.
+
+### Fallback: Free-Text Command Execution <a id="fallback"></a>
+- **`run_command`**: Free-text shell execution for utilities (`git`, `find`, `awk`, `sed`) that do not wrap a specialized pentest tool.
+
+---
+
+## Target Scope Resolution & Local Tool Exemption <a id="scope-resolution"></a>
+
+```text
+MCP Tool Call Received
+          |
+          v
+   NeedsTarget(tool)?
+     |-- NO  (e.g., checksec_audit, radare2_disasm, jwt_tool_inspect, consolidate_hosts)
+     |     \-- Executes immediately (No network scope required, purely local file analysis)
+     |
+     \-- YES (e.g., nmap_scan, httpx_probe, nuclei_scan, arjun_scan)
+           \-- Extracts target argument -> gateway.CheckHostname & CheckEgress -> Opens nftables rule
+```
+
+---
+
+## Argv Execution Safety vs Shell Execution <a id="argv-safety"></a>
+
+Inside `sandbox-mcp`, tool handlers execute binaries directly using parameter argv slices:
+```go
+exec.Command("nmap", "-sV", target) // Direct kernel execve, zero shell metacharacter injection
+```
+
+Unlike shell execution (`/bin/bash -lc "..."`), direct argv invocation guarantees that argument strings cannot break out of command boundaries via semicolons, pipes, or command substitution operators (`&&`, `||`, `;`, `$()`).
+
+---
+
+## Container Execution Constraints <a id="container-constraints"></a>
+
+- **Non-Root Execution**: Runs strictly as UID 1000 (`pentester`). Capabilities (`NET_RAW`, `NET_ADMIN`) are granted selectively via `setcap` on specific binaries (e.g., `nmap`).
+- **Execution Timeout**: Hard default ceiling of 10 minutes (`YUMMI_SANDBOX_EXEC_TIMEOUT`).
+- **Output Buffering**: Stdout and Stderr are capped at 1 MiB per stream to prevent memory exhaustion.
+- **Fail-Closed Default Route**: Sandbox container network routing directs all egress through the gateway daemon (`172.20.0.2`).

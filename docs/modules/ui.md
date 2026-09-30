@@ -1,8 +1,8 @@
-← [Back to README](../../README.md) · [Docs index](../README.md)
+<- [Back to README](../../README.md) · [Docs index](../README.md)
 
 # Module: ui (React + Vite)
 
-The web dashboard — the only piece of this repository built with Node/npm rather than Go or Rust. Served in production by nginx inside its own container (`ui/Dockerfile`: `node:22-alpine` build stage → `nginx:1.27-alpine` runtime stage), proxying `/api` and `/ws` to orchestrator (`ui/nginx.conf`). See [Usage Guide](../usage-guide.md) for what each tab actually does — this page is the source-tree map.
+The web dashboard — the only piece of this repository built with Node/npm rather than Go or Rust. Served in production by nginx inside its own container (`ui/Dockerfile`: `node:22-alpine` build stage -> `nginx:1.27-alpine` runtime stage), proxying `/api` and `/ws` to orchestrator (`ui/nginx.conf`). See [Usage Guide](../usage-guide.md) for what each tab actually does — this page is the source-tree map.
 
 ## Table of contents
 
@@ -17,20 +17,20 @@ The web dashboard — the only piece of this repository built with Node/npm rath
 
 ```
 ui/src/
-├── app/            App.tsx — top-level routing between the seven tabs (routes past the
-│                   first are React.lazy-loaded behind a Suspense boundary)
-├── entities/       types.ts — shared TypeScript types mirroring orchestrator's JSON shapes
-├── pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/
-├── features/       One directory per data concern: assistant/, chat/, debuglog/, desktop/,
-│                   gateway/, health/, operator/, sessions/, skills/, statusbar/,
-│                   system/, tasks/, terminal/, trace/
-├── shared/         api/http.ts (the one fetch wrapper everything else uses), api/runtime.ts
-│                   (apiURL/websocketURL — see below), i18n/ (strings.ts translation dictionary,
-│                   driven by YUMMI_LANG build time variable), lib/ (operatorText.ts,
-│                   activityPresentation.ts — client-side counterparts of the server's
-│                   model-text sanitization, see Security Model), reusable components
-│                   (StatusBadge, ModuleCard, MetricRow, LogLine), assets
-└── test/           setup.ts — see "the one mock-adjacent file" below (no mocks/ directory exists)
+|-- app/            App.tsx - top-level routing between the seven tabs (routes past the
+|                   first are React.lazy-loaded behind a Suspense boundary)
+|-- entities/       types.ts - shared TypeScript types mirroring orchestrator's JSON shapes
+|-- pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/
+|-- features/       One directory per data concern: assistant/, chat/, debuglog/, desktop/,
+|                   gateway/, health/, operator/, sessions/, skills/, statusbar/,
+|                   system/, tasks/, terminal/, trace/
+|-- shared/         api/http.ts (the one fetch wrapper everything else uses), api/runtime.ts
+|                   (apiURL/websocketURL - see below), i18n/ (strings.ts translation dictionary,
+|                   driven by YUMMI_LANG build time variable), lib/ (operatorText.ts,
+|                   activityPresentation.ts - client-side counterparts of the server's
+|                   model-text sanitization, see Security Model), reusable components
+|                   (StatusBadge, ModuleCard, MetricRow, LogLine), assets
+`-- test/           setup.ts - see "the one mock-adjacent file" below (no mocks/ directory exists)
 ```
 
 nginx serves this tree as a browser SPA (`ui/Dockerfile`) — the only production deployment shape; there is no alternative shell. `shared/api/runtime.ts`'s `apiURL`/`websocketURL` resolve same-origin by default, with an escape hatch (`VITE_YUMMI_API_ORIGIN`) for serving the UI from a different origin than the orchestrator. Every fetch/WebSocket call site in `features/*` goes through those two helpers rather than hardcoding a relative path.

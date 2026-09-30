@@ -1,4 +1,4 @@
-← [Back to README](../../README.md) · [Docs index](../README.md)
+<- [Back to README](../../README.md) · [Docs index](../README.md)
 
 # Module: gateway (Rust)
 
@@ -32,7 +32,7 @@ The order genuinely matters and is worth stating explicitly, since it's the conc
 
 ```
 1. Load config (gateway/config/default.yaml, or --config path)
-2. Install nftables DROP-all rules for the sandbox source IP  ← before step 3
+2. Install nftables DROP-all rules for the sandbox source IP  <- before step 3
 3. Spawn the policy-TTL cleanup, observer, IPC-server, and watchdog tasks
 4. The IPC task binds the Unix socket; the watchdog begins heartbeat/RSS checks
 ```
