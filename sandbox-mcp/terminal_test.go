@@ -177,12 +177,26 @@ func TestTerminal_RejectsInvalidID(t *testing.T) {
 	}
 }
 
-func TestTerminal_DuplicateOpenRejected(t *testing.T) {
+// term_open is deliberately idempotent on an already-live id (see
+// termOpenHandler's doc comment): a client-side retry after a transient
+// transport hiccup — which genuinely happens under real concurrent tool
+// calls sharing one MCP connection — must not turn "I already succeeded"
+// into a hard, unrecoverable error.
+func TestTerminal_DuplicateOpenIsIdempotent(t *testing.T) {
 	skipIfNoTmux(t)
 	ctx := context.Background()
 	id := openTempSession(t, ctx)
-	res, _, _ := termOpenHandler(ctx, nil, termOpenArgs{Label: id})
-	if res == nil || !res.IsError {
-		t.Errorf("expected duplicate open of %q to be rejected", id)
+	res, _, err := termOpenHandler(ctx, nil, termOpenArgs{Label: id})
+	if err != nil {
+		t.Fatalf("handler returned protocol error: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("expected re-opening an already-live id %q to succeed, got error result: %v", id, res)
+	}
+	// The session must still be the SAME live one, still fully usable.
+	res2, _, err := termRunHandler(ctx, nil, termRunArgs{ID: id, Command: "echo still-usable"})
+	out := resultText(t, res2, err)
+	if !strings.Contains(out, "still-usable") {
+		t.Errorf("session should still be usable after a duplicate term_open, got: %q", out)
 	}
 }

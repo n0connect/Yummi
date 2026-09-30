@@ -88,6 +88,24 @@ services:
       dockerfile: sandbox/Dockerfile
     image: yummi/sandbox:local
     command: ["/usr/local/bin/entrypoint.sh"]
+    # entrypoint.sh execs websockify as its final step, making it PID 1 —
+    # websockify is a WebSocket proxy, not an init system, so it never reaps
+    # orphaned child processes (no SIGCHLD/wait() loop). Every `docker exec`
+    # into this container (the agent's own tool execution path, and the
+    # persistent docker-exec-i session internal/sandboxmcp.Client holds open
+    # for the whole orchestrator process lifetime) eventually exits as a
+    # child reparented to PID 1; without a real init, each becomes a
+    # permanent zombie. Found via sustained stress-testing the terminal-
+    # session feature (hundreds of docker exec/tmux cycles): zombies
+    # accumulated until hitting the container's default 512-PID cgroup
+    # ceiling, at which point fork() started failing for EVERYTHING in the
+    # container, not just the new feature — tmux, the agent's shell
+    # commands, all of it. `init: true` asks Docker Compose to inject its
+    # own built-in minimal init (tini) as the REAL PID 1; entrypoint.sh (and
+    # therefore websockify) then runs as its child, and tini reaps every
+    # orphan automatically — the standard, zero-extra-dependency fix for
+    # exactly this class of bug.
+    init: true
     # Resolve names via Cloudflare DNS (not Docker's embedded resolver), so the
     # sandbox and the orchestrator (which resolves the same names through
     # Cloudflare before opening a gateway rule) agree on the target IPs. DNS

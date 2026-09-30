@@ -16,6 +16,9 @@ import (
 // executor.mcpResultToSandboxResult does in production — fmt.Sprint on
 // res.Content prints Go pointer values, not the actual text.
 func textOf(res *mcp.CallToolResult) string {
+	if res == nil {
+		return "<nil result>"
+	}
 	var b strings.Builder
 	for _, c := range res.Content {
 		if tc, ok := c.(*mcp.TextContent); ok {
@@ -56,6 +59,7 @@ func liveContainerUp(t *testing.T) {
 func TestLive_MultiTerminal_FastConcurrentManagement(t *testing.T) {
 	liveContainerUp(t)
 	client := NewClient("yummi-sandbox")
+	t.Cleanup(func() { _ = client.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -79,7 +83,7 @@ func TestLive_MultiTerminal_FastConcurrentManagement(t *testing.T) {
 				return
 			}
 			if res.IsError {
-				errs[i] = fmt.Errorf("term_open error result: %v", res.Content)
+				errs[i] = fmt.Errorf("term_open error result: %s", textOf(res))
 				return
 			}
 			ids[i] = label
