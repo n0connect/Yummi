@@ -1,0 +1,146 @@
+.report-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+}
+
+.report-modal {
+  background: var(--bg-secondary, #1c1c1e);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius-md, 10px);
+  width: 100%;
+  max-width: 800px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.report-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle, #2c2c2e);
+}
+
+.report-modal-title {
+  font-family: var(--font-mono, monospace);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent, #0a84ff);
+  letter-spacing: 0.04em;
+}
+
+.report-modal-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.report-format-select {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.report-format-label {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  font-family: var(--font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.report-btn-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.report-format-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle, #333);
+  color: var(--text-secondary, #ccc);
+  padding: 5px 12px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.report-format-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, #fff);
+}
+
+.report-format-btn.active {
+  background: var(--accent, #0a84ff);
+  border-color: var(--accent, #0a84ff);
+  color: #fff;
+  font-weight: 600;
+}
+
+.report-preview-box {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-subtle, #2c2c2e);
+  border-radius: var(--radius-sm, 6px);
+  padding: 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary, #ddd);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.report-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle, #2c2c2e);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.report-btn-action {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.report-btn-copy {
+  background: transparent;
+  border-color: var(--border, #444);
+  color: var(--text-primary, #fff);
+}
+
+.report-btn-copy:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.report-btn-download {
+  background: var(--accent, #0a84ff);
+  color: #fff;
+}
+
+.report-btn-download:hover {
+  background: #0070df;
+}
