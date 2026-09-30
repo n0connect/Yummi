@@ -189,6 +189,22 @@ func (r *EinoRunner) Handoffs() map[string]agent.Agent {
 	return out
 }
 
+// unknownToolHandler recovers from a model calling a tool name Eino's
+// ToolsNode has no registration for, instead of letting that abort the whole
+// task (see the ToolsNodeConfig wiring above for the incident that motivated
+// this). name is exactly the Function.Name the model emitted; the returned
+// string is fed back as that tool call's own result, so the model sees it on
+// its very next turn like any other tool observation.
+func unknownToolHandler(_ context.Context, name, _ string) (string, error) {
+	return fmt.Sprintf(
+		"UNKNOWN_TOOL: %q is not a directly-callable tool. If it's one of the cataloged "+
+			"sandbox pentest tools, call run_pentest_tool with tool=%q and the matching args "+
+			"instead — do not call %q as a function name. If you're not sure it exists or what "+
+			"arguments it takes, call search_pentest_tools first.",
+		name, name, name,
+	), nil
+}
+
 func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	t, ok := r.store.Get(task.ID)
 	if !ok {
@@ -368,7 +384,23 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 			// UI just showed them. Sequential dispatch keeps tool execution
 			// (and therefore gating) one-at-a-time, honoring Gate's existing
 			// invariant instead of turning it into a multi-slot structure.
-			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools, ExecuteSequentially: true},
+			ToolsNodeConfig: compose.ToolsNodeConfig{
+				Tools: tools, ExecuteSequentially: true,
+				// Without this, a model calling a tool name that isn't
+				// actually registered — confirmed live: DeepSeek, mid-task,
+				// called "nuclei_scan" directly instead of routing it
+				// through run_pentest_tool(tool="nuclei_scan", ...) as its
+				// own catalog-discovery tool requires — hits Eino's
+				// framework-level "tool X not found in toolsNode indexes"
+				// error, which aborts the ENTIRE task rather than letting
+				// the model see its own mistake and self-correct. A single
+				// hallucinated tool name should cost one turn, not the
+				// whole run. This feeds the mistake back as an ordinary
+				// tool result instead, naming the two real recovery paths
+				// (run_pentest_tool for a catalog tool, search_pentest_tools
+				// if the exact name/schema is unknown).
+				UnknownToolsHandler: unknownToolHandler,
+			},
 			// finish/ask_operator are terminal control signals, not tools whose
 			// result should be fed back for another model turn — without this,
 			// the loop only stops once the model itself decides not to call
