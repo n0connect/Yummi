@@ -26,7 +26,7 @@ export function ProxyBridgePanel(): JSX.Element {
         {t('trace.proxy.sources')}
       </div>
       <details style={{ marginTop: '4px' }}>
-        <summary style={{ cursor: 'pointer', color: 'var(--accent, #0a84ff)' }}>Burp / Caido / cURL Ingestion Syntax</summary>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent, #0a84ff)' }}>{t('trace.proxy.syntaxTitle')}</summary>
         <pre className="trace-context-val" style={{ fontSize: '10px' }}>
 {`# Inject live HTTP flow into Yummi ASM:
 curl -X POST http://localhost:9080/api/v1/proxy/inject \\

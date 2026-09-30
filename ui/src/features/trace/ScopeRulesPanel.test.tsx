@@ -47,6 +47,9 @@ describe('ScopeRulesPanel', () => {
 
     render(<ScopeRulesPanel sessionID="s1" />)
 
+    // Precedence notice is rendered
+    expect(screen.getByText(t('trace.scopeRules.precedenceNotice'))).toBeTruthy()
+
     await waitFor(() => {
       expect(screen.getByText('*.example.com')).toBeTruthy()
       expect(screen.getByText('admin.example.com')).toBeTruthy()
@@ -61,6 +64,62 @@ describe('ScopeRulesPanel', () => {
 
     await waitFor(() => {
       expect(screen.getByText(new RegExp(t('trace.scopeRules.inScope')))).toBeTruthy()
+    })
+  })
+
+  it('rejects bare wildcard pattern submission with validation alert', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as Response)
+    )
+
+    render(<ScopeRulesPanel sessionID="s1" />)
+
+    const patternInput = screen.getByPlaceholderText(t('trace.scopeRules.patternPlaceholder'))
+    fireEvent.change(patternInput, { target: { value: '*' } })
+
+    const addBtn = screen.getByRole('button', { name: t('trace.scopeRules.add') })
+    fireEvent.click(addBtn)
+
+    await waitFor(() => {
+      expect(screen.getByText(t('trace.scopeRules.invalidPattern'))).toBeTruthy()
+    })
+  })
+
+  it('handles 1000-character input in live classifier without issue', async () => {
+    const longHostname = 'a'.repeat(980) + '.example.com'
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      const urlStr = String(url)
+      if (urlStr.includes('/scope-rules/classify')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              [longHostname]: {
+                in_scope: false,
+                reason: 'whitelist miss',
+              },
+            }),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as Response)
+    })
+
+    render(<ScopeRulesPanel sessionID="s1" />)
+
+    const testInput = screen.getByPlaceholderText(t('trace.scopeRules.testPlaceholder'))
+    fireEvent.change(testInput, { target: { value: longHostname } })
+
+    const classifyBtn = screen.getByRole('button', { name: t('trace.scopeRules.testButton') })
+    fireEvent.click(classifyBtn)
+
+    await waitFor(() => {
+      expect(screen.getByText(new RegExp(t('trace.scopeRules.outScope')))).toBeTruthy()
     })
   })
 })

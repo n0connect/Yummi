@@ -15,6 +15,7 @@ export function ScopeRulesPanel({ sessionID }: ScopeRulesPanelProps): JSX.Elemen
   const [kind, setKind] = useState<ScopeRuleKind>('include')
   const [note, setNote] = useState<string>('')
   const [submitting, setSubmitting] = useState<boolean>(false)
+  const [ruleError, setRuleError] = useState<string | null>(null)
 
   // Live classifier state
   const [testHost, setTestHost] = useState<string>('')
@@ -39,7 +40,13 @@ export function ScopeRulesPanel({ sessionID }: ScopeRulesPanelProps): JSX.Elemen
 
   const handleAddRule = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!pattern.trim()) return
+    setRuleError(null)
+    const trimmed = pattern.trim()
+    if (!trimmed) return
+    if (trimmed === '*' || trimmed === '*.') {
+      setRuleError(t('trace.scopeRules.invalidPattern'))
+      return
+    }
 
     setSubmitting(true)
     try {
@@ -48,7 +55,7 @@ export function ScopeRulesPanel({ sessionID }: ScopeRulesPanelProps): JSX.Elemen
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pattern: pattern.trim(),
+          pattern: trimmed,
           kind,
           note: note.trim() || undefined,
         }),
@@ -56,8 +63,8 @@ export function ScopeRulesPanel({ sessionID }: ScopeRulesPanelProps): JSX.Elemen
       setPattern('')
       setNote('')
       await loadRules()
-    } catch {
-      // Failed to add rule
+    } catch (err) {
+      setRuleError(err instanceof Error ? err.message : 'Failed to add rule')
     } finally {
       setSubmitting(false)
     }
@@ -130,6 +137,17 @@ export function ScopeRulesPanel({ sessionID }: ScopeRulesPanelProps): JSX.Elemen
         </div>
       )}
 
+      {/* Precedence Notice */}
+      <div className="scope-precedence-notice" style={{ fontSize: '10px', color: 'var(--text-muted, #888)', fontStyle: 'italic', padding: '2px 0' }}>
+        {t('trace.scopeRules.precedenceNotice')}
+      </div>
+
+      {ruleError && (
+        <div className="execution-threat" role="alert" style={{ fontSize: '11px', padding: '4px 8px' }}>
+          {ruleError}
+        </div>
+      )}
+
       {/* Add rule form */}
       <form className="scope-rules-form" onSubmit={handleAddRule}>
         <select
@@ -189,9 +207,11 @@ export function ScopeRulesPanel({ sessionID }: ScopeRulesPanelProps): JSX.Elemen
           {verdict && (
             <span
               className={`scope-verdict-tag ${verdict.in_scope ? 'scope-rule-include' : 'scope-rule-exclude'}`}
+              title={verdict.reason}
             >
               {verdict.in_scope ? t('trace.scopeRules.inScope') : t('trace.scopeRules.outScope')}
               {verdict.matched_rule ? ` (${verdict.matched_rule})` : ''}
+              {verdict.reason ? ` - ${verdict.reason}` : ''}
             </span>
           )}
         </form>
