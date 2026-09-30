@@ -245,6 +245,9 @@ export function ExecutionMessage({
 }): JSX.Element {
   const status = execution.status
   const isActive = ['queued', 'running'].includes(status)
+  const [userToggled, setUserToggled] = useState<boolean | null>(null)
+  const isOpen = userToggled ?? isActive
+
   const visibleOutput =
     execution.output || (content !== execution.error ? content : '')
   const outputView = useMemo(
@@ -290,11 +293,24 @@ export function ExecutionMessage({
       ? t('assistant.completedWithOutput')
       : (statusLabel[status] ?? status)
   return (
-    <details
-      className={`msg msg-execution execution-${status}`}
-      open={isActive}
+    <div
+      className={`msg msg-execution execution-${status}${isOpen ? ' is-open' : ''}`}
+      role="region"
+      aria-expanded={isOpen}
     >
-      <summary className="execution-summary">
+      <div
+        className="execution-summary"
+        role="button"
+        tabIndex={0}
+        onClick={() => setUserToggled(!isOpen)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setUserToggled(!isOpen)
+          }
+        }}
+        aria-label={`${execution.command} (${completedLabel})`}
+      >
         <span className="execution-chevron" aria-hidden="true">›</span>
         {/* Decorative — the adjacent execution-state span already spells out
             the same status as real text, so this glyph is hidden from
@@ -316,8 +332,9 @@ export function ExecutionMessage({
           <code className="execution-cmd">{execution.command}</code>
           <span className="execution-state">{completedLabel}</span>
         </div>
-      </summary>
-      <div className="execution-detail">
+      </div>
+      {isOpen && (
+        <div className="execution-detail">
         {isActive && (
           <div className="execution-live" aria-live="polite">
             <span className="typing-dots" aria-hidden="true">
@@ -385,7 +402,8 @@ export function ExecutionMessage({
           <div className="execution-error">{execution.error}</div>
         )}
       </div>
-    </details>
+      )}
+    </div>
   )
 }
 

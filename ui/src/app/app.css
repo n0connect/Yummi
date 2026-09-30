@@ -803,7 +803,8 @@ body::before {
   border-radius: var(--radius-md); overflow: hidden;
   transition: border-color var(--transition-fast);
 }
-.msg-execution[open] { border-color: var(--border); }
+.msg-execution[open],
+.msg-execution.is-open { border-color: var(--border); }
 .execution-summary {
   display: flex; align-items: center; gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
@@ -811,13 +812,18 @@ body::before {
   transition: background var(--transition-fast);
 }
 .execution-summary:hover { background: var(--wash-soft); }
+.execution-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .execution-summary::-webkit-details-marker { display: none; }
 .execution-chevron {
   color: var(--text-muted); font-size: var(--text-sm); line-height: 1;
   display: inline-block; flex-shrink: 0;
   transition: transform var(--transition-fast);
 }
-.msg-execution[open] .execution-chevron { transform: rotate(90deg); }
+.msg-execution[open] .execution-chevron,
+.msg-execution.is-open .execution-chevron { transform: rotate(90deg); }
 .execution-status {
   font-size: 11px; font-weight: 700; flex-shrink: 0;
   width: 16px; text-align: center;
@@ -834,7 +840,8 @@ body::before {
 .execution-running .execution-state { color: var(--cyan); }
 .execution-queued .execution-state { color: var(--text-tertiary); }
 .execution-detail { border-top: 1px solid var(--border-subtle); }
-.msg-execution[open] .execution-detail { animation: detailReveal 0.22s ease; }
+.msg-execution[open] .execution-detail,
+.msg-execution.is-open .execution-detail { animation: detailReveal 0.22s ease; }
 @keyframes detailReveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* A running command gets exactly one animated affordance in the collapsed
