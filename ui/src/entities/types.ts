@@ -238,6 +238,45 @@ export type Target = {
   created_at?: number
 }
 
+// ─── Attack Surface Management (ASM) & Asset Graph types ────────────────────
+
+export type AssetType =
+  | 'domain'
+  | 'subdomain'
+  | 'ip'
+  | 'port'
+  | 'endpoint'
+  | 'parameter'
+  | 'technology'
+  | 'cloud_bucket'
+  | 'secret'
+  | string
+
+export type AssetNode = {
+  id: string
+  session_id: string
+  parent_id?: string
+  type: AssetType
+  value: string
+  metadata?: Record<string, unknown>
+  created_at: number
+  updated_at?: number
+}
+
+export type AssetTree = AssetNode & {
+  children?: AssetTree[]
+}
+
+export type ReportFormat = 'hackerone' | 'bugcrowd' | 'executive' | 'json'
+
+export type ProxyStatus = {
+  status: string
+  mode: string
+  ca_installed: boolean
+  supported_protocols: string[]
+  supported_sources: string[]
+}
+
 // A structured security finding (from /api/v1/sessions/{id}/findings).
 export type Finding = {
   id: string
