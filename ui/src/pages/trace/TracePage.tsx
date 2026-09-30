@@ -3,6 +3,9 @@ import type { ActivityEvent, ActivityKind, PendingSkill } from '../../entities/t
 import { presentActivity } from '../../shared/lib/activityPresentation'
 import { resolveSessionID, useTraceData } from '../../features/trace/useTraceData'
 import { FindingsPanel } from '../../features/trace/FindingsPanel'
+import { AssetTreePanel } from '../../features/trace/AssetTreePanel'
+import { ReportExportModal } from '../../features/trace/ReportExportModal'
+import { ProxyBridgePanel } from '../../features/trace/ProxyBridgePanel'
 import { usePendingSkills } from '../../features/skills/usePendingSkills'
 import { t } from '../../shared/i18n/strings'
 
@@ -211,9 +214,10 @@ function Section({
 
 export function TracePage(): JSX.Element {
   const [sessionID] = useState(resolveSessionID)
-  const { activity, findings, targets, tactics, context, skills, roles, capabilities, refresh } = useTraceData(sessionID)
+  const { activity, findings, targets, assets, tactics, context, skills, roles, capabilities, refresh } = useTraceData(sessionID)
   const { pending: pendingSkills, rejected: rejectedSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
   const [skillError, setSkillError] = useState<string | null>(null)
+  const [showReportModal, setShowReportModal] = useState<boolean>(false)
 
   async function handleApproveSkill(id: string) {
     setSkillError(null)
@@ -237,6 +241,7 @@ export function TracePage(): JSX.Element {
       <div className="trace-header">
         <span className="trace-page-title">{t('trace.title')}</span>
         <span className="trace-page-sub">{t('trace.subtitle')}</span>
+        <button className="small-button" onClick={() => setShowReportModal(true)}>{t('trace.reports.generate')}</button>
         <button className="small-button" onClick={refresh}>{t('trace.refresh')}</button>
       </div>
 
@@ -269,6 +274,11 @@ export function TracePage(): JSX.Element {
           </div>
           <FindingsPanel findings={findings} targets={targets} />
         </div>
+
+        {/* Attack Surface Management (ASM) & Hierarchical Asset Tree */}
+        <Section title={t('trace.sectionAssets')} count={assets.length}>
+          <AssetTreePanel assets={assets} />
+        </Section>
 
         {/* Procedural memory */}
         <Section title={t('trace.sectionTactics')} count={tactics.length}>
@@ -327,7 +337,16 @@ export function TracePage(): JSX.Element {
             {roles.map(r => <span key={r} className="trace-role">{r}</span>)}
           </div>
         </Section>
+
+        {/* HTTP Proxy Ingestion Bridge */}
+        <Section title={t('trace.proxy.statusTitle')} count={1}>
+          <ProxyBridgePanel />
+        </Section>
       </div>
+
+      {showReportModal && (
+        <ReportExportModal sessionID={sessionID} onClose={() => setShowReportModal(false)} />
+      )}
     </main>
   )
 }

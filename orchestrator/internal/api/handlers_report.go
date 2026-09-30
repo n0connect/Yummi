@@ -81,6 +81,14 @@ func HandleGenerateReport(ks *knowledge.Store, sm *session.Manager) http.Handler
 			return
 		}
 
+		ext := "md"
+		if repFmt == report.FormatJSON {
+			ext = "json"
+		}
+		if r.URL.Query().Get("download") == "true" || r.URL.Query().Get("download") == "1" {
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"pentest-report-%s.%s\"", sessionID, ext))
+		}
+
 		w.Header().Set("Content-Type", contentType)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(out))

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
-  ActivityEvent, AgentCapabilities, Finding, PersistentContext, SkillInfo, Tactic, Target,
+  ActivityEvent, AgentCapabilities, AssetTree, Finding, PersistentContext, SkillInfo, Tactic, Target,
 } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
@@ -19,6 +19,7 @@ export type TraceData = {
   activity: ActivityEvent[]
   findings: Finding[]
   targets: Target[]
+  assets: AssetTree[]
   tactics: Tactic[]
   context: PersistentContext[]
   skills: SkillInfo[]
@@ -33,6 +34,7 @@ export function useTraceData(sessionID: string): TraceData {
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [findings, setFindings] = useState<Finding[]>([])
   const [targets, setTargets]   = useState<Target[]>([])
+  const [assets, setAssets]     = useState<AssetTree[]>([])
   const [tactics, setTactics]   = useState<Tactic[]>([])
   const [context, setContext]   = useState<PersistentContext[]>([])
   const [skills, setSkills]     = useState<SkillInfo[]>([])
@@ -44,6 +46,7 @@ export function useTraceData(sessionID: string): TraceData {
     fetchJSON<ActivityEvent[]>(`/api/v1/sessions/${sid}/activity`).then(d => setActivity(d ?? [])).catch(() => {})
     fetchJSON<Finding[]>(`/api/v1/sessions/${sid}/findings`).then(d => setFindings(d ?? [])).catch(() => {})
     fetchJSON<Target[]>(`/api/v1/sessions/${sid}/targets`).then(d => setTargets(d ?? [])).catch(() => {})
+    fetchJSON<AssetTree[]>(`/api/v1/sessions/${sid}/assets?format=tree`).then(d => setAssets(d ?? [])).catch(() => {})
     fetchJSON<Tactic[]>(`/api/v1/tactics`).then(d => setTactics(d ?? [])).catch(() => {})
     fetchJSON<PersistentContext[]>(`/api/v1/sessions/${sid}/context`).then(d => setContext(d ?? [])).catch(() => {})
     fetchJSON<SkillInfo[]>(`/api/v1/skills`).then(d => setSkills(d ?? [])).catch(() => {})
@@ -63,6 +66,7 @@ export function useTraceData(sessionID: string): TraceData {
     }
     if (ev.kind === 'command_result') {
       fetchJSON<Tactic[]>(`/api/v1/tactics`).then(d => setTactics(d ?? [])).catch(() => {})
+      fetchJSON<AssetTree[]>(`/api/v1/sessions/${ev.session_id}/assets?format=tree`).then(d => setAssets(d ?? [])).catch(() => {})
     }
     if (ev.kind === 'context_saved') {
       fetchJSON<PersistentContext[]>(`/api/v1/sessions/${ev.session_id}/context`).then(d => setContext(d ?? [])).catch(() => {})
@@ -73,5 +77,5 @@ export function useTraceData(sessionID: string): TraceData {
   // explicit resync signal emitted when the bounded server window was lost.
   useChatStream({ sessionID: sessionID || 'default', onActivity, onReconnect: refresh })
 
-  return { activity, findings, targets, tactics, context, skills, roles, capabilities, refresh }
+  return { activity, findings, targets, assets, tactics, context, skills, roles, capabilities, refresh }
 }
