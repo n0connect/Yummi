@@ -13,6 +13,7 @@ import "sync"
 // reply.
 type StreamEvent struct {
 	SessionID string `json:"session_id"`
+	TurnID    string `json:"turn_id"`
 	Delta     string `json:"delta,omitempty"`
 	Done      bool   `json:"done"`
 }
@@ -91,9 +92,9 @@ func (e *Engine) UnsubscribeStream(id int) {
 // publishStream broadcasts a delta (or the terminal done signal) scoped to
 // sessionID. A no-op when sessionID is empty — the session-less Chat() path
 // has no WS audience to scope the event to — or when the engine is nil.
-func (e *Engine) publishStream(sessionID, delta string, done bool) {
+func (e *Engine) publishStream(sessionID, turnID, delta string, done bool) {
 	if e == nil || sessionID == "" {
 		return
 	}
-	e.stream.publish(StreamEvent{SessionID: sessionID, Delta: delta, Done: done})
+	e.stream.publish(StreamEvent{SessionID: sessionID, TurnID: turnID, Delta: delta, Done: done})
 }

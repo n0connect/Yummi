@@ -37,13 +37,13 @@ func recordTaskFindings(ctx context.Context, ks *knowledge.Store, sessionID, tas
 		// ANSI stripped before the threat scan — same ordering as the agent's
 		// own observations (graph.go: StripANSI, then Banner) — so a target
 		// can't use an escape sequence to split a banned phrase past the regex.
-		// sanitizeAgentText (<think> blocks, echoed protocol-tag lines) on top
+		// SanitizeAgentText (<think> blocks, echoed protocol-tag lines) on top
 		// of the existing ANSI strip: these three fields are re-injected into
 		// every future prompt for the session AND served wire-visible via the
 		// Trace tab's findings list, so both defenses belong here.
-		title := sanitizeAgentText(threatscan.StripANSI(d.Title))
-		desc := sanitizeAgentText(threatscan.StripANSI(d.Description))
-		evidence := sanitizeAgentText(threatscan.StripANSI(d.Evidence))
+		title := SanitizeAgentText(threatscan.StripANSI(d.Title))
+		desc := SanitizeAgentText(threatscan.StripANSI(d.Description))
+		evidence := SanitizeAgentText(threatscan.StripANSI(d.Evidence))
 		if msg := threatscan.FirstThreatMessage(title+"\n"+desc+"\n"+evidence, threatscan.ScopeContext); msg != "" {
 			slog.Warn("agent: structured finding blocked by threat scan", "task", taskID, "reason", msg)
 			continue

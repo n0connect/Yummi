@@ -93,6 +93,22 @@ func TestHandleCreateTargetValidation(t *testing.T) {
 		t.Errorf("expected 201 for valid target IP, got %d: %s", w1.Code, w1.Body.String())
 	}
 
+	// Valid URL canonicalized to host
+	reqURL := httptest.NewRequest(http.MethodPost, "/sessions/default/targets", strings.NewReader(`{"value":"https://api.target.com/v1/auth","in_scope":true}`))
+	wURL := httptest.NewRecorder()
+	r.ServeHTTP(wURL, reqURL)
+	if wURL.Code != http.StatusCreated {
+		t.Errorf("expected 201 for URL target, got %d: %s", wURL.Code, wURL.Body.String())
+	}
+
+	// Valid host:port canonicalized to host
+	reqPort := httptest.NewRequest(http.MethodPost, "/sessions/default/targets", strings.NewReader(`{"value":"192.168.1.50:8080","in_scope":true}`))
+	wPort := httptest.NewRecorder()
+	r.ServeHTTP(wPort, reqPort)
+	if wPort.Code != http.StatusCreated {
+		t.Errorf("expected 201 for host:port target, got %d: %s", wPort.Code, wPort.Body.String())
+	}
+
 	// Invalid target IP
 	req2 := httptest.NewRequest(http.MethodPost, "/sessions/default/targets", strings.NewReader(`{"value":"999.999.999.999","in_scope":true}`))
 	w2 := httptest.NewRecorder()

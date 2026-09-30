@@ -11,16 +11,26 @@
 //!
 //! Requires: CAP_NET_ADMIN (set in docker-compose.yml for the gateway service).
 
+use std::collections::HashMap;
 use std::io::Write as IoWrite;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::GatewayConfig;
 use crate::network::NetworkError;
 use crate::policy::rules::EgressMode;
 
 const NFT_BIN: &str = "/usr/sbin/nft";
+
+#[derive(Debug, Clone)]
+pub struct EnforcementStatus {
+    pub rules_active: bool,
+    pub policy_kernel_consistent: bool,
+    pub generation: u64,
+    pub last_error: Option<String>,
+}
 
 /// Generate a random locally-administered, unicast MAC address suitable for
 /// masking a real vendor OUI (e.g. avoiding a recognizable Docker/cloud
@@ -71,6 +81,12 @@ pub struct NftablesController {
     mac_randomization: bool,
     interface: String,
     active: AtomicBool,
+    generation: AtomicU64,
+    last_error: RwLock<Option<String>>,
+    /// Kernel set elements mirrored in userspace so a full atomic mode swap
+    /// can rebuild them instead of silently discarding active approvals.
+    dynamic_targets: RwLock<HashMap<ipnet::IpNet, i64>>,
+    mutation: Mutex<()>,
     /// The controller's OWN copy of the operator egress mode, used purely for
     /// ruleset generation. The IPC handler keeps it in sync with PolicyEngine
     /// by calling both `PolicyEngine::set_egress_mode` and
@@ -92,17 +108,19 @@ impl NftablesController {
             mac_randomization: cfg.network.mac_randomization,
             interface: cfg.network.interface.clone(),
             active: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            last_error: RwLock::new(None),
+            dynamic_targets: RwLock::new(HashMap::new()),
+            mutation: Mutex::new(()),
             egress_mode: RwLock::new(EgressMode::Block),
         }
     }
 
-    /// Set the controller's egress mode and re-apply the kernel ruleset.
-    /// `install_rules()` is idempotent (it deletes + recreates the table), so
-    /// this safely swaps the FORWARD chain to reflect the new mode. The
-    /// fail-closed final drop is preserved in every mode.
+    /// Apply an egress-mode candidate to the kernel, then publish it locally.
+    /// A failed check/apply leaves both the previous kernel table and this
+    /// controller's committed mode untouched.
     pub fn set_egress_mode(&self, m: EgressMode) -> Result<(), NetworkError> {
-        *self.egress_mode.write().unwrap() = m;
-        self.install_rules()
+        self.apply_candidate(m)
     }
 
     /// Install fail-closed FORWARD-chain rules.
@@ -112,14 +130,11 @@ impl NftablesController {
             self.randomize_egress_mac(&self.interface);
         }
 
-        // Atomically replace — delete first (ignore failure if not present).
-        let _ = Command::new(NFT_BIN)
-            .args(["delete", "table", "inet", &self.table_name])
-            .output();
-
-        let ruleset = self.build_ruleset();
-        self.nft_apply(&ruleset)?;
-        self.active.store(true, Ordering::SeqCst);
+        // The delete and recreate commands are submitted as one nft batch.
+        // nf_tables commits a successful batch atomically, so there is no
+        // unfiltered window and a rejected candidate leaves the old table live.
+        let mode = *self.egress_mode.read().unwrap();
+        self.apply_candidate(mode)?;
 
         tracing::info!(
             table = %self.table_name,
@@ -129,6 +144,26 @@ impl NftablesController {
             "nftables FORWARD rules installed (fail-closed)"
         );
         Ok(())
+    }
+
+    /// Periodic desired-state repair. Rebuilds the full table (including
+    /// unexpired dynamic elements) from userspace policy in one transaction.
+    pub fn reconcile(&self, policy_mode: EgressMode) -> Result<(), NetworkError> {
+        self.apply_candidate(policy_mode)
+    }
+
+    pub fn enforcement_status(&self, policy_mode: EgressMode) -> EnforcementStatus {
+        let rules_active = self.rules_active().unwrap_or(false);
+        let controller_mode = *self.egress_mode.read().unwrap();
+        let last_error = self.last_error.read().unwrap().clone();
+        EnforcementStatus {
+            rules_active,
+            policy_kernel_consistent: rules_active
+                && controller_mode == policy_mode
+                && last_error.is_none(),
+            generation: self.generation.load(Ordering::SeqCst),
+            last_error,
+        }
     }
 
     /// Remove the gateway nftables table.
@@ -158,6 +193,37 @@ impl NftablesController {
         let active = out.status.success();
         self.active.store(active, Ordering::SeqCst);
         Ok(active)
+    }
+
+    fn table_exists(&self) -> Result<bool, NetworkError> {
+        let out = Command::new(NFT_BIN)
+            .args(["list", "table", "inet", &self.table_name])
+            .output()
+            .map_err(|e| NetworkError::InstallFailed(format!("nft list table: {e}")))?;
+        Ok(out.status.success())
+    }
+
+    fn apply_candidate(&self, mode: EgressMode) -> Result<(), NetworkError> {
+        let _guard = self.mutation.lock().unwrap();
+        let result: Result<(), NetworkError> = (|| {
+            let script = self.build_replacement_ruleset(self.table_exists()?, mode);
+            self.nft_check(&script)?;
+            self.nft_apply(&script)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                *self.egress_mode.write().unwrap() = mode;
+                self.active.store(true, Ordering::SeqCst);
+                self.generation.fetch_add(1, Ordering::SeqCst);
+                *self.last_error.write().unwrap() = None;
+                Ok(())
+            }
+            Err(err) => {
+                *self.last_error.write().unwrap() = Some(err.to_string());
+                Err(err)
+            }
+        }
     }
 
     /// Best-effort: assign a random locally-administered MAC to the
@@ -202,16 +268,11 @@ impl NftablesController {
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    /// Dynamically add a target CIDR to the allowed_targets set with TTL.
-    ///
-    /// Uses `nft add element` which is atomic and does not flush existing rules.
-    /// The set has `flags interval, timeout` so both host IPs and subnets work.
-    pub fn add_allowed_target(
-        &self,
-        net: &ipnet::IpNet,
-        ttl_secs: u64,
-    ) -> Result<(), NetworkError> {
-        let (element, set_name) = match net {
+    /// Renders the nft set element string and the target set's name for a
+    /// CIDR/host — shared by add_allowed_target and remove_allowed_target so
+    /// the two can never derive different element text for the same input.
+    fn target_element(net: &ipnet::IpNet) -> (String, &'static str) {
+        match net {
             ipnet::IpNet::V4(n) => {
                 let el = if n.prefix_len() == 32 {
                     n.addr().to_string()
@@ -228,7 +289,20 @@ impl NftablesController {
                 };
                 (el, "allowed_targets_v6")
             }
-        };
+        }
+    }
+
+    /// Dynamically add a target CIDR to the allowed_targets set with TTL.
+    ///
+    /// Uses `nft add element` which is atomic and does not flush existing rules.
+    /// The set has `flags interval, timeout` so both host IPs and subnets work.
+    pub fn add_allowed_target(
+        &self,
+        net: &ipnet::IpNet,
+        ttl_secs: u64,
+    ) -> Result<(), NetworkError> {
+        let _guard = self.mutation.lock().unwrap();
+        let (element, set_name) = Self::target_element(net);
 
         let cmd = format!(
             "add element inet {} {} {{ {} timeout {}s }}",
@@ -248,6 +322,64 @@ impl NftablesController {
         }
 
         tracing::info!(target = %element, ttl_secs, "nftables: target added to allowed_targets");
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+            .saturating_add(ttl_secs as i64);
+        self.dynamic_targets
+            .write()
+            .unwrap()
+            .entry(*net)
+            .and_modify(|existing| *existing = (*existing).max(expires_at))
+            .or_insert(expires_at);
+        Ok(())
+    }
+
+    /// Revoke a previously-added target immediately, rather than waiting for
+    /// its `timeout` to elapse on its own. Without this, an operator's
+    /// explicit "remove rule" action only updated the policy engine's own
+    /// bookkeeping — the corresponding kernel-level `allowed_targets`/
+    /// `allowed_targets_v6` set element (installed by add_allowed_target)
+    /// stayed live until its ORIGINAL ttl_secs naturally expired (up to 24h,
+    /// the IPC layer's max), so the target remained reachable from sandbox
+    /// well after the operator believed it was revoked.
+    ///
+    /// `nft delete element` targets a set element by its key alone — the
+    /// `timeout` clause used at insertion time is not part of the key and
+    /// must not be repeated here.
+    pub fn remove_allowed_target(&self, net: &ipnet::IpNet) -> Result<(), NetworkError> {
+        let _guard = self.mutation.lock().unwrap();
+        let (element, set_name) = Self::target_element(net);
+
+        let cmd = format!(
+            "delete element inet {} {} {{ {} }}",
+            self.table_name, set_name, element,
+        );
+
+        let out = Command::new(NFT_BIN)
+            .args(["-e", &cmd])
+            .output()
+            .map_err(|e| NetworkError::InstallFailed(format!("nft delete element: {e}")))?;
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // "no such file or directory" is nft's error for a missing element —
+            // e.g. the element already expired naturally between the operator's
+            // click and this call. Not a real failure: the end state (target not
+            // reachable) is exactly what was requested.
+            if stderr.contains("No such file or directory") {
+                tracing::debug!(target = %element, "nftables: target already absent from allowed_targets");
+                self.dynamic_targets.write().unwrap().remove(net);
+                return Ok(());
+            }
+            return Err(NetworkError::InstallFailed(format!(
+                "nft delete element failed: {stderr}"
+            )));
+        }
+
+        tracing::info!(target = %element, "nftables: target removed from allowed_targets");
+        self.dynamic_targets.write().unwrap().remove(net);
         Ok(())
     }
 
@@ -260,7 +392,21 @@ impl NftablesController {
     ///   4. Static allow list (from config) + dynamic `allowed_targets` set.
     ///   5. Allow DNS (UDP 53) for resolution.
     ///   6. Rate-limited log + DROP for everything else.
+    #[cfg(test)]
     pub(crate) fn build_ruleset(&self) -> String {
+        self.build_ruleset_for(*self.egress_mode.read().unwrap())
+    }
+
+    pub(crate) fn build_replacement_ruleset(&self, table_exists: bool, mode: EgressMode) -> String {
+        let mut script = String::new();
+        if table_exists {
+            script.push_str(&format!("delete table inet {}\n", self.table_name));
+        }
+        script.push_str(&self.build_ruleset_for(mode));
+        script
+    }
+
+    pub(crate) fn build_ruleset_for(&self, mode: EgressMode) -> String {
         let mut s = String::new();
 
         s.push_str(&format!("table inet {} {{\n", self.table_name));
@@ -271,11 +417,13 @@ impl NftablesController {
         s.push_str("  set allowed_targets {\n");
         s.push_str("    type ipv4_addr\n");
         s.push_str("    flags interval, timeout\n");
+        self.render_dynamic_elements(&mut s, false);
         s.push_str("  }\n\n");
 
         s.push_str("  set allowed_targets_v6 {\n");
         s.push_str("    type ipv6_addr\n");
         s.push_str("    flags interval, timeout\n");
+        self.render_dynamic_elements(&mut s, true);
         s.push_str("  }\n\n");
 
         // ── FORWARD chain ──────────────────────────────────────────────────
@@ -331,7 +479,7 @@ impl NftablesController {
         // gateway management API — would stay reachable after switching to
         // Block, since set_egress_mode's install_rules() rebuild is the only
         // thing that can retract a live kernel accept rule.
-        let block_all = *self.egress_mode.read().unwrap() == EgressMode::Block;
+        let block_all = mode == EgressMode::Block;
 
         // Static allow rules from config.
         if !block_all {
@@ -361,7 +509,7 @@ impl NftablesController {
         // always-blocked floor still win) and BEFORE the final fail-closed drop,
         // which is preserved. Block/Ask modes add no blanket accept — Ask relies
         // on per-target @allowed_targets and Block drops everything.
-        if *self.egress_mode.read().unwrap() == EgressMode::Allow && !self.sandbox_ip.is_empty() {
+        if mode == EgressMode::Allow && !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
                 s.push_str(&format!("    ip saddr {ip} accept\n"));
             }
@@ -388,29 +536,64 @@ impl NftablesController {
         s
     }
 
+    fn render_dynamic_elements(&self, out: &mut String, ipv6: bool) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut elements = self
+            .dynamic_targets
+            .read()
+            .unwrap()
+            .iter()
+            .filter_map(|(net, expires_at)| {
+                let is_v6 = matches!(net, ipnet::IpNet::V6(_));
+                if is_v6 != ipv6 || *expires_at <= now {
+                    return None;
+                }
+                let (element, _) = Self::target_element(net);
+                Some(format!("{element} timeout {}s", expires_at - now))
+            })
+            .collect::<Vec<_>>();
+        elements.sort();
+        if !elements.is_empty() {
+            out.push_str(&format!("    elements = {{ {} }}\n", elements.join(", ")));
+        }
+    }
+
     /// Feed a ruleset script to `nft -f -` via stdin.
+    fn nft_check(&self, ruleset: &str) -> Result<(), NetworkError> {
+        self.nft_run(&["-c", "-f", "-"], ruleset, "check")
+    }
+
     fn nft_apply(&self, ruleset: &str) -> Result<(), NetworkError> {
+        self.nft_run(&["-f", "-"], ruleset, "apply")
+    }
+
+    fn nft_run(&self, args: &[&str], ruleset: &str, operation: &str) -> Result<(), NetworkError> {
         let mut child = Command::new(NFT_BIN)
-            .args(["-f", "-"])
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| NetworkError::InstallFailed(format!("spawn nft: {e}")))?;
+            .map_err(|e| NetworkError::InstallFailed(format!("spawn nft {operation}: {e}")))?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(ruleset.as_bytes())
-                .map_err(|e| NetworkError::InstallFailed(format!("write ruleset: {e}")))?;
+            stdin.write_all(ruleset.as_bytes()).map_err(|e| {
+                NetworkError::InstallFailed(format!("write {operation} ruleset: {e}"))
+            })?;
         }
 
         let result = child
             .wait_with_output()
-            .map_err(|e| NetworkError::InstallFailed(format!("nft wait: {e}")))?;
+            .map_err(|e| NetworkError::InstallFailed(format!("nft {operation} wait: {e}")))?;
 
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
-            return Err(NetworkError::InstallFailed(format!("nft: {stderr}")));
+            return Err(NetworkError::InstallFailed(format!(
+                "nft {operation}: {stderr}"
+            )));
         }
         Ok(())
     }
@@ -460,6 +643,40 @@ mod tests {
                 mac_randomization: false,
             },
         }
+    }
+
+    #[test]
+    fn test_replacement_ruleset_deletes_and_recreates_in_one_transaction() {
+        let ctrl = NftablesController::new(&test_config());
+        let script = ctrl.build_replacement_ruleset(true, EgressMode::Block);
+        assert!(script.starts_with("delete table inet yummi_gateway\n"));
+        assert!(script.contains("\ntable inet yummi_gateway {"));
+    }
+
+    #[test]
+    fn test_candidate_mode_render_does_not_publish_unapplied_policy() {
+        let ctrl = NftablesController::new(&test_config());
+        let candidate = ctrl.build_ruleset_for(EgressMode::Allow);
+        assert!(candidate.contains("ip saddr 172.20.0.10 accept"));
+        assert_eq!(*ctrl.egress_mode.read().unwrap(), EgressMode::Block);
+        assert!(!ctrl.build_ruleset().contains("ip saddr 172.20.0.10 accept"));
+    }
+
+    #[test]
+    fn test_mode_rebuild_preserves_unexpired_dynamic_targets() {
+        let ctrl = NftablesController::new(&test_config());
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        ctrl.dynamic_targets
+            .write()
+            .unwrap()
+            .insert("203.0.113.7/32".parse().unwrap(), now + 120);
+
+        let candidate = ctrl.build_ruleset_for(EgressMode::Ask);
+        assert!(candidate.contains("elements = { 203.0.113.7 timeout"));
+        assert!(candidate.contains("ip daddr @allowed_targets accept"));
     }
 
     #[test]
@@ -556,6 +773,31 @@ mod tests {
     fn test_format_mac_produces_colon_separated_hex() {
         let formatted = format_mac([0x02, 0xAB, 0x00, 0x11, 0xFF, 0x9c]);
         assert_eq!(formatted, "02:ab:00:11:ff:9c");
+    }
+
+    // target_element is the shared basis for both add_allowed_target and
+    // remove_allowed_target's `nft` element text — a mismatch here would mean
+    // remove_allowed_target could silently target the WRONG set element and
+    // never actually revoke what add_allowed_target installed. The real `nft`
+    // invocation itself isn't unit-tested (needs root + CAP_NET_ADMIN + a real
+    // nftables-capable kernel — see docs/installation.md's Docker Desktop VM
+    // networking callout), only verified live via `make start`.
+    #[test]
+    fn test_target_element_v4_host_vs_subnet() {
+        let (el, set) = NftablesController::target_element(&"1.2.3.4/32".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("1.2.3.4", "allowed_targets"));
+
+        let (el, set) = NftablesController::target_element(&"10.0.0.0/24".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("10.0.0.0/24", "allowed_targets"));
+    }
+
+    #[test]
+    fn test_target_element_v6_host_vs_subnet() {
+        let (el, set) = NftablesController::target_element(&"2001:db8::1/128".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("2001:db8::1", "allowed_targets_v6"));
+
+        let (el, set) = NftablesController::target_element(&"2001:db8::/32".parse().unwrap());
+        assert_eq!((el.as_str(), set), ("2001:db8::/32", "allowed_targets_v6"));
     }
 
     #[test]

@@ -187,8 +187,16 @@ impl AuditLog {
     }
 
     /// Fetch the most recent `limit` audit rows (oldest first, for chronological
-    /// display) plus whether the full chain currently verifies.
+    /// display) plus whether the full chain currently verifies. `limit` is
+    /// clamped to [1, 1000] (mirrors the orchestrator's own clampLimit) —
+    /// the gateway is the fail-closed authority for its own IPC surface and
+    /// must not trust a caller-supplied limit, not even the well-behaved
+    /// orchestrator client: a limit >= 2^63 cast to i64 for the SQL LIMIT
+    /// parameter would go negative, and SQLite treats a negative LIMIT as
+    /// unbounded — silently returning the entire audit table instead of a
+    /// bounded page.
     pub fn recent_rows(&self, limit: usize) -> Result<(Vec<AuditRow>, bool), AuditError> {
+        let limit = limit.clamp(1, 1000);
         let conn = self.conn.lock().map_err(|_| AuditError::LockPoisoned)?;
         let mut stmt = conn.prepare(
             "SELECT id, timestamp, src_ip, dst_ip, decision, reason
@@ -370,5 +378,33 @@ mod tests {
             "expected the second-most-recent row first (oldest-first ordering)"
         );
         assert_eq!(rows[1].timestamp, 1004, "expected the most recent row last");
+    }
+
+    #[test]
+    fn test_recent_rows_huge_limit_is_clamped_not_unbounded() {
+        // recent_rows casts `limit: usize` to i64 for the SQL LIMIT
+        // parameter. A limit >= 2^63 (representable in usize, e.g. usize::MAX)
+        // wraps to a NEGATIVE i64 — and SQLite treats a negative LIMIT as
+        // "no limit at all", silently returning every row instead of
+        // bounding the result. Not reachable through the Go orchestrator's
+        // own client today (Go's `int` cannot hold a value that large), but
+        // this is the gateway's own IPC boundary — the same "gateway is the
+        // fail-closed authority, never trust the caller" principle the rest
+        // of this codebase follows applies here too, not just to the
+        // well-behaved orchestrator client. A dataset larger than the clamp
+        // is required to actually distinguish "clamped" from "unbounded but
+        // happens to equal the row count" — a small dataset would pass
+        // either way.
+        let log = AuditLog::open(":memory:").expect("open audit log");
+        for i in 0..1200 {
+            log.record_rule_event(1000 + i, "10.0.0.1/32", "rule_added", "[agent] test")
+                .expect("record");
+        }
+        let (rows, _verified) = log.recent_rows(usize::MAX).expect("recent rows");
+        assert!(
+            rows.len() < 1200,
+            "a huge limit must be clamped to a sane maximum, not treated as unbounded (got {} of 1200 rows)",
+            rows.len()
+        );
     }
 }

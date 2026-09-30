@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -283,10 +284,10 @@ func main() {
 
 	var sb strings.Builder
 	sb.WriteString("# Yummi Persona — Semantik Doğrulamalı Test Raporu\n\n")
-	sb.WriteString(fmt.Sprintf("**Model:** `%s`  \n", ollamaModel))
-	sb.WriteString(fmt.Sprintf("**Tier:** `%s`  \n", eng.Tier().Tier))
-	sb.WriteString(fmt.Sprintf("**Tarih:** %s  \n", time.Now().Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("**Toplam Test:** %d\n\n", len(cases)))
+	fmt.Fprintf(&sb, "**Model:** `%s`  \n", ollamaModel)
+	fmt.Fprintf(&sb, "**Tier:** `%s`  \n", eng.Tier().Tier)
+	fmt.Fprintf(&sb, "**Tarih:** %s  \n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&sb, "**Toplam Test:** %d\n\n", len(cases))
 	sb.WriteString("> Bu raporda her testin hem yapısal hem de **semantik** kriterleri kontrol edilir.\n")
 	sb.WriteString("> `wantTool` → komutun doğru araçla başlaması. `bannedTools` → yasak araç tespiti.\n\n")
 	sb.WriteString("---\n\n")
@@ -324,18 +325,9 @@ func main() {
 			}
 
 			// wanted tool check (if specified)
-			if len(tc.wantTool) > 0 {
-				found := false
-				for _, wt := range tc.wantTool {
-					if tool == wt {
-						found = true
-						break
-					}
-				}
-				if !found {
-					failReasons = append(failReasons,
-						fmt.Sprintf("yanlış araç: `%s` (beklenen: %s)", tool, strings.Join(tc.wantTool, " | ")))
-				}
+			if len(tc.wantTool) > 0 && !slices.Contains(tc.wantTool, tool) {
+				failReasons = append(failReasons,
+					fmt.Sprintf("yanlış araç: `%s` (beklenen: %s)", tool, strings.Join(tc.wantTool, " | ")))
 			}
 		}
 
@@ -353,11 +345,11 @@ func main() {
 			var pl strings.Builder
 			for i, p := range resp.Proposals {
 				tool := commandTool(p.Command)
-				pl.WriteString(fmt.Sprintf("\n**Komut %d:** `%s`  \n", i+1, p.Command))
-				pl.WriteString(fmt.Sprintf("**Tool:** `%s` | **Risk:** `%s` | **Onay:** `%v`  \n",
-					tool, p.RiskLevel, p.RequiresApproval))
+				fmt.Fprintf(&pl, "\n**Komut %d:** `%s`  \n", i+1, p.Command)
+				fmt.Fprintf(&pl, "**Tool:** `%s` | **Risk:** `%s` | **Onay:** `%v`  \n",
+					tool, p.RiskLevel, p.RequiresApproval)
 				if p.Rationale != "" {
-					pl.WriteString(fmt.Sprintf("**Gerekçe:** %s  \n", p.Rationale))
+					fmt.Fprintf(&pl, "**Gerekçe:** %s  \n", p.Rationale)
 				}
 			}
 			proposalLines = pl.String()
@@ -370,10 +362,10 @@ func main() {
 
 		rawJSON, _ := json.MarshalIndent(resp, "", "  ")
 
-		sb.WriteString(fmt.Sprintf("## [%s] %s · %s\n\n", tc.id, tc.category, status))
-		sb.WriteString(fmt.Sprintf("**Sorgu:** `%s`  \n", tc.query))
-		sb.WriteString(fmt.Sprintf("**Notlar:** %s  \n", tc.notes))
-		sb.WriteString(fmt.Sprintf("**Süre:** %s  \n\n", elapsed.Round(time.Millisecond)))
+		fmt.Fprintf(&sb, "## [%s] %s · %s\n\n", tc.id, tc.category, status)
+		fmt.Fprintf(&sb, "**Sorgu:** `%s`  \n", tc.query)
+		fmt.Fprintf(&sb, "**Notlar:** %s  \n", tc.notes)
+		fmt.Fprintf(&sb, "**Süre:** %s  \n\n", elapsed.Round(time.Millisecond))
 
 		if len(failReasons) > 0 {
 			sb.WriteString("**Başarısızlık:**\n")
@@ -383,8 +375,8 @@ func main() {
 			sb.WriteString("\n")
 		}
 
-		sb.WriteString(fmt.Sprintf("**Intent:** `%s` | **Confidence:** `%.2f`  \n", resp.Intent, resp.Confidence))
-		sb.WriteString(fmt.Sprintf("**Mesaj:** %s  \n\n", resp.Message))
+		fmt.Fprintf(&sb, "**Intent:** `%s` | **Confidence:** `%.2f`  \n", resp.Intent, resp.Confidence)
+		fmt.Fprintf(&sb, "**Mesaj:** %s  \n\n", resp.Message)
 		sb.WriteString("**Proposals:**  \n" + proposalLines + "\n\n")
 		sb.WriteString("**Uyarılar:** " + warningLines + "\n\n")
 		sb.WriteString("<details><summary>Ham JSON</summary>\n\n```json\n" + string(rawJSON) + "\n```\n\n</details>\n\n")
@@ -396,10 +388,10 @@ func main() {
 
 	sb.WriteString("## Özet\n\n")
 	sb.WriteString("| Metrik | Değer |\n|--------|-------|\n")
-	sb.WriteString(fmt.Sprintf("| Toplam Test | %d |\n", len(cases)))
-	sb.WriteString(fmt.Sprintf("| ✅ Geçti | %d |\n", passed))
-	sb.WriteString(fmt.Sprintf("| ❌ Kaldı | %d |\n", failed))
-	sb.WriteString(fmt.Sprintf("| Başarı Oranı | %.1f%% |\n", float64(passed)/float64(len(cases))*100))
+	fmt.Fprintf(&sb, "| Toplam Test | %d |\n", len(cases))
+	fmt.Fprintf(&sb, "| ✅ Geçti | %d |\n", passed)
+	fmt.Fprintf(&sb, "| ❌ Kaldı | %d |\n", failed)
+	fmt.Fprintf(&sb, "| Başarı Oranı | %.1f%% |\n", float64(passed)/float64(len(cases))*100)
 
 	if err := os.WriteFile(logPath, []byte(sb.String()), 0644); err != nil {
 		log.Fatalf("log yazılamadı: %v", err)

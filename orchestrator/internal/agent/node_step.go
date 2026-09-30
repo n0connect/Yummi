@@ -46,6 +46,19 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 	system := StepSystemPrompt(s.cfg.Persona)
 	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary, s.buildPreamble(ctx, task))
 
+	// NeedsCompression's check above only tracks raw observation bytes added
+	// via AddObservation — it has no visibility into the persona, plan
+	// rendering, or skills/delegation/memory preamble that also ride in
+	// every prompt, nor into the compressed Summary's own weight after a
+	// prior compression pass reset TokensUsed to 0. Recording the actual
+	// prompt size we just built (never shrinking it — a smaller reading here
+	// would just be this turn's Observations being momentarily lower, not
+	// real pressure easing) keeps next turn's compression decision anchored
+	// to what is really being sent, not just the observation-byte proxy.
+	if real := EstimateTokens(system) + EstimateTokens(prompt); real > s.memCtx.TokensUsed {
+		s.memCtx.TokensUsed = real
+	}
+
 	raw, err := s.llm.Chat(ctx, system, prompt)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -109,6 +122,26 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		}
 		return edgeRunCommand, nil
 	case "FINISH":
+		// Premature-FINISH guard: a multi-part goal that decomposed into
+		// several plan steps must not be closed while any of those steps is
+		// still pending/running. The model — regardless of size — will often
+		// answer the first part of a goal and then emit FINISH, and nothing
+		// downstream re-opens the loop. Bounce the first such FINISH back with
+		// an explicit list of the goals it has not addressed yet; if it insists
+		// on FINISH after seeing that list, obey (the remaining work may be
+		// genuinely unreachable). One forced reconsideration, then trust.
+		if s.autoFinishTerminalPlan && s.incompleteFinishNudges < maxIncompleteFinishNudges {
+			if pending := pendingStepDescriptions(task.Plan); len(pending) > 0 &&
+				task.StepBudget-task.StepsUsed >= 2 {
+				s.incompleteFinishNudges++
+				s.lastObs = Wrap("INCOMPLETE_GOALS", fmt.Sprintf(
+					"You attempted to FINISH, but the goal has %d part(s) you have NOT addressed yet:\n%s\n"+
+						"Each is a distinct part of the GOAL. Run a command to complete the next one. "+
+						"Only FINISH once every part is done, or mark a part unreachable with UPDATE_PLAN first.",
+					len(pending), strings.Join(pending, "\n")))
+				return edgeUpdatePlan, nil
+			}
+		}
 		s.finishOutcome = outcomeCompleted
 		s.finishMsg = msg.Action.Summary
 		if s.finishMsg == "" {
@@ -181,6 +214,28 @@ func hasSynthesisEvidence(memory MemoryContext) bool {
 		}
 	}
 	return false
+}
+
+// maxIncompleteFinishNudges bounds how many times stepNode bounces a premature
+// FINISH back to the model before obeying it — one, so a genuinely-unreachable
+// remaining goal never wedges the loop.
+const maxIncompleteFinishNudges = 1
+
+// pendingStepDescriptions returns the human-readable descriptions of plan steps
+// still pending or running — the goals a FINISH would leave unaddressed. Used
+// by the premature-FINISH guard to tell the model exactly what remains.
+func pendingStepDescriptions(plan []PlanStep) []string {
+	var out []string
+	for _, step := range plan {
+		if step.Status == StepPending || step.Status == StepRunning {
+			desc := strings.TrimSpace(step.Description)
+			if desc == "" {
+				desc = strings.TrimSpace(step.ID)
+			}
+			out = append(out, "  - "+desc)
+		}
+	}
+	return out
 }
 
 func planTerminal(plan []PlanStep) bool {

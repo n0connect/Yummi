@@ -51,7 +51,7 @@ if ! command -v ollama &>/dev/null; then
   fi
 fi
 
-OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-qwen3:14b}"
+OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-gpt-oss:20b}"
 # Exact tag match (anchored), not a family-name substring match: a substring
 # match on "qwen3" would treat qwen3:8b as satisfying a request for
 # qwen3:14b (or vice versa), silently skipping the pull of the tag actually

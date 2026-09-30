@@ -271,6 +271,31 @@ func (r *Runner) InterruptDelegation(id string) error {
 	return coordinator.Interrupt(id)
 }
 
+func (r *Runner) Capabilities() BackendCapabilities {
+	if r == nil {
+		return BackendCapabilities{Backend: "graph", ExecutionModel: "graph_state_machine", RecoveryModel: "durable_graph_checkpoint"}
+	}
+	r.mu.Lock()
+	cfg := r.cfg
+	r.mu.Unlock()
+	skillCount := 0
+	if cfg.Skills != nil {
+		skillCount = len(cfg.Skills.All())
+	}
+	retrieval := "disabled"
+	if cfg.Retrieval != nil {
+		retrieval = "configured"
+	}
+	return BackendCapabilities{
+		Backend: "graph", ExecutionModel: "graph_state_machine", RecoveryModel: "durable_graph_checkpoint",
+		Resumable: true, NativeToolCalling: false, ApprovalMode: cfg.ApprovalMode,
+		Roles: r.Roles(), MaxHandoffDepth: 1, MaxConcurrentSubAgents: cfg.MaxConcurrentSubAgents,
+		MemoryEnabled: cfg.Knowledge != nil && cfg.Retrieval != nil, RetrievalModel: retrieval,
+		SkillsEnabled: cfg.Skills != nil, SkillCount: skillCount,
+		SkillGovernance: "versioned_threat_scanned_operator_approved",
+	}
+}
+
 // Run executes a task synchronously, blocking until completion.
 // The task must already be in StatusPlanned or StatusPaused.
 func (r *Runner) Run(ctx context.Context, task *Task) error {
@@ -341,10 +366,71 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 		_ = r.store.Transition(task.ID, StatusFailed, func(t *Task) { t.LastError = perr.Error() })
 		return Task{}, perr
 	}
-	if limit := selectedPlanStepLimit(selectedSkills); limit > 0 && len(steps) > limit {
-		steps = steps[:limit]
+	// Deterministic under-decomposition guard: when the operator's goal
+	// explicitly enumerates N parts ("1) ... 2) ... 3) ...") but the model
+	// produced fewer steps than that, it collapsed multiple requested parts
+	// into one — the exact failure that makes "give it two tasks and it does
+	// one" happen, and it happens at PLANNING time, before the per-step
+	// ledger can help. Re-asking the model was proven insufficient (it
+	// re-collapsed a 3-part goal to 1 step even when explicitly told one step
+	// per part), so decompose deterministically from the operator's own
+	// enumeration markers instead — no model judgment involved. Only fires on
+	// explicitly enumerated goals; a single free-form instruction is never
+	// touched (SplitEnumeratedParts returns nil).
+	enumParts := SplitEnumeratedParts(goal)
+	if len(enumParts) < 2 && LikelyMultiPart(goal) {
+		// No explicit "1) ... 2) ..." markers — this is the common case in
+		// real operator phrasing ("scan X and also check Y", "X'i tara ve
+		// Y'yi kontrol et"), which the marker regex above cannot see at all.
+		// A narrow, separately-scoped audit call catches the same
+		// under-decomposition failure for natural-language multi-part goals
+		// instead of leaving them with zero protection. Gated by
+		// LikelyMultiPart so this extra round-trip is only spent when the
+		// goal actually contains coordinating language — most real goals are
+		// single-intent and must not pay for an audit call that can only
+		// ever come back negative. Best-effort: nil on any failure, so a
+		// single-intent goal (or an LLM hiccup) never adds spurious steps.
+		if audited := AuditGoalParts(ctx, r.llm, goal); len(audited) >= 2 {
+			enumParts = audited
+		}
 	}
-	if err := r.store.Transition(task.ID, StatusPlanned, func(t *Task) { t.Plan = steps }); err != nil {
+	if len(enumParts) > len(steps) {
+		synthesized := make([]PlanStep, len(enumParts))
+		for i, part := range enumParts {
+			synthesized[i] = PlanStep{ID: fmt.Sprintf("s%d", i+1), Description: part, Status: StepPending}
+		}
+		steps = synthesized
+		r.store.RecordActivity(ActivityEvent{
+			SessionID: task.SessionID, TaskID: task.ID, ParentTaskID: parentTaskID,
+			Kind: ActPlan, Summary: fmt.Sprintf("decomposed %d enumerated parts (model gave fewer)", len(enumParts)),
+		})
+	}
+	if limit := selectedPlanStepLimit(selectedSkills); limit > 0 {
+		// A single-technique skill's step cap (e.g. largest-files' plan_step_limit:1)
+		// is meant to keep ONE focused technique from ballooning — it must not
+		// clamp an operator's EXPLICIT multi-part enumeration down below the
+		// number of parts they asked for. Found live: "1) find largest files
+		// 2) count CPUs 3) list users" selected the largest-files skill, whose
+		// limit of 1 silently truncated the correctly-decomposed 3-step plan
+		// back to 1, re-hiding parts 2 and 3. The enumeration count is a hard
+		// floor the skill cap cannot cut beneath.
+		if len(enumParts) > limit {
+			limit = len(enumParts)
+		}
+		if len(steps) > limit {
+			steps = steps[:limit]
+		}
+	}
+	// See agent.ScaledStepBudget's own doc comment for the formula and the
+	// live evidence behind it — shared with the eino backend so a scaling
+	// change only needs to happen once. Folded into the same Transition call
+	// below so stepNode's task.StepBudget is correct from the very first
+	// real step, not just from the second onward.
+	effectiveStepBudget := ScaledStepBudget(r.cfg.StepBudget, len(enumParts))
+	if err := r.store.Transition(task.ID, StatusPlanned, func(t *Task) {
+		t.Plan = steps
+		t.StepBudget = effectiveStepBudget
+	}); err != nil {
 		return Task{}, err
 	}
 	task, _ = r.store.Get(task.ID)
@@ -472,6 +558,17 @@ func (r *Runner) SetApprovalMode(mode ApprovalMode) error {
 		_ = sub.SetApprovalMode(mode)
 	}
 	return nil
+}
+
+// SetTaskAutoApprove flips one task's AutoApproveNonCritical override. A
+// single store.Update call is enough regardless of whether taskID names a
+// top-level task or a sub-agent's — every Runner in this hierarchy (top-level
+// and every sub-agent) shares the SAME *Store instance (wired identically in
+// cmd/orchestrator/main.go), unlike gate.Resolve, which is per-Runner and so
+// Approve above must fan out to every sub-agent's own gate to find the right
+// one.
+func (r *Runner) SetTaskAutoApprove(taskID string, enable bool) error {
+	return r.store.Update(taskID, func(t *Task) { t.AutoApproveNonCritical = enable })
 }
 
 // ResumeRecovered starts top-level tasks that Store startup converted to a

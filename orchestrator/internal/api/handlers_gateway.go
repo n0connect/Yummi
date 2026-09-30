@@ -183,11 +183,16 @@ func HandleGatewayRemoveRule(c *gateway.Client) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "gateway not configured", nil)
 			return
 		}
-		if err := c.RemoveRule(ruleID); err != nil {
+		kernelWarning, err := c.RemoveRule(ruleID)
+		if err != nil {
 			writeError(w, http.StatusBadGateway, "failed to remove rule", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"removed": ruleID})
+		resp := map[string]any{"removed": ruleID}
+		if kernelWarning != "" {
+			resp["kernel_warning"] = kernelWarning
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

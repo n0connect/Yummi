@@ -8,7 +8,6 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"github.com/google/uuid"
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
@@ -74,80 +73,13 @@ func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		defer func() { rc.deps.trace.record(args.Command, result) }()
 	}
 
-	proposal := conductor.Proposal{
-		ID: uuid.NewString(), Command: args.Command,
-		Rationale: args.Rationale, RiskLevel: args.RiskLevel,
-	}
-	validated := rc.validate(proposal)
-	if len(validated.Proposals) == 0 {
-		reason := strings.Join(validated.Warnings, "; ")
-		if reason == "" {
-			reason = "command rejected by validator"
-		}
-		return "COMMAND_BLOCKED: " + reason, nil
-	}
-	p := validated.Proposals[0]
-
-	// Approval is mode-driven, exactly matching graph.go's toolNode: in
-	// ask_permission mode EVERY command gates on the operator; in auto mode
-	// none do.
-	if rc.deps.approvalMode() == agent.ModeAskPermission {
-		verdictCh := rc.deps.gate.Request(rc.deps.taskID, p.ID, p.Command, p.RiskLevel)
-		// Surface the pending gate on the Task itself — mirrors
-		// graph.go's approvalNode. Without this, GET /api/v1/tasks/{id}
-		// (and therefore the UI) has no way to discover that the task
-		// is silently blocked on operator approval: the gate blocks
-		// correctly either way (fail-closed), but invisibly.
-		if rc.deps.store != nil {
-			_ = rc.deps.store.Transition(rc.deps.taskID, agent.StatusAwaitingApproval, func(t *agent.Task) {
-				t.PendingProposalID = p.ID
-				t.PendingCommand = p.Command
-				t.PendingRisk = p.RiskLevel
-			})
-		}
-		v := <-verdictCh
-		if rc.deps.store != nil {
-			_ = rc.deps.store.Transition(rc.deps.taskID, agent.StatusRunning, func(t *agent.Task) {
-				t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
-			})
-		}
-		if !v.Approved {
-			reason := v.Reason
-			if reason == "" {
-				reason = "no reason given"
-			}
-			return fmt.Sprintf("APPROVAL_DENIED: %s — reason: %s. Propose an alternative or call finish.", p.Command, reason), nil
-		}
-	}
-
-	execResult, execErr := rc.deps.exec.Run(ctx, rc.deps.sessionID, p.Command)
-	if execErr != nil {
-		return "", fmt.Errorf("eino run_command: exec: %w", execErr)
-	}
-	execResult.Content = threatscan.StripANSI(execResult.Content)
-	outcome, reason := agent.Verify(execResult)
-	switch outcome {
-	case agent.OutcomeBlocked:
-		return "COMMAND_BLOCKED: " + reason, nil
-	case agent.OutcomeFailure:
-		return fmt.Sprintf("TOOL_FAILED: %s\nreason: %s\n%s", p.Command, reason, execResult.Content), nil
-	}
-	if banner := threatscan.Banner(execResult.Content); banner != "" {
-		// Content-layer fail-closed, mirroring graph.go's observeResult: flag
-		// the banner alongside the output rather than silently trusting it.
-		return banner + "\n\n" + execResult.Content, nil
-	}
-	return execResult.Content, nil
-}
-
-// validate mirrors graph.go's GraphState.validate — a nil validator allows
-// the proposal through unchanged (used in tests / when scope filtering is
-// intentionally disabled).
-func (rc *runCommandTool) validate(p conductor.Proposal) conductor.ChatResponse {
-	if rc.deps.validator == nil {
-		return conductor.ChatResponse{Intent: "suggest_command", Proposals: []conductor.Proposal{p}}
-	}
-	return rc.deps.validator.ValidateChatResponse(conductor.ChatResponse{Intent: "suggest_command", Proposals: []conductor.Proposal{p}})
+	return runToolPipeline(ctx, toolPipelineDeps{
+		store: rc.deps.store, gate: rc.deps.gate, validator: rc.deps.validator,
+		taskID: rc.deps.taskID, approvalMode: rc.deps.approvalMode,
+	}, args.Command, args.Rationale, args.RiskLevel, "eino run_command: exec",
+		func(ctx context.Context, command string) (agent.ToolResult, error) {
+			return rc.deps.exec.Run(ctx, rc.deps.sessionID, command)
+		})
 }
 
 // ── remember ─────────────────────────────────────────────────────────────
@@ -247,8 +179,43 @@ func (at askOperatorTool) InvokableRun(_ context.Context, argumentsInJSON string
 }
 
 type finishArgs struct {
-	Summary  string   `json:"summary"`
-	Findings []string `json:"findings,omitempty"`
+	Summary  string        `json:"summary"`
+	Findings looseFindings `json:"findings,omitempty"`
+}
+
+// looseFindings accepts either the schema's declared shape (a plain array of
+// strings) or an array of richer objects. Live-observed: gpt-oss sometimes
+// answers findings as structured objects (e.g. {"section":"...",
+// "details":[...]}) despite the tool schema declaring findings as
+// array-of-string — a MORE detailed answer than asked for, not a malformed
+// one, and hard-failing the whole finish call over it (the previous
+// behavior: json.Unmarshal into []string errors on the first non-string
+// element) threw away a real, correctly-reasoned result. Falls back to the
+// raw JSON text for any element that isn't a plain string, so richer
+// structure is preserved as readable text instead of being lost.
+type looseFindings []string
+
+func (f *looseFindings) UnmarshalJSON(data []byte) error {
+	var strs []string
+	if err := json.Unmarshal(data, &strs); err == nil {
+		*f = strs
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			out = append(out, s)
+			continue
+		}
+		out = append(out, strings.TrimSpace(string(r)))
+	}
+	*f = out
+	return nil
 }
 
 var finishInfo = &schema.ToolInfo{
@@ -267,10 +234,18 @@ func (finishTool) Info(_ context.Context) (*schema.ToolInfo, error) { return fin
 func (ft finishTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var args finishArgs
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
-		return fmt.Sprintf("invalid tool call arguments: %v", err), nil
+		// A real error here (not a disguised "success" string) — finish is
+		// ReturnDirectly, so a swallowed parse failure previously became the
+		// task's own user-facing Summary verbatim ("invalid tool call
+		// arguments: json: cannot unmarshal..."), live-observed marking a
+		// task StatusCompleted with a raw Go error as its deliverable. An
+		// actual error lets Run()'s existing runErr handling take over
+		// instead — failing the task honestly with this as LastError, which
+		// an operator can act on, rather than a fabricated-looking success.
+		return "", fmt.Errorf("invalid finish tool call arguments: %w", err)
 	}
 	if ft.capture != nil {
-		ft.capture.set(args.Summary, args.Findings)
+		ft.capture.set(args.Summary, []string(args.Findings))
 	}
 	return "task finished", nil
 }

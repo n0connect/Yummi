@@ -154,6 +154,25 @@ type Task struct {
 	PendingProposalID string `json:"pending_proposal_id,omitempty"`
 	PendingCommand    string `json:"pending_command,omitempty"`
 	PendingRisk       string `json:"pending_risk,omitempty"`
-	CreatedAt         int64  `json:"created_at"`
-	UpdatedAt         int64  `json:"updated_at"`
+
+	// AutoApproveNonCritical is an operator-set, per-task override: when
+	// true, a proposal whose risk is anything other than high/critical
+	// (conductor.IsHighSeverity) skips the ask_permission gate and runs
+	// immediately, the same way auto mode would — but "high"/"critical" and
+	// anything destructiveFloor forces (ForceApprovalReason) still always
+	// gate, in EITHER mode. This exists because the runner-wide ApprovalMode
+	// is deliberately NOT something a running task can change (SetApprovalMode's
+	// own doc comment: "tasks already mid-loop keep the mode they were built
+	// with") — an operator watching a long recon task who has seen enough
+	// low/medium-risk proposals to trust the pattern had no way to stop
+	// clicking approve for the rest of THIS task without either tolerating
+	// every future task (SetApprovalMode is global) or missing a genuinely
+	// dangerous step (auto mode has no risk floor at all beyond
+	// ForceApprovalReason). Ephemeral like the Pending* fields above — not a
+	// persist() column — it only needs to survive for the running process's
+	// lifetime, not across a restart.
+	AutoApproveNonCritical bool `json:"auto_approve_non_critical,omitempty"`
+
+	CreatedAt int64 `json:"created_at"`
+	UpdatedAt int64 `json:"updated_at"`
 }

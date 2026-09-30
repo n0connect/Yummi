@@ -7,7 +7,20 @@ import './TerminalPanel.css'
 import { websocketURL } from '../../shared/api/runtime'
 import { t } from '../../shared/i18n/strings'
 
-export function TerminalPanel(): JSX.Element {
+type Props = {
+  // compact drops the Clear button and shrinks the header/font for a small
+  // embedded preview (see MiniSandboxPreview) — same WS connection, same
+  // persistent tmux session as the full Bash tab (multiple simultaneous
+  // `docker exec ... tmux new-session -A -s operator` attaches all mirror
+  // the one session), just less chrome. Not a second, disposable terminal.
+  compact?: boolean
+  // Lets a compact embed (which hides its own header/status dot) still
+  // surface connection state to whatever chrome wraps it, without
+  // duplicating the WS logic that already tracks it here.
+  onConnectedChange?: (connected: boolean) => void
+}
+
+export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -19,9 +32,9 @@ export function TerminalPanel(): JSX.Element {
     if (!containerRef.current) return
 
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: !compact,
       fontFamily: '"Geist Mono", Menlo, Monaco, "Cascadia Code", monospace',
-      fontSize: 12.5,
+      fontSize: compact ? 10 : 12.5,
       lineHeight: 1.35,
       scrollback: 10000,
       theme: {
@@ -122,29 +135,35 @@ export function TerminalPanel(): JSX.Element {
     }
   }, [])
 
+  useEffect(() => {
+    onConnectedChange?.(connected)
+  }, [connected, onConnectedChange])
+
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <span className="panel-header-title">
-          <span
-            className={`dot ${connected ? 'dot-ok' : 'dot-err'}`}
-            title={connected ? t('terminalPanel.connected') : t('terminalPanel.disconnected')}
-            role="status"
-            aria-live="polite"
-            aria-label={connected ? t('terminalPanel.connected') : t('terminalPanel.disconnected')}
-          />
-          {t('terminalPanel.title')}
-        </span>
-        <span className="panel-header-actions">
-          <button
-            className="small-button"
-            onClick={() => termRef.current?.clear()}
-            title={t('terminalPanel.clearTitle')}
-          >
-            {t('terminalPanel.clearLabel')}
-          </button>
-        </span>
-      </div>
+    <section className={`panel ${compact ? 'terminal-panel-compact' : ''}`}>
+      {!compact && (
+        <div className="panel-header">
+          <span className="panel-header-title">
+            <span
+              className={`dot ${connected ? 'dot-ok' : 'dot-err'}`}
+              title={connected ? t('terminalPanel.connected') : t('terminalPanel.disconnected')}
+              role="status"
+              aria-live="polite"
+              aria-label={connected ? t('terminalPanel.connected') : t('terminalPanel.disconnected')}
+            />
+            {t('terminalPanel.title')}
+          </span>
+          <span className="panel-header-actions">
+            <button
+              className="small-button"
+              onClick={() => termRef.current?.clear()}
+              title={t('terminalPanel.clearTitle')}
+            >
+              {t('terminalPanel.clearLabel')}
+            </button>
+          </span>
+        </div>
+      )}
 
       {/* panel-body padding removed so xterm fills the full available area */}
       <div className="panel-body terminal-body" style={{ padding: 0, overflow: 'hidden' }}>

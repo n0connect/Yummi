@@ -197,6 +197,35 @@ async fn handle_connection(
 }
 
 /// Returns true if the peer UID is allowed to execute write operations.
+/// Current wall-clock time in nanoseconds since the Unix epoch, for audit rows.
+/// `unwrap_or(0)` rather than panicking — an audit-timestamp fallback of 0 on a
+/// (practically impossible) pre-epoch clock is preferable to crashing the IPC
+/// handler over a logging field.
+fn now_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0)
+}
+
+/// Early-returns an `IpcResponse::Error` from the enclosing function when the
+/// peer UID is not allowlisted for write operations. A macro (not a function)
+/// because every write-op match arm in `process_request` needs its own early
+/// return out of that function, not out of a helper.
+macro_rules! require_write_auth {
+    ($peer_uid:expr, $allowed_uids:expr, $op:literal) => {
+        if !is_write_authorized($peer_uid, $allowed_uids) {
+            warn!(
+                peer_uid = $peer_uid,
+                concat!($op, " denied: UID not allowlisted")
+            );
+            return IpcResponse::Error {
+                message: "permission denied: UID not allowlisted for write operations".to_string(),
+            };
+        }
+    };
+}
+
 fn is_write_authorized(peer_uid: Option<u32>, allowed_uids: &[u32]) -> bool {
     if allowed_uids.is_empty() {
         return true; // no restriction configured
@@ -242,10 +271,7 @@ fn process_request(
             // them, and an allowed scope check makes no security decision worth
             // a row.
             if verdict != EgressVerdict::Allow {
-                let now_ns = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as i64)
-                    .unwrap_or(0);
+                let now_ns = now_ns();
                 if let Err(e) = audit.record_decision(
                     now_ns,
                     None,
@@ -273,11 +299,20 @@ fn process_request(
         // startup if `install_rules()` fails, so by the time the IPC socket
         // is even listening, the fail-closed FORWARD rules are installed.
         // `uptime_secs` is real elapsed process time, not a stub.
-        IpcRequest::GetStatus => IpcResponse::Status {
-            level: 0,
-            rules_active: true,
-            uptime_secs: started_at.elapsed().as_secs(),
-        },
+        IpcRequest::GetStatus => {
+            let enforcement = ctrl.map(|c| c.enforcement_status(policy.egress_mode()));
+            IpcResponse::Status {
+                level: 0,
+                rules_active: enforcement.as_ref().map(|s| s.rules_active).unwrap_or(true),
+                uptime_secs: started_at.elapsed().as_secs(),
+                policy_kernel_consistent: enforcement
+                    .as_ref()
+                    .map(|s| s.policy_kernel_consistent)
+                    .unwrap_or(true),
+                enforcement_generation: enforcement.as_ref().map(|s| s.generation).unwrap_or(0),
+                last_reconcile_error: enforcement.and_then(|s| s.last_error),
+            }
+        }
         IpcRequest::Ping => IpcResponse::Pong,
 
         IpcRequest::ListRules => {
@@ -334,10 +369,7 @@ fn process_request(
             // hostname policy" event — record it in the tamper-evident chain
             // (the orchestrator enforces it by not resolving/running the name).
             if verdict == crate::policy::hostname::HostnameVerdict::Block {
-                let now_ns = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as i64)
-                    .unwrap_or(0);
+                let now_ns = now_ns();
                 if let Err(e) = audit.record_decision(
                     now_ns,
                     None,
@@ -368,13 +400,7 @@ fn process_request(
             ttl_secs,
             description,
         } => {
-            if !is_write_authorized(peer_uid, allowed_uids) {
-                warn!(peer_uid, "AddTemporaryRule denied: UID not allowlisted");
-                return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations"
-                        .to_string(),
-                };
-            }
+            require_write_auth!(peer_uid, allowed_uids, "AddTemporaryRule");
             if network.len() > 45 {
                 return IpcResponse::Error {
                     message: "network CIDR string too long".to_string(),
@@ -395,24 +421,21 @@ fn process_request(
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
                     let desc = description.unwrap_or_else(|| format!("Temporary rule: {network}"));
+                    // Kernel first, policy commit second. A failed nftables
+                    // mutation must not publish an allow decision that the
+                    // packet filter did not actually install.
+                    if let Some(c) = ctrl {
+                        if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
+                            warn!(network = %network, error = %e, "nftables target unlock failed; policy change aborted");
+                            return IpcResponse::Error {
+                                message: format!("nftables rejected target unlock for {network}; policy was not changed: {e}"),
+                            };
+                        }
+                    }
                     let (rule_id, expires_at) =
                         policy.add_temporary_allow(net, ttl_secs, desc.clone());
 
-                    // Also unlock at the nftables kernel level so sandbox's packets actually reach the target.
-                    let mut kernel_warning = None;
-                    if let Some(c) = ctrl {
-                        if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
-                            warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
-                            kernel_warning = Some(format!(
-                                "policy rule added but the nftables kernel unlock for {network} failed ({e}) — sandbox traffic to this target is still dropped"
-                            ));
-                        }
-                    }
-
-                    let now_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as i64;
+                    let now_ns = now_ns();
                     if let Err(e) = audit.record_rule_event(
                         now_ns,
                         &network,
@@ -425,7 +448,7 @@ fn process_request(
                     IpcResponse::RuleAdded {
                         rule_id,
                         expires_at,
-                        kernel_warning,
+                        kernel_warning: None,
                     }
                 }
                 Err(_) => IpcResponse::Error {
@@ -434,29 +457,45 @@ fn process_request(
             }
         }
         IpcRequest::RemoveRule { rule_id } => {
-            if !is_write_authorized(peer_uid, allowed_uids) {
-                warn!(peer_uid, "RemoveRule denied: UID not allowlisted");
-                return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations"
-                        .to_string(),
-                };
-            }
+            require_write_auth!(peer_uid, allowed_uids, "RemoveRule");
             if rule_id.len() > 64 {
                 return IpcResponse::Error {
                     message: "rule_id exceeds maximum limit (64)".to_string(),
                 };
             }
-            if policy.remove_rule(&rule_id) {
-                let now_ns = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos() as i64;
+            if let Some(candidate) = policy.list_rules().into_iter().find(|r| {
+                r.id == rule_id && r.action == RuleAction::Allow && r.source != RuleSource::Config
+            }) {
+                // Revoke in the kernel before committing the policy removal.
+                // If another active rule shares the same set element, retain
+                // it; the kernel key represents the network, not the rule ID.
+                let shared_network = policy.list_rules().iter().any(|r| {
+                    r.id != rule_id
+                        && r.action == RuleAction::Allow
+                        && r.network == candidate.network
+                });
+                if let Some(c) = ctrl {
+                    if !shared_network {
+                        if let Err(e) = c.remove_allowed_target(&candidate.network) {
+                            warn!(network = %candidate.network, error = %e, "nftables target revoke failed; policy removal aborted");
+                            return IpcResponse::Error {
+                                message: format!("nftables rejected rule revocation; policy was not changed: {e}"),
+                            };
+                        }
+                    }
+                }
+                let _ = policy.remove_rule(&rule_id);
+
+                let now_ns = now_ns();
                 if let Err(e) =
                     audit.record_rule_event(now_ns, &rule_id, "rule_removed", "[removed]")
                 {
                     warn!(error = %e, "failed to audit rule removal (removal itself succeeded)");
                 }
-                IpcResponse::RuleRemoved { rule_id }
+                IpcResponse::RuleRemoved {
+                    rule_id,
+                    kernel_warning: None,
+                }
             } else {
                 IpcResponse::Error {
                     message: format!("rule not found: {rule_id}"),
@@ -470,13 +509,7 @@ fn process_request(
             ttl_secs,
             reason,
         } => {
-            if !is_write_authorized(peer_uid, allowed_uids) {
-                warn!(peer_uid, "AddManualRule denied: UID not allowlisted");
-                return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations"
-                        .to_string(),
-                };
-            }
+            require_write_auth!(peer_uid, allowed_uids, "AddManualRule");
             if network.len() > 45 {
                 return IpcResponse::Error {
                     message: "network CIDR string too long".to_string(),
@@ -499,21 +532,17 @@ fn process_request(
             }
             match network.parse::<ipnet::IpNet>() {
                 Ok(net) => {
-                    let (rule_id, expires_at) =
-                        policy.add_manual_allow(net, ttl_secs, reason.clone());
-                    let mut kernel_warning = None;
                     if let Some(c) = ctrl {
                         if let Err(e) = c.add_allowed_target(&net, ttl_secs) {
-                            warn!(network = %network, error = %e, "nftables target unlock failed (policy added, kernel rule skipped)");
-                            kernel_warning = Some(format!(
-                                "policy rule added but the nftables kernel unlock for {network} failed ({e}) — sandbox traffic to this target is still dropped"
-                            ));
+                            warn!(network = %network, error = %e, "nftables manual unlock failed; policy change aborted");
+                            return IpcResponse::Error {
+                                message: format!("nftables rejected manual target unlock for {network}; policy was not changed: {e}"),
+                            };
                         }
                     }
-                    let now_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as i64;
+                    let (rule_id, expires_at) =
+                        policy.add_manual_allow(net, ttl_secs, reason.clone());
+                    let now_ns = now_ns();
                     if let Err(e) = audit.record_rule_event(
                         now_ns,
                         &network,
@@ -525,7 +554,7 @@ fn process_request(
                     IpcResponse::RuleAdded {
                         rule_id,
                         expires_at,
-                        kernel_warning,
+                        kernel_warning: None,
                     }
                 }
                 Err(_) => IpcResponse::Error {
@@ -536,13 +565,7 @@ fn process_request(
 
         // ── Write op — requires allowlisted UID ───────────────────────────
         IpcRequest::SetEgressMode { mode } => {
-            if !is_write_authorized(peer_uid, allowed_uids) {
-                warn!(peer_uid, "SetEgressMode denied: UID not allowlisted");
-                return IpcResponse::Error {
-                    message: "permission denied: UID not allowlisted for write operations"
-                        .to_string(),
-                };
-            }
+            require_write_auth!(peer_uid, allowed_uids, "SetEgressMode");
             if mode.len() > 10 {
                 return IpcResponse::Error {
                     message: "egress mode too long".to_string(),
@@ -556,21 +579,21 @@ fn process_request(
                     };
                 }
             };
-            // Update the policy engine first, then re-apply the kernel ruleset so
-            // the controller's own copy stays in sync with PolicyEngine. The
-            // controller keeps its OWN egress-mode copy purely for ruleset
-            // generation — keeping both setters in lock-step here is what keeps
-            // them consistent.
-            policy.set_egress_mode(m);
+            // Apply and preflight the complete kernel candidate first. Only a
+            // committed nft transaction is allowed to publish the new policy.
             if let Some(c) = ctrl {
-                if let Err(e) = c.set_egress_mode(m) {
-                    warn!(mode = %mode, error = %e, "nftables egress-mode re-apply failed (policy updated, kernel ruleset NOT re-applied)");
+                if let Err(e) = policy.set_egress_mode_after(m, || c.set_egress_mode(m)) {
+                    warn!(mode = %mode, error = %e, "nftables egress-mode candidate rejected; policy unchanged");
+                    return IpcResponse::Error {
+                        message: format!(
+                            "nftables rejected egress mode {mode}; policy was not changed: {e}"
+                        ),
+                    };
                 }
+            } else {
+                policy.set_egress_mode(m);
             }
-            let now_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64;
+            let now_ns = now_ns();
             if let Err(e) = audit.record_rule_event(
                 now_ns,
                 "-",
@@ -642,10 +665,7 @@ fn handle_hostname_edit(
         };
     }
 
-    let now_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0);
+    let now_ns = now_ns();
     let event = if add {
         "hostname_rule_added"
     } else {
@@ -1071,6 +1091,79 @@ mod tests {
             std::time::Instant::now(),
         );
         assert!(matches!(resp, IpcResponse::RuleAdded { .. }));
+    }
+
+    // Regression for the bug where RemoveRule only updated the policy
+    // engine's own bookkeeping — evaluate()/is_in_scope() correctly stopped
+    // allowing the target immediately, but with no live controller wired at
+    // all (the pre-fix state), removal had no way to ALSO revoke the kernel
+    // element add_allowed_target had installed, so sandbox could still reach
+    // it until the rule's original TTL naturally expired. This proves the
+    // policy-engine side of a remove is unconditional (works with no
+    // controller attached, same as production when ctrl is None) and that a
+    // second removal / an unknown id both fail cleanly rather than panicking
+    // or silently succeeding.
+    #[test]
+    fn test_remove_rule_revokes_policy_engine_scope() {
+        let policy = make_policy();
+        let audit = AuditLog::open(":memory:").expect("audit log");
+
+        let add_resp = process_request(
+            IpcRequest::AddTemporaryRule {
+                network: "1.2.3.0/24".to_string(),
+                ttl_secs: 60,
+                description: None,
+            },
+            &policy,
+            Some(0),
+            &[0u32],
+            None,
+            &audit,
+            std::time::Instant::now(),
+        );
+        let rule_id = match add_resp {
+            IpcResponse::RuleAdded { rule_id, .. } => rule_id,
+            other => panic!("expected RuleAdded, got {other:?}"),
+        };
+        assert!(policy.is_in_scope("1.2.3.4".parse().unwrap()));
+
+        let remove_resp = process_request(
+            IpcRequest::RemoveRule {
+                rule_id: rule_id.clone(),
+            },
+            &policy,
+            Some(0),
+            &[0u32],
+            None, // no live controller in unit tests — see test doc comment
+            &audit,
+            std::time::Instant::now(),
+        );
+        match remove_resp {
+            IpcResponse::RuleRemoved {
+                rule_id: removed_id,
+                kernel_warning,
+            } => {
+                assert_eq!(removed_id, rule_id);
+                assert!(
+                    kernel_warning.is_none(),
+                    "no controller attached — no kernel warning expected"
+                );
+            }
+            other => panic!("expected RuleRemoved, got {other:?}"),
+        }
+        assert!(!policy.is_in_scope("1.2.3.4".parse().unwrap()));
+
+        // Removing the same (now-gone) id again fails cleanly.
+        let second_remove = process_request(
+            IpcRequest::RemoveRule { rule_id },
+            &policy,
+            Some(0),
+            &[0u32],
+            None,
+            &audit,
+            std::time::Instant::now(),
+        );
+        assert!(matches!(second_remove, IpcResponse::Error { .. }));
     }
 
     #[test]

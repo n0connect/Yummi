@@ -69,11 +69,18 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 		role := strings.TrimSpace(t.Role)
 		subgoal := strings.TrimSpace(t.Subgoal)
 		sub := s.cfg.SubAgents[role]
+		if sub == nil && s.cfg.SubAgents != nil {
+			sub = s.cfg.SubAgents[strings.ToLower(role)]
+		}
 		s.emit(ActHandoffIn, role+" specialist delegated", "")
 
 		wg.Add(1)
 		go func(i int, role, subgoal string, sub *Runner) {
 			defer wg.Done()
+			if sub == nil {
+				results[i] = handoffResult{role: role, subgoal: subgoal, err: fmt.Errorf("unknown specialist role %q", role)}
+				return
+			}
 			delegationID, childCtx, beginErr := s.cfg.Delegations.Begin(subCtx, s.taskID, role, subgoal)
 			if beginErr != nil {
 				results[i] = handoffResult{role: role, subgoal: subgoal, err: beginErr}

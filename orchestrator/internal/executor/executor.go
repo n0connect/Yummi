@@ -242,6 +242,49 @@ func recordTacticOutcome(ctx context.Context, ks *knowledge.Store, command strin
 	}
 }
 
+// combinedOutput concatenates stdout, stderr, and any non-fatal gateway
+// warning into the single string form the execution record stores — shared
+// by the shell (ProcessFunc) and MCP (processMCP) paths, whose result
+// shapes are unified by mcpResultToSandboxResult specifically so this one
+// formatter covers both.
+func combinedOutput(result *sandbox.Result) string {
+	var out strings.Builder
+	if result.Stdout != "" {
+		out.WriteString(result.Stdout)
+	}
+	if result.Stderr != "" {
+		if out.Len() > 0 {
+			out.WriteString("\n--- stderr ---\n")
+		}
+		out.WriteString(result.Stderr)
+	}
+	if result.Warning != "" {
+		if out.Len() > 0 {
+			out.WriteString("\n--- warning ---\n")
+		}
+		out.WriteString(result.Warning)
+	}
+	return out.String()
+}
+
+// handleExecError classifies a scoped-exec error for the caller: an egress
+// approval hold is returned as-is (recEgressErr, true) so ProcessFunc/
+// processMCP can hand it straight to the execution store; anything else is
+// recorded as a failed tactic and reduced to (output, error) in the same
+// shape ProcessFunc must return. Shared tail for both exec paths' error
+// branches, which previously duplicated this classification identically.
+func handleExecError(ctx context.Context, ks *knowledge.Store, command string, result *sandbox.Result, err error) (output string, outErr error) {
+	var egressErr execution.EgressApprovalRequiredError
+	if errors.As(err, &egressErr) {
+		return "", egressErr
+	}
+	recordTacticOutcome(ctx, ks, command, false)
+	if result != nil {
+		return result.Stderr, fmt.Errorf("command failed: %w", err)
+	}
+	return "", err
+}
+
 // ProcessFunc returns an execution.ProcessFunc that can be registered
 // on the execution store via SetProcessor.
 func (e *Executor) ProcessFunc() execution.ProcessFunc {
@@ -273,38 +316,13 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 			// Egress Ask mode: the gateway wants operator approval before the
 			// target may be reached. Hold the execution (fail-closed, no
 			// traffic) instead of failing it — ResolveEgress resumes or ends it.
-			var egressErr execution.EgressApprovalRequiredError
-			if errors.As(err, &egressErr) {
-				return "", egressErr
-			}
-			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
-			if result != nil {
-				return result.Stderr, fmt.Errorf("command failed: %w", err)
-			}
-			return "", err
+			return handleExecError(ctx, e.knowledge, rec.Command, result, err)
 		}
 
-		// Build output combining stdout, stderr, and any non-fatal gateway warning.
-		var out strings.Builder
-		if result.Stdout != "" {
-			out.WriteString(result.Stdout)
-		}
-		if result.Stderr != "" {
-			if out.Len() > 0 {
-				out.WriteString("\n--- stderr ---\n")
-			}
-			out.WriteString(result.Stderr)
-		}
-		if result.Warning != "" {
-			if out.Len() > 0 {
-				out.WriteString("\n--- warning ---\n")
-			}
-			out.WriteString(result.Warning)
-		}
-
+		out := combinedOutput(result)
 		if result.ExitCode != 0 {
 			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
-			return out.String(), fmt.Errorf("exit code %d", result.ExitCode)
+			return out, fmt.Errorf("exit code %d", result.ExitCode)
 		}
 		recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
 
@@ -314,7 +332,7 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 			"duration_ms", result.Duration,
 		)
 
-		return out.String(), nil
+		return out, nil
 	}
 }
 
@@ -332,11 +350,6 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 			return "", fmt.Errorf("invalid mcp args: %w", err)
 		}
 	}
-	target, ok := sandboxmcp.Target(rec.MCPTool, args)
-	if !ok {
-		return "", fmt.Errorf("mcp tool %q: no target found in arguments", rec.MCPTool)
-	}
-
 	execFn := func(ctx context.Context) (*sandbox.Result, error) {
 		start := time.Now()
 		callResult, err := e.sandboxMCP.CallTool(ctx, rec.MCPTool, args)
@@ -346,41 +359,33 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 		return mcpResultToSandboxResult(rec.Command, callResult, time.Since(start)), nil
 	}
 
-	result, err := runScopedTarget(ctx, e.gateway, target, nil, rec.Command, execFn)
+	// A tool with no target field at all (checksec_audit, radare2_disasm,
+	// consolidate_hosts) touches no network — nothing for the gateway to
+	// scope-check, and requiring one anyway made every such tool fail every
+	// real dispatch (see sandboxmcp.NeedsTarget's doc comment). Every other
+	// tool keeps the exact same scope-check-then-exec path as before.
+	var result *sandbox.Result
+	var err error
+	if sandboxmcp.NeedsTarget(rec.MCPTool) {
+		target, ok := sandboxmcp.Target(rec.MCPTool, args)
+		if !ok {
+			return "", fmt.Errorf("mcp tool %q: no target found in arguments", rec.MCPTool)
+		}
+		result, err = runScopedTarget(ctx, e.gateway, target, nil, rec.Command, execFn)
+	} else {
+		result, err = execFn(ctx)
+	}
 	if err != nil {
-		var egressErr execution.EgressApprovalRequiredError
-		if errors.As(err, &egressErr) {
-			return "", egressErr
-		}
-		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
-		if result != nil {
-			return result.Stderr, fmt.Errorf("command failed: %w", err)
-		}
-		return "", err
+		return handleExecError(ctx, e.knowledge, rec.Command, result, err)
 	}
 
-	var out strings.Builder
-	if result.Stdout != "" {
-		out.WriteString(result.Stdout)
-	}
-	if result.Stderr != "" {
-		if out.Len() > 0 {
-			out.WriteString("\n--- stderr ---\n")
-		}
-		out.WriteString(result.Stderr)
-	}
-	if result.Warning != "" {
-		if out.Len() > 0 {
-			out.WriteString("\n--- warning ---\n")
-		}
-		out.WriteString(result.Warning)
-	}
+	out := combinedOutput(result)
 	if result.ExitCode != 0 {
 		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
-		return out.String(), fmt.Errorf("exit code %d", result.ExitCode)
+		return out, fmt.Errorf("exit code %d", result.ExitCode)
 	}
 	recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
-	return out.String(), nil
+	return out, nil
 }
 
 // mcpResultToSandboxResult adapts an MCP CallToolResult into the same
@@ -408,6 +413,41 @@ func mcpResultToSandboxResult(command string, result *mcp.CallToolResult, dur ti
 	}
 }
 
+// maxRuleDescription mirrors the gateway's hard cap on AddTemporaryRule's
+// description field (gateway/src/ipc/mod.rs) — a longer string doesn't just
+// get logged oddly, the whole request is rejected and the nftables rule is
+// never installed. Agent-generated recon commands are frequently long
+// multi-step shell pipelines, so this is reachable in practice, not
+// theoretical: an untruncated 485-char command plus an 18-21 char label
+// exceeds it. See [[project_conductor_cloud_and_live_verification]] memory —
+// found live against example.com's candidate-consolidation step.
+const maxRuleDescription = 500
+
+// ruleDescription builds an AddTemporaryRule description from a label and the
+// triggering command, truncating (on a rune boundary) so the combined string
+// never exceeds maxRuleDescription.
+func ruleDescription(label, command string) string {
+	desc := label + command
+	if len(desc) <= maxRuleDescription {
+		return desc
+	}
+	const ellipsis = "...(truncated)"
+	budget := maxRuleDescription - len(label) - len(ellipsis)
+	if budget <= 0 {
+		r := []rune(label)
+		if len(r) > maxRuleDescription {
+			r = r[:maxRuleDescription]
+		}
+		return string(r)
+	}
+	runes := []rune(command)
+	kept := 0
+	for kept < len(runes) && len(string(runes[:kept+1])) <= budget {
+		kept++
+	}
+	return label + string(runes[:kept]) + ellipsis
+}
+
 // openAllowRules installs a 1-hour temporary gateway allow rule for each
 // resolved IP of target (or target's own /32·/128 when it is already an IP and
 // ips is empty). It never fails the caller — a rule-install problem is returned
@@ -423,7 +463,7 @@ func openAllowRules(pc *gateway.Client, target string, ips []string, command str
 	}
 	var warnings []string
 	for _, network := range networks {
-		if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, "approved execution: "+command); nftErr != nil {
+		if _, _, kernelWarning, nftErr := pc.AddTemporaryRule(network, 3600, ruleDescription("approved execution: ", command)); nftErr != nil {
 			slog.Warn("executor: gateway nftables unlock failed (proceeding — check gateway logs)",
 				"target", target, "network", network, "error", nftErr)
 			warnings = append(warnings, fmt.Sprintf("gateway nftables unlock for %s failed (%v)", network, nftErr))
@@ -515,7 +555,7 @@ func UnlockEgressTarget(pc *gateway.Client, target, command string, pinnedIPs ..
 	var firstErr error
 	opened := 0
 	for _, network := range networks {
-		if _, _, _, err := pc.AddTemporaryRule(network, 3600, "egress approved: "+command); err != nil {
+		if _, _, _, err := pc.AddTemporaryRule(network, 3600, ruleDescription("egress approved: ", command)); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}

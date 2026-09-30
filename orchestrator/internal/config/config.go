@@ -16,6 +16,15 @@ type Config struct {
 	DatabasePath     string
 	GatewaySocket    string
 	SandboxContainer string
+	// SandboxDesktopAddr is host:port for the sandbox container's own
+	// websockify bridge (see docker-compose.yml — the same unified "sandbox"
+	// service the agent execs into also runs the desktop stack) —
+	// HandleDesktopWSBridge dials this on every /ws/desktop connection.
+	// Defaults to the compose service's own DNS name; if the sandbox
+	// container itself is down, the dial simply fails with a clean "desktop
+	// sandbox unreachable" message per-connection rather than the
+	// orchestrator refusing to start.
+	SandboxDesktopAddr string
 	// SandboxExecTimeout bounds a single sandbox command's wall-clock time —
 	// see sandbox.Bridge's defaultTimeout doc comment for why the default is
 	// generous (real pentest tooling routinely runs long).
@@ -37,8 +46,27 @@ type Config struct {
 	OllamaThinking      *bool
 	OllamaFallbackModel string // optional lighter LOCAL model the agent loop degrades to when the primary repeatedly fails (empty = no downgrade, breaker still trips)
 	OllamaEmbedModel    string // local Ollama embedding model for semantic retrieval (separate pull from OllamaModel); SemanticRetrieval degrades to StructuredRetrieval if this model isn't actually pulled
-	TLSDir              string // directory holding mTLS certificates for orchestrator ↔ gateway
-	GatewayTLS          bool   // opt-in until the Rust gateway IPC server supports TLS framing
+	// EinoModelBaseURL/EinoModelName/EinoModelNumCtx let the Eino backend's
+	// own ReAct loop run against a DIFFERENT OpenAI-compatible server/model
+	// than the one Ollama/OllamaModel drives — e.g. a local LM Studio, vLLM,
+	// or llama.cpp server instead of Ollama, for a larger/more capable
+	// tool-calling model. The conductor (chat/intent classification) and
+	// this override are independent: conductor always needs a working
+	// Ollama-native client regardless of this setting, since chat/intent
+	// handling never goes through the agent backend. All three are blank/0
+	// by default, in which case cmd/orchestrator/main.go derives the exact
+	// same values it always has (Ollama's own OpenAI-compat endpoint) — this
+	// is purely additive, zero behavior change until an operator sets it.
+	// EinoModelBaseURL must include any path prefix the target server needs
+	// (e.g. "http://localhost:1234/v1") — unlike the Ollama derivation, this
+	// is not assumed to be Ollama, so no "/v1" is auto-appended.
+	EinoModelBaseURL string
+	EinoModelName    string
+	EinoModelAPIKey  string
+	EinoProvider     string // "ollama" | "openrouter" | "openai" (auto-detected if blank)
+	EinoModelNumCtx  int
+	TLSDir           string // directory holding mTLS certificates for orchestrator ↔ gateway
+	GatewayTLS       bool   // opt-in until the Rust gateway IPC server supports TLS framing
 	// DataRetentionDays enables internal/retention's background pruning of
 	// old chat_messages/agent_activity/executions rows when > 0. 0 (the
 	// default) disables it entirely — see internal/retention's package doc
@@ -68,24 +96,30 @@ func Load() *Config {
 		DatabasePath:        envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
 		GatewaySocket:       envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
 		SandboxContainer:    envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
+		SandboxDesktopAddr:  envOr("YUMMI_SANDBOX_DESKTOP_ADDR", "sandbox:6080"),
 		SandboxExecTimeout:  parseDuration(os.Getenv("YUMMI_SANDBOX_EXEC_TIMEOUT")), // 0 = use sandbox.Bridge's own default
 		PersonaDir:          envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
 		AutoSkillDir:        envOr("YUMMI_AUTO_SKILL_DIR", filepath.Join(home, "skills")),
 		DockerSocket:        envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
 		OllamaURL:           os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
-		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "qwen3:14b"),
+		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "gpt-oss:20b"),
 		OllamaTier:          strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
 		OllamaNumCtx:        parseIntOr(os.Getenv("YUMMI_OLLAMA_NUM_CTX"), 0),
 		OllamaThinking:      parseOptionalBool(os.Getenv("YUMMI_OLLAMA_THINKING")),
 		OllamaFallbackModel: strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
 		OllamaEmbedModel:    envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+		EinoModelBaseURL:    strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_BASE_URL")),
+		EinoModelName:       strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_NAME")),
+		EinoModelAPIKey:     strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_API_KEY")),
+		EinoProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("YUMMI_EINO_PROVIDER"))),
+		EinoModelNumCtx:     parseIntOr(os.Getenv("YUMMI_EINO_MODEL_NUM_CTX"), 0),
 		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
 		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
 		DataRetentionDays:   parseIntOr(os.Getenv("YUMMI_DATA_RETENTION_DAYS"), 0),
 	}
 
 	// A directly configured model is the most specific choice. Otherwise an
-	// explicit tier selects its model; with neither set, qwen3:14b is the default.
+	// explicit tier selects its model; with neither set, gpt-oss:20b is the default.
 	if explicitOllamaModel == "" && cfg.OllamaTier != "" {
 		if model, ok := tierToModel(cfg.OllamaTier); ok {
 			cfg.OllamaModel = model
@@ -99,14 +133,10 @@ func Load() *Config {
 // conductor package. Keep this in sync with conductor/tier.go.
 func tierToModel(tier string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
-	case "lite":
-		return "qwen3:4b", true
 	case "standard":
-		return "qwen3:8b", true
-	case "pro":
-		return "qwen3:14b", true
+		return "gpt-oss:20b", true
 	case "expert":
-		return "qwen3:32b", true
+		return "gpt-oss:120b", true
 	default:
 		return "", false
 	}
@@ -201,4 +231,22 @@ func parseOptionalBool(v string) *bool {
 // LLM inference (e.g. qwen3:8b) can exceed 30 s on CPU; 3 min gives headroom.
 func (c *Config) RequestTimeout() time.Duration {
 	return 3 * time.Minute
+}
+
+// ResolvedEinoProvider returns the effective provider for Eino ("ollama", "openrouter", "openai").
+// Auto-detects based on BaseURL or APIKey if not explicitly set.
+func (c *Config) ResolvedEinoProvider() string {
+	if c.EinoProvider != "" {
+		return c.EinoProvider
+	}
+	if strings.Contains(c.EinoModelBaseURL, "openrouter.ai") {
+		return "openrouter"
+	}
+	if strings.Contains(c.EinoModelBaseURL, "api.openai.com") {
+		return "openai"
+	}
+	if c.EinoModelAPIKey != "" && c.EinoModelAPIKey != "ollama" {
+		return "openai"
+	}
+	return "ollama"
 }

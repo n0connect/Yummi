@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react'
 import type { ActivityEvent, AgentTask, ChatStreamEvent, ExecutionRecord, GatewayRule, PendingSkill } from '../../entities/types'
 import { websocketURL } from '../../shared/api/runtime'
+import { eventSocketPath, reduceEventCursor, type EventCursor } from './eventCursor'
 
-type WsEvent =
+type EventMeta = { schema_version?: number; epoch?: string; sequence?: number }
+type WsEvent = EventMeta & (
+  | { type: 'control.hello'; data: { schema_version: number; epoch: string; latest_sequence: number; resync_required: boolean } }
   | { type: 'execution.status'; data: ExecutionRecord }
   | { type: 'task.status'; data: AgentTask }
   | { type: 'gateway.status'; data: GatewayRule[] }
   | { type: 'agent.activity'; data: ActivityEvent }
   | { type: 'skill.status'; event: string; data: PendingSkill }
   | { type: 'chat.stream'; event: string; data: ChatStreamEvent }
+)
+
+export type EventConnectionState = 'connecting' | 'live' | 'recovering' | 'stale'
 
 type Options = {
+  sessionID?: string
   onExecution?: (rec: ExecutionRecord) => void
   onTask?: (task: AgentTask) => void
   onGatewayRules?: (rules: GatewayRule[]) => void
@@ -26,13 +33,18 @@ type Options = {
   // conductor.StreamEvent server-side. Purely cosmetic: the authoritative
   // reply still arrives over the normal /api/v1/chat REST response.
   onChatStream?: (ev: ChatStreamEvent) => void
+  // Fired only when the server reports that its bounded replay window cannot
+  // cover this cursor (process epoch changed or the cursor is too old). Normal
+  // reconnects are healed by ordered replay and do not force a REST refresh.
+  onReconnect?: () => void
+  onConnectionState?: (state: EventConnectionState) => void
 }
 
 /**
  * Opens a single /ws/events WebSocket and dispatches execution.status and
  * task.status events to the provided callbacks. Reconnects on close.
  */
-export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity, onSkillEvent, onChatStream }: Options): void {
+export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, onActivity, onSkillEvent, onChatStream, onReconnect, onConnectionState }: Options): void {
   // Keep refs so the effect only opens once, but callbacks are always current.
   const onExecutionRef    = useRef(onExecution)
   const onTaskRef         = useRef(onTask)
@@ -40,17 +52,22 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity,
   const onActivityRef     = useRef(onActivity)
   const onSkillEventRef   = useRef(onSkillEvent)
   const onChatStreamRef   = useRef(onChatStream)
+  const onReconnectRef    = useRef(onReconnect)
+  const onConnectionStateRef = useRef(onConnectionState)
   onExecutionRef.current    = onExecution
   onTaskRef.current         = onTask
   onGatewayRulesRef.current = onGatewayRules
   onActivityRef.current     = onActivity
   onSkillEventRef.current   = onSkillEvent
   onChatStreamRef.current   = onChatStream
+  onReconnectRef.current    = onReconnect
+  onConnectionStateRef.current = onConnectionState
 
   useEffect(() => {
     let retryTimer: number | undefined
     let socket: WebSocket | null = null
     let closed = false
+    let cursor: EventCursor = { epoch: null, sequence: 0 }
 
     // Jittered exponential backoff: a healthy connection resets to baseDelay;
     // repeated failures grow geometrically up to maxDelay so a downed
@@ -62,14 +79,23 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity,
     let delay = baseDelay
 
     const connect = () => {
-      socket = new WebSocket(websocketURL('/ws/events'))
+      onConnectionStateRef.current?.(cursor.epoch ? 'recovering' : 'connecting')
+      socket = new WebSocket(websocketURL(eventSocketPath(sessionID, cursor)))
       socket.onopen = () => {
         delay = baseDelay // reset the curve once connected
       }
       socket.onmessage = evt => {
         try {
           const msg = JSON.parse(String(evt.data)) as WsEvent
-          if (msg.type === 'execution.status' && msg.data) {
+          const reduced = reduceEventCursor(cursor, msg)
+          cursor = reduced.cursor
+          if (msg.type === 'control.hello') {
+            if (reduced.resyncRequired) {
+              onConnectionStateRef.current?.('recovering')
+              onReconnectRef.current?.()
+            }
+            onConnectionStateRef.current?.('live')
+          } else if (msg.type === 'execution.status' && msg.data) {
             onExecutionRef.current?.(msg.data as ExecutionRecord)
           } else if (msg.type === 'task.status' && msg.data) {
             onTaskRef.current?.(msg.data as AgentTask)
@@ -88,6 +114,7 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity,
       }
       socket.onclose = () => {
         if (closed) return // unmounted — don't reconnect
+        onConnectionStateRef.current?.(cursor.epoch ? 'recovering' : 'stale')
         const wait = delay + Math.floor(Math.random() * (delay / 5)) // +0–20% jitter
         retryTimer = window.setTimeout(connect, wait)
         delay = Math.min(delay * 2, maxDelay)
@@ -100,5 +127,5 @@ export function useChatStream({ onExecution, onTask, onGatewayRules, onActivity,
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       socket?.close()
     }
-  }, [])
+  }, [sessionID])
 }

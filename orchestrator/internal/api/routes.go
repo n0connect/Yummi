@@ -60,6 +60,20 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sessions/{sessionID}/findings", HandleListFindings(ks))
 		r.Post("/sessions/{sessionID}/findings", HandleCreateFinding(ks))
 
+		// Assets (ASM & Asset Matrix)
+		r.Get("/sessions/{sessionID}/assets", HandleListAssets(ks))
+		r.Post("/sessions/{sessionID}/assets", HandleCreateAsset(ks))
+
+		// Program scope (bug-bounty program scope bookkeeping — distinct from
+		// the gateway's own network-egress scope; never gates execution)
+		r.Get("/sessions/{sessionID}/scope-rules", HandleListScopeRules(ks))
+		r.Post("/sessions/{sessionID}/scope-rules", HandleCreateScopeRules(ks))
+		r.Delete("/sessions/{sessionID}/scope-rules/{ruleID}", HandleDeleteScopeRule(ks))
+		r.Post("/sessions/{sessionID}/scope-rules/classify", HandleClassifyScope(ks))
+
+		// Reports (Multi-format Pentest & Bug Bounty Report Generator)
+		r.Get("/sessions/{sessionID}/report", HandleGenerateReport(ks, sm))
+
 		// TRACE observability — read-only views of the agent's world model.
 		r.Get("/sessions/{sessionID}/activity", HandleListActivity(taskStore))
 		r.Get("/sessions/{sessionID}/context", HandleListContext(ks))
@@ -69,7 +83,12 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/skills/pending", HandleListPendingSkills(curatorStore))
 		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
 		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
+		// Operator briefing — "operator drives, AI assists": the same
+		// accumulated knowledge the agent is fed (matching skills, tactics,
+		// findings on record), surfaced for the operator's own manual work.
+		r.Get("/operator/briefing", HandleOperatorBriefing(skillReg, ks))
 		r.Get("/agent/roles", HandleListRoles(taskRunner))
+		r.Get("/agent/capabilities", HandleAgentCapabilities(taskRunner))
 		r.Get("/agent/delegations", HandleListDelegations(taskRunner))
 		r.Post("/agent/delegations/{id}/interrupt", HandleInterruptDelegation(taskRunner))
 		r.Get("/sessions/{sessionID}/audit", HandleListAudit(sm))
@@ -98,6 +117,10 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))
 		r.Post("/sandbox/exec", HandleSandboxExec(bridge, pc, sm))
 
+		// Proxy & traffic ingestion bridge
+		r.Get("/proxy/status", HandleProxyStatus())
+		r.Post("/proxy/inject", HandleProxyInject(ks, sm))
+
 		// System aggregated status, metrics & debug log stream
 		r.Get("/system/status", HandleSystemStatus(bridge, pc, cfg.DockerSocket, assistant))
 		r.Get("/system/health-metrics", HandleHealthMetrics(agg))
@@ -119,10 +142,12 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Post("/tasks/{id}/start", HandleStartTask(taskRunner))
 		r.Post("/tasks/{id}/stop", HandleStopTask(taskRunner))
 		r.Post("/tasks/{id}/approve", HandleApproveTask(taskRunner, taskStore))
+		r.Post("/tasks/{id}/auto-approve", HandleSetTaskAutoApprove(taskRunner))
 	})
 
 	// WebSocket
 	r.Get("/ws/terminal", HandleTerminalWSBridge(bridge))
+	r.Get("/ws/desktop", HandleDesktopWSBridge(cfg.SandboxDesktopAddr))
 	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg, curatorStore, assistant))
 
 	return r

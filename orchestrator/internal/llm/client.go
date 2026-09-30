@@ -16,6 +16,11 @@ import (
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Thinking carries Ollama's native reasoning-channel output (present for
+	// gpt-oss and other "thinking"-capable models even with Options.Think
+	// disabled) — see do()'s doc comment on why this is captured and used
+	// as a fallback rather than just decoded and discarded.
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // Options controls inference behaviour for the Ollama request.
@@ -171,16 +176,26 @@ func (c *Client) Preload(ctx context.Context) error {
 		return fmt.Errorf("ollama client not configured")
 	}
 	type preloadReq struct {
-		Model     string `json:"model"`
-		Prompt    string `json:"prompt"`
-		Stream    bool   `json:"stream"`
-		KeepAlive any    `json:"keep_alive"`
+		Model     string        `json:"model"`
+		Prompt    string        `json:"prompt"`
+		Stream    bool          `json:"stream"`
+		KeepAlive any           `json:"keep_alive"`
+		Options   ollamaOptions `json:"options"`
 	}
+	o := c.opts
 	body, err := json.Marshal(preloadReq{
 		Model:     c.model,
 		Prompt:    "", // empty prompt: load model, generate nothing
 		Stream:    false,
 		KeepAlive: c.keepAlive,
+		Options: ollamaOptions{
+			NumCtx:    o.NumCtx,
+			NumGPU:    o.NumGPU,
+			NumThread: o.NumThread,
+			MMap:      o.MMap,
+			MLock:     o.MLock,
+			F16KV:     o.F16KV,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("marshal preload request: %w", err)
@@ -251,11 +266,22 @@ type ollamaRequest struct {
 	Model     string    `json:"model"`
 	Messages  []Message `json:"messages"`
 	Stream    bool      `json:"stream"`
-	Format    string    `json:"format,omitempty"`
 	KeepAlive any       `json:"keep_alive,omitempty"`
 	// Think controls Qwen3 extended thinking mode. Must be top-level, NOT inside
 	// options — Ollama's template renderer reads it here and gates <think> tokens.
 	// false = fast responses (no hidden reasoning chain); true = deeper but slower.
+	//
+	// Deliberately no "format":"json" here even for JSON-expecting callers
+	// (BuildPlanPrompt, conductor's structured chat replies) — live-observed
+	// against gpt-oss:20b: combined with Think=false, Ollama's forced-JSON
+	// grammar constraint made the model return a fully empty message (no
+	// content AND no thinking, despite eval_count showing real tokens
+	// generated) for any non-trivial system prompt, not just a slow response.
+	// Every JSON-expecting caller already instructs "reply with ONLY this
+	// JSON" in its own prompt text and has its own parse-failure handling
+	// (e.g. ParsePlan's one-retry-with-reminder), so the Ollama-level
+	// constraint was redundant defense that turned out to actively break the
+	// model it was meant to help.
 	Think   *bool         `json:"think,omitempty"`
 	Options ollamaOptions `json:"options"`
 }
@@ -272,7 +298,6 @@ func (c *Client) do(ctx context.Context, messages []Message) (string, error) {
 		Model:     c.model,
 		Messages:  messages,
 		Stream:    false,
-		Format:    "json",
 		KeepAlive: c.keepAlive,
 		Think:     o.Think, // top-level: Ollama gates Qwen3 <think> tokens here
 		Options: ollamaOptions{
@@ -318,13 +343,27 @@ func (c *Client) do(ctx context.Context, messages []Message) (string, error) {
 	if result.Error != "" {
 		return "", fmt.Errorf("ollama: %s", result.Error)
 	}
-	// An empty/whitespace-only message is a model or transport hiccup, not a
-	// usable reply. Surface it as an error so callers retry (with backoff) rather
-	// than feeding an empty string into a downstream parser.
-	if strings.TrimSpace(result.Message.Content) == "" {
+	content := result.Message.Content
+	// Live-observed against gpt-oss served via Ollama's native /api/chat: the
+	// model's actual answer sometimes lands entirely in the "thinking"
+	// channel with content left empty — the same class of channel-routing
+	// inconsistency found (and worked around) in the Eino backend's own
+	// handling of this model family, just via a different serving protocol.
+	// Falling back to Thinking recovers a usable reply instead of hard-
+	// failing a call that, from the model's own perspective, actually
+	// succeeded — it just wrote its answer to the field this client wasn't
+	// reading.
+	if strings.TrimSpace(content) == "" {
+		content = result.Message.Thinking
+	}
+	// An empty/whitespace-only message (in EITHER field) is a model or
+	// transport hiccup, not a usable reply. Surface it as an error so callers
+	// retry (with backoff) rather than feeding an empty string into a
+	// downstream parser.
+	if strings.TrimSpace(content) == "" {
 		return "", fmt.Errorf("ollama returned an empty message")
 	}
-	return result.Message.Content, nil
+	return content, nil
 }
 
 // doStream is do's streaming counterpart. Ollama's streamed /api/chat
@@ -339,7 +378,6 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 		Model:     c.model,
 		Messages:  messages,
 		Stream:    true,
-		Format:    "json",
 		KeepAlive: c.keepAlive,
 		Think:     o.Think, // top-level: Ollama gates Qwen3 <think> tokens here
 		Options: ollamaOptions{
@@ -378,7 +416,7 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 		return "", fmt.Errorf("ollama http %d: %s", resp.StatusCode, string(b))
 	}
 
-	var full strings.Builder
+	var full, thinking strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	// Each NDJSON line carries only one chunk's worth of content, but grow the
 	// buffer well past bufio's 64KB default in case a single line is unusually
@@ -404,6 +442,7 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 				onChunk(chunk.Message.Content)
 			}
 		}
+		thinking.WriteString(chunk.Message.Thinking)
 		if chunk.Done {
 			break
 		}
@@ -413,6 +452,11 @@ func (c *Client) doStream(ctx context.Context, messages []Message, onChunk func(
 	}
 
 	result := full.String()
+	// See do()'s identical fallback: some models (gpt-oss observed live) can
+	// stream their real answer entirely on the thinking channel.
+	if strings.TrimSpace(result) == "" {
+		result = thinking.String()
+	}
 	if strings.TrimSpace(result) == "" {
 		return "", fmt.Errorf("ollama returned an empty message")
 	}

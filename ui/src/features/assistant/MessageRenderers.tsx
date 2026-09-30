@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import type { ActivityEvent, AgentTask, ExecutionRecord } from '../../entities/types'
 import { TaskTracker } from '../tasks/TaskTracker'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
@@ -22,8 +22,9 @@ export function TaskCardMessage({
   onApprove,
   onStop,
   onResume,
-  subTask,
-  onApproveSub
+  subTasks,
+  onApproveSub,
+  onToggleAutoApprove
 }: {
   task: AgentTask
   activities?: ActivityEvent[]
@@ -31,8 +32,9 @@ export function TaskCardMessage({
   onApprove: (proposalID: string, approved: boolean) => void
   onStop: () => void
   onResume: (message: string) => void
-  subTask?: AgentTask | null
-  onApproveSub?: (proposalID: string, approved: boolean) => void
+  subTasks?: AgentTask[]
+  onApproveSub?: (subTaskID: string, proposalID: string, approved: boolean) => void
+  onToggleAutoApprove?: (enable: boolean) => void
 }): JSX.Element {
   return (
     <div className="msg-task-card">
@@ -42,8 +44,9 @@ export function TaskCardMessage({
         onApprove={onApprove}
         onStop={onStop}
         onResume={onResume}
-        subTask={subTask}
+        subTasks={subTasks}
         onApproveSub={onApproveSub}
+        onToggleAutoApprove={onToggleAutoApprove}
         activities={activities}
       />
     </div>
@@ -56,10 +59,96 @@ const STARTER_PROMPTS = [
   t('assistant.starterPrompt.2')
 ]
 
+// Two modes, not a free-text guess at what "web pentest" or "bug bounty
+// recon" means: each goal string is written to hit the exact trigger
+// keywords the matching persona skills key off (osint-enum: "bug bounty",
+// "attack surface", "subdomain", "takeover"; web/api-pentest/js-recon/
+// parameter-fuzzing/vuln-scanning: "web", "API", "BOLA", "javascript",
+// "secrets", "hidden parameters", "XSS", "vulnerability scan") — so the
+// composed instruction reliably pulls in the full methodology on the very
+// first step, not a generic response the model has to reinterpret.
+const TARGET_LAUNCHER_MODES = [
+  {
+    id: 'bugBounty' as const,
+    label: t('assistant.targetLauncher.bugBounty'),
+    hint: t('assistant.targetLauncher.bugBountyHint'),
+    goal: t('assistant.targetLauncher.goal.bugBounty')
+  },
+  {
+    id: 'webPentest' as const,
+    label: t('assistant.targetLauncher.webPentest'),
+    hint: t('assistant.targetLauncher.webPentestHint'),
+    goal: t('assistant.targetLauncher.goal.webPentest')
+  }
+]
+
+// TargetFirstLauncher is the actual "reflex" entry point: drop a target,
+// pick a mode, go — one action, not composing a sentence around a
+// fill-in-the-blank starter prompt. onLaunch receives the fully-composed
+// goal and is expected to send it immediately (not just populate the input
+// box), since minimizing clicks between "I have a target" and "Yummi is
+// already working" is the entire point.
+export function TargetFirstLauncher({
+  onLaunch
+}: {
+  onLaunch: (goal: string) => void
+}): JSX.Element {
+  const [target, setTarget] = useState('')
+  const [modeID, setModeID] = useState<(typeof TARGET_LAUNCHER_MODES)[number]['id']>('bugBounty')
+
+  const launch = () => {
+    const trimmed = target.trim()
+    if (!trimmed) return
+    const mode = TARGET_LAUNCHER_MODES.find((m) => m.id === modeID) ?? TARGET_LAUNCHER_MODES[0]
+    onLaunch(mode.goal.replace('{target}', trimmed))
+  }
+
+  return (
+    <div className="target-launcher">
+      <span className="target-launcher-eyebrow">{t('assistant.targetLauncher.eyebrow')}</span>
+      <div className="target-launcher-modes" role="radiogroup">
+        {TARGET_LAUNCHER_MODES.map((mode) => (
+          <button
+            key={mode.id}
+            type="button"
+            role="radio"
+            aria-checked={modeID === mode.id}
+            className={`target-launcher-mode${modeID === mode.id ? ' is-active' : ''}`}
+            onClick={() => setModeID(mode.id)}
+          >
+            <span className="target-launcher-mode-label">{mode.label}</span>
+            <span className="target-launcher-mode-hint">{mode.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="target-launcher-row">
+        <input
+          className="target-launcher-input"
+          type="text"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              launch()
+            }
+          }}
+          placeholder={t('assistant.targetLauncher.placeholder')}
+        />
+        <button type="button" className="target-launcher-start" onClick={launch} disabled={!target.trim()}>
+          {t('assistant.targetLauncher.start')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function EmptyWorkspace({
-  onUsePrompt
+  onUsePrompt,
+  onLaunchTarget
 }: {
   onUsePrompt: (prompt: string) => void
+  onLaunchTarget: (goal: string) => void
 }): JSX.Element {
   return (
     <div className="chat-empty">
@@ -71,6 +160,7 @@ export function EmptyWorkspace({
       <p>
         {t('assistant.emptyBody')}
       </p>
+      <TargetFirstLauncher onLaunch={onLaunchTarget} />
       <div className="chat-starters" aria-label={t('assistant.startersAriaLabel')}>
         {STARTER_PROMPTS.map((prompt) => (
           <button
@@ -136,7 +226,8 @@ function formatOutputForDisplay(text: string): {
 export function ExecutionMessage({
   content,
   execution,
-  liveOutput
+  liveOutput,
+  onCancel
 }: {
   content: string
   execution: ExecutionRecord
@@ -145,6 +236,11 @@ export function ExecutionMessage({
   // undefined/empty until the first chunk arrives; always superseded by
   // execution.output once the record reaches a terminal status.
   liveOutput?: string
+  // Cancels this specific execution (POST /executions/{id}/cancel) — the
+  // only stop affordance a bare command dispatched outside an agent task
+  // has, since the composer's Stop button is wired to activeTask and stays
+  // hidden when there's no task, ever (see AssistantPanel's cancelExecution).
+  onCancel?: (executionID: string) => void
 }): JSX.Element {
   const status = execution.status
   const isActive = ['queued', 'running'].includes(status)
@@ -158,6 +254,27 @@ export function ExecutionMessage({
     () => (liveOutput ? formatOutputForDisplay(liveOutput) : null),
     [liveOutput]
   )
+  // Auto-follow-tail: as streamed output grows, keep the live <pre> pinned to
+  // the bottom the way a real terminal (and Claude Code's tool output) does —
+  // but ONLY while the operator is already at the bottom. The moment they
+  // scroll up to read earlier output, stop yanking them back down; resume
+  // following as soon as they scroll back to the bottom themselves. Without
+  // this the operator either never sees the newest line of a long-running
+  // scan, or gets fought for control of the scrollbar mid-read.
+  const liveOutputRef = useRef<HTMLPreElement>(null)
+  const followTailRef = useRef(true)
+  useEffect(() => {
+    const el = liveOutputRef.current
+    if (el && followTailRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [liveOutputView?.display])
+  const onLiveScroll = (e: React.UIEvent<HTMLPreElement>) => {
+    const el = e.currentTarget
+    // A small slack (4px) so sub-pixel rounding at the true bottom still
+    // counts as "at the bottom" and keeps following.
+    followTailRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 4
+  }
   const statusLabel: Record<string, string> = {
     queued: t('assistant.execStatus.queued'),
     running: t('assistant.execStatus.running'),
@@ -214,6 +331,16 @@ export function ExecutionMessage({
                   ? `${t('assistant.runningWithElapsedBefore')}${formatElapsed(execution.elapsed_secs)}${t('assistant.runningWithElapsedAfter')}`
                   : t('assistant.runningNoElapsed')}
             </span>
+            {onCancel && (
+              <button
+                type="button"
+                className="btn-execution-cancel"
+                title={t('assistant.cancelExecutionTitle')}
+                onClick={() => onCancel(execution.id)}
+              >
+                {t('assistant.cancelExecutionButton')}
+              </button>
+            )}
           </div>
         )}
         {execution.security_banner && (
@@ -233,7 +360,11 @@ export function ExecutionMessage({
                 </span>
               )}
             </div>
-            <pre className="execution-output">{liveOutputView.display}</pre>
+            <pre
+              ref={liveOutputRef}
+              className="execution-output"
+              onScroll={onLiveScroll}
+            >{liveOutputView.display}</pre>
           </div>
         )}
         {!isActive && visibleOutput && (

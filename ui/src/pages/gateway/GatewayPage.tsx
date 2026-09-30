@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, type HostnameList } from '../../features/gateway/useGatewayData'
+import { useGatewayRules, useGatewayAudit, addGatewayRule, removeGatewayRule, useEgressMode, useHostnamePolicy, useGatewayStatus, type HostnameList } from '../../features/gateway/useGatewayData'
 import type { GatewayEgressMode } from '../../entities/types'
 import { apiURL } from '../../shared/api/runtime'
 import { t } from '../../shared/i18n/strings'
@@ -11,10 +11,39 @@ const EGRESS_MODES: { mode: GatewayEgressMode; label: string; hint: string }[] =
   { mode: 'ask', label: t('gateway.egress.ask.label'), hint: t('gateway.egress.ask.hint') }
 ]
 
+// HostnameColumn renders one allow/block pattern list with per-item remove
+// buttons — GatewayPage previously duplicated this JSX once per list with
+// only the label/CSS-modifier/data differing.
+function HostnameColumn({
+  list,
+  labelKey,
+  patterns,
+  onRemove
+}: {
+  list: HostnameList
+  labelKey: 'gateway.allowListLabel' | 'gateway.blockListLabel'
+  patterns: string[]
+  onRemove: (list: HostnameList, pattern: string) => void
+}): JSX.Element {
+  return (
+    <div className="gateway-hostname-col">
+      <span className={`gateway-hostname-label gateway-hostname-${list}`}>{t(labelKey)} ({list})</span>
+      {patterns.length === 0 && <span className="gateway-empty">{t('gateway.emptyDash')}</span>}
+      {patterns.map(p => (
+        <div key={`${list}-${p}`} className="gateway-hostname-item">
+          <code>{p}</code>
+          <button onClick={() => onRemove(list, p)} title={t('common.remove')} aria-label={`${t('common.remove')} ${p}`}>✕</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function GatewayPage(): JSX.Element {
   const { rules, status, refresh: refreshRules } = useGatewayRules()
   const { rows, chainVerified } = useGatewayAudit(50)
   const { mode: egressMode, status: egressStatus, setMode: setEgress } = useEgressMode()
+  const { gateway } = useGatewayStatus()
   const hostnamePolicy = useHostnamePolicy()
   const [hnPattern, setHnPattern] = useState('')
   const [hnList, setHnList] = useState<HostnameList>('block')
@@ -113,6 +142,28 @@ export function GatewayPage(): JSX.Element {
         <span className={`gateway-status-badge ${status}`} role="status" aria-live="polite">{status}</span>
       </div>
 
+      {gateway && (
+        <section className={`gateway-card gateway-enforcement-card ${gateway.policy_kernel_consistent ? '' : 'mismatch'}`} aria-labelledby="gateway-enforcement-title">
+          <div className="gateway-enforcement-state">
+            <h3 id="gateway-enforcement-title">{t('gateway.enforcementTitle')}</h3>
+            <strong>{gateway.policy_kernel_consistent ? t('gateway.policyKernelSynced') : t('gateway.policyKernelMismatch')}</strong>
+          </div>
+          <div className="gateway-enforcement-metric">
+            <span>{t('gateway.generation')}</span>
+            <strong>{gateway.enforcement_generation}</strong>
+          </div>
+          <div className="gateway-enforcement-metric">
+            <span>{t('gateway.rulesActive')}</span>
+            <strong>{gateway.rules_active ? t('gateway.on') : t('gateway.off')}</strong>
+          </div>
+          {gateway.last_reconcile_error && (
+            <div className="gateway-reconcile-error" role="alert">
+              {t('gateway.lastReconcileError')}: {gateway.last_reconcile_error}
+            </div>
+          )}
+        </section>
+      )}
+
       <div className="gateway-card gateway-egress-card">
         <h3>{t('gateway.egressModeTitle')}</h3>
         <div className="gateway-egress-selector" role="group" aria-label={t('gateway.egressModeGroupAriaLabel')}>
@@ -147,26 +198,8 @@ export function GatewayPage(): JSX.Element {
           {t('gateway.hostnamePolicyDesc')}
         </p>
         <div className="gateway-hostname-lists">
-          <div className="gateway-hostname-col">
-            <span className="gateway-hostname-label gateway-hostname-allow">{t('gateway.allowListLabel')} (allow)</span>
-            {hostnamePolicy.allow.length === 0 && <span className="gateway-empty">{t('gateway.emptyDash')}</span>}
-            {hostnamePolicy.allow.map(p => (
-              <div key={`allow-${p}`} className="gateway-hostname-item">
-                <code>{p}</code>
-                <button onClick={() => handleRemoveHostname('allow', p)} title={t('common.remove')} aria-label={`${t('common.remove')} ${p}`}>✕</button>
-              </div>
-            ))}
-          </div>
-          <div className="gateway-hostname-col">
-            <span className="gateway-hostname-label gateway-hostname-block">{t('gateway.blockListLabel')} (block)</span>
-            {hostnamePolicy.block.length === 0 && <span className="gateway-empty">{t('gateway.emptyDash')}</span>}
-            {hostnamePolicy.block.map(p => (
-              <div key={`block-${p}`} className="gateway-hostname-item">
-                <code>{p}</code>
-                <button onClick={() => handleRemoveHostname('block', p)} title={t('common.remove')} aria-label={`${t('common.remove')} ${p}`}>✕</button>
-              </div>
-            ))}
-          </div>
+          <HostnameColumn list="allow" labelKey="gateway.allowListLabel" patterns={hostnamePolicy.allow} onRemove={handleRemoveHostname} />
+          <HostnameColumn list="block" labelKey="gateway.blockListLabel" patterns={hostnamePolicy.block} onRemove={handleRemoveHostname} />
         </div>
         <div className="gateway-add-form">
           <select value={hnList} onChange={e => setHnList(e.target.value as HostnameList)} aria-label={t('gateway.hostnameListSelectAriaLabel')}>

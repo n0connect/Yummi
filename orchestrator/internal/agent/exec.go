@@ -82,17 +82,25 @@ func (h *storeHandle) Wait(soft time.Duration) (ToolResult, bool) {
 		// (WaitForTerminal returns a timeout error rather than blocking.)
 		return ToolResult{}, false
 	}
+	return toolResultFromRecord(final, dur), true
+}
+
+// toolResultFromRecord converts a terminal execution.Record into the
+// ToolResult shape the agent loop consumes — shared by storeHandle.Wait
+// (shell commands) and StoreMCPExecer.RunMCPTool (MCP tool calls), which
+// otherwise duplicated this exact completed/canceled/failed classification.
+func toolResultFromRecord(final execution.Record, dur time.Duration) ToolResult {
 	switch final.Status {
 	case execution.StatusCompleted:
-		return ToolResult{Content: final.Output, Duration: dur}, true
+		return ToolResult{Content: final.Output, Duration: dur}
 	case execution.StatusCanceled:
-		return ToolResult{Content: orDefault(final.Output, "command aborted"), IsError: true, Duration: dur}, true
+		return ToolResult{Content: orDefault(final.Output, "command aborted"), IsError: true, Duration: dur}
 	default: // failed
 		return ToolResult{
 			Content:  orDefault(final.Error, "execution failed") + "\n" + final.Output,
 			IsError:  true,
 			Duration: dur,
-		}, true
+		}
 	}
 }
 
@@ -155,16 +163,5 @@ func (e *StoreMCPExecer) RunMCPTool(ctx context.Context, sessionID, tool string,
 		}
 		return ToolResult{}, fmt.Errorf("wait timeout: mcp tool %s did not finish within %s", tool, e.hardCap)
 	}
-	switch final.Status {
-	case execution.StatusCompleted:
-		return ToolResult{Content: final.Output, Duration: dur}, nil
-	case execution.StatusCanceled:
-		return ToolResult{Content: orDefault(final.Output, "command aborted"), IsError: true, Duration: dur}, nil
-	default:
-		return ToolResult{
-			Content:  orDefault(final.Error, "execution failed") + "\n" + final.Output,
-			IsError:  true,
-			Duration: dur,
-		}, nil
-	}
+	return toolResultFromRecord(final, dur), nil
 }

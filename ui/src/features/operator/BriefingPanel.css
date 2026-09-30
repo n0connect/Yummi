@@ -1,0 +1,210 @@
+/* Operator briefing — the visible half of "operator drives, AI assists".
+   Theme-token-only (no hardcoded colors) so it tracks light/dark like the
+   rest of the app. */
+.briefing {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.briefing-header {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.briefing-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.briefing-subtitle {
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.briefing-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.briefing-input {
+  flex: 1 1 120px;
+  min-width: 0;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  transition: border-color var(--transition-fast);
+}
+.briefing-input-goal { flex: 2 1 180px; }
+.briefing-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+.briefing-input::placeholder { color: var(--text-muted); }
+
+.briefing-btn {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.briefing-btn:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-primary); }
+.briefing-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.briefing-btn-primary {
+  background: var(--cyan);
+  color: #04121b;
+  border-color: var(--cyan);
+  font-weight: 600;
+}
+.briefing-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+.briefing-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-lg);
+}
+
+.briefing-hint,
+.briefing-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.briefing-error {
+  margin: 0;
+  color: var(--red);
+  font-size: var(--text-sm);
+}
+
+.briefing-section { margin-bottom: var(--space-xl); }
+.briefing-section:last-child { margin-bottom: 0; }
+.briefing-section-title {
+  margin: 0 0 var(--space-sm);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Skills / playbooks */
+.briefing-skill {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+.briefing-skill-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.briefing-skill-name { font-weight: 600; color: var(--text-primary); font-size: var(--text-sm); }
+.briefing-skill-tools { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--cyan); }
+.briefing-skill-desc { margin: 4px 0 0; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; }
+.briefing-skill-knowledge {
+  margin: var(--space-sm) 0 0;
+  padding: var(--space-sm);
+  background: var(--bg-base);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* Tactics */
+.briefing-tactic {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-xs);
+}
+.briefing-tactic.outcome-worked { border-left-color: var(--green); }
+.briefing-tactic.outcome-failed { border-left-color: var(--red); }
+.briefing-tactic.outcome-inconclusive { border-left-color: var(--orange); }
+.briefing-tactic-cmd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: pre;
+  min-width: 0;
+  flex: 1;
+}
+.briefing-tactic-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+.briefing-tactic-outcome {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.briefing-tactic-outcome.outcome-worked { color: var(--green); }
+.briefing-tactic-outcome.outcome-failed { color: var(--red); }
+.briefing-tactic-outcome.outcome-inconclusive { color: var(--orange); }
+.briefing-tactic-hits { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+
+/* Findings */
+.briefing-finding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px var(--space-md);
+  border-left: 2px solid var(--border);
+  margin-bottom: var(--space-xs);
+}
+.briefing-finding.severity-critical { border-left-color: var(--red); }
+.briefing-finding.severity-high { border-left-color: var(--orange); }
+.briefing-finding.severity-medium { border-left-color: var(--yellow); }
+.briefing-finding.severity-low { border-left-color: var(--cyan); }
+.briefing-finding.severity-info { border-left-color: var(--text-muted); }
+.briefing-finding-sev {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  width: 52px;
+}
+.briefing-finding-title { color: var(--text-secondary); font-size: var(--text-xs); }

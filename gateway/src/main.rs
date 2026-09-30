@@ -48,7 +48,7 @@ async fn run() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 async fn run_linux() -> Result<()> {
-    use tracing::info;
+    use tracing::{error, info, warn};
     use yummi_gateway::audit::AuditLog;
     use yummi_gateway::config::GatewayConfig;
     use yummi_gateway::ipc::IpcServer;
@@ -105,6 +105,36 @@ async fn run_linux() -> Result<()> {
         }
     });
 
+    // Continuously converge kernel state back to the in-process policy. The
+    // replacement is preflighted and committed atomically. Any repair failure
+    // immediately closes the policy side and attempts a kernel Block rebuild;
+    // no new scope check can be approved while enforcement is uncertain.
+    let reconcile_policy = policy.clone();
+    let reconcile_controller = controller.clone();
+    let reconcile_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        interval.tick().await; // installation already established generation 1
+        loop {
+            interval.tick().await;
+            if let Err(e) = reconcile_policy
+                .apply_current_egress_mode(|mode| reconcile_controller.reconcile(mode))
+            {
+                error!(error = %e, "nftables reconciliation failed — entering fail-closed policy mode");
+                let block = yummi_gateway::policy::rules::EgressMode::Block;
+                if let Err(lockdown_err) = reconcile_policy
+                    .set_egress_mode_after(block, || reconcile_controller.set_egress_mode(block))
+                {
+                    // Even when kernel repair is unavailable, stop authorizing
+                    // new work at the policy boundary and surface inconsistency.
+                    reconcile_policy.set_egress_mode(block);
+                    error!(error = %lockdown_err, "emergency nftables lockdown failed; enforcement status remains inconsistent");
+                } else {
+                    warn!("emergency nftables lockdown committed");
+                }
+            }
+        }
+    });
+
     let observer_handle = tokio::spawn(observer.run());
     let ipc_handle = tokio::spawn(ipc.run());
     let watchdog_handle = tokio::spawn(watchdog.run());
@@ -120,6 +150,7 @@ async fn run_linux() -> Result<()> {
     ipc_handle.abort();
     watchdog_handle.abort();
     gc_handle.abort();
+    reconcile_handle.abort();
 
     audit.flush().await?;
     info!("gateway stopped cleanly (nftables rules still active)");

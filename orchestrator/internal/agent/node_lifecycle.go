@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
@@ -40,6 +41,52 @@ func retryNode(ctx context.Context, s *GraphState) (string, error) {
 	return edgeRetryAgain, nil
 }
 
+// awaitGateVerdict runs the operator-approval wait skeleton shared
+// byte-for-byte by approvalNode and threatHoldNode: register the pending
+// approval, transition the task to StatusAwaitingApproval, then block on ctx
+// cancellation, the approval timeout, or a real verdict.
+//
+// On cancellation, a Transition error, or a timeout, the terminal outcome is
+// already fully resolved (task transitioned, pendingAct/gate cleared as
+// needed) — the caller must return (edge, err) exactly as given, without
+// further handling. On a real verdict, the task is transitioned back to
+// StatusRunning and (verdict, "", nil, true) is returned for the caller to
+// interpret (approved vs denied) itself, since that handling differs between
+// the two callers.
+func awaitGateVerdict(ctx context.Context, s *GraphState, cmdLabel string, p conductor.Proposal, timeoutMsg string) (verdict Verdict, edge string, err error, ok bool) {
+	verdictCh := s.gate.Request(s.taskID, p.ID, cmdLabel, p.RiskLevel)
+	if terr := s.store.Transition(s.taskID, StatusAwaitingApproval, func(t *Task) {
+		t.PendingProposalID = p.ID
+		t.PendingCommand = cmdLabel
+		t.PendingRisk = p.RiskLevel
+	}); terr != nil {
+		return Verdict{}, "", terr, false
+	}
+
+	select {
+	case <-ctx.Done():
+		return Verdict{}, "", ctx.Err(), false
+
+	case <-time.After(s.cfg.ApprovalTimeout):
+		s.gate.Clear(s.taskID)
+		// Operator-facing pause message (plain text, not a protocol tag).
+		_ = s.store.Transition(s.taskID, StatusPaused, func(t *Task) {
+			t.Question = timeoutMsg
+			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
+		})
+		s.pendingAct = Action{Question: timeoutMsg}
+		return Verdict{}, edgeGiveUp, nil, false
+
+	case v := <-verdictCh:
+		if terr := s.store.Transition(s.taskID, StatusRunning, func(t *Task) {
+			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
+		}); terr != nil {
+			return Verdict{}, "", terr, false
+		}
+		return v, "", nil, true
+	}
+}
+
 // approvalNode blocks on the operator gate for medium+ risk commands.
 func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 	p := s.pendingProposal
@@ -48,59 +95,33 @@ func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 		return "", ErrTaskNotFound
 	}
 
-	verdictCh := s.gate.Request(s.taskID, p.ID, p.Command, p.RiskLevel)
-	if err := s.store.Transition(s.taskID, StatusAwaitingApproval, func(t *Task) {
-		t.PendingProposalID = p.ID
-		t.PendingCommand = p.Command
-		t.PendingRisk = p.RiskLevel
-	}); err != nil {
-		return "", err
+	v, edge, err, gotVerdict := awaitGateVerdict(ctx, s, p.Command, p, "Approval timed out for: "+p.Command)
+	if !gotVerdict {
+		return edge, err
 	}
 
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-
-	case <-time.After(s.cfg.ApprovalTimeout):
-		s.gate.Clear(s.taskID)
-		// Operator-facing pause message (plain text, not a protocol tag).
-		timeout := "Approval timed out for: " + p.Command
-		_ = s.store.Transition(s.taskID, StatusPaused, func(t *Task) {
-			t.Question = timeout
-			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
-		})
-		s.pendingAct = Action{Question: timeout}
-		return edgeGiveUp, nil
-
-	case v := <-verdictCh:
-		if err := s.store.Transition(s.taskID, StatusRunning, func(t *Task) {
-			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
-		}); err != nil {
-			return "", err
+	if !v.Approved {
+		reason := v.Reason
+		if reason == "" {
+			reason = "no reason given"
 		}
-		if !v.Approved {
-			reason := v.Reason
-			if reason == "" {
-				reason = "no reason given"
-			}
-			obs := Wrap("APPROVAL_DENIED", p.Command+" — reason: "+reason+"\nPropose an alternative or finish.")
-			s.memCtx.AddObservation(obs)
-			s.lastObs = obs
-			return edgeDenied, nil
-		}
-		// Execute the approved command and observe it like any other.
-		s.pendingCommand = p.Command
-		result, err := s.exec.Run(ctx, task.SessionID, p.Command)
-		if err != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			return "", fmt.Errorf("exec (post-approval): %w", err)
-		}
-		s.executedCmds = append(s.executedCmds, p.Command)
-		_ = observeResult(s, result)
-		return edgeApproved, nil
+		obs := Wrap("APPROVAL_DENIED", p.Command+" — reason: "+reason+"\nPropose an alternative or finish.")
+		s.memCtx.AddObservation(obs)
+		s.lastObs = obs
+		return edgeDenied, nil
 	}
+	// Execute the approved command and observe it like any other.
+	s.pendingCommand = p.Command
+	result, err := s.exec.Run(ctx, task.SessionID, p.Command)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("exec (post-approval): %w", err)
+	}
+	s.executedCmds = append(s.executedCmds, p.Command)
+	_ = observeResult(s, result)
+	return edgeApproved, nil
 }
 
 // summarizeNode compresses observation history into a running summary when the
@@ -188,8 +209,8 @@ func summarizeInput(obs []string, budget int) string {
 func finishNode(ctx context.Context, s *GraphState) (string, error) {
 	switch s.finishOutcome {
 	case outcomeCompleted:
-		summary := sanitizeAgentText(s.finishMsg)
-		findings := sanitizeFindings(s.pendingAct.Findings)
+		summary := SanitizeAgentText(s.finishMsg)
+		findings := SanitizeFindings(s.pendingAct.Findings)
 		if strings.TrimSpace(summary) == "" {
 			summary, findings = mergeSynthesis(ctx, s, findings)
 		}
@@ -201,6 +222,11 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		var records []FindingRecord
 		if task0, ok := s.store.Get(s.taskID); ok {
 			records = buildFindingRecords(s.pendingAct.FindingsDetail, "", "", task0.Plan)
+			if len(findings) == 0 {
+				findings = task0.Findings
+			} else if len(task0.Findings) > 0 {
+				findings = dedupeStrings(append(task0.Findings, findings...))
+			}
 		}
 		_ = s.store.Transition(s.taskID, StatusCompleted, func(t *Task) {
 			t.Summary = summary
@@ -220,6 +246,13 @@ func finishNode(ctx context.Context, s *GraphState) (string, error) {
 		summary, findings := mergeSynthesis(ctx, s, nil)
 		summary = appendUnverifiedToolWarning(s, summary, findings)
 		summary = appendEvidenceDigest(s, summary)
+		if task0, ok := s.store.Get(s.taskID); ok && len(task0.Findings) > 0 {
+			if len(findings) == 0 {
+				findings = task0.Findings
+			} else {
+				findings = dedupeStrings(append(task0.Findings, findings...))
+			}
+		}
 		_ = s.store.Transition(s.taskID, StatusFailed, func(t *Task) {
 			t.LastError = s.finishMsg
 			t.Summary = summary // what was gathered before the failure, if anything
@@ -262,7 +295,7 @@ func appendEvidenceDigest(s *GraphState, summary string) string {
 		if step.Status == StepFailed {
 			detail = step.Error
 		}
-		detail = sanitizeAgentText(detail)
+		detail = SanitizeAgentText(detail)
 		if len(detail) > 320 {
 			detail = detail[:utf8SafeCut(detail, 320)] + "…"
 		}
@@ -352,12 +385,12 @@ func synthesizeSummary(ctx context.Context, s *GraphState) (string, []string) {
 		Findings []string `json:"findings"`
 	}
 	_ = json.Unmarshal([]byte(extractJSON(stripThinkTokens(raw))), &out)
-	return sanitizeAgentText(out.Summary), sanitizeFindings(out.Findings)
+	return SanitizeAgentText(out.Summary), SanitizeFindings(out.Findings)
 }
 
 // askNode pauses the task for operator input (plain operator-facing text).
 func askNode(ctx context.Context, s *GraphState) (string, error) {
-	question := sanitizeAgentText(s.pendingAct.Question)
+	question := SanitizeAgentText(s.pendingAct.Question)
 	if question == "" {
 		question = "The agent needs operator input to continue."
 	}
@@ -369,4 +402,19 @@ func askNode(ctx context.Context, s *GraphState) (string, error) {
 	})
 	s.emit(ActAsk, question, "")
 	return edgeDone, nil
+}
+
+func dedupeStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
+		if _, exists := seen[item]; !exists {
+			seen[item] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	return out
 }

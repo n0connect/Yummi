@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,53 @@ import (
 	"testing"
 	"time"
 )
+
+func TestChatWithHistoryTurnRejectsConcurrentTurnAndCorrelatesStream(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"{\"intent\":\"explain\",\"message\":\"ok\",\"confidence\":0.9}"},"done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":""},"done":true}` + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+
+	e, err := NewEngine("", srv.URL, "test-model")
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	_, stream, err := e.SubscribeStream(8)
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, runErr := e.ChatWithHistoryTurn(context.Background(), "sess-1", "turn-1", "first")
+		firstDone <- runErr
+	}()
+	<-started
+
+	if _, err := e.ChatWithHistoryTurn(context.Background(), "sess-1", "turn-2", "second"); !errors.Is(err, ErrTurnInProgress) {
+		t.Fatalf("second same-session turn error = %v, want ErrTurnInProgress", err)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	for {
+		evt := <-stream
+		if evt.TurnID != "turn-1" {
+			t.Fatalf("stream turn_id = %q, want turn-1", evt.TurnID)
+		}
+		if evt.Done {
+			break
+		}
+	}
+}
 
 // TestStreamBrokerSubscribePublishUnsubscribe exercises the broker directly:
 // a subscriber receives published events, and stops receiving (channel
@@ -78,8 +126,8 @@ func TestEngineSubscribeStreamNilSafe(t *testing.T) {
 	if _, ok := <-ch; ok {
 		t.Fatal("expected an already-closed channel from a nil engine")
 	}
-	e.UnsubscribeStream(1)                // must not panic
-	e.publishStream("s1", "delta", false) // must not panic
+	e.UnsubscribeStream(1)                          // must not panic
+	e.publishStream("s1", "turn-1", "delta", false) // must not panic
 }
 
 // newNDJSONOllamaServer is a real httptest.Server (not a mock) answering
@@ -108,14 +156,20 @@ func newNDJSONOllamaServer(t *testing.T, chunks ...string) *httptest.Server {
 }
 
 // TestChatWithHistoryPublishesStreamDeltas proves the actual wiring asked
-// for by this feature: ChatWithHistory's internal LLM call streams, and each
-// fragment is published on the session's chat.stream channel as it arrives,
-// followed by a terminal done=true event — all while the returned
-// ChatResponse is parsed from the fully-accumulated text exactly as before
-// (this test's JSON payload matches what TestParseStructuredResponse-style
-// fixtures expect elsewhere in this package).
+// for by this feature: ChatWithHistory's internal LLM call streams, and the
+// extracted "message" field text is published on the session's chat.stream
+// channel as it becomes available, followed by a terminal done=true event —
+// all while the returned ChatResponse is parsed from the fully-accumulated
+// RAW text exactly as before. The model's raw output is the WHOLE
+// {"intent":...,"message":"...",...} JSON object, not prose — streaming it
+// verbatim let the operator's live "typing" preview briefly show raw JSON
+// syntax before the REST reply replaced it with the parsed message (see
+// extractMessagePreview). The message VALUE is deliberately split across
+// both raw chunks here (chunk 1 ends mid-string) so this also proves genuine
+// incremental delivery of the message text itself, not just "reveal it all
+// once the field closes".
 func TestChatWithHistoryPublishesStreamDeltas(t *testing.T) {
-	srv := newNDJSONOllamaServer(t, `{"intent":"expl`, `ain","message":"hi there","confidence":0.9}`)
+	srv := newNDJSONOllamaServer(t, `{"intent":"explain","message":"hi `, `there","confidence":0.9}`)
 
 	e, err := NewEngine("", srv.URL, "test-model")
 	if err != nil {
@@ -161,10 +215,15 @@ collect:
 	if len(deltas) != 2 {
 		t.Fatalf("expected 2 delta events, got %d: %+v", len(deltas), deltas)
 	}
+	for _, d := range deltas {
+		if strings.ContainsAny(d, "{}") {
+			t.Fatalf("delta leaked raw JSON structure: %+v", deltas)
+		}
+	}
 	got := strings.Join(deltas, "")
-	want := `{"intent":"explain","message":"hi there","confidence":0.9}`
+	want := "hi there"
 	if got != want {
-		t.Fatalf("streamed deltas did not reassemble to the raw model output: got %q want %q", got, want)
+		t.Fatalf("streamed deltas did not reassemble to the extracted message: got %q want %q", got, want)
 	}
 }
 

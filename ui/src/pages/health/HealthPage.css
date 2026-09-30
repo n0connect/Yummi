@@ -1,7 +1,7 @@
 .health-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 56px);
+  height: calc(100vh - var(--app-chrome-height));
   padding: var(--space-xl);
   gap: var(--space-lg);
   overflow-y: auto;

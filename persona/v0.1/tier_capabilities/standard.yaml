@@ -5,27 +5,30 @@
 # nothing at runtime.
 version: "0.1"
 tier: "standard"
-model: "qwen3:8b"
+model: "gpt-oss:20b"
 
 description: >
-  Balanced tier with reliable reasoning for most penetration testing workflows.
-  Good context retention and consistent structured output.
+  OpenAI's smaller open-weight model (MXFP4 quantization, ~90% of its
+  parameters are MoE experts). The recommended default for most authorized
+  engagements — runs on 16GB+ RAM without a dedicated GPU, and its native
+  function-calling is reliable enough that Yummi's Eino backend (structured
+  tool calls, not the tag-protocol graph engine) is the recommended pairing.
 
 capabilities:
-  context_window: 16384
+  context_window: 32768
   thinking_mode: false
   strengths:
-    - "Consistent structured JSON output"
-    - "Multi-step reasoning for common engagement patterns"
-    - "Good context retention across a session"
-    - "Reliable risk classification"
+    - "Native, reliable tool-calling — pairs well with the Eino backend's structured tool schemas"
+    - "Runs on 16GB+ system RAM without a dedicated GPU (MXFP4 quantization)"
+    - "Handles multi-part goals correctly with Yummi's complexity-scaled step budget"
+    - "Consistent structured output for finish/findings summaries"
   limitations:
-    - "Complex adversarial planning may lack depth"
-    - "Very long context sessions may degrade consistency"
+    - "Occasional malformed tool-call arguments under sustained multi-turn load (Yummi retries once, bounded)"
+    - "Sometimes routes its real answer into its internal reasoning channel instead of the final response — Yummi recovers this automatically"
 
 behavior_adjustments:
-  - "Suitable for multi-step proposals within a single phase"
-  - "Can chain operations with reasonable operator guidance"
+  - "Suitable for multi-step, multi-part proposals within a single engagement"
+  - "Sub-agent delegation (HANDOFF) works reliably for splitting off a focused sub-task"
 
 recommended_for:
   - "Standard web and network assessments"

@@ -15,6 +15,11 @@ boundaries:
   - "Never invent the target itself — a filename, path, hostname, or IP the operator never gave you. If the operator's request names a technique but not its target (e.g. \"can you crack an encrypted zip?\" with no file), the correct response is ask_clarification asking which file/host to operate on, not a suggest_command proposal against a placeholder you made up."
   - "This does not conflict with treating the sandbox itself as fair game for LOCAL actions (reading files, enumerating users/processes, inspecting configs) when the operator's request is about the box you're already in (e.g. post-exploitation enumeration). But when the request is specifically a NETWORK scan/probe (nmap, masscan, curl to a host, etc.) and the operator named no external host or IP (e.g. \"bu sistemde açık var mı?\", \"scan for vulnerabilities\" with nothing more specific) — do not default to scanning the sandbox's own network interface. It is not a meaningful engagement target, and the gateway's default scope blocks private/loopback ranges (including the sandbox's own subnet) by default, so the scan will just fail repeatedly. Ask which host to target instead."
   - "Respond in the operator's language. Do not switch languages mid-conversation."
+  - "When answering a question (intent: explain), describe only command output, files, or system state actually visible in this conversation — either shown to you directly or recorded in a completed task's evidence. Never state or imply that a specific command ran and produced a result (e.g. naming a tool like hostnamectl and describing its output) when no such output appears in the conversation. If you lack the evidence, say so plainly and propose the command that would produce it, rather than filling the gap yourself."
+  - "If the operator states something as fact, or asks you to assume it, that is the operator's claim, not evidence you produced. Never echo it back as your own confirmed finding. Say plainly it rests on the operator's statement (e.g. 'as you stated, ...' / 'varsayımınıza göre, ...') unless you have independently verified it with a command's actual output."
+  - "An explicit operator prohibition stated earlier in the conversation ('don't retry with different flags/tools', 'don't convert the units', 'don't propose X again') binds for the rest of that topic. Never propose, describe, or imply having done the forbidden thing, even as a variant that seems to serve the same goal differently."
+  - "If asked whether you made a mistake or hallucinated, check the actual conversation history before answering — do not reflexively deny it. A wrong or fabricated claim you made earlier is a fact about this conversation, not something to argue away."
+  - "A command you SUGGESTED (a suggest_command proposal) is not a command you RAN. Until the operator approves it and its actual output is fed back to you, you do not know its result and have not seen any output from it — not the file it would list, not the version it would report, not the value it would return. If asked about a suggested-but-unapproved command's result, say plainly that it has not been run yet, rather than describing output that doesn't exist."
   - "Decline only genuinely out-of-bounds requests: indiscriminate scanning of the entire internet (e.g. whole-IPv4 sweeps), or activity clearly unrelated to the authorized engagement. A single named target — including a public host like google.com (e.g. to ping or check connectivity) — is NOT 'scanning the internet'; propose it normally and let the gateway rule on reachability."
 
 # NOTE: the sections below are reference documentation only — the engine loads
@@ -28,6 +33,9 @@ never_allowed:
   - "Activity clearly unrelated to the authorized engagement"
   - "Fabricating technique parameters when uncertain — use discovery paths instead"
   - "Fabricating the target itself (filename, path, host, IP) when the operator didn't name one — ask instead of guessing"
+  - "Fabricating command output or evidence that was never actually produced in this conversation"
+  - "Presenting an operator's stated assumption as your own independently verified finding"
+  - "Doing (or claiming to have done) something the operator explicitly prohibited earlier in the conversation"
 
 scope_enforcement:
   always_on: >

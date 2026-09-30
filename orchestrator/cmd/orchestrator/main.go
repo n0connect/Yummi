@@ -84,9 +84,75 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Resolved once here so the Eino backend (below) can inject the identical
+	// effective num_ctx as an outbound-request option — conductor.Engine
+	// resolves and applies its own copy of this internally but doesn't expose
+	// it, and Eino's OpenAI-compatible model calls need their own explicit
+	// value (see eino.NewOllamaChatModel's doc comment).
+	resolvedTier := conductor.DefaultTierRegistry().Resolve(cfg.OllamaModel)
+	resolvedNumCtx := resolvedTier.NumCtx
+	if cfg.OllamaNumCtx > 0 {
+		resolvedNumCtx = cfg.OllamaNumCtx
+	}
+	// resolvedThinking mirrors NewEngineWithOverrides' own resolution
+	// (DefaultTierRegistry tier default, overridden by an explicit
+	// YUMMI_OLLAMA_THINKING) so the Eino backend below gets the SAME
+	// resolved value the conductor actually applies to its own calls,
+	// instead of the two silently disagreeing — see eino.NewOllamaChatModel's
+	// doc comment for why false maps to "medium" reasoning_effort there,
+	// not a literal off.
+	resolvedThinking := resolvedTier.Thinking
+	if cfg.OllamaThinking != nil {
+		resolvedThinking = *cfg.OllamaThinking
+	}
+
+	// Eino's own model target: defaults to mirroring the conductor's Ollama
+	// config exactly (same URL rewritten to its OpenAI-compat path, same
+	// model, same resolved context window) when none of the three
+	// YUMMI_EINO_MODEL_* overrides are set — zero behavior change for
+	// anyone who hasn't opted in. Resolved here (before conductor
+	// construction, not down in the Eino backend switch below) because the
+	// conductor's own cloud-override decision right below needs the same
+	// values: an explicitly-set base URL means an operator has opted into a
+	// cloud model, full stop, not just "for Eino."
+	einoModelBaseURL := cfg.EinoModelBaseURL
+	if einoModelBaseURL == "" {
+		einoModelBaseURL = strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1"
+	}
+	einoModelName := cfg.EinoModelName
+	if einoModelName == "" {
+		einoModelName = cfg.OllamaModel
+	}
+	einoModelNumCtx := cfg.EinoModelNumCtx
+	if einoModelNumCtx <= 0 {
+		einoModelNumCtx = resolvedNumCtx
+	}
+
+	// CloudBaseURL, when the operator explicitly set YUMMI_EINO_MODEL_BASE_URL,
+	// is a MANDATORY replacement for Ollama, not an addition alongside it: an
+	// operator who has already opted an agent backend into a cloud model gets
+	// no privacy benefit from also running Ollama purely for chat/intent
+	// classification, since that classification step hands the same goal
+	// text to the same cloud model anyway the moment a task starts — see
+	// conductor.ChatBackend's doc comment. cfg.EinoModelBaseURL (not the
+	// derived einoModelBaseURL, which is never empty) is the right check
+	// here: an UNSET override already means "Eino mirrors Ollama exactly,"
+	// so there is no redundancy to eliminate in that case — conductor
+	// staying on Ollama is already correct. This also means the graph
+	// backend's own agent loop (which reuses assistant.LLM() as primaryLLM
+	// below) moves to the same cloud model automatically, not just Eino's
+	// ReAct loop.
 	assistant, err := conductor.NewEngineWithOverrides(cfg.PersonaDir, cfg.OllamaURL, cfg.OllamaModel, conductor.TierOverrides{
 		NumCtx:   cfg.OllamaNumCtx,
 		Thinking: cfg.OllamaThinking,
+		CloudBaseURL: func() string {
+			if cfg.EinoModelBaseURL == "" {
+				return ""
+			}
+			return einoModelBaseURL
+		}(),
+		CloudModel:  einoModelName,
+		CloudAPIKey: cfg.EinoModelAPIKey,
 	})
 	if err != nil {
 		slog.Warn("assistant persona load failed; running without conductor", "error", err, "persona_dir", cfg.PersonaDir)
@@ -118,7 +184,35 @@ func main() {
 	// dispatch path (processMCP) regardless of which agent backend is active;
 	// only the Eino backend currently issues MCP tool calls.
 	sandboxMCPClient := sandboxmcp.NewClient(cfg.SandboxContainer)
-	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel)
+	// preloadNumCtx is the larger of the conductor's own resolved context and
+	// any explicit Eino override THAT TARGETS THE SAME OLLAMA INSTANCE (an
+	// unset EinoModelBaseURL, or one explicitly equal to the derived Ollama
+	// OpenAI-compat URL — when Eino points at a genuinely different server,
+	// e.g. LM Studio, its num_ctx is irrelevant to this Ollama client and
+	// must not inflate its preload for no reason). Applied via
+	// WithOptions below instead of NewClient's DefaultQwen3Options hardcoded
+	// 16384. Without this, Preload() — which runs at startup, before any
+	// real chat request — could be the first call to touch a not-yet-loaded
+	// model, permanently fixing its context window: Ollama allocates a
+	// model's KV cache once, sized by whichever request loads it, and every
+	// later request asking for a different num_ctx (the conductor's own
+	// resolved value, OR Eino's explicit override) is silently served
+	// against that already-fixed size instead of getting what it asked for.
+	// Live-observed twice: once with Preload's old hardcoded 16384 beating a
+	// differently-resolved tier value, and again with Preload's (correctly
+	// resolved but smaller) value beating Eino's own larger explicit
+	// EinoModelNumCtx.
+	preloadNumCtx := resolvedNumCtx
+	einoTargetsSameOllama := cfg.EinoModelBaseURL == "" ||
+		cfg.EinoModelBaseURL == strings.TrimSuffix(cfg.OllamaURL, "/")+"/v1"
+	if einoTargetsSameOllama && cfg.EinoModelNumCtx > preloadNumCtx {
+		preloadNumCtx = cfg.EinoModelNumCtx
+	}
+	llmClient := llm.NewClient(cfg.OllamaURL, cfg.OllamaModel).WithOptions(func() llm.Options {
+		o := llm.DefaultQwen3Options()
+		o.NumCtx = preloadNumCtx
+		return o
+	}())
 
 	// Semantic retrieval: an optional local embedding model (separate Ollama
 	// pull from the chat model) lets procedural memory rank by similarity
@@ -135,7 +229,18 @@ func main() {
 	// cold-start. Failure is non-fatal; the model lazy-loads on the first chat.
 	// With keep_alive="-1", once loaded it stays resident for the process lifetime,
 	// so this runs exactly once regardless of how many requests follow.
-	if cfg.OllamaURL != "" {
+	//
+	// Skipped when the conductor has moved to a cloud backend
+	// (cfg.EinoModelBaseURL set — see conductor.NewEngineWithOverrides'
+	// CloudBaseURL above): nothing in that configuration calls the Ollama
+	// chat model anymore, so preloading (and keeping resident) a
+	// multi-gigabyte model into VRAM for zero actual use is exactly the
+	// redundant local load an operator who opted into a cloud model
+	// shouldn't pay for. embedClient above is untouched — semantic
+	// retrieval's embedding model is a genuinely separate, small, local-only
+	// feature with no cloud equivalent in this architecture, unrelated to
+	// the chat-model redundancy this guards against.
+	if cfg.OllamaURL != "" && cfg.EinoModelBaseURL == "" {
 		preloadCtx, preloadCancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer preloadCancel()
 		if err := llmClient.Preload(preloadCtx); err != nil {
@@ -147,23 +252,12 @@ func main() {
 	}
 
 	// Wire real command execution: sandbox bridge + gateway scope check.
-	// The processor is wrapped so that every completed execution feeds its
-	// output back into the conductor's session history. This closes the
-	// agentic loop: LLM proposes → user approves → command runs → LLM sees
-	// the result on the next turn → LLM proposes the next step.
+	// Single-command output enters conductor history only through the UI's
+	// typed from_feedback turn after execution threat review. Appending raw
+	// processor output here would both duplicate feedback and bypass that hold.
 	exec := executor.New(bridge, gatewayClient, ks, sandboxMCPClient)
 	baseProcessor := exec.ProcessFunc()
-	executionStore.SetProcessor(func(ctx context.Context, rec execution.Record) (string, error) {
-		output, err := baseProcessor(ctx, rec)
-		if assistant != nil && rec.SessionID != "" {
-			var errText string
-			if err != nil {
-				errText = err.Error()
-			}
-			assistant.AppendObservation(rec.SessionID, rec.Command, output, errText)
-		}
-		return output, err
-	})
+	executionStore.SetProcessor(baseProcessor)
 
 	// Agentic task loop: store + runner over the same execution pipeline.
 	// Commands run by the loop flow through executionStore, so they get gateway
@@ -282,6 +376,17 @@ func main() {
 						// parent's SubAgentTimeout bump below, which is the actual
 						// wall-clock ceiling this step budget runs against.
 						StepBudget: 40,
+						// TokenBudget scales with the model's actual configured
+						// context window (resolvedNumCtx) instead of the
+						// package's hardcoded 6000 fallback, which was sized for
+						// nothing in particular and identical across lite/pro/
+						// expert tiers regardless of their real 8192/16384/32768
+						// windows. Half the window is reserved as compression
+						// headroom for persona/skills/plan overhead and model
+						// output; the other half is the raw-observation budget
+						// NeedsCompression watches. A higher step budget (40 vs
+						// 15) makes this even more load-bearing for sub-agents.
+						TokenBudget: resolvedNumCtx / 2,
 					},
 				)
 			}
@@ -296,6 +401,17 @@ func main() {
 			// build tag, so operators can switch by restarting the
 			// container, not rebuilding it; make conf's YUMMI_AGENT_BACKEND
 			// question just pre-seeds this for convenience.
+			//
+			// einoModelBaseURL/einoModelName/einoModelNumCtx are resolved once,
+			// early (see the block right before conductor.NewEngineWithOverrides
+			// above) — defaults to mirroring the conductor's Ollama config
+			// exactly when none of the three YUMMI_EINO_MODEL_* overrides are
+			// set (zero behavior change for anyone who hasn't opted in), or to
+			// an explicit override target otherwise. When an override IS set,
+			// the conductor was ALREADY pointed at this same target above —
+			// not left on Ollama — so chat/intent classification and the
+			// agent's own task execution run on one self-consistent model, not
+			// two silently different ones.
 			switch backend := strings.ToLower(os.Getenv("YUMMI_AGENT_BACKEND")); backend {
 			case "eino":
 				taskRunner = eino.NewEinoRunner(
@@ -305,8 +421,18 @@ func main() {
 					eino.Config{
 						StepBudget:    15,
 						ApprovalMode:  agent.ModeAskPermission,
-						ModelBaseURL:  strings.TrimSuffix(cfg.OllamaURL, "/") + "/v1",
-						ModelName:     cfg.OllamaModel,
+						ModelBaseURL:  einoModelBaseURL,
+						ModelName:     einoModelName,
+						ModelAPIKey:   cfg.EinoModelAPIKey,
+						ModelNumCtx:   einoModelNumCtx,
+						ModelThinking: resolvedThinking,
+						// Built from the SAME target as the ReAct loop above
+						// (not the conductor's agentLLM) so the goal-part
+						// audit call runs on whichever model is actually
+						// driving this task, self-consistent regardless of
+						// whether that's Ollama or an override.
+						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, 0),
+						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
 						MCPList:       sandboxMCPClient,
@@ -322,7 +448,7 @@ func main() {
 						SubAgentTimeout: 20 * time.Minute,
 					},
 				)
-				slog.Info("agent backend: eino", "model", cfg.OllamaModel)
+				slog.Info("agent backend: eino", "model", einoModelName, "base_url", einoModelBaseURL, "provider", cfg.ResolvedEinoProvider())
 			default:
 				taskRunner = agent.NewRunner(
 					taskStore,
@@ -343,6 +469,19 @@ func main() {
 						// a larger budget needs proportionally more wall clock or the
 						// timeout, not the step count, becomes the real limiter.
 						SubAgentTimeout: 20 * time.Minute,
+						// Same resolvedNumCtx-scaled TokenBudget as the sub-agent
+						// Config above — see that field's comment. Previously this
+						// was left unset (defaulting to a flat 6000 regardless of
+						// tier), the single biggest reason long multi-step tasks
+						// degraded unpredictably: on lite (8192 ctx) 6000 raw-
+						// observation tokens plus untracked persona/plan/skills
+						// overhead could already be past the real window; on
+						// expert (32768 ctx) the same 6000 triggered lossy
+						// LLM-resummarization passes far earlier than necessary,
+						// discarding specific technical detail (exact versions,
+						// paths, header values) for no reason — a real quality
+						// cost paid on every long session regardless of backend.
+						TokenBudget: resolvedNumCtx / 2,
 					},
 				)
 				slog.Info("agent backend: graph")
@@ -372,10 +511,10 @@ func main() {
 		Handler: router,
 		// ReadTimeout covers header + body read; 30s is generous for any request.
 		ReadTimeout: 30 * time.Second,
-		// WriteTimeout must accommodate LLM inference latency. qwen3:8b can take
-		// 20-45 seconds on CPU-heavy loads. Setting to 120s gives headroom while
-		// still bounding runaway connections. Per-route tighter timeouts (chat
-		// handler uses a 90s context) enforce the actual LLM budget.
+		// WriteTimeout must accommodate LLM inference latency, which can run
+		// 20-45+ seconds on CPU-heavy loads. Setting to 120s gives headroom
+		// while still bounding runaway connections. Per-route tighter timeouts
+		// (chat handler uses a 90s context) enforce the actual LLM budget.
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  90 * time.Second,
 	}

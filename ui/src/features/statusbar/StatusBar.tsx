@@ -48,6 +48,7 @@ export function StatusBar(): JSX.Element {
           {[
             { to: '/', label: t('statusBar.nav.agent'), end: true },
             { to: '/terminal', label: t('statusBar.nav.bash'), end: false },
+            { to: '/desktop', label: t('statusBar.nav.desktop'), end: false },
             { to: '/trace', label: t('statusBar.nav.trace'), end: false },
             { to: '/logs', label: t('statusBar.nav.logs'), end: false },
             { to: '/gateway', label: t('statusBar.nav.gateway'), end: false },

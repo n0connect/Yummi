@@ -13,8 +13,8 @@ type ChatFunc func(ctx context.Context, system, user string) (string, error)
 
 // Resilient wraps a primary chat backend with a circuit breaker, exponential
 // EMA latency tracking, and an OPTIONAL fallback backend (a smaller/cheaper
-// model — e.g. lite tier qwen3:4b) used while the breaker is open or on an
-// immediate primary failure.
+// model configured via YUMMI_OLLAMA_FALLBACK_MODEL) used while the breaker
+// is open or on an immediate primary failure.
 //
 // It deliberately keeps Yummi's privacy-first, single-host posture: there is no
 // multi-cloud routing à la openclaude's smart_router. The only "route" is

@@ -1,51 +1,49 @@
 # Yummi Documentation
 
-← [Back to the project README](../README.md) for a quick overview and the fastest path to running Yummi.
+[Back to Project README](../README.md)
 
-This directory is the in-depth documentation set for the agent, operator surfaces, and enforcement components. Pages are grouped by behavior and implementation stack so you can start from a workflow and still reach the owning source code.
+This directory contains in-depth documentation for the Yummi autonomous pentest platform, covering system architecture, security controls, operator interfaces, and runtime components.
 
-## Layout
+## Directory Layout
 
-```
+```text
 docs/
-  architecture.md         The 5 runtime components, network topology, the 3 core data flows
-  security-model.md       Fail-closed network layer + content-layer threat scanning + audit chain
-  installation.md         OS/architecture-specific setup, the cgo/Go-version/Node gotchas, troubleshooting
-  usage-guide.md           The 6 UI tabs, approval flows, the CLI
-  development.md          Fast build loops, running a single test, the two-Go-modules trap
-  api-reference.md        Every REST route and WebSocket event, grouped by domain
+  architecture.md           Five runtime components, network topology, core data flows
+  security-model.md         Fail-closed network layer, threat scanning, tamper-evident audit
+  installation.md           Platform prerequisites, container engines, model tier setup
+  usage-guide.md            Web UI operation (7 tabs), approval workflows, CLI commands
+  development.md            Build targets, multi-module testing, development harnesses
+  api-reference.md          REST API endpoints and WebSocket event specifications
 
-  agent/                  The agent AS A SYSTEM — behavior, not file layout
-    overview.md            What makes this agent different from a plain LLM loop
-    graph-and-nodes.md      The 11-node state machine, stuck detection, checkpointing
-    tag-protocol.md         The closed agent↔LLM vocabulary and robust parsing
-    memory-and-knowledge.md Targets/findings/tactics/context, structured + semantic retrieval
-    skills-and-subagents.md Declarative playbooks, depth-1 concurrent delegation, auto-skill-drafting
-    quality-and-evaluation.md Golden boundary fixtures, objective task metrics, live quality gate, vulnerability-finding benchmark
-    sandbox-execution.md    The one path every command takes to a real shell
+  agent/                    Agent design and execution behavior
+    overview.md             Agent architecture: graph state machine vs. Eino ADK
+    graph-and-nodes.md      11-node state machine, routing table, cycle detection
+    tag-protocol.md         Closed tag vocabulary for deterministic agent-LLM protocol
+    memory-and-knowledge.md Targets, findings, procedural tactics, context retrieval
+    skills-and-subagents.md Playbook selection, depth-1 delegation, skill curation
+    quality-and-evaluation. Objective quality metrics and assertion-bearing benchmarks
+    sandbox-execution.md    Single scoped execution path and MCP tool catalog
 
-  modules/                Code organized BY IMPLEMENTATION STACK — where to find things
-    orchestrator.md         Go — orchestrator packages and the conductor/executor boundary
-    gateway.md               Rust — the trust-boundary module map and startup sequence
-    cli.md                   Go (root module) — the yummi binary (Docker lifecycle, doctor, web UI launcher)
-    ui.md                    Node/React — the dashboard's directory structure
+  modules/                  Component maps organized by implementation stack
+    orchestrator.md         Go orchestrator packages and subsystem boundaries
+    gateway.md              Rust gateway daemon and fail-closed firewall management
+    cli.md                  Root Go CLI module (lifecycle and UI launcher)
+    ui.md                   React 18 + Vite dashboard structure and state management
 
   persona/
-    persona-and-skills.md   The two independent personas (conductor vs. agent), safety boundaries
+    persona-and-skills.md   Conductor vs. agent personas and safety boundaries
 ```
 
-## Reading paths
+The `brain/` directory (located at the repository root) contains an optional Python/LangGraph agent runtime: **[brain/README.md](../brain/README.md)**. It provides a supervisor-specialist multi-agent workflow driving the orchestrator via REST API and MCP.
 
-**"I just want to run it."** → [Installation](installation.md), then [Usage Guide](usage-guide.md).
+## Recommended Reading Paths
 
-**"I want to understand what this actually does before I trust it with real targets."** → [Architecture](architecture.md), then [Security Model](security-model.md).
+- **Quick Start and Setup**: [Installation](installation.md) -> [Usage Guide](usage-guide.md)
+- **Security and Architecture Review**: [Architecture](architecture.md) -> [Security Model](security-model.md)
+- **Agent Internals and Customization**: [Agent Overview](agent/overview.md) -> [Graph & Nodes](agent/graph-and-nodes.md) -> [Tag Protocol](agent/tag-protocol.md)
+- **Codebase Orientation**: [Modules](modules/) (organized by Go, Rust, and TypeScript stacks)
+- **API and Tool Integration**: [API Reference](api-reference.md)
 
-**"I want to modify or extend the agent's own reasoning."** → [Agent Overview](agent/overview.md) → [Graph & Nodes](agent/graph-and-nodes.md) → [Tag Protocol](agent/tag-protocol.md).
+## Documentation Maintenance
 
-**"I need to find which file owns X."** → [Modules](modules/) — organized by Go/Rust/Node, mirroring the actual module boundaries in the codebase.
-
-**"I'm integrating against the API directly (a custom client, a script)."** → [API Reference](api-reference.md).
-
-## Maintenance contract
-
-Documentation is versioned with the code, but source remains authoritative. When a route, wire type, environment default, security boundary, UI tab, Make target, or supported tool changes, update the owning component README and the relevant page here in the same change. Prefer links to source files and real test names over copied schemas or illustrative commands that can silently drift.
+Documentation is versioned alongside the code. When modifying routes, data schemas, security invariants, UI workflows, or configuration defaults, update the corresponding documentation files in the same pull request. References should link to actual source files and test identifiers where possible.
