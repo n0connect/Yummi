@@ -35,20 +35,20 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/yummi-sandbox-mcp .
 # rolling/latest environment, not a pinned one.
 FROM golang:1.26.6-bookworm AS recontools
 ENV CGO_ENABLED=0 GOBIN=/out
-RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest && \
-    go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
-    go install github.com/projectdiscovery/alterx/cmd/alterx@latest && \
-    go install github.com/projectdiscovery/katana/cmd/katana@latest && \
-    go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
-    go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest && \
-    go install github.com/PentestPad/subzy@latest && \
-    # jsluice pulls in go-tree-sitter, whose per-language bindings are cgo —
-    # the stage's own CGO_ENABLED=0 default excludes them entirely ("build
-    # constraints exclude all Go files"), so this one install needs cgo back
-    # on. The golang:*-bookworm builder image ships gcc for exactly this.
-    CGO_ENABLED=1 go install github.com/BishopFox/jsluice/cmd/jsluice@latest && \
-    go install github.com/hahwul/dalfox/v2@latest && \
-    go install github.com/lc/gau/v2/cmd/gau@latest
+RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+RUN go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+RUN go install github.com/projectdiscovery/alterx/cmd/alterx@latest
+RUN go install github.com/projectdiscovery/katana/cmd/katana@latest
+RUN go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+RUN go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest
+RUN go install github.com/PentestPad/subzy@latest
+# jsluice pulls in go-tree-sitter, whose per-language bindings are cgo —
+# the stage's own CGO_ENABLED=0 default excludes them entirely ("build
+# constraints exclude all Go files"), so this one install needs cgo back
+# on. The golang:*-bookworm builder image ships gcc for exactly this.
+RUN CGO_ENABLED=1 go install github.com/BishopFox/jsluice/cmd/jsluice@latest
+RUN go install github.com/hahwul/dalfox/v2@latest
+RUN go install github.com/lc/gau/v2/cmd/gau@latest
 
 FROM kalilinux/kali-rolling:latest
 
