@@ -5,7 +5,7 @@ import { ProxyBridgePanel } from './ProxyBridgePanel'
 
 describe('ProxyBridgePanel', () => {
   it('renders proxy bridge status when API responds', async () => {
-    vi.spyOn(global, 'fetch').mockImplementationOnce(() =>
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -28,7 +28,7 @@ describe('ProxyBridgePanel', () => {
   })
 
   it('renders empty dash when API fails', async () => {
-    vi.spyOn(global, 'fetch').mockImplementationOnce(() =>
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() =>
       Promise.reject(new Error('Network error'))
     )
 
