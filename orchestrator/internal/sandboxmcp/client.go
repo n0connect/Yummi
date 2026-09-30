@@ -58,6 +58,64 @@ func (c *Client) ensureSession(ctx context.Context) (*mcp.ClientSession, error) 
 	return c.session, nil
 }
 
+// reconnect replaces c.session, but ONLY if it is still the exact session
+// pointer the caller observed failing (bad). Multiple goroutines can share
+// one Client concurrently — Eino's ToolsNode genuinely executes several
+// tool calls in parallel within one model turn (compose.ToolsNode's own
+// worker-goroutine fan-out), so several in-flight CallTool calls can be
+// sharing this one persistent docker-exec-i session at once. Stress-testing
+// the terminal-session feature with real concurrency (N goroutines each
+// opening/driving a session) reproducibly showed one goroutine's transient
+// transport error triggering a reconnect that tore the shared connection
+// out from under every OTHER goroutine's still-healthy in-flight call —
+// each of those then saw a spurious EOF too and reconnected AGAIN
+// redundantly, and the original bad session was never closed (leaking its
+// docker-exec-i process every single time). The "already exists" failures
+// this surfaced on term_open were a symptom, not the disease: a goroutine
+// whose first attempt genuinely succeeded server-side, but whose response
+// got lost when a DIFFERENT goroutine's reconnect killed the connection out
+// from under it, retried the same (non-idempotent) call and collided with
+// its own already-created session.
+//
+// Fix: only the goroutine whose bad session pointer still matches the
+// CURRENT c.session is responsible for reconnecting (and it Closes the old
+// session first, so the process is never leaked); every other goroutine
+// that races in here with an already-superseded bad pointer just reuses
+// whatever is current — recreated by someone else, or never actually replaced
+// if this goroutine was the only one affected.
+func (c *Client) reconnect(ctx context.Context, bad *mcp.ClientSession) (*mcp.ClientSession, error) {
+	c.mu.Lock()
+	if c.session != bad {
+		// Someone else already replaced it (or it was never actually the
+		// live one when we observed the failure) — reuse the current
+		// session instead of tearing down a connection other calls may
+		// still be healthily using.
+		current := c.session
+		c.mu.Unlock()
+		if current != nil {
+			return current, nil
+		}
+		// Current is nil too (e.g. a concurrent reconnect itself just
+		// failed) — fall through to try creating one ourselves.
+		return c.ensureSession(ctx)
+	}
+	// We are the one responsible: close the dead session (don't leak its
+	// docker-exec-i process) and connect a fresh one before anyone else can
+	// observe c.session as non-nil and skip past this branch.
+	if bad != nil {
+		_ = bad.Close()
+	}
+	session, err := c.mcpClient.Connect(ctx, c.newTransport(ctx), nil)
+	if err != nil {
+		c.session = nil
+		c.mu.Unlock()
+		return nil, err
+	}
+	c.session = session
+	c.mu.Unlock()
+	return session, nil
+}
+
 // withReconnect runs call against the current session and, if it fails,
 // drops the (possibly dead) session and retries exactly once against a
 // freshly reconnected one — shared by CallTool and ListTools, which
@@ -87,10 +145,7 @@ func withReconnect[T any](c *Client, ctx context.Context, call func(*mcp.ClientS
 		return zero, fmt.Errorf("sandboxmcp: call did not complete before context was done: %w", err)
 	}
 
-	c.mu.Lock()
-	c.session = nil
-	c.mu.Unlock()
-	session, err = c.ensureSession(ctx)
+	session, err = c.reconnect(ctx, session)
 	if err != nil {
 		return zero, fmt.Errorf("sandboxmcp: reconnect failed: %w", err)
 	}

@@ -109,6 +109,32 @@ var terminals = &terminalManager{labels: map[string]string{}}
 // was not reliable under real concurrent use.
 var tmuxMu sync.Mutex
 
+// sessionLocks serializes key-sending operations (term_run, term_keys)
+// targeting the SAME session id, while leaving different sessions fully
+// independent/parallel. tmuxMu alone only makes each individual tmux CLI
+// invocation atomic; it does nothing to stop two separate term_run calls
+// against the same session from being in flight at once, each typing its
+// own multi-line sentinel sequence — stress-testing this package against
+// the real sandbox with two goroutines racing on one session id
+// reproducibly showed one call's command text getting echoed onto the same
+// line as another call's own sentinel output. A session is a single shell;
+// only one logical "type these keys" operation may be in progress against
+// it at a time, matching how a human could only type into one terminal
+// with one pair of hands. Acquired by name via lockSession/unlockSession;
+// released (map entry removed) on term_close so it does not grow forever.
+var sessionLocks sync.Map // map[string]*sync.Mutex
+
+func lockSession(id string) {
+	v, _ := sessionLocks.LoadOrStore(id, &sync.Mutex{})
+	v.(*sync.Mutex).Lock()
+}
+
+func unlockSession(id string) {
+	if v, ok := sessionLocks.Load(id); ok {
+		v.(*sync.Mutex).Unlock()
+	}
+}
+
 func nonceHex() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
@@ -211,9 +237,28 @@ func termOpenHandler(ctx context.Context, _ *mcp.CallToolRequest, args termOpenA
 	if !sessIDPattern.MatchString(id) {
 		return errResult(fmt.Sprintf("invalid session id %q — use letters, digits, _ and - (max 40 chars, no leading -)", id))
 	}
-	// Reject a duplicate up front for a clearer message than tmux's own.
+	// term_open is deliberately IDEMPOTENT on an already-live id: if the
+	// session is already open, report success and reuse it rather than
+	// erroring. Two things made this the right behavior, not just a
+	// convenience: (1) an id embeds a nonce/timestamp precisely so a caller
+	// only ever reuses one on purpose (e.g. "ensure a terminal named
+	// 'target' exists"), so treating that as success does what the caller
+	// almost certainly wants; (2) on the MCP transport used to reach this
+	// server (a persistent docker-exec-i pipe shared by every concurrent
+	// tool call — Eino's ToolsNode genuinely executes several tool calls in
+	// parallel within one model turn), a transient transport hiccup can make
+	// the CLIENT believe a call failed and transparently retry it, even
+	// though the original request already succeeded server-side. Before
+	// this, that retry hit this exact check and failed hard with "already
+	// exists" — a spurious, non-recoverable error for what was actually a
+	// successful operation. Erroring here is still correct for the ONE case
+	// that matters: an id whose tmux session is alive but was opened by a
+	// genuinely different, unrelated call — but there is no way to
+	// distinguish that from "my own retry" at this layer, and unlike, say,
+	// two callers racing to run a destructive command, reusing an
+	// already-open terminal has no harmful effect either way.
 	if _, err := runTmux(ctx, "has-session", "-t", tmuxName(id)); err == nil {
-		return errResult(fmt.Sprintf("session %q already exists", id))
+		return textResult(fmt.Sprintf("session %q already exists — reusing it. Use term_run with id=%q to run commands.", id, id))
 	}
 
 	cols, rows := args.Cols, args.Rows
@@ -245,6 +290,11 @@ func termRunHandler(ctx context.Context, _ *mcp.CallToolRequest, args termRunArg
 	if strings.TrimSpace(args.Command) == "" {
 		return errResult("command is required")
 	}
+	// Serialize against any other term_run/term_keys targeting this SAME
+	// session — see sessionLocks' doc comment. Different sessions are
+	// unaffected (each gets its own lock).
+	lockSession(id)
+	defer unlockSession(id)
 	wait := args.Wait == nil || *args.Wait
 
 	if !wait {
@@ -397,6 +447,13 @@ func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysA
 	if args.Keys == "" && !args.Enter {
 		return errResult("keys is required")
 	}
+	// Same per-session serialization as termRunHandler. In the intended
+	// usage pattern (wait=false term_run, then term_wait/term_keys), this
+	// never contends: a wait=false term_run only holds the lock for the
+	// brief moment it takes to type the command, not across the command's
+	// whole runtime.
+	lockSession(id)
+	defer unlockSession(id)
 	base := []string{"send-keys", "-t", tmuxName(id)}
 	if args.Literal {
 		if args.Keys != "" {
@@ -464,6 +521,7 @@ func termCloseHandler(ctx context.Context, _ *mcp.CallToolRequest, args termIDAr
 	terminals.mu.Lock()
 	delete(terminals.labels, id)
 	terminals.mu.Unlock()
+	sessionLocks.Delete(id) // no longer a live session; drop its lock entry
 	return textResult(fmt.Sprintf("closed session %q", id))
 }
 
