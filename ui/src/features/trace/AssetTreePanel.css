@@ -1,0 +1,121 @@
+.asm-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.asm-search {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle, #333);
+  color: var(--text-primary, #fff);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 6px);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.asm-search:focus {
+  outline: none;
+  border-color: var(--accent, #0a84ff);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.asm-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.asm-node {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px dashed var(--border-subtle, #333);
+  margin-left: 8px;
+  padding-left: 8px;
+}
+
+.asm-node-root {
+  border-left: none;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.asm-node-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  transition: background 0.15s ease;
+}
+
+.asm-node-head:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.asm-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.asm-toggle:hover {
+  color: var(--text-primary, #fff);
+}
+
+.asm-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.asm-type-domain       { background: rgba(10, 132, 255, 0.15); color: #0a84ff; }
+.asm-type-subdomain    { background: rgba(100, 210, 255, 0.15); color: #64d2ff; }
+.asm-type-ip           { background: rgba(191, 90, 242, 0.15); color: #bf5af2; }
+.asm-type-port         { background: rgba(255, 159, 10, 0.15); color: #ff9f0a; }
+.asm-type-endpoint     { background: rgba(48, 209, 88, 0.15); color: #30d158; }
+.asm-type-parameter    { background: rgba(255, 214, 10, 0.15); color: #ffd60a; }
+.asm-type-cloud_bucket { background: rgba(255, 69, 58, 0.15); color: #ff453a; }
+.asm-type-secret       { background: rgba(255, 55, 95, 0.15); color: #ff375f; }
+.asm-type-default      { background: rgba(142, 142, 147, 0.15); color: #8e8e93; }
+
+.asm-val {
+  color: var(--text-primary, #fff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.asm-scope {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(48, 209, 88, 0.12);
+  color: #30d158;
+}
+
+.asm-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
