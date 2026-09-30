@@ -10,6 +10,7 @@ import type {
 } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { useChatStream } from '../chat/useChatStream'
+import { acceptsTurnStream } from '../chat/turns'
 import { ContextBar, type ApprovalMode } from './ContextBar'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 import { t } from '../../shared/i18n/strings'
@@ -34,12 +35,21 @@ import {
   StreamingMessage,
   LIVE_OUTPUT_CAP
 } from './MessageRenderers'
+import { MiniSandboxPreview } from './MiniSandboxPreview'
+
+// ≈4 chars per token (BPE average — same estimate ContextBar.tsx already
+// uses for its overall-usage display; this is a per-turn size, not exact,
+// since /api/v1/chat returns no real token count from Ollama).
+function estimateTokens(chars: number): number {
+  return Math.max(0, Math.round(chars / 4))
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ChatResponse = {
   reply?: string
   session_id?: string
+  turn_id?: string
   approval_required_count?: number
   data?: {
     intent?: string
@@ -84,12 +94,35 @@ export function AssistantPanel({
   // the REST response resolves — that response, not this WS-driven text, is
   // the authoritative source for the final message.
   const [streamingText, setStreamingText] = useState<string | null>(null)
+  const activeTurnIDRef = useRef<string | null>(null)
+  // Aborts the in-flight /api/v1/chat call (sendChat OR analyzeOutput,
+  // whichever is currently running — only one can be at once, gated by
+  // isLoading) when the operator clicks Stop. A stale controller from a
+  // turn that already finished is never aborted by a later click: each
+  // caller only aborts what it itself stored here, checked via the turnID
+  // guard alongside it.
+  const chatAbortRef = useRef<AbortController | null>(null)
+  // Small always-visible summary of how the LAST turn ended — done, an
+  // error surfaced (was previously swallowed silently by analyzeOutput's
+  // catch — live-observed as "the model just stops with zero explanation"
+  // after a large tool output like linpeas.sh triggered a chat-analysis
+  // failure), or stopped by the operator. Distinct from isLoading/the
+  // typing dots: those only say a request is IN FLIGHT, never what
+  // happened once it isn't. tokens is the same ~4-chars-per-token estimate
+  // ContextBar already uses — real Ollama token counts aren't returned by
+  // /api/v1/chat, so this is honestly an estimate, not exact.
+  const [turnStatus, setTurnStatus] = useState<{
+    kind: 'done' | 'stopped' | 'error'
+    tokens: number
+  } | null>(null)
   // activeTask tracks the task the user is watching. Cleared when terminal.
   const [activeTask, setActiveTask] = useState<AgentTask | null>(null)
-  // subTask tracks a sub-agent task delegated (via [HANDOFF]) from
-  // activeTask, when one exists. Handoff is synchronous and depth-capped at
-  // 1, so there is at most one outstanding sub-task per active task.
-  const [subTask, setSubTask] = useState<AgentTask | null>(null)
+  // subTasks tracks every currently-live sub-agent task delegated (via
+  // [HANDOFF]) from activeTask, keyed by task id. Handoff is depth-capped at
+  // 1 (a sub-agent cannot itself delegate further), but a SINGLE step can fan
+  // out to several specialists at once (MaxHandoffsPerStep, default 4) that
+  // run concurrently — so this must track a set, not a single slot.
+  const [subTasks, setSubTasks] = useState<Record<string, AgentTask>>({})
   // Keep snapshots independently of the currently-running task. A terminal
   // task remains a useful, inspectable part of the transcript instead of
   // vanishing the moment its final websocket event arrives.
@@ -147,11 +180,12 @@ export function AssistantPanel({
     // running an old command under the new session's id.
     setProposals([])
     setActiveTask(null)
-    setSubTask(null)
+    setSubTasks({})
     setTaskSnapshots({})
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setTurnStatus(null)
     setLiveOutputs({})
     // isLoading isn't session-scoped state, so it must be cleared here too:
     // an in-flight request from the previous session now skips its own
@@ -162,6 +196,7 @@ export function AssistantPanel({
     // are about to start being filtered out by the new sessionID anyway (see
     // onChatStream), but the stale partial text must not linger on screen.
     setStreamingText(null)
+    activeTurnIDRef.current = null
     autoFeedbackCountRef.current = 0
     analyzedExecutionIDsRef.current = new Set()
     if (sid === 'default') {
@@ -199,6 +234,15 @@ export function AssistantPanel({
         setMessages(
           [...rebuildMessages(rows ?? []), ...hydratedExecutions].slice(-120)
         )
+        // Re-derive the egress/threat approval bars from the same fetch —
+        // both are otherwise populated ONLY by live onExecution WS events
+        // (see below), so a command left holding at the gateway (Ask-mode
+        // egress) or the content scanner (threat hold) went invisible the
+        // moment the operator switched away and back to this session: the
+        // execution is still genuinely stuck fail-closed server-side, just
+        // with no way left on screen to resolve it.
+        setEgressHolds(executions.filter((r) => r.status === 'awaiting_egress_approval'))
+        setThreatHolds(executions.filter((r) => r.status === 'awaiting_threat_approval'))
         setTaskActivities(
           activities.reduce<Record<string, ActivityEvent[]>>(
             (byTask, event) => {
@@ -319,6 +363,29 @@ export function AssistantPanel({
     })
   }, [])
 
+  // cancelExecution stops a single in-flight command dispatched outside an
+  // agent task (the plain chat-proposal path — approve a suggested command,
+  // no plan, no activeTask). stopActiveTask below only ever had a task to
+  // stop; a bare running/queued execution had no cancel affordance in the UI
+  // at all even though the backend has always supported it (POST
+  // /api/v1/executions/{id}/cancel, execution.Store.Cancel). The returned
+  // record is pushed straight through upsertExecutionMessage, same as any
+  // other execution lifecycle update from the WS stream.
+  const cancelExecution = useCallback(
+    async (executionID: string) => {
+      try {
+        const record = await fetchJSON<ExecutionRecord>(
+          `/api/v1/executions/${executionID}/cancel`,
+          { method: 'POST' }
+        )
+        upsertExecutionMessage(record)
+      } catch {
+        appendMessage({ role: 'system', content: t('assistant.executionCancelFailed') })
+      }
+    },
+    [upsertExecutionMessage, appendMessage]
+  )
+
   // newChat starts a fresh, server-persisted conversation. It creates a real
   // session (so its turns are durable and it appears in the rail) and lets the
   // first operator message auto-title it. Falls back to the ad-hoc "default"
@@ -327,11 +394,12 @@ export function AssistantPanel({
     setMessages([freshWelcome()])
     setProposals([])
     setActiveTask(null)
-    setSubTask(null)
+    setSubTasks({})
     setTaskSnapshots({})
     setTaskActivities({})
     setEgressHolds([])
     setThreatHolds([])
+    setTurnStatus(null)
     setLiveOutputs({})
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
@@ -366,6 +434,85 @@ export function AssistantPanel({
   // paint its (now stale) result into whatever session is on screen.
   const sessionIDRef = useRef(sessionID)
   sessionIDRef.current = sessionID
+
+  // resyncActiveTask re-derives activeTask/subTasks/taskSnapshots for `sid`
+  // from GET /sessions/{sid}/tasks — the REST-backed counterpart to the
+  // WS-pushed onTask handler below. Necessary because task state is
+  // otherwise reconstructed PURELY from live WS events keyed off a task id
+  // the client already knows about (see onTask's `task.id !== active.id`
+  // guard, driven only by locally-created tasks): switching to a session
+  // with an in-progress task, or reconnecting after a dropped socket (every
+  // event on this ws is best-effort — see execution.Store.publish
+  // server-side), otherwise leaves the client with no way to learn that
+  // task exists at all, let alone its current status. Best-effort itself: a
+  // failed fetch here just means the next real WS event, if one arrives,
+  // still self-heals the same way it always did.
+  // Deliberately NOT skipped for sid === 'default': unlike chat messages
+  // (sessionStorage-only for that bucket, see loadHistory), agent.Runner
+  // never special-cases the session id when creating a task — a task
+  // started from the default bucket is a real, persisted row server-side
+  // under session_id="default" (HandleListTasks has no such guard either).
+  // Skipping the resync here left any such task permanently unrecoverable
+  // after a tab switch, dropped socket, or reload — still fully alive and
+  // possibly awaiting operator approval server-side, but invisible in the UI.
+  const resyncActiveTask = useCallback((sid: string) => {
+    fetchJSON<AgentTask[]>(`/api/v1/sessions/${sid}/tasks`)
+      .then((tasks) => {
+        if (sessionIDRef.current !== sid) return
+        setTaskSnapshots((prev) => {
+          const next = { ...prev }
+          for (const task of tasks) next[task.id] = task
+          return next
+        })
+        const live = tasks.find((task) => !TERMINAL.has(task.status) && !task.parent_task_id)
+        setActiveTask(live ?? null)
+        const children = live
+          ? tasks.filter((task) => task.parent_task_id === live.id)
+          : []
+        setSubTasks(Object.fromEntries(children.map((c) => [c.id, c])))
+      })
+      .catch(() => {
+        /* best-effort resync; a later WS event, if any, still self-heals */
+      })
+  }, [])
+
+  // resyncExecutionHolds re-derives the egress/threat approval bars for
+  // `sid` from GET /sessions/{sid}/executions — the WS-reconnect
+  // counterpart to loadHistory's own fetch of the same endpoint (which
+  // already covers the session-switch case, see its .then above — except
+  // for sid === 'default', where loadHistory skips the network entirely
+  // and never fetches executions at all; see resyncActiveTask above for
+  // why executions, like tasks, are real server-side rows under
+  // session_id="default" too). Without this, a command left holding at
+  // the gateway or the content scanner across a dropped/reconnecting
+  // socket, tab switch, or reload has no way back onto the operator's
+  // screen even though it is still genuinely stuck fail-closed server-side.
+  const resyncExecutionHolds = useCallback((sid: string) => {
+    fetchJSON<ExecutionRecord[]>(`/api/v1/sessions/${sid}/executions?limit=100`)
+      .then((executions) => {
+        if (sessionIDRef.current !== sid) return
+        setEgressHolds(executions.filter((r) => r.status === 'awaiting_egress_approval'))
+        setThreatHolds(executions.filter((r) => r.status === 'awaiting_threat_approval'))
+      })
+      .catch(() => {
+        /* best-effort resync; a later WS event, if any, still self-heals */
+      })
+  }, [])
+
+  // Resync once per session load/switch — loadHistory's own effect only
+  // hydrates chat messages and activity, never task state (see above), and
+  // for sid === 'default' skips the network entirely (sessionStorage-only
+  // bucket for messages), so it never reaches its own executions fetch
+  // either. resyncExecutionHolds was previously wired ONLY to the WS
+  // onReconnect handler below, leaving a genuine egress/threat approval
+  // hold under the default session invisible after a plain mount, tab
+  // switch, or reload — not just after a dropped socket. A redundant fetch
+  // here for a real session (already covered by loadHistory's own) is cheap.
+  useEffect(() => {
+    resyncActiveTask(sessionID)
+    resyncExecutionHolds(sessionID)
+  }, [sessionID, resyncActiveTask, resyncExecutionHolds])
+
   // Counts consecutive auto-feedbacks since the last user message.
   // Capped at 3 to break infinite retry loops.
   const autoFeedbackCountRef = useRef(0)
@@ -415,13 +562,25 @@ export function AssistantPanel({
       }
 
       const sid = sessionID
+      const turnID = crypto.randomUUID()
+      activeTurnIDRef.current = turnID
       setIsLoading(true)
+      setTurnStatus(null)
+      const controller = new AbortController()
+      chatAbortRef.current = controller
       setStreamingText('') // this call streams too — see onChatStream
+      let replyChars = feedback.length
       try {
         const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: feedback, session_id: sid })
+          body: JSON.stringify({
+            message: feedback,
+            session_id: sid,
+            turn_id: turnID,
+            from_feedback: true
+          }),
+          signal: controller.signal
         })
         // The operator may have switched to a different conversation while this
         // was in flight — its (now-stale) reply/proposals belong to `sid`, not
@@ -430,16 +589,35 @@ export function AssistantPanel({
         // will show up correctly if the operator switches back to it.
         if (sessionIDRef.current !== sid) return
         const reply = res.data?.message ?? res.reply ?? ''
+        replyChars += reply.length
         if (reply) appendMessage({ role: 'assistant', content: reply })
         // If the model suggests new proposals after a failure, surface them.
         const newProposals = res.data?.proposals ?? []
         if (newProposals.length > 0) setProposals(newProposals)
-      } catch {
-        /* silent — execution output already visible in card */
+        if (sessionIDRef.current === sid) setTurnStatus({ kind: 'done', tokens: estimateTokens(replyChars) })
+      } catch (e) {
+        // This used to be silently swallowed entirely — live-observed as
+        // "the model just stops with zero explanation" after a large tool
+        // output (e.g. linpeas.sh's own verbose scan output, tens of
+        // thousands of characters) triggered a failure analyzing it: the
+        // command's OWN result was visible in its execution card, but
+        // whether the FOLLOW-UP analysis step succeeded was invisible.
+        // Always surface which of those two very different things happened.
+        if (sessionIDRef.current === sid) {
+          if (e instanceof DOMException && e.name === 'AbortError') {
+            appendMessage({ role: 'system', content: t('assistant.responseStopped') })
+            setTurnStatus({ kind: 'stopped', tokens: estimateTokens(replyChars) })
+          } else {
+            appendMessage({ role: 'system', content: t('assistant.analysisFailed') })
+            setTurnStatus({ kind: 'error', tokens: estimateTokens(replyChars) })
+          }
+        }
       } finally {
         if (sessionIDRef.current === sid) {
           setIsLoading(false)
           setStreamingText(null)
+          if (activeTurnIDRef.current === turnID) activeTurnIDRef.current = null
+          if (chatAbortRef.current === controller) chatAbortRef.current = null
         }
       }
     },
@@ -522,20 +700,22 @@ export function AssistantPanel({
   const onTask = useCallback(
     (task: AgentTask) => {
       const active = activeTaskRef.current
+      setTaskSnapshots((prev) => ({ ...prev, [task.id]: task }))
 
       // A sub-agent task delegated from the one we're watching: track it
-      // separately so its own pending approval can render nested under the
-      // parent's card, instead of being silently dropped (it has its own task
-      // ID the UI otherwise never learns about — see TaskTracker's subTask prop).
+      // (keyed by its own id, alongside any concurrent siblings from the same
+      // fan-out) so its pending approval can render nested under the
+      // parent's card, instead of being silently dropped — it has its own
+      // task ID the UI otherwise never learns about (see TaskTracker's
+      // subTasks prop), and a concurrent sibling must not overwrite it.
       if (active && task.parent_task_id === active.id) {
-        setSubTask(TERMINAL.has(task.status) ? null : task)
+        setSubTasks((prev) => ({ ...prev, [task.id]: task }))
         return
       }
 
       if (!active || task.id !== active.id) return
 
       setActiveTask(task)
-      setTaskSnapshots((prev) => ({ ...prev, [task.id]: task }))
 
       // When task completes or fails, inject a summary message and clear active.
       if (TERMINAL.has(task.status)) {
@@ -553,7 +733,6 @@ export function AssistantPanel({
         if (lines.length > 0) {
           appendMessage({ role: 'assistant', content: lines.join('\n') })
         }
-        setSubTask(null)
       }
 
       // When paused and there's a question, surface it.
@@ -587,14 +766,19 @@ export function AssistantPanel({
   // stops growing and gets replaced wholesale once the REST reply lands.
   const onChatStream = useCallback(
     (ev: ChatStreamEvent) => {
-      if (ev.session_id !== sessionID || ev.done) return
+      if (!acceptsTurnStream(ev, sessionID, activeTurnIDRef.current) || ev.done) return
       if (!ev.delta) return
       setStreamingText((prev) => (prev ?? '') + ev.delta)
     },
     [sessionID]
   )
 
-  useChatStream({ onExecution, onTask, onActivity, onChatStream })
+  const onReconnect = useCallback(() => {
+    resyncActiveTask(sessionIDRef.current)
+    resyncExecutionHolds(sessionIDRef.current)
+  }, [resyncActiveTask, resyncExecutionHolds])
+
+  useChatStream({ sessionID, onExecution, onTask, onActivity, onChatStream, onReconnect })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -604,7 +788,7 @@ export function AssistantPanel({
       await fetchJSON(`/api/v1/tasks/${activeTask.id}/stop`, { method: 'POST' })
       appendMessage({ role: 'system', content: t('assistant.taskStopped') })
       setActiveTask(null)
-      setSubTask(null)
+      setSubTasks({})
     } catch {
       appendMessage({ role: 'system', content: t('assistant.taskStopFailed') })
     }
@@ -631,6 +815,7 @@ export function AssistantPanel({
 
   const approveTaskGate = useCallback(
     async (taskID: string, proposalID: string, approved: boolean) => {
+      const sid = sessionID // the conversation this gate approval belongs to
       try {
         await fetchJSON(`/api/v1/tasks/${taskID}/approve`, {
           method: 'POST',
@@ -642,16 +827,35 @@ export function AssistantPanel({
           })
         })
       } catch {
+        if (sessionIDRef.current !== sid) return
         appendMessage({ role: 'system', content: t('assistant.approvalSendFailed') })
       }
     },
-    [appendMessage]
+    [appendMessage, sessionID]
+  )
+
+  const toggleTaskAutoApprove = useCallback(
+    async (taskID: string, enable: boolean) => {
+      const sid = sessionID // the conversation this task belongs to
+      try {
+        await fetchJSON(`/api/v1/tasks/${taskID}/auto-approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enable })
+        })
+      } catch {
+        if (sessionIDRef.current !== sid) return
+        appendMessage({ role: 'system', content: t('assistant.autoApproveToggleFailed') })
+      }
+    },
+    [appendMessage, sessionID]
   )
 
   const resolveEgress = useCallback(
     async (rec: ExecutionRecord, approved: boolean) => {
       // Optimistically drop the card; the resulting completed/failed event will
       // append the final result (or onExecution re-adds it if the call fails).
+      const sid = sessionID // the conversation this hold belongs to
       setEgressHolds((prev) => prev.filter((r) => r.id !== rec.id))
       try {
         await fetchJSON(`/api/v1/executions/${rec.id}/resolve-egress`, {
@@ -659,6 +863,7 @@ export function AssistantPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved })
         })
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: approved
@@ -666,6 +871,7 @@ export function AssistantPanel({
             : `${t('assistant.egressDeniedBefore')}${rec.egress_target ?? rec.command}`
         })
       } catch {
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: t('assistant.egressDecisionFailed')
@@ -673,13 +879,14 @@ export function AssistantPanel({
         setEgressHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec]) // restore
       }
     },
-    [appendMessage]
+    [appendMessage, sessionID]
   )
 
   const resolveThreat = useCallback(
     async (rec: ExecutionRecord, approved: boolean) => {
       // The terminal event emitted by the API is the source of truth for the
       // final card and (only on approval) the subsequent LLM feedback.
+      const sid = sessionID // the conversation this hold belongs to
       setThreatHolds((prev) => prev.filter((r) => r.id !== rec.id))
       try {
         await fetchJSON(`/api/v1/executions/${rec.id}/resolve-threat`, {
@@ -687,6 +894,7 @@ export function AssistantPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved })
         })
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: approved
@@ -694,6 +902,7 @@ export function AssistantPanel({
             : t('assistant.threatDenied')
         })
       } catch {
+        if (sessionIDRef.current !== sid) return
         appendMessage({
           role: 'system',
           content: t('assistant.threatDecisionFailed')
@@ -701,7 +910,7 @@ export function AssistantPanel({
         setThreatHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec])
       }
     },
-    [appendMessage]
+    [appendMessage, sessionID]
   )
 
   const setApprovalMode = useCallback(
@@ -726,15 +935,26 @@ export function AssistantPanel({
 
   // ── Chat API ───────────────────────────────────────────────────────────────
 
-  const sendChat = async () => {
-    const text = input.trim()
+  // overrideText lets a caller send a fully-composed message immediately
+  // without a round-trip through input state first (setInput is
+  // asynchronous — reading `input` right back in the same tick would see
+  // the stale value). Used by the target-first recon/pentest launcher,
+  // which composes its own goal string and sends it in one action rather
+  // than filling the box and waiting for a second manual click.
+  const sendChat = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim()
     if (!text || isLoading) return
 
     const sid = sessionID // the conversation this turn actually belongs to
+    const turnID = crypto.randomUUID()
+    activeTurnIDRef.current = turnID
     autoFeedbackCountRef.current = 0 // reset retry counter on new user message
     setInput('')
     appendMessage({ role: 'user', content: text })
     setIsLoading(true)
+    setTurnStatus(null)
+    const controller = new AbortController()
+    chatAbortRef.current = controller
     // Show the in-progress bubble immediately (typing indicator until the
     // first delta lands) — see onChatStream / the streamingText render below.
     setStreamingText('')
@@ -755,11 +975,13 @@ export function AssistantPanel({
         })
     }
 
+    let replyChars = 0
     try {
       const res = await fetchJSON<ChatResponse>('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session_id: sid })
+        body: JSON.stringify({ message: text, session_id: sid, turn_id: turnID }),
+        signal: controller.signal
       })
 
       // The operator may have switched to a different conversation while this
@@ -773,6 +995,7 @@ export function AssistantPanel({
         onSessionChange(res.session_id)
 
       const reply = res.data?.message ?? res.reply ?? t('assistant.noReplyReceived')
+      replyChars = text.length + reply.length
       appendMessage({ role: 'assistant', content: reply })
 
       const taskID = res.data?.task_id
@@ -783,7 +1006,7 @@ export function AssistantPanel({
           if (sessionIDRef.current !== sid) return
           setActiveTask(task)
           setTaskSnapshots((prev) => ({ ...prev, [task.id]: task }))
-          setSubTask(null) // a brand-new task can't have a stale sub-task from before
+          setSubTasks({}) // a brand-new task can't have a stale sub-task from before
           // Inject a task card message so it appears in the message thread.
           appendMessage({
             role: 'task',
@@ -801,12 +1024,20 @@ export function AssistantPanel({
         const newProposals = res.data?.proposals ?? []
         if (newProposals.length > 0) setProposals(newProposals)
       }
-    } catch {
-      if (sessionIDRef.current === sid)
-        appendMessage({
-          role: 'system',
-          content: t('assistant.connectionError')
-        })
+      if (sessionIDRef.current === sid) setTurnStatus({ kind: 'done', tokens: estimateTokens(replyChars) })
+    } catch (e) {
+      if (sessionIDRef.current === sid) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          appendMessage({ role: 'system', content: t('assistant.responseStopped') })
+          setTurnStatus({ kind: 'stopped', tokens: estimateTokens(replyChars) })
+        } else {
+          appendMessage({
+            role: 'system',
+            content: t('assistant.connectionError')
+          })
+          setTurnStatus({ kind: 'error', tokens: estimateTokens(replyChars) })
+        }
+      }
     } finally {
       if (sessionIDRef.current === sid) {
         setIsLoading(false)
@@ -815,6 +1046,8 @@ export function AssistantPanel({
         // bubble's job ends here regardless of whether any/all/no deltas
         // ever arrived over the websocket.
         setStreamingText(null)
+        if (activeTurnIDRef.current === turnID) activeTurnIDRef.current = null
+        if (chatAbortRef.current === controller) chatAbortRef.current = null
         inputRef.current?.focus()
       }
     }
@@ -945,10 +1178,21 @@ export function AssistantPanel({
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
+  // Aborts whichever chat call (sendChat or analyzeOutput) is currently in
+  // flight. Both stash their own AbortController here, so this always
+  // targets the real in-flight request regardless of which function
+  // started it — there is deliberately no separate "stop a task" affordance
+  // here; taskRunning has its own distinct UI (see the running-indicator
+  // branch above) and its own cancel path (cancelExecution).
+  const stopChat = () => {
+    chatAbortRef.current?.abort()
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <section className="panel panel-left">
+      <MiniSandboxPreview />
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
         {taskRunning && (
@@ -959,6 +1203,14 @@ export function AssistantPanel({
         {!taskRunning && isLoading && (
           <span className="running-indicator" role="status" aria-live="polite">
             <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.replyPreparingIndicator')}
+            <button
+              type="button"
+              className="small-button chat-stop-btn"
+              onClick={stopChat}
+              title={t('assistant.stopResponseButton')}
+            >
+              {t('assistant.stopResponseButton')}
+            </button>
           </span>
         )}
         <span className="panel-header-actions">
@@ -998,7 +1250,7 @@ export function AssistantPanel({
           aria-relevant="additions"
         >
           {isFreshWorkspace ? (
-            <EmptyWorkspace onUsePrompt={useStarterPrompt} />
+            <EmptyWorkspace onUsePrompt={useStarterPrompt} onLaunchTarget={(goal) => void sendChat(goal)} />
           ) : (
             messages.map((msg) => {
               if (msg.role === 'task' && msg.taskID) {
@@ -1017,7 +1269,7 @@ export function AssistantPanel({
                       })
                       if (activeTask?.id === msg.taskID) {
                         setActiveTask(null)
-                        setSubTask(null)
+                        setSubTasks({})
                       }
                     }}
                     onApprove={(pid, approved) =>
@@ -1025,10 +1277,11 @@ export function AssistantPanel({
                     }
                     onStop={stopActiveTask}
                     onResume={(message) => resumeTask(msg.taskID!, message)}
-                    subTask={subTask}
-                    onApproveSub={(pid, approved) =>
-                      subTask && approveTaskGate(subTask.id, pid, approved)
+                    subTasks={Object.values(taskSnapshots).filter(task => task.parent_task_id === msg.taskID)}
+                    onApproveSub={(subTaskID, pid, approved) =>
+                      approveTaskGate(subTaskID, pid, approved)
                     }
+                    onToggleAutoApprove={(enable) => toggleTaskAutoApprove(msg.taskID!, enable)}
                   />
                 )
               }
@@ -1039,6 +1292,7 @@ export function AssistantPanel({
                     content={msg.content}
                     execution={msg.execution}
                     liveOutput={liveOutputs[msg.execution.id]}
+                    onCancel={cancelExecution}
                   />
                 )
               }
@@ -1265,6 +1519,24 @@ export function AssistantPanel({
             </button>
           )}
         </div>
+
+        {/* Last-turn status — small and easy to miss on purpose, but ALWAYS
+            present once a turn ends, whichever way it ended. Distinct from
+            the typing-dots/Stop button above (those only exist while a
+            request is in flight); this is the answer to "did anything
+            happen after that" once it isn't. See analyzeOutput's own
+            comment for the silent-failure case this replaces. */}
+        {turnStatus && !isLoading && (
+          <div className={`chat-turn-status chat-turn-status-${turnStatus.kind}`}>
+            {turnStatus.kind === 'done' && t('assistant.turnStatusDone')}
+            {turnStatus.kind === 'stopped' && t('assistant.turnStatusStopped')}
+            {turnStatus.kind === 'error' && t('assistant.turnStatusError')}
+            {' · ~'}
+            {turnStatus.tokens >= 1000 ? `${(turnStatus.tokens / 1000).toFixed(1)}k` : turnStatus.tokens}
+            {' '}
+            {t('assistant.turnStatusTokensSuffix')}
+          </div>
+        )}
 
         {/* Context bar */}
         <ContextBar

@@ -23,8 +23,8 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.OllamaURL != "" {
 		t.Errorf("expected OllamaURL empty by default, got %s", cfg.OllamaURL)
 	}
-	if cfg.OllamaModel != "qwen3:14b" {
-		t.Errorf("expected default OllamaModel qwen3:14b, got %q", cfg.OllamaModel)
+	if cfg.OllamaModel != "gpt-oss:20b" {
+		t.Errorf("expected default OllamaModel gpt-oss:20b, got %q", cfg.OllamaModel)
 	}
 	if cfg.TLSDir == "" {
 		t.Error("expected a default TLSDir")
@@ -34,6 +34,50 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.OllamaEmbedModel != "nomic-embed-text" {
 		t.Errorf("expected default OllamaEmbedModel nomic-embed-text, got %q", cfg.OllamaEmbedModel)
+	}
+}
+
+// TestConfigEinoModelOverridesDefaultBlank locks the "purely additive, zero
+// behavior change unless set" contract: an operator who never touches
+// YUMMI_EINO_MODEL_* must see cmd/orchestrator/main.go derive the exact same
+// target it always has from YUMMI_OLLAMA_URL/MODEL — this test only proves
+// Config itself defaults to blank/0 so main.go's fallback branch is the one
+// that actually runs; main.go's own derivation logic is exercised by eino's
+// own tests via Config.PlanLLM/ModelBaseURL, not here.
+func TestConfigEinoModelOverridesDefaultBlank(t *testing.T) {
+	unset(t, "YUMMI_EINO_MODEL_BASE_URL", "YUMMI_EINO_MODEL_NAME", "YUMMI_EINO_MODEL_NUM_CTX")
+
+	cfg := Load()
+
+	if cfg.EinoModelBaseURL != "" {
+		t.Errorf("expected EinoModelBaseURL blank by default, got %q", cfg.EinoModelBaseURL)
+	}
+	if cfg.EinoModelName != "" {
+		t.Errorf("expected EinoModelName blank by default, got %q", cfg.EinoModelName)
+	}
+	if cfg.EinoModelNumCtx != 0 {
+		t.Errorf("expected EinoModelNumCtx 0 by default, got %d", cfg.EinoModelNumCtx)
+	}
+}
+
+// TestConfigEinoModelOverridesRead proves the three env vars actually reach
+// Config when an operator sets them (e.g. to point only the eino backend at
+// a local LM Studio instance instead of Ollama).
+func TestConfigEinoModelOverridesRead(t *testing.T) {
+	t.Setenv("YUMMI_EINO_MODEL_BASE_URL", "http://localhost:1234/v1")
+	t.Setenv("YUMMI_EINO_MODEL_NAME", "openai/gpt-oss-20b")
+	t.Setenv("YUMMI_EINO_MODEL_NUM_CTX", "32768")
+
+	cfg := Load()
+
+	if cfg.EinoModelBaseURL != "http://localhost:1234/v1" {
+		t.Errorf("EinoModelBaseURL = %q, want http://localhost:1234/v1", cfg.EinoModelBaseURL)
+	}
+	if cfg.EinoModelName != "openai/gpt-oss-20b" {
+		t.Errorf("EinoModelName = %q, want openai/gpt-oss-20b", cfg.EinoModelName)
+	}
+	if cfg.EinoModelNumCtx != 32768 {
+		t.Errorf("EinoModelNumCtx = %d, want 32768", cfg.EinoModelNumCtx)
 	}
 }
 
@@ -90,7 +134,7 @@ func TestConfigGatewayTLSOptIn(t *testing.T) {
 }
 
 func TestConfigExplicitModelOverridesTier(t *testing.T) {
-	t.Setenv("YUMMI_OLLAMA_TIER", "pro")
+	t.Setenv("YUMMI_OLLAMA_TIER", "expert")
 	t.Setenv("YUMMI_OLLAMA_MODEL", "custom:13b")
 
 	cfg := Load()
@@ -98,18 +142,18 @@ func TestConfigExplicitModelOverridesTier(t *testing.T) {
 	if cfg.OllamaModel != "custom:13b" {
 		t.Errorf("expected explicit model to win, got %s", cfg.OllamaModel)
 	}
-	if cfg.OllamaTier != "pro" {
-		t.Errorf("expected OllamaTier=pro, got %s", cfg.OllamaTier)
+	if cfg.OllamaTier != "expert" {
+		t.Errorf("expected OllamaTier=expert, got %s", cfg.OllamaTier)
 	}
 }
 
 func TestConfigTierSelectsModelWithoutExplicitOverride(t *testing.T) {
-	t.Setenv("YUMMI_OLLAMA_TIER", "lite")
+	t.Setenv("YUMMI_OLLAMA_TIER", "standard")
 	t.Setenv("YUMMI_OLLAMA_MODEL", "")
 
 	cfg := Load()
-	if cfg.OllamaModel != "qwen3:4b" {
-		t.Errorf("expected lite tier model, got %s", cfg.OllamaModel)
+	if cfg.OllamaModel != "gpt-oss:20b" {
+		t.Errorf("expected standard tier model, got %s", cfg.OllamaModel)
 	}
 }
 

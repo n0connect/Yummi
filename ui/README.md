@@ -20,22 +20,26 @@ src/
   entities/       Shared TypeScript types (AgentTask, ExecutionRecord, etc.)
   features/       Self-contained feature modules
     assistant/    Chat panel — message rendering, proposal bar
-    chat/          Chat/event stream hook (useChatStream — WS, jittered backoff)
+    chat/         Chat/event stream hook (useChatStream — WS, jittered backoff)
+    desktop/      Desktop panel — noVNC/websockify canvas & status
+    operator/     Operator Trust Rail & Briefing panel
     tasks/        Agent task tracker (live plan steps, approval gate)
-    trace/         TRACE tab — activity timeline + Findings/Tactics/Context/Skills/Roles
-    gateway/       GATEWAY tab — status, rules, egress mode, tamper-evident audit log
+    trace/        TRACE tab — activity timeline + Findings/Tactics/Context/Skills/Roles
+    gateway/      GATEWAY tab — status, rules, egress mode, tamper-evident audit log
     terminal/     xterm.js PTY panel
     debuglog/     SSE log stream panel
     health/       Health page widgets
     sessions/     Session rail and session mutations
     skills/       Pending-skill review hooks
-    statusbar/    Top nav: Agent | Bash | Trace | Logs | Gateway | Health
+    statusbar/    Top nav: Agent | Bash | Desktop | Trace | Logs | Gateway | Health
     system/       System status cards
   pages/          Route-level page wrappers
-    chat/ terminal/ trace/ logs/ gateway/ health/   route wrappers (/, /terminal, …)
+    chat/ terminal/ desktop/ trace/ logs/ gateway/ health/   route wrappers (/, /terminal, /desktop, …)
   shared/
-    api/          fetchJSON wrapper, WebSocket helpers
+    api/          fetchJSON wrapper, WebSocket helpers (runtime.ts, http.ts)
     components/   Generic UI primitives
+    i18n/         Build-time string translation table (strings.ts, driven by YUMMI_LANG)
+    lib/          Sanitization and presentation helpers
   test/setup.ts   jsdom stubs for scrollIntoView and ResizeObserver
 ```
 
@@ -86,9 +90,12 @@ The UI communicates with orchestrator via:
 | `/api/v1/chat/approve` | POST | Approve a proposal by ID |
 | `/api/v1/tasks/{id}` | GET | Poll task state |
 | `/api/v1/tasks/{id}/approve` | POST | Approve agent gate |
-| `/ws/events` | WS | Execution, task, agent-activity, and gateway status events |
-| `/ws/terminal` | WS | PTY terminal stream |
-| `/api/v1/system/logs` | SSE | Structured log stream |
+| `/api/v1/tasks/{id}/auto-approve` | POST | Set per-task auto-approval toggle |
+| `/api/v1/operator/briefing` | GET | Surfaced tactics, skills, and findings for operator |
+| `/ws/events` | WS | Monotonic replayable event stream (execution, task, activity, gateway, skill, chat stream) |
+| `/ws/terminal` | WS | PTY terminal stream (Bash tab) |
+| `/ws/desktop` | WS | noVNC / websockify stream (Desktop tab) |
+| `/api/v1/system/logs` | SSE | Structured log stream (Logs tab) |
 
 ## State management
 

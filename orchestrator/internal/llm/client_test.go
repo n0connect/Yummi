@@ -24,9 +24,6 @@ func TestClientChat(t *testing.T) {
 		if req.Model == "" {
 			t.Error("expected model in request")
 		}
-		if req.Format != "json" {
-			t.Errorf("expected format=json, got %q", req.Format)
-		}
 		// System message should be first
 		if len(req.Messages) < 2 || req.Messages[0].Role != "system" {
 			t.Error("expected first message to be system")
@@ -67,6 +64,80 @@ func TestClientChatEmptyMessageIsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty message") {
 		t.Fatalf("expected empty-message error, got: %v", err)
+	}
+}
+
+// TestClientChatFallsBackToThinkingWhenContentEmpty is the regression test
+// for a live-observed gpt-oss-via-Ollama failure: the model's real answer
+// landed entirely in the "thinking" field with content left empty, and the
+// conductor hard-failed every chat/intent call with a generic connection-
+// error message even though Ollama responded successfully. Content empty +
+// Thinking populated must recover the Thinking text instead of erroring.
+func TestClientChatFallsBackToThinkingWhenContentEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := ollamaResponse{
+			Message: Message{Role: "assistant", Content: "", Thinking: "the real answer landed here"},
+			Done:    true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model")
+	got, err := client.Chat(context.Background(), "system", "user")
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got != "the real answer landed here" {
+		t.Fatalf("got %q, want the Thinking field's text", got)
+	}
+}
+
+// TestClientChatEmptyContentAndThinkingIsStillAnError proves the fallback
+// doesn't mask a genuinely empty response — both fields empty must still
+// error, same as before this fallback existed.
+func TestClientChatEmptyContentAndThinkingIsStillAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := ollamaResponse{
+			Message: Message{Role: "assistant", Content: "", Thinking: "  "},
+			Done:    true,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model")
+	_, err := client.Chat(context.Background(), "system", "user")
+	if err == nil || !strings.Contains(err.Error(), "empty message") {
+		t.Fatalf("expected empty-message error when both fields are blank, got: %v", err)
+	}
+}
+
+// TestClientChatNeverSendsFormatJSON is the regression test for a real,
+// live-reproduced gpt-oss:20b failure: "format":"json" combined with
+// Think=false made Ollama return a fully empty message — no content AND no
+// thinking, despite the response showing real tokens were generated — for
+// any non-trivial system prompt. Confirmed by isolating the variable via
+// direct requests against a running Ollama instance: identical prompt with
+// "format" omitted returned clean, valid JSON content every time. Every
+// JSON-expecting caller already instructs the model in its own prompt text
+// and has its own parse-failure handling, so the Ollama-level constraint was
+// redundant even before it turned out to be actively harmful.
+func TestClientChatNeverSendsFormatJSON(t *testing.T) {
+	var raw map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		resp := ollamaResponse{Message: Message{Role: "assistant", Content: "ok"}, Done: true}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-model")
+	if _, err := client.Chat(context.Background(), "system", "user"); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, ok := raw["format"]; ok {
+		t.Fatalf("request body included \"format\": %v, want the field omitted entirely", raw["format"])
 	}
 }
 
@@ -152,6 +223,7 @@ func TestClientPreload(t *testing.T) {
 		Prompt    string          `json:"prompt"`
 		Stream    bool            `json:"stream"`
 		KeepAlive json.RawMessage `json:"keep_alive"`
+		Options   ollamaOptions   `json:"options"`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +260,9 @@ func TestClientPreload(t *testing.T) {
 	// Ollama's duration parser rejects bare "-1" without a unit suffix.
 	if string(capturedBody.KeepAlive) != "-1" {
 		t.Errorf("expected keep_alive=-1 (integer), got %s", capturedBody.KeepAlive)
+	}
+	if capturedBody.Options.NumCtx != 16384 {
+		t.Errorf("expected preload num_ctx=16384, got %d", capturedBody.Options.NumCtx)
 	}
 }
 
@@ -299,9 +374,6 @@ func TestClientChatStreamAccumulatesAndInvokesOnChunk(t *testing.T) {
 	if !req.Stream {
 		t.Error("expected stream=true in request body")
 	}
-	if req.Format != "json" {
-		t.Errorf("expected format=json, got %q", req.Format)
-	}
 	if len(req.Messages) < 2 || req.Messages[0].Role != "system" {
 		t.Error("expected first message to be system")
 	}
@@ -372,6 +444,29 @@ func TestClientChatStreamSkipsMalformedLine(t *testing.T) {
 	}
 	if full != "good" {
 		t.Errorf("expected 'good', got %q", full)
+	}
+}
+
+// TestClientChatStreamFallsBackToThinkingWhenContentEmpty is ChatStream's
+// counterpart to TestClientChatFallsBackToThinkingWhenContentEmpty — the
+// streaming path accumulates content and thinking separately per NDJSON
+// chunk, so it needs its own regression coverage for the same fallback.
+func TestClientChatStreamFallsBackToThinkingWhenContentEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"","thinking":"the "}}` + "\n"))
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"","thinking":"real answer"}}` + "\n"))
+		doneLine, _ := json.Marshal(ollamaResponse{Done: true})
+		_, _ = w.Write(append(doneLine, '\n'))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL, "test-model")
+	full, err := client.ChatStream(context.Background(), "sys", "user", nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if full != "the real answer" {
+		t.Fatalf("got %q, want the accumulated Thinking text", full)
 	}
 }
 

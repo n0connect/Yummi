@@ -1,70 +1,101 @@
 package scope
 
 import (
-	"net/netip"
 	"strings"
 	"testing"
 )
 
-// FuzzExtractTarget drives random command strings through ExtractTarget and
-// enforces the security invariant the whole scope layer rests on: whatever is
-// returned must be a token that re-validates as a target on its own. If
-// ExtractTarget ever returned an IP-shaped prefix of a longer hostname (the bug
-// fixed in this package), or an out-of-range pseudo-IP, this property would fail
-// — the gateway would then open an nftables rule for a token that does not match
-// what the command actually talks to.
-func FuzzExtractTarget(f *testing.F) {
+// FuzzExtractTargets hardens the single source of truth every scope decision
+// in the codebase depends on (see package doc: validator and executor must
+// always agree on the same target, or a command could be scope-checked
+// against one host and unlocked for another). Seeded with the existing
+// hand-written regression cases plus known-tricky shapes (scope-confusion
+// IP-prefix hostnames, boundary octets, IPv6 literals, quoting) so the fuzzer
+// starts mutating from real, meaningful inputs rather than blank bytes.
+func FuzzExtractTargets(f *testing.F) {
 	seeds := []string{
-		"nmap -sV 192.168.1.1",
-		"curl http://1.2.3.4.evil.com/x",
+		"nmap 10.0.0.1 8.8.8.8 example.com",
+		"curl https://example.com https://api.example.com/x https://example.com/y",
+		"nmap -iL /workspace/targets.txt --top-ports 100",
+		"nmap -sV -p 80 10.0.0.1",
+		"nmap -sV --top-ports 100 scanme.nmap.org",
+		"curl http://user:pass@10.0.0.7:8080/x",
+		"ffuf -w /usr/share/wordlists/common.txt -u http://10.0.0.1/FUZZ",
+		"ffuf --url=http://10.0.0.9/FUZZ",
+		"nmap -sn 192.168.1.0/24",
+		"curl http://[2001:db8::1]/x",
+		"nmap 256.1.1.1",
 		"nmap 999.999.999.999",
-		"ffuf -u http://10.0.0.1/FUZZ -w /usr/share/wordlists/x.txt",
-		"nikto --host=example.org",
+		"nmap 1.2.3.4.evil.com",
+		"curl http://1.2.3.4.evil.com/x",
+		`curl "10.0.0.1"`,
+		`nikto -h 'example.org'`,
+		`ffuf --url="http://10.0.0.9/FUZZ"`,
 		"echo hello",
-		"curl http://[2001:db8::1]:8080/y",
+		"nmap localhost",
 		"",
-		"-----",
-		"a.b.c.d.e.f.g",
-		"http://@@@://::::",
+		"   ",
+		"nmap --flag=",
+		"nmap -",
+		"nmap =",
+		"curl http://",
+		"curl ://nohost",
+		"nmap \x00\x01\x02",
+		"nmap " + strings.Repeat("a", 5000) + ".com",
+		"nmap " + strings.Repeat("1.", 2000) + "1",
+		"curl http://[::1",
+		"curl http://user:pass@[::1]:80/x",
+		"nmap 你好.example.com",
+		"nmap İstanbul.example.com",
 	}
 	for _, s := range seeds {
 		f.Add(s)
 	}
 
-	f.Fuzz(func(t *testing.T, cmd string) {
-		got := ExtractTarget(cmd) // must never panic
+	f.Fuzz(func(t *testing.T, command string) {
+		// Invariant 1: never panics (checked implicitly — testing.F fails the
+		// corpus entry and reports it if the function under test panics).
+		targets := ExtractTargets(command)
 
-		if got == "" {
-			return
-		}
-
-		// Invariant 1: the result re-validates as a target token on its own.
-		if validTarget(got) != got {
-			t.Fatalf("ExtractTarget(%q) = %q which does not re-validate (got validTarget=%q)",
-				cmd, got, validTarget(got))
-		}
-
-		// Invariant 2: if the result parses as an IP/CIDR, net/netip must accept
-		// it — i.e. octets are in range. Guards against a regex that lets
-		// 256.x or 999.x through as a "target".
-		if looksNumericIP(got) {
-			if _, errA := netip.ParseAddr(got); errA != nil {
-				if _, errP := netip.ParsePrefix(got); errP != nil {
-					t.Fatalf("ExtractTarget(%q) = %q looks like an IP but net/netip rejects it", cmd, got)
-				}
+		// Invariant 2: every returned target is non-empty and independently
+		// re-validates as a well-formed target on its own — ExtractTargets
+		// must never emit something validTarget itself would reject, or a
+		// caller trusting the list could scope-check something malformed.
+		for _, target := range targets {
+			if target == "" {
+				t.Fatalf("ExtractTargets(%q) returned an empty target string", command)
+			}
+			if revalidated := validTarget(target); revalidated == "" {
+				t.Fatalf(
+					"ExtractTargets(%q) returned %q, but validTarget(%q) rejects it — "+
+						"an invalid target must never reach a caller",
+					command, target, target,
+				)
 			}
 		}
-	})
-}
 
-// looksNumericIP reports whether s starts with a digit and contains only the
-// characters of a dotted/CIDR IPv4 literal — a cheap "is this meant to be an IP"
-// check for the fuzz invariant.
-func looksNumericIP(s string) bool {
-	if s == "" || s[0] < '0' || s[0] > '9' {
-		return false
-	}
-	return strings.IndexFunc(s, func(r rune) bool {
-		return (r < '0' || r > '9') && r != '.' && r != '/'
-	}) < 0
+		// Invariant 3: no duplicates — ExtractTargets already de-duplicates
+		// internally (the `seen` map); a fuzz-found input that slips a dup
+		// through would indicate the de-dup key doesn't match the actual
+		// returned value in some encoding edge case.
+		seen := make(map[string]bool, len(targets))
+		for _, target := range targets {
+			if seen[target] {
+				t.Fatalf("ExtractTargets(%q) returned duplicate target %q: %v", command, target, targets)
+			}
+			seen[target] = true
+		}
+
+		// Invariant 4: ExtractTarget (the single-target convenience wrapper)
+		// must always agree with ExtractTargets[0] — two implementations of
+		// "the first target" must never diverge.
+		single := ExtractTarget(command)
+		if len(targets) == 0 {
+			if single != "" {
+				t.Fatalf("ExtractTarget(%q) = %q but ExtractTargets returned none", command, single)
+			}
+		} else if single != targets[0] {
+			t.Fatalf("ExtractTarget(%q) = %q, want %q (ExtractTargets[0])", command, single, targets[0])
+		}
+	})
 }

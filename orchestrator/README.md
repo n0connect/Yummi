@@ -35,12 +35,14 @@ internal/
     gate.go                Blocking operator-approval channel
     activity.go            Typed TRACE ActivityEvents
     evaluation.go · verdict.go  Objective quality metrics · server-side finding verdicts
+    eino/                  Cloud / Eino-driven ReAct agent backend (alternate tool-calling engine)
   knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
     store.go               targets · findings · procedural_memory · persistent_context
     procedural.go          target-scrubbed tactic recording (the learning loop)
     retrieval.go           RetrievalStrategy — structured SQL recall (excludes current-task cmds)
     semantic_retrieval.go  Local Ollama embeddings with structured fallback
   skill/                 Declarative skill registry (YAML playbooks, threat-scanned on load)
+  skillcurator/          Autonomous skill creation from successful trajectories (quarantine store)
   security/              Content-layer fail-closed
     threatscan/            injection/exfil/C2/invisible-unicode scan + ANSI stripping
     invariants/            architectural fitness tests (exec-path, mcp-dormancy, no-telemetry)
@@ -48,14 +50,16 @@ internal/
     engine.go              LLM inference · persona · per-session chat history
     validator.go           RISK CLASSIFICATION ONLY (no scope decisions, no tool allowlist)
     approval.go            In-memory proposal store with TTL
-    tier.go · persona.go   Ollama tier presets · persona YAML loader
+    tier.go · persona.go   Ollama tier presets (standard / expert) · persona YAML loader
     golden.go · policy.go   Deterministic persona boundary fixtures and policy
   scope/                 Single source of truth for ExtractTargets(command) (leaf)
   execution/ executor/   Execution lifecycle store · processor (scope check → sandbox)
   llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
   sandbox/ gateway/      Docker exec bridge · IPC client to the gateway daemon
+  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (30 tools)
+  retention/             Background retention cleaner for aged session data
   session/ health/       SQLite session CRUD · ring-buffer health metrics
-  api/                   REST routes · domain handlers · WS events/terminal · SSE logs
+  api/                   REST routes · domain handlers · WS events/terminal/desktop · SSE logs
   mcp/                   JSON-RPC MCP client — DORMANT (host-exec; unimported by production)
   tlsutil/ config/ ui/   mTLS certs · env config · embedded ui/dist
 ```
@@ -93,14 +97,21 @@ internal/
 | `YUMMI_ORCHESTRATOR_HOST` / `_PORT` | `127.0.0.1` / `9080` | Listen address / port |
 | `YUMMI_DB_PATH` | `~/.yummi/sessions.db` | SQLite database |
 | `YUMMI_OLLAMA_URL` | _(empty)_ | Ollama endpoint; **empty = conductor declines everything (no rule-based fallback)** |
-| `YUMMI_OLLAMA_MODEL` | `qwen3:14b` | Explicit model tag; takes precedence over a tier |
-| `YUMMI_OLLAMA_TIER` | _(empty)_ | `lite` / `standard` / `pro` / `expert`; selects a model only when no explicit model is set |
+| `YUMMI_OLLAMA_MODEL` | `gpt-oss:20b` | Explicit model tag; takes precedence over a tier |
+| `YUMMI_OLLAMA_TIER` | _(empty)_ | `standard` (`gpt-oss:20b`) / `expert` (`gpt-oss:120b`); selects a model only when no explicit model is set |
 | `YUMMI_OLLAMA_FALLBACK_MODEL` | _(empty)_ | Optional lighter LOCAL model the resilient client downgrades to |
 | `YUMMI_OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model; semantic retrieval falls back to structured retrieval if unavailable |
-| `YUMMI_AUTO_SKILL_DIR` | `~/.yummi/skills` | Writable persistent directory for operator-approved generated skills |
+| `YUMMI_AGENT_BACKEND` | `native` | Agent execution engine (`native` graph state machine or `eino` ReAct loop) |
+| `YUMMI_EINO_MODEL_BASE_URL` | _(empty)_ | OpenAI-compatible endpoint URL for Eino backend (e.g. OpenRouter, vLLM) |
+| `YUMMI_EINO_MODEL_NAME` | _(empty)_ | Model identifier for Eino backend |
+| `YUMMI_EINO_MODEL_API_KEY` | _(empty)_ | API key for Eino backend provider |
+| `YUMMI_EINO_PROVIDER` | _(auto)_ | Provider type for Eino (`ollama`, `openrouter`, `openai`) |
+| `YUMMI_DATA_RETENTION_DAYS` | `0` | Auto-prune sessions older than N days (`0` = retain indefinitely) |
 | `YUMMI_SANDBOX_CONTAINER` | `yummi-sandbox` | Kali container name |
+| `YUMMI_SANDBOX_DESKTOP_ADDR` | `sandbox:6080` | Address of the sandbox's websockify desktop stream |
 | `YUMMI_SANDBOX_EXEC_TIMEOUT` | _(empty → 10m bridge default)_ | Go duration bounding one command |
 | `YUMMI_GATEWAY_SOCKET` | `/run/yummi/gateway.sock` | Gateway Unix socket |
+| `YUMMI_AUTO_SKILL_DIR` | `~/.yummi/skills` | Writable persistent directory for operator-approved generated skills |
 | `YUMMI_PERSONA_DIR` | `persona/v0.1` | Persona YAML directory |
 
 **Gateway is the sole network-scope authority.** Orchestrator extracts every explicit target and asks gateway for hostname and egress verdicts; it never decides allow/block itself. The conductor validator does risk classification only.

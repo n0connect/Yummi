@@ -41,7 +41,9 @@ export function usePendingSkills(): PendingSkillsData {
   // simple at this data volume, and avoids reasoning about partial merges
   // for a store whose rows move between exactly two fetched views.
   const onSkillEvent = useCallback(() => { refresh() }, [refresh])
-  useChatStream({ onSkillEvent })
+  // Ordinary disconnects use event replay; a process restart or replay-window
+  // loss triggers this REST refresh through the explicit resync signal.
+  useChatStream({ onSkillEvent, onReconnect: refresh })
 
   const approve = useCallback(async (id: string, reason = '') => {
     await fetchJSON(`/api/v1/skills/pending/${encodeURIComponent(id)}/approve`, {

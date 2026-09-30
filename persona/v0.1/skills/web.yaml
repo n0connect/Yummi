@@ -1,5 +1,7 @@
+schema_version: 1
+version: 2.1.0
 name: web
-description: Web service assessment — fingerprint, map, and probe HTTP(S) targets.
+description: Senior web application penetration testing — fingerprinting, crawler-based endpoint extraction, directory/parameter fuzzing, and WAF triage.
 triggers:
   - web
   - http
@@ -13,16 +15,69 @@ triggers:
   - port 443
   - url
   - api
+  - katana
+  - ffuf
+  - gobuster
+  - whatweb
+  - wafw00f
 tools:
   - whatweb
+  - wafw00f
   - curl
-  - gobuster
+  - katana
   - ffuf
+  - gobuster
   - nikto
+  - gau
 knowledge: |
-  Assess web targets methodically:
-  1. Fingerprint: `whatweb <url>` and `curl -sI <url>` for server, framework, headers.
-  2. Map content with `gobuster dir -u <url> -w <wordlist>` or `ffuf -u <url>/FUZZ -w <wordlist>`.
-  3. Known issues: `nikto -h <url>` for outdated software / misconfig signatures.
-  4. Inspect security headers (CSP, HSTS, X-Frame-Options) and cookie flags.
-  5. Record each distinct issue as its own structured finding with the evidence (response snippet).
+  Assess web application attack surfaces systematically like a senior red-team operator.
+
+  TOOLING: prefer each tool's own dedicated function over a raw shell command
+  — `whatweb_scan`, `wafw00f_scan`, `curl_probe`, `katana_crawl`, `gau_fetch`,
+  `ffuf_fuzz`, `nikto_scan` (the last three are also reachable via
+  `run_pentest_tool` if not offered directly). Each already runs with this
+  methodology's proven flags baked in, returns clean parsed text instead of a
+  shell pipeline's raw output, and — as ONE tool call instead of a multi-
+  command shell chain — doesn't trip the operator-approval system's chained-
+  command risk floor the way `cmd1 && cmd2 | cmd3` does. Give a tool an
+  `output_file` set to an ABSOLUTE path under `/home/pentester/work/<target>/`
+  whenever its result feeds a later step (a crawl result you'll grep for
+  `.js` URLs, a fuzz result you'll cross-reference) — sandbox-mcp's own
+  working directory is fixed, so a path relative to wherever a separate shell
+  command `cd`s into will NOT resolve.
+
+  1. FINGERPRINTING & WAF TRIAGE:
+     - Identify web server, application framework, CMS, and technologies:
+       `whatweb_scan(url, aggression=3)`.
+     - Check for Web Application Firewalls (Cloudflare, AWS WAF, Akamai, Imperva):
+       `wafw00f_scan(url)`.
+     - Inspect security headers (CSP, HSTS, CORS `Origin: null`, Cookie flags
+       `HttpOnly; Secure; SameSite`):
+       `curl_probe(url, headers_only=true, follow_redirects=true)`.
+
+  2. MODERN ENDPOINT CRAWLING & JAVASCRIPT DISCOVERY:
+     - Crawl pages, parse client-side forms, and extract endpoints from
+       loaded JS: `katana_crawl(url, depth=3, output_file)`.
+     - Harvest historical endpoints and parameter names:
+       `gau_fetch(domain, output_file)` — take the first ~200 lines of the
+       saved file if the full result is large; that's a raw-shell `head`, not
+       a reason to re-fetch.
+
+  3. CONTENT & HIDDEN DIRECTORY DISCOVERY:
+     - Fuzz directories and file extensions with status code filtering:
+       `ffuf_fuzz(url, wordlist="common.txt", match_codes="200,204,301,302,307,401,403", output_file)`.
+     - For identified 403 Forbidden endpoints, test standard bypass headers:
+       `curl_probe(url="<url>/admin", headers=["X-Forwarded-For: 127.0.0.1", "X-Custom-IP-Authorization: 127.0.0.1"])`.
+
+  4. API & CONFIGURATION EXPOSURE PROBING:
+     - Check common API documentation paths: `/api/v1`, `/swagger.json`, `/api-docs`, `/openapi.json`, `/graphql`.
+     - Check critical exposed files: `/.git/HEAD`, `/.env`, `/.DS_Store`, `/robots.txt`, `/sitemap.xml`.
+
+  5. STRUCTURED EVIDENCE & FINDINGS:
+     - Never report generic descriptions. Include exact HTTP status codes, server response headers,
+       parameter names, or matched URL paths as verifiable evidence.
+references:
+  - persona:web-v2
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/web.yaml

@@ -58,17 +58,33 @@ func (c *Client) ensureSession(ctx context.Context) (*mcp.ClientSession, error) 
 	return c.session, nil
 }
 
-// CallTool invokes a tool on the sandbox-resident server, transparently
-// reconnecting once if the persistent session has died (sandbox restarted,
-// process crashed) since the last call.
-func (c *Client) CallTool(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+// withReconnect runs call against the current session and, if it fails,
+// drops the (possibly dead) session and retries exactly once against a
+// freshly reconnected one — shared by CallTool and ListTools, which
+// otherwise duplicated this retry-after-reconnect shape identically.
+//
+// If ctx is already past its deadline when the first call fails — the
+// realistic case for a slow tool (gau's historical-URL fetch against a
+// live domain has been observed taking 90s+ depending on external OSINT
+// service responsiveness) that simply ran out of the caller's time budget
+// — a second attempt is doomed before it starts: ensureSession's own
+// Connect(ctx, ...) would fail immediately on the same expired ctx. Retrying
+// anyway produced a misleading "reconnect failed: context deadline exceeded"
+// that reads as a broken connection when the real story is "the call itself
+// timed out" — confirmed live against gau_fetch. Surface the original error
+// directly in that case instead of masking it behind a doomed reconnect.
+func withReconnect[T any](c *Client, ctx context.Context, call func(*mcp.ClientSession) (T, error)) (T, error) {
+	var zero T
 	session, err := c.ensureSession(ctx)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	result, err := call(session)
 	if err == nil {
 		return result, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return zero, fmt.Errorf("sandboxmcp: call did not complete before context was done: %w", err)
 	}
 
 	c.mu.Lock()
@@ -76,9 +92,18 @@ func (c *Client) CallTool(ctx context.Context, tool string, args map[string]any)
 	c.mu.Unlock()
 	session, err = c.ensureSession(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sandboxmcp: reconnect failed: %w", err)
+		return zero, fmt.Errorf("sandboxmcp: reconnect failed: %w", err)
 	}
-	return session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	return call(session)
+}
+
+// CallTool invokes a tool on the sandbox-resident server, transparently
+// reconnecting once if the persistent session has died (sandbox restarted,
+// process crashed) since the last call.
+func (c *Client) CallTool(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	return withReconnect(c, ctx, func(session *mcp.ClientSession) (*mcp.CallToolResult, error) {
+		return session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	})
 }
 
 // ListTools returns every tool the sandbox-resident server has registered —
@@ -87,27 +112,13 @@ func (c *Client) CallTool(ctx context.Context, tool string, args map[string]any)
 // exercised in practice, but the underlying protocol supports it via
 // ListToolsResult.NextCursor if that changes.
 func (c *Client) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
-	session, err := c.ensureSession(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
-	if err == nil {
+	return withReconnect(c, ctx, func(session *mcp.ClientSession) ([]*mcp.Tool, error) {
+		result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
+		if err != nil {
+			return nil, err
+		}
 		return result.Tools, nil
-	}
-
-	c.mu.Lock()
-	c.session = nil
-	c.mu.Unlock()
-	session, err = c.ensureSession(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sandboxmcp: reconnect failed: %w", err)
-	}
-	result, err = session.ListTools(ctx, &mcp.ListToolsParams{})
-	if err != nil {
-		return nil, err
-	}
-	return result.Tools, nil
+	})
 }
 
 // Close terminates the persistent session, if any.

@@ -57,6 +57,37 @@ func TestDBTargetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDBScopeRuleRoundTrip(t *testing.T) {
+	s := dbStore(t)
+	ctx := context.Background()
+	saved, err := s.SaveScopeRule(ctx, ScopeRule{
+		SessionID: "s1", Pattern: "*.EXAMPLE.com.", Kind: ScopeExclude, Note: "staging",
+	})
+	if err != nil {
+		t.Fatalf("SaveScopeRule: %v", err)
+	}
+	if saved.Pattern != "*.example.com" {
+		t.Fatalf("pattern not normalized on save: %q", saved.Pattern)
+	}
+
+	got, err := s.ListScopeRules(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListScopeRules: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != ScopeExclude || got[0].Note != "staging" {
+		t.Fatalf("scope rule column mapping wrong: %+v", got)
+	}
+
+	ok, err := s.DeleteScopeRule(ctx, "s1", saved.ID)
+	if err != nil || !ok {
+		t.Fatalf("DeleteScopeRule: ok=%v err=%v", ok, err)
+	}
+	got, _ = s.ListScopeRules(ctx, "s1")
+	if len(got) != 0 {
+		t.Fatalf("want 0 rules after delete, got %d", len(got))
+	}
+}
+
 func TestDBTacticDedupViaSQL(t *testing.T) {
 	s := dbStore(t)
 	ctx := context.Background()

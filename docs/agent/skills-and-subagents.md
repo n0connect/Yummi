@@ -42,6 +42,30 @@ SKILLS (relevant playbooks — apply the matching approach):
 - recon: Enumerate before you exploit. Start passive/light, escalate only as needed: ...
 ```
 
+### The 17 Built-in Red Team Skills
+
+Yummi includes 17 specialized YAML playbooks located in `persona/v0.1/skills/`:
+
+| Skill | Focus / Methodology | Key Tools Mentioned |
+|---|---|---|
+| **`recon`** | Host & network enumeration, sequencing discipline | `nmap` |
+| **`web`** | Web application fingerprinting, header analysis, directories | `whatweb`, `curl`, `gobuster`, `nikto` |
+| **`js-recon`** | JS file discovery, endpoint extraction, hidden API routes | `katana`, `gau`, `curl` |
+| **`parameter-fuzzing`** | Query & body parameter discovery, hidden debug flags | `ffuf` |
+| **`api-pentest`** | REST/GraphQL API enumeration, broken object auth, IDOR probing | `curl`, `ffuf` |
+| **`sql-injection`** | Error-based, boolean-blind, and time-based SQLi verification | `sqlmap`, `curl` |
+| **`wordpress-assessment`** | CMS detection, plugin enumeration, known CVE verification | `wpscan` |
+| **`vuln-scanning`** | Automated template-based vulnerability assessment | `nuclei`, `nikto` |
+| **`osint-enum`** | Passive reconnaissance, subdomain discovery, certificate search | `subfinder`, `amass`, `theHarvester` |
+| **`credential-attack`** | Service authentication testing, brute-force & credential spraying | `hydra`, `medusa` |
+| **`smb-enum`** | Null sessions, share listing, user enumeration | `enum4linux` |
+| **`snmp-enum`** | SNMP community string bruteforcing, MIB walk | `onesixtyone`, `snmpwalk` |
+| **`reverse-engineering`** | Binary header inspection, mitigation audit, disassembly triage | `checksec`, `radare2` |
+| **`source-analysis`** | Static source code review, dangerous function pattern matching | `grep`, `find` |
+| **`system-inspection`** | Linux privilege triage, SUID/GUID enumeration, cron inspection | `find`, `ls` |
+| **`software-presence`** | Installed package & binary audit on local host/container | `dpkg`, `which` |
+| **`largest-files`** | Disk triage, log dump inspection, large backup discovery | `find`, `du` |
+
 ## A real skill, read in full <a id="real-skill"></a>
 
 `persona/v0.1/skills/recon.yaml`, verbatim:

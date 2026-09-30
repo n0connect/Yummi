@@ -296,6 +296,86 @@ func TestRunnerE2E_AutoModeStillGatesOnDestructiveCommand(t *testing.T) {
 	}
 }
 
+// TestRunnerE2E_AutoApproveNonCriticalSkipsGateForLowRisk proves the
+// per-task override (Task.AutoApproveNonCritical, set via
+// Runner.SetTaskAutoApprove): in ask_permission mode — which normally gates
+// EVERY command — a task with the override enabled runs a medium-risk
+// command straight through to completion with no approval wait at all,
+// unlike TestRunnerE2E_ApprovalGate's identical setup without the override.
+func TestRunnerE2E_AutoApproveNonCriticalSkipsGateForLowRisk(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	es := realShellStore(t)
+	validator := conductor.NewValidator()
+	ollama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"run a scan"}]}`,
+		"[RUN_COMMAND]\n{\"command\":\"echo scanning\",\"step_id\":\"s1\",\"risk_level\":\"medium\"}",
+		"[FINISH]\n{\"summary\":\"scan auto-approved and done\"}",
+	)
+
+	cfg := fastRetryCfg()
+	cfg.ApprovalMode = ModeAskPermission
+	runner := NewRunner(store, ollama, validator, NewStoreExecer(es, 5*time.Second), cfg)
+
+	task, err := runner.CreateAndPlan(context.Background(), "test-session", "scan without bothering the operator")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if err := runner.SetTaskAutoApprove(task.ID, true); err != nil {
+		t.Fatalf("SetTaskAutoApprove: %v", err)
+	}
+	if err := runner.Start(task.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
+	if !strings.Contains(got.Summary, "scan auto-approved and done") {
+		t.Fatalf("summary mismatch: %q", got.Summary)
+	}
+}
+
+// TestRunnerE2E_AutoApproveNonCriticalStillGatesHighRisk proves the
+// override's own floor: even with it enabled, a "high" risk_level command
+// still pauses awaiting_approval in ask_permission mode — only below-high
+// risk is ever auto-approved by this toggle.
+func TestRunnerE2E_AutoApproveNonCriticalStillGatesHighRisk(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	es := realShellStore(t)
+	validator := conductor.NewValidator()
+	ollama := newFakeOllama(t,
+		`{"steps":[{"id":"s1","description":"brute force a login"}]}`,
+		"[RUN_COMMAND]\n{\"command\":\"hydra -l admin -P rockyou.txt 10.0.0.5 ssh\",\"step_id\":\"s1\",\"risk_level\":\"high\"}",
+		"[FINISH]\n{\"summary\":\"brute force approved and done\"}",
+	)
+
+	cfg := fastRetryCfg()
+	cfg.ApprovalMode = ModeAskPermission
+	runner := NewRunner(store, ollama, validator, NewStoreExecer(es, 5*time.Second), cfg)
+
+	task, err := runner.CreateAndPlan(context.Background(), "test-session", "brute force with the override on")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if err := runner.SetTaskAutoApprove(task.ID, true); err != nil {
+		t.Fatalf("SetTaskAutoApprove: %v", err)
+	}
+	if err := runner.Start(task.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	pending := waitForStatus(t, store, task.ID, StatusAwaitingApproval, 5*time.Second)
+	if pending.PendingRisk != "high" {
+		t.Fatalf("expected high risk to still gate despite AutoApproveNonCritical, got %q", pending.PendingRisk)
+	}
+
+	if err := runner.Approve(task.ID, pending.PendingProposalID, true, ""); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	got := waitForStatus(t, store, task.ID, StatusCompleted, 5*time.Second)
+	if !strings.Contains(got.Summary, "brute force approved and done") {
+		t.Fatalf("summary mismatch: %q", got.Summary)
+	}
+}
+
 // TestResumeAfterAskOperatorInjectsMessageAndContinues is a regression test
 // for a bug found via live stress-testing: once a task paused via
 // [ASK_OPERATOR], resuming it (POST /api/v1/tasks/{id}/start) just re-entered
@@ -367,5 +447,212 @@ func TestResumeAfterAskOperatorInjectsMessageAndContinues(t *testing.T) {
 	}
 	if !strings.Contains(capturedPrompts[2], "10.0.0.5") {
 		t.Fatalf("operator's resume message never reached the model's prompt:\n%s", capturedPrompts[2])
+	}
+}
+
+// TestCreateAndPlan_EnumeratedGoalDeterministicallyDecomposed proves the
+// under-decomposition guard: even when the planner LLM collapses an
+// explicitly 3-part goal into ONE step (the live-confirmed failure — the
+// model re-collapses it no matter how it is asked), the guard splits the
+// operator's own enumeration markers in code into one plan step per part.
+func TestCreateAndPlan_EnumeratedGoalDeterministicallyDecomposed(t *testing.T) {
+	store, err := NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	// The model stubbornly returns a single step, regardless of the goal.
+	oneStep := `{"steps":[{"id":"s1","description":"find largest files in /var"}]}`
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	goal := "Uc sey yap: 1) /var altinda en buyuk 3 dosya, 2) CPU cekirdek sayisi, 3) /etc/passwd kullanicilari"
+	task, err := r.CreateAndPlan(context.Background(), "sess", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 3 {
+		t.Fatalf("plan has %d steps, want 3 (deterministic split of a 3-part goal): %+v", len(task.Plan), task.Plan)
+	}
+	// Each step must carry the operator's own text for that part.
+	wants := []string{"/var altinda en buyuk 3 dosya", "CPU cekirdek sayisi", "/etc/passwd kullanicilari"}
+	for i, w := range wants {
+		if task.Plan[i].Description != w {
+			t.Errorf("step %d description = %q, want %q", i+1, task.Plan[i].Description, w)
+		}
+	}
+}
+
+// TestCreateAndPlan_FreeFormGoalNotTouched is the negative control: a single
+// free-form instruction (no enumeration markers) must keep exactly the plan
+// the model produced — the deterministic split must never fire on it.
+func TestCreateAndPlan_FreeFormGoalNotTouched(t *testing.T) {
+	store, _ := NewStore(nil)
+	oneStep := `{"steps":[{"id":"s1","description":"find the largest file under /var"}]}`
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "find the largest file under /var and report its size")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 1 {
+		t.Fatalf("plan has %d steps, want 1 — split must not fire on a free-form goal: %+v", len(task.Plan), task.Plan)
+	}
+}
+
+// TestCreateAndPlan_EnumeratedGoalAdequatePlanKept proves the guard does not
+// override a model plan that already covered every part — it only fires when
+// the model produced FEWER steps than the enumeration.
+func TestCreateAndPlan_EnumeratedGoalAdequatePlanKept(t *testing.T) {
+	store, _ := NewStore(nil)
+	threeStep := `{"steps":[{"id":"s1","description":"model step one, nicely phrased"},{"id":"s2","description":"model step two"},{"id":"s3","description":"model step three"}]}`
+	r := NewRunner(store, newFakeOllama(t, threeStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "1) a 2) b 3) c")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 3 || task.Plan[0].Description != "model step one, nicely phrased" {
+		t.Fatalf("guard overrode an already-adequate model plan: %+v", task.Plan)
+	}
+}
+
+// TestSplitEnumeratedParts is the pure, deterministic unit test of the split.
+func TestSplitEnumeratedParts(t *testing.T) {
+	got := SplitEnumeratedParts("Uc sey yap: 1) diskte /var altinda en buyuk 3 dosyayi bul, 2) kac tane CPU cekirdegi oldugunu soyle, 3) sandbox'ta hangi kullanicilar var listele.")
+	want := []string{
+		"diskte /var altinda en buyuk 3 dosyayi bul",
+		"kac tane CPU cekirdegi oldugunu soyle",
+		"sandbox'ta hangi kullanicilar var listele",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d parts, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("part %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// Non-enumerated → nil.
+	if p := SplitEnumeratedParts("just find the biggest file"); p != nil {
+		t.Errorf("free-form goal split to %#v, want nil", p)
+	}
+}
+
+// TestCreateAndPlan_SkillStepLimitDoesNotClampEnumeration is the live-found
+// regression: an enumerated multi-part goal whose FIRST part triggers a
+// single-technique skill (largest-files, plan_step_limit:1) had its correctly
+// decomposed 3-step plan truncated back to 1 by that skill cap — re-hiding
+// parts 2 and 3. The enumeration count must be a hard floor the skill cap
+// cannot cut beneath.
+func TestCreateAndPlan_SkillStepLimitDoesNotClampEnumeration(t *testing.T) {
+	store, _ := NewStore(nil)
+	oneStep := `{"steps":[{"id":"s1","description":"find largest files in /var"}]}`
+	reg, err := skill.LoadDir("../../../persona/v0.1/skills")
+	if err != nil {
+		t.Fatalf("load skills: %v", err)
+	}
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil,
+		Config{Persona: testPersona, StepBudget: 15, Skills: reg})
+
+	// Part 1 mentions "en buyuk dosya" to trigger the largest-files skill.
+	goal := "Uc sey yap: 1) /var altinda en buyuk dosyalari bul, 2) CPU cekirdek sayisi, 3) /etc/passwd kullanicilari"
+	task, err := r.CreateAndPlan(context.Background(), "sess", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 3 {
+		t.Fatalf("plan has %d steps, want 3 — a single-technique skill cap clamped an explicit 3-part enumeration: %+v", len(task.Plan), task.Plan)
+	}
+}
+
+// TestCreateAndPlan_NaturalLanguageMultiPartGoalAudited proves the natural-
+// language fallback: a goal with NO numbered markers ("check the OS and
+// list the open ports" — real operator phrasing, not "1) ... 2) ...") whose
+// planner call still under-decomposes to one step must be caught by the
+// AuditGoalParts fallback, not silently accepted the way
+// TestCreateAndPlan_FreeFormGoalNotTouched's genuinely single-intent goal
+// correctly is. The fake LLM serves the plan call's single-step response
+// first, then the audit call's two-line enumeration second.
+func TestCreateAndPlan_NaturalLanguageMultiPartGoalAudited(t *testing.T) {
+	store, err := NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	oneStep := `{"steps":[{"id":"s1","description":"check what OS is running"}]}`
+	auditResponse := "check what OS is running\nlist the open ports"
+	r := NewRunner(store, newFakeOllama(t, oneStep, auditResponse), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	goal := "check what OS is running and also list the open ports"
+	task, err := r.CreateAndPlan(context.Background(), "sess", goal)
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if len(task.Plan) != 2 {
+		t.Fatalf("plan has %d steps, want 2 (audit-driven decomposition of an unmarked multi-part goal): %+v",
+			len(task.Plan), task.Plan)
+	}
+}
+
+// TestCreateAndPlan_ScalesStepBudgetForEnumeratedGoal is the graph backend's
+// regression test for the same live-observed failure the eino backend fixed:
+// a flat StepBudget doesn't fit a goal with real detected complexity. A
+// 3-part enumerated goal configured with the flat default (15) must come out
+// of planning with StepBudget already raised to ScaledStepBudget(15, 3) = 42,
+// so stepNode's very first budget check (task.StepsUsed >= task.StepBudget)
+// sees the real ceiling, not the stale flat one.
+func TestCreateAndPlan_ScalesStepBudgetForEnumeratedGoal(t *testing.T) {
+	store, _ := NewStore(nil)
+	threeStep := `{"steps":[{"id":"s1","description":"a"},{"id":"s2","description":"b"},{"id":"s3","description":"c"}]}`
+	r := NewRunner(store, newFakeOllama(t, threeStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "1) a 2) b 3) c")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	want := ScaledStepBudget(15, 3)
+	if task.StepBudget != want {
+		t.Fatalf("StepBudget = %d, want %d (scaled for 3 enumerated parts, not left at the flat configured 15)", task.StepBudget, want)
+	}
+}
+
+// TestCreateAndPlan_DoesNotScaleSingleIntentGoal is the negative control: a
+// free-form single-intent goal must keep the exact configured StepBudget —
+// scaling only when there's real detected reason to expect more work is what
+// keeps the budget meaningful as a runaway-loop backstop.
+func TestCreateAndPlan_DoesNotScaleSingleIntentGoal(t *testing.T) {
+	store, _ := NewStore(nil)
+	oneStep := `{"steps":[{"id":"s1","description":"find the largest file under /var"}]}`
+	r := NewRunner(store, newFakeOllama(t, oneStep), nil, nil, Config{Persona: testPersona, StepBudget: 15})
+
+	task, err := r.CreateAndPlan(context.Background(), "sess", "find the largest file under /var")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	if task.StepBudget != 15 {
+		t.Fatalf("StepBudget = %d, want unchanged at the configured 15 for a single-intent goal", task.StepBudget)
+	}
+}
+
+// TestScaledStepBudget is the pure unit test of the shared formula: floors at
+// the configured value, scales linearly per part, caps at 80.
+func TestScaledStepBudget(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int
+		numParts   int
+		want       int
+	}{
+		{"single-intent unchanged", 15, 0, 15},
+		{"one part unchanged", 15, 1, 15},
+		{"two parts scale above flat default", 15, 2, 30},
+		{"three parts", 15, 3, 42},
+		{"never scales below configured", 50, 2, 50},
+		{"caps at 80", 15, 20, 80},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ScaledStepBudget(tc.configured, tc.numParts); got != tc.want {
+				t.Errorf("ScaledStepBudget(%d, %d) = %d, want %d", tc.configured, tc.numParts, got, tc.want)
+			}
+		})
 	}
 }

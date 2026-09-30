@@ -44,13 +44,16 @@ type OracleKind string
 
 const (
 	// OracleToolEvidence: the claimed Evidence is a literal substring of the
-	// real, stored output of the PlanStep the finding cites. This is
-	// evidence-grounding, not exploit-reproduction — Yummi does not (yet)
-	// re-run an exploit to prove code execution; it only proves the model's
-	// claim is actually traceable to real tool output rather than invented.
-	// Future oracle kinds (active replay, OAST callback, etc.) get their own
-	// value here if Yummi grows that capability.
+	// real, stored output of the PlanStep the finding cites.
 	OracleToolEvidence OracleKind = "tool_evidence"
+	// OracleActivePoC: machine-verified HTTP status/header/payload reproduction.
+	OracleActivePoC OracleKind = "active_poc"
+	// OracleDOMExecution: verified client-side DOM or script execution indicator.
+	OracleDOMExecution OracleKind = "dom_execution"
+	// OracleOOBInteraction: verified Out-of-Band (OOB) DNS or HTTP canary callback.
+	OracleOOBInteraction OracleKind = "oob_interaction"
+	// OracleDifferential: verified statistical response/timing delta (e.g. SQLi).
+	OracleDifferential OracleKind = "differential"
 )
 
 // FindingRecord is the persisted, structured form of one finding: the
@@ -102,11 +105,11 @@ func buildFindingRecords(details []FindingDetail, currentStepID, liveContent str
 // the same as disproving it. Only a step that itself failed/never completed
 // earns the stronger Unsupported verdict.
 func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, plan []PlanStep) FindingRecord {
-	title := sanitizeAgentText(d.Title)
+	title := SanitizeAgentText(d.Title)
 	if title == "" {
-		title = sanitizeAgentText(d.Description)
+		title = SanitizeAgentText(d.Description)
 	}
-	evidence := sanitizeAgentText(d.Evidence)
+	evidence := SanitizeAgentText(d.Evidence)
 	stepID := strings.TrimSpace(d.StepID)
 	if stepID == "" {
 		stepID = currentStepID
@@ -119,9 +122,9 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 	}
 
 	if stepID == currentStepID && liveContent != "" {
-		if containsFold(liveContent, evidence) {
+		if matchEvidence(liveContent, evidence) {
 			rec.Verdict = VerdictVerified
-			rec.OracleKind = OracleToolEvidence
+			rec.OracleKind = ClassifyOracleKind(title, evidence, liveContent)
 			return rec
 		}
 		rec.Reason = "could not confirm — claimed evidence not found verbatim in this step's actual output"
@@ -138,17 +141,40 @@ func verifyFindingDetail(d FindingDetail, currentStepID, liveContent string, pla
 		rec.Reason = fmt.Sprintf("cited step %q never completed successfully (status: %s)", stepID, step.Status)
 		return rec
 	}
-	if !containsFold(step.Result, evidence) {
+	if !matchEvidence(step.Result, evidence) {
 		rec.Reason = fmt.Sprintf("could not confirm — claimed evidence not found verbatim in step %q's recorded output", stepID)
 		return rec
 	}
 	rec.Verdict = VerdictVerified
-	rec.OracleKind = OracleToolEvidence
+	rec.OracleKind = ClassifyOracleKind(title, evidence, step.Result)
 	return rec
+}
+
+func matchEvidence(haystack, needle string) bool {
+	if needle == "" || haystack == "" {
+		return false
+	}
+	if containsFold(haystack, needle) {
+		return true
+	}
+	trimmed := strings.Trim(needle, "\"'` \t\r\n")
+	if trimmed != "" && containsFold(haystack, trimmed) {
+		return true
+	}
+	normHaystack := normalizeWhitespace(haystack)
+	normNeedle := normalizeWhitespace(trimmed)
+	if normNeedle != "" && containsFold(normHaystack, normNeedle) {
+		return true
+	}
+	return false
 }
 
 func containsFold(haystack, needle string) bool {
 	return needle != "" && strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}
+
+func normalizeWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func findPlanStep(plan []PlanStep, id string) (PlanStep, bool) {

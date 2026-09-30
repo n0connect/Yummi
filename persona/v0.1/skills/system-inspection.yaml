@@ -10,7 +10,8 @@ triggers:
   - shell
   - uptime
   - memory
-  - ram
+  - ram usage
+  - free ram
   - mysql
   - postgresql
   - largest

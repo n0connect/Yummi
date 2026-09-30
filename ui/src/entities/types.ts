@@ -14,6 +14,7 @@ export type ChatProposal = {
 // authoritative reply is still the normal /api/v1/chat REST response.
 export type ChatStreamEvent = {
   session_id: string
+  turn_id: string
   delta?: string
   done: boolean
 }
@@ -162,8 +163,39 @@ export type AgentTask = {
   pending_proposal_id?: string
   pending_command?: string
   pending_risk?: string
+  // Operator-set, per-task override (POST /api/v1/tasks/{id}/auto-approve):
+  // when true, a proposal below high/critical risk skips the ask_permission
+  // gate for the REST of this one task — high/critical and anything
+  // destructiveFloor forces still always gate. Distinct from the runner-wide
+  // approval mode, which only ever applies to tasks started after a change.
+  auto_approve_non_critical?: boolean
   created_at?: number
   updated_at?: number
+}
+
+export type AgentCapabilities = {
+  backend: 'graph' | 'eino' | string
+  execution_model: string
+  recovery_model: string
+  resumable: boolean
+  native_tool_calling: boolean
+  approval_mode: 'ask_permission' | 'auto' | string
+  roles: string[]
+  max_handoff_depth: number
+  max_concurrent_sub_agents: number
+  memory_enabled: boolean
+  retrieval_model: string
+  skills_enabled: boolean
+  skill_count: number
+  skill_governance: string
+}
+
+export type AgentDelegationRun = {
+  id: string
+  parent_task_id: string
+  task_id?: string
+  role: string
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | string
 }
 
 // ─── TRACE / observability types ─────────────────────────────────────────────
@@ -252,6 +284,18 @@ export type SkillInfo = {
   knowledge?: string
 }
 
+// The operator briefing (from /api/v1/operator/briefing) — the same
+// accumulated knowledge the AI conductor is fed, surfaced for the operator's
+// own manual work: matching skills, tactics that worked before, and findings
+// already on record for the session.
+export type OperatorBriefing = {
+  goal: string
+  tool: string
+  skills: SkillInfo[]
+  tactics: Tactic[]
+  findings: Finding[]
+}
+
 // A curator-drafted skill awaiting operator review (from
 // /api/v1/skills/pending). Never auto-loaded — approval writes it to disk
 // and hot-adds it to the live registry; rejection just marks the row.
@@ -293,6 +337,10 @@ export type GatewayAuditRow = {
 export type GatewayStatus = {
   level: number
   rules_active: boolean
+  uptime_secs?: number
+  policy_kernel_consistent: boolean
+  enforcement_generation: number
+  last_reconcile_error?: string
   status: 'connected' | 'disconnected' | 'not_configured'
 }
 

@@ -190,6 +190,31 @@ func TestEinoBackendNeverImportsOSExec(t *testing.T) {
 	}
 }
 
+// TestExecutionProcessorDoesNotInjectRawOutputIntoChatHistory locks the
+// content-security boundary between sandbox execution and the conductor. Raw
+// target output must first pass execution threat review and then enter chat
+// through the typed from_feedback route; main must not append it eagerly.
+func TestExecutionProcessorDoesNotInjectRawOutputIntoChatHistory(t *testing.T) {
+	root := moduleRoot(t)
+	path := filepath.Join(root, "cmd", "orchestrator", "main.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if ok && sel.Sel.Name == "AppendObservation" {
+			t.Errorf("main eagerly calls AppendObservation at %s; raw output must enter through reviewed from_feedback only", fset.Position(call.Pos()))
+		}
+		return true
+	})
+}
+
 // TestNoTelemetryEndpoints backs the privacy-first claim: no analytics/telemetry
 // phone-home endpoint may appear anywhere in source (incl. tests). (openclaude's
 // verify-no-phone-home, as a source-level guard.)

@@ -19,19 +19,20 @@ type Request struct {
 
 // Response mirrors gateway/src/ipc/protocol.rs IpcResponse.
 type Response struct {
-	Type        string `json:"type"`
-	IP          string `json:"ip,omitempty"`
-	InScope     bool   `json:"in_scope,omitempty"`
-	Level       int    `json:"level,omitempty"`
-	RulesActive bool   `json:"rules_active,omitempty"`
-	UptimeSecs  uint64 `json:"uptime_secs,omitempty"`
-	Message     string `json:"message,omitempty"`
-	RuleID      string `json:"rule_id,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"`
-	// KernelWarning is set when the gateway's policy engine added a rule but
-	// the nftables kernel-level unlock failed — the rule looks active to
-	// future scope checks, but traffic to the target is still actually
-	// dropped (fail-safe, not fail-open). See ipc/protocol.rs RuleAdded.
+	Type                   string `json:"type"`
+	IP                     string `json:"ip,omitempty"`
+	InScope                bool   `json:"in_scope,omitempty"`
+	Level                  int    `json:"level,omitempty"`
+	RulesActive            bool   `json:"rules_active,omitempty"`
+	UptimeSecs             uint64 `json:"uptime_secs,omitempty"`
+	PolicyKernelConsistent bool   `json:"policy_kernel_consistent,omitempty"`
+	EnforcementGeneration  uint64 `json:"enforcement_generation,omitempty"`
+	LastReconcileError     string `json:"last_reconcile_error,omitempty"`
+	Message                string `json:"message,omitempty"`
+	RuleID                 string `json:"rule_id,omitempty"`
+	ExpiresAt              int64  `json:"expires_at,omitempty"`
+	// KernelWarning is a legacy compatibility field. Current gateways commit
+	// policy only after nftables succeeds and return Error on any mismatch.
 	KernelWarning string         `json:"kernel_warning,omitempty"`
 	Rules         []RuleView     `json:"rules,omitempty"`
 	AuditRows     []AuditRowView `json:"rows,omitempty"`
@@ -51,9 +52,12 @@ type Response struct {
 
 // StatusResponse is a structured gateway status.
 type StatusResponse struct {
-	Level       int    `json:"level"`
-	RulesActive bool   `json:"rules_active"`
-	UptimeSecs  uint64 `json:"uptime_secs"`
+	Level                  int    `json:"level"`
+	RulesActive            bool   `json:"rules_active"`
+	UptimeSecs             uint64 `json:"uptime_secs"`
+	PolicyKernelConsistent bool   `json:"policy_kernel_consistent"`
+	EnforcementGeneration  uint64 `json:"enforcement_generation"`
+	LastReconcileError     string `json:"last_reconcile_error,omitempty"`
 }
 
 // RuleView mirrors gateway/src/ipc/protocol.rs RuleView.

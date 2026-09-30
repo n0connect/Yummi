@@ -1,0 +1,10 @@
+# ui/ has its own build context (docker-compose.yml: `context: ./ui`). The
+# Dockerfile runs `npm ci` inside the image, so a host node_modules/dist would
+# only bloat the upload and risk shadowing the clean install.
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store

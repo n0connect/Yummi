@@ -6,9 +6,7 @@ import "strings"
 type Tier string
 
 const (
-	TierLite     Tier = "lite"
 	TierStandard Tier = "standard"
-	TierPro      Tier = "pro"
 	TierExpert   Tier = "expert"
 )
 
@@ -18,7 +16,7 @@ type TierConfig struct {
 	Model       string
 	MaxTokens   int
 	NumCtx      int  // Ollama num_ctx context window tokens
-	Thinking    bool // Qwen3 extended thinking mode
+	Thinking    bool // model-dependent extended-reasoning toggle (Options.Think)
 	Description string
 }
 
@@ -27,41 +25,31 @@ type TierRegistry struct {
 	tiers map[Tier]TierConfig
 }
 
-// DefaultTierRegistry returns Yummi's default Qwen3 tier presets.
+// DefaultTierRegistry returns Yummi's default gpt-oss tier presets.
+//
+// Only two tiers exist because OpenAI's gpt-oss family only ships in two
+// real sizes on Ollama — 20b and 120b — unlike the four-rung qwen3 ladder
+// (4b/8b/14b/32b) this registry used before. A third or fourth named tier
+// here would have to alias one of these two same models under a different
+// name, which is worse than just not pretending a finer distinction exists.
 func DefaultTierRegistry() *TierRegistry {
 	return &TierRegistry{
 		tiers: map[Tier]TierConfig{
-			TierLite: {
-				Tier:        TierLite,
-				Model:       "qwen3:4b",
-				MaxTokens:   2048,
-				NumCtx:      8192,
-				Thinking:    false,
-				Description: "4B parameters — fast, minimal RAM footprint.",
-			},
 			TierStandard: {
 				Tier:        TierStandard,
-				Model:       "qwen3:8b",
+				Model:       "gpt-oss:20b",
 				MaxTokens:   4096,
-				NumCtx:      16384,
+				NumCtx:      32768,
 				Thinking:    false,
-				Description: "8B parameters — balanced quality and latency.",
-			},
-			TierPro: {
-				Tier:        TierPro,
-				Model:       "qwen3:14b",
-				MaxTokens:   4096,
-				NumCtx:      16384,
-				Thinking:    false,
-				Description: "14B parameters — recommended default for most hardware.",
+				Description: "20B parameters (MXFP4) — runs on 16GB+ RAM, the recommended default.",
 			},
 			TierExpert: {
 				Tier:        TierExpert,
-				Model:       "qwen3:32b",
+				Model:       "gpt-oss:120b",
 				MaxTokens:   8192,
 				NumCtx:      32768,
-				Thinking:    true,
-				Description: "32B parameters — deep reasoning, workstation-grade hardware required.",
+				Thinking:    false,
+				Description: "120B parameters (MXFP4) — workstation-grade hardware, a single 80GB GPU or 64GB+ Mac with offload.",
 			},
 		},
 	}
@@ -78,23 +66,23 @@ func (tr *TierRegistry) Get(t Tier) (TierConfig, bool) {
 
 // Resolve interprets its argument as a tier name or a literal Ollama model tag.
 // Tier names return the matching registry entry; anything else is treated as a
-// custom model tag wrapped under the Pro tier profile (16K context, no thinking).
-// An empty input returns the Pro default.
+// custom model tag wrapped under the Standard tier profile (32K context, no
+// thinking). An empty input returns the Standard default.
 func (tr *TierRegistry) Resolve(modelOrTier string) TierConfig {
 	if tr == nil {
 		return TierConfig{}
 	}
 	key := strings.ToLower(strings.TrimSpace(modelOrTier))
 	if key == "" {
-		return tr.tiers[TierPro]
+		return tr.tiers[TierStandard]
 	}
 	if cfg, ok := tr.tiers[Tier(key)]; ok {
 		return cfg
 	}
-	// Custom model tag — wrap under Pro profile.
-	base := tr.tiers[TierPro]
+	// Custom model tag — wrap under the Standard profile.
+	base := tr.tiers[TierStandard]
 	base.Model = strings.TrimSpace(modelOrTier)
-	base.Description = "custom model tag — Pro profile settings"
+	base.Description = "custom model tag — Standard profile settings"
 	return base
 }
 

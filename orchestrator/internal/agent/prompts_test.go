@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -68,5 +70,171 @@ func TestStepSystemPromptIncludesProtocol(t *testing.T) {
 		if !strings.Contains(p, tag) {
 			t.Errorf("system prompt missing %s", tag)
 		}
+	}
+}
+
+// TestCountEnumeratedParts locks the deterministic under-decomposition guard:
+// the exact live-confirmed failure was the planner collapsing a clearly
+// three-part goal into one plan step. This is the pure, deterministic signal
+// that catches it — verified here without any model call.
+func TestCountEnumeratedParts(t *testing.T) {
+	cases := []struct {
+		goal string
+		want int
+	}{
+		// The exact live-failing goal.
+		{"Uc sey yap: 1) diskte /var altinda en buyuk 3 dosyayi bul, 2) kac tane CPU cekirdegi oldugunu soyle, 3) sandbox'ta hangi kullanicilar var listele.", 3},
+		{"1. do X 2. do Y", 2},
+		{"do these: 1) alpha 2) beta 3) gamma 4) delta", 4},
+		// Single free-form instruction — must NOT fire.
+		{"find the largest file under /var", 0},
+		{"list running processes", 0},
+		// Numbers that are not enumeration markers — must NOT fire.
+		{"check python 3.14 and top 3 files", 0},
+		{"scan ports 1 through 3", 0},
+		// A lone "1." is not a multi-part enumeration.
+		{"step 1. do the thing", 0},
+		// Non-consecutive / not starting at 1 — must NOT fire.
+		{"see item 2) and item 5)", 0},
+	}
+	for _, c := range cases {
+		if got := CountEnumeratedParts(c.goal); got != c.want {
+			t.Errorf("CountEnumeratedParts(%q) = %d, want %d", c.goal, got, c.want)
+		}
+	}
+}
+
+func TestAuditGoalParts_ParsesMultiLineResponse(t *testing.T) {
+	llm := newFakeOllama(t, "check what OS is running\nlist the open ports")
+	parts := AuditGoalParts(context.Background(), llm, "check the OS and list open ports")
+	if len(parts) != 2 {
+		t.Fatalf("parts = %v, want 2 entries", parts)
+	}
+	if parts[0] != "check what OS is running" || parts[1] != "list the open ports" {
+		t.Fatalf("parts = %v, unexpected content", parts)
+	}
+}
+
+func TestAuditGoalParts_SingleLineReturnsNil(t *testing.T) {
+	llm := newFakeOllama(t, "scan 10.0.0.1 for open ports")
+	parts := AuditGoalParts(context.Background(), llm, "scan 10.0.0.1 for open ports")
+	if parts != nil {
+		t.Fatalf("parts = %v, want nil for a single-intent goal", parts)
+	}
+}
+
+func TestAuditGoalParts_StripsBulletsAndNumberMarkers(t *testing.T) {
+	llm := newFakeOllama(t, "1. check the OS\n2) list open ports")
+	parts := AuditGoalParts(context.Background(), llm, "check the OS and list open ports")
+	if len(parts) != 2 {
+		t.Fatalf("parts = %v, want 2 entries", parts)
+	}
+	if parts[0] != "check the OS" || parts[1] != "list open ports" {
+		t.Fatalf("parts = %v, markers/bullets not stripped cleanly", parts)
+	}
+}
+
+func TestAuditGoalParts_TooManyLinesReturnsNil(t *testing.T) {
+	var lines []string
+	for i := range 12 {
+		lines = append(lines, fmt.Sprintf("part %d", i))
+	}
+	llm := newFakeOllama(t, strings.Join(lines, "\n"))
+	parts := AuditGoalParts(context.Background(), llm, "do a lot of things")
+	if parts != nil {
+		t.Fatalf("parts = %v, want nil for pathological line count", parts)
+	}
+}
+
+func TestAuditGoalParts_NilLLMReturnsNil(t *testing.T) {
+	if parts := AuditGoalParts(context.Background(), nil, "scan the host"); parts != nil {
+		t.Fatalf("parts = %v, want nil with no LLM configured", parts)
+	}
+}
+
+func TestLikelyMultiPart(t *testing.T) {
+	cases := []struct {
+		goal string
+		want bool
+	}{
+		{"check the OS and list open ports", true},
+		{"X'i tara ve Y'yi kontrol et", true},
+		{"scan the host, then check the banner", true},
+		{"scan the host; also check the banner", true},
+		{"recon", false},
+		{"go", false},
+		{"delegate to two specialists", false},
+		{"scan 10.0.0.1 for open ports", false},
+	}
+	for _, c := range cases {
+		if got := LikelyMultiPart(c.goal); got != c.want {
+			t.Errorf("LikelyMultiPart(%q) = %v, want %v", c.goal, got, c.want)
+		}
+	}
+}
+
+func TestSanitizeAgentText_StripsSpecialTokens(t *testing.T) {
+	in := "<|channel|>final <|constrain|>finish<|channel|>commentary json<|message|>the OS is Linux"
+	got := SanitizeAgentText(in)
+	if strings.Contains(got, "<|") {
+		t.Fatalf("special tokens not stripped: %q", got)
+	}
+	if !strings.Contains(got, "the OS is Linux") {
+		t.Fatalf("real content lost: %q", got)
+	}
+}
+
+// TestBuildStepPrompt_BudgetRegimeGuidance covers the three budget regimes a
+// step prompt can render: silent with a healthy budget, LOW under a quarter
+// remaining, CRITICAL with essentially no slack left. Replaces the old
+// BUDGET_WARNING protocol tag, which was declared in the registry but never
+// actually emitted by any node — the model was told the tag existed and would
+// never receive it. This guidance is a persistent per-turn prompt block
+// instead, consistent with how the plan/goal-parts state is already rendered
+// every turn rather than as a one-shot observation.
+func TestBuildStepPrompt_BudgetRegimeGuidance(t *testing.T) {
+	cases := []struct {
+		name              string
+		used, budget      int
+		wantCritical      bool
+		wantLow           bool
+		wantNeitherPhrase bool
+	}{
+		{name: "healthy budget stays silent", used: 2, budget: 42, wantNeitherPhrase: true},
+		{name: "low budget under a quarter remaining", used: 33, budget: 42, wantLow: true},
+		{name: "critical budget with one step left", used: 41, budget: 42, wantCritical: true},
+		{name: "critical at exactly zero-slack small budget", used: 14, budget: 15, wantCritical: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			task := Task{Goal: "g", StepsUsed: c.used, StepBudget: c.budget}
+			prompt := BuildStepPrompt(task, "", "", "")
+			hasCritical := strings.Contains(prompt, "BUDGET CRITICAL")
+			hasLow := strings.Contains(prompt, "BUDGET LOW")
+			if hasCritical != c.wantCritical {
+				t.Errorf("BUDGET CRITICAL present=%v, want %v", hasCritical, c.wantCritical)
+			}
+			if hasLow != c.wantLow {
+				t.Errorf("BUDGET LOW present=%v, want %v", hasLow, c.wantLow)
+			}
+			if c.wantNeitherPhrase && (hasCritical || hasLow) {
+				t.Errorf("expected no budget guidance for a healthy budget, got critical=%v low=%v", hasCritical, hasLow)
+			}
+		})
+	}
+}
+
+// TestBuildStepPrompt_BudgetRegimeScalesWithBudget proves the thresholds are
+// ratio-based, not a fixed step count — the same "3 remaining" must read as
+// healthy against a scaled 42-step budget but LOW against the flat 15-step
+// default, since ScaledStepBudget can put either in play for the same task.
+func TestBuildStepPrompt_BudgetRegimeScalesWithBudget(t *testing.T) {
+	small := BuildStepPrompt(Task{Goal: "g", StepsUsed: 12, StepBudget: 15}, "", "", "")
+	if !strings.Contains(small, "BUDGET LOW") && !strings.Contains(small, "BUDGET CRITICAL") {
+		t.Errorf("3 remaining of 15 should trigger budget guidance, got:\n%s", small)
+	}
+	large := BuildStepPrompt(Task{Goal: "g", StepsUsed: 12, StepBudget: 42}, "", "", "")
+	if strings.Contains(large, "BUDGET LOW") || strings.Contains(large, "BUDGET CRITICAL") {
+		t.Errorf("12 used of 42 is healthy and should not trigger budget guidance, got:\n%s", large)
 	}
 }

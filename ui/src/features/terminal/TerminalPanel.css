@@ -24,3 +24,9 @@
   flex-direction: column;
   min-height: 0;
 }
+
+/* Compact embed (see MiniSandboxPreview) — no panel-header, so give the
+   host its own rounded frame instead of relying on the full panel chrome. */
+.terminal-panel-compact { border-radius: var(--radius-sm); overflow: hidden; }
+.terminal-panel-compact .terminal-host { min-height: 0; }
+.terminal-panel-compact .terminal-host .xterm { padding: 6px; }

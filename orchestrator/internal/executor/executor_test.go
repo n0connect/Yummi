@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -181,13 +182,9 @@ func TestRunScopedCommandFailsClosedWhenGatewayUnreachable(t *testing.T) {
 	}
 }
 
-// TestRunScopedCommandSurfacesGatewayKernelWarning is a regression test: the
-// gateway can accept a temporary-rule request (policy state updated) while
-// its own internal nftables kernel-level unlock silently fails. Before this
-// fix that failure was visible only in the gateway's own logs — the
-// orchestrator believed the unlock fully succeeded. RunScopedCommand must
-// carry the gateway's kernel_warning into the sandbox.Result the operator/API
-// actually sees.
+// TestRunScopedCommandSurfacesGatewayKernelWarning preserves mixed-version
+// compatibility: if an older gateway reports a partial-commit warning, the
+// executor must still carry it into the operator-visible sandbox result.
 func TestRunScopedCommandSurfacesGatewayKernelWarning(t *testing.T) {
 	const warning = "policy rule added but the nftables kernel unlock for 10.0.0.5/32 failed (no such device) — sandbox traffic to this target is still dropped"
 	socket := gateway.StartTestServer(t, false, func(req gateway.Request) gateway.Response {
@@ -279,6 +276,49 @@ func TestResolvedNetworks(t *testing.T) {
 	}
 }
 
+func TestRuleDescription(t *testing.T) {
+	short := ruleDescription("approved execution: ", "nmap -sV example.com")
+	if short != "approved execution: nmap -sV example.com" {
+		t.Fatalf("short command should pass through untouched, got %q", short)
+	}
+	if len(short) > maxRuleDescription {
+		t.Fatalf("short description unexpectedly exceeds cap: %d", len(short))
+	}
+
+	longCommand := strings.Repeat("a", 600)
+	got := ruleDescription("egress approved: ", longCommand)
+	if len(got) > maxRuleDescription {
+		t.Fatalf("ruleDescription must never exceed the gateway's %d-char cap, got %d: %q", maxRuleDescription, len(got), got)
+	}
+	if !strings.HasPrefix(got, "egress approved: ") {
+		t.Fatalf("truncated description must keep its label prefix, got %q", got)
+	}
+	if !strings.HasSuffix(got, "...(truncated)") {
+		t.Fatalf("truncated description must be marked as truncated, got %q", got)
+	}
+
+	// A real-world reproduction: this exact 485-char multi-step shell pipeline
+	// (observed live against example.com) exceeds the cap once either label
+	// is prefixed, and used to make the gateway reject AddTemporaryRule
+	// outright — silently dropping the nftables rule, not just the audit text.
+	realCommand := `cd ~/work/example.com && echo "example.com" > apex.txt; cat subs_clean.txt candidates_alterx.txt apex.txt | sort -u > candidates_all.txt; echo "=== Final candidate universe ==="; wc -l candidates_all.txt; echo "--- breakdown ---"; echo "Authoritative (passive CT+amass): $(wc -l < subs_clean.txt)"; echo "Alterx permutations:             $(wc -l < candidates_alterx.txt)"; echo "Apex example.com:                1"; echo "Total unique:                    $(wc -l < candidates_all.txt)"`
+	if len("egress approved: "+realCommand) <= maxRuleDescription {
+		t.Fatalf("fixture command must reproduce the bug once labeled, got %d chars", len("egress approved: "+realCommand))
+	}
+	for _, label := range []string{"approved execution: ", "egress approved: "} {
+		if got := ruleDescription(label, realCommand); len(got) > maxRuleDescription {
+			t.Fatalf("ruleDescription(%q, realCommand) = %d chars, want <= %d", label, len(got), maxRuleDescription)
+		}
+	}
+
+	// Multi-byte runes must not be split mid-character.
+	unicodeCommand := strings.Repeat("İ", 500)
+	got = ruleDescription("egress approved: ", unicodeCommand)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncation produced invalid UTF-8: %q", got)
+	}
+}
+
 func TestProcessBlocksTargetedCommandWhenGatewayUnavailable(t *testing.T) {
 	e := New(sandbox.NewBridge("unused-container"), nil, nil, nil)
 	_, err := e.ProcessFunc()(context.Background(), execution.Record{
@@ -355,6 +395,34 @@ func TestProcessFunc_MCPRecord_SurfacesStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(output, "Failed to resolve host") {
 		t.Fatalf("output = %q, want it to contain the MCP failure text (Stderr)", output)
+	}
+}
+
+// TestProcessFunc_MCPRecord_NoTargetToolSkipsScopeCheck proves a tool with no
+// target field (checksec_audit here, same shape as radare2_disasm and the
+// new consolidate_hosts) dispatches successfully with NO gateway configured
+// at all — before the NeedsTarget fix, this failed every real dispatch: it's
+// pure local file analysis, nothing for the gateway to scope-check, but the
+// old code required a target field regardless and blocked on its absence.
+func TestProcessFunc_MCPRecord_NoTargetToolSkipsScopeCheck(t *testing.T) {
+	fakeMCP := &fakeSandboxMCPClient{
+		result: &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "checksec: NX enabled, PIE enabled"}}},
+	}
+	e := New(sandbox.NewBridge("unused"), nil, nil, fakeMCP)
+
+	rec := execution.Record{
+		ID: "rec-1", SessionID: "sess-1", Command: "checksec --file=/tmp/bin",
+		MCPTool: "checksec_audit", MCPArgs: `{"file":"/tmp/bin"}`,
+	}
+	output, err := e.ProcessFunc()(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("ProcessFunc: %v", err)
+	}
+	if !strings.Contains(output, "NX enabled") {
+		t.Fatalf("output = %q, want it to contain the MCP result text", output)
+	}
+	if fakeMCP.calledTool != "checksec_audit" {
+		t.Fatalf("sandboxMCP.CallTool called with tool = %q, want checksec_audit", fakeMCP.calledTool)
 	}
 }
 

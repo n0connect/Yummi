@@ -32,8 +32,8 @@
   <!-- Sandbox -->
   <rect x="380" y="320" width="220" height="110" rx="10" fill="#111a2c" stroke="#3a4a63" stroke-width="1.5"/>
   <text x="490" y="356" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#e8edf5" font-weight="600">Sandbox</text>
-  <text x="490" y="377" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">Kali · read-only rootfs</text>
-  <text x="490" y="396" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">tool execution only</text>
+  <text x="490" y="377" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">Kali · unified sandbox</text>
+  <text x="490" y="396" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">agent exec + operator GUI</text>
   <text x="490" y="415" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9fb0c3">no direct route out</text>
 
   <!-- Gateway (trust boundary — visually distinct) -->

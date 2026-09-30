@@ -6,7 +6,8 @@ This page assumes you've already completed [Installation](installation.md) — a
 
 ## Table of contents
 
-- [Two Go modules — the mistake almost everyone makes once](#two-go-modules)
+- [Three Go modules — the mistake almost everyone makes once](#two-go-modules)
+- [Fast rebuild after a source change](#rebase)
 - [Fast feedback loops per component](#fast-loops)
 - [Running a single test](#single-test)
 - [Linting and vulnerability scanning](#lint-vuln)
@@ -15,19 +16,30 @@ This page assumes you've already completed [Installation](installation.md) — a
 
 ---
 
-## Two Go modules — the mistake almost everyone makes once <a id="two-go-modules"></a>
+## Three Go modules — the mistake almost everyone makes once <a id="two-go-modules"></a>
 
-This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root and `orchestrator/go.mod` are **two independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/`, you must `cd orchestrator` (or prefix each command with `cd orchestrator &&`) first:
+This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root, `orchestrator/go.mod`, and `sandbox-mcp/go.mod` are **three independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator and sandbox-mcp test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/` or `sandbox-mcp/`, you must `cd` into that module (or prefix each command with `cd <module> &&`) first:
 
 ```bash
-# WRONG — silently skips every orchestrator_test.go
+# WRONG — silently skips every orchestrator_test.go and sandbox-mcp test
 go test ./...
 
 # RIGHT
 cd orchestrator && go test ./...
+cd sandbox-mcp && go test ./...
 ```
 
 `make test` (and its granular pieces below) already get this right — it's specifically ad-hoc `go test`/`go build`/`go vet` invocations outside the Makefile where this bites people.
+
+---
+
+## Fast rebuild after a source change <a id="rebase"></a>
+
+```bash
+make rebase
+```
+
+The habitual `make stop && make close && make clean && make build && make start` wastes real time: `make build` compiles native binaries to `./bin` and `ui/dist` that the Docker images never consume at all, and neither `clean` nor `close` touch Docker's own build cache, images, or volumes. `make rebase` is exactly `down`, `build`, `up` — Docker's own layer cache does the real work (the `go mod download`/`npm install` layers are skipped when `go.sum`/`package-lock.json` haven't changed), so a source-only change rebuilds in seconds instead of minutes. It never prunes Docker's cache/images/volumes and never touches Ollama — reach for `make clean` or `docker system prune` when you actually need a from-scratch rebuild.
 
 ---
 
@@ -81,11 +93,11 @@ The `cmd/test_agent`, `cmd/test_engine`, and `cmd/test_loop` binaries under `orc
 ## Linting and vulnerability scanning <a id="lint-vuln"></a>
 
 ```bash
-make lint    # golangci-lint run — TWICE: once at the repo root, once `cd orchestrator`
-make vuln    # govulncheck — supply-chain scan, both Go modules
+make lint    # golangci-lint run — once per Go module: root, orchestrator, sandbox-mcp
+make vuln    # govulncheck — supply-chain scan, all three Go modules
 ```
 
-`make lint` running twice is not a typo — it's the same two-module split as above: `golangci-lint` operates per Go module, so one invocation at the repo root lints the CLI module and a second, separate invocation (`cd orchestrator && golangci-lint run`) lints the orchestrator module. There is only **one** `.golangci.yml` in the repository (at the root) — `golangci-lint` discovers it by walking up from the current directory, so both passes read the same config; you don't need a second copy inside `orchestrator/` for shared rules to apply there too.
+`make lint` running three times is not a typo — it's the same three-module split as above: `golangci-lint` operates per Go module, so it runs once at the repo root (CLI module), once in `orchestrator/`, and once in `sandbox-mcp/`. There is only **one** `.golangci.yml` in the repository (at the root) — `golangci-lint` discovers it by walking up from the current directory, so every pass reads the same config; you don't need a copy inside `orchestrator/` or `sandbox-mcp/` for shared rules to apply there too.
 
 ---
 
@@ -101,16 +113,27 @@ Runs `scripts/dev.sh`, which bootstraps (`scripts/install.sh`) and brings up jus
 
 ## The dev harnesses (`cmd/test_*`) <a id="dev-harnesses"></a>
 
-`orchestrator/cmd/test_agent`, `cmd/test_engine`, and `cmd/test_loop` are small, runnable Go programs (not `_test.go` files — genuine `main` packages) for driving specific layers interactively against real dependencies while developing:
+`orchestrator/cmd/test_agent`, `cmd/test_engine`, `cmd/test_loop`, `cmd/test_openai_backend`, and `cmd/context_probe` are small, runnable Go programs (not `_test.go` files — genuine `main` packages) for driving specific layers interactively against real dependencies while developing:
 
 ```bash
 cd orchestrator
-go run ./cmd/test_engine   # exercise the conductor engine directly
-go run ./cmd/test_loop     # exercise the agent's graph loop directly
-go run ./cmd/test_agent    # exercise the full agent Runner
+go run ./cmd/test_engine          # exercise the conductor engine directly
+go run ./cmd/test_loop            # exercise the agent's graph loop directly
+go run ./cmd/test_agent           # exercise the full agent Runner (graph backend)
+go run ./cmd/test_openai_backend  # scripted multi-part-goal scenarios against the Eino backend + a real OpenAI-compatible model
 ```
 
-These compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchestrator/test_loop` if built in place — already covered by `.gitignore`, so building one locally won't accidentally get committed.
+`test_openai_backend` takes `EINO_STEP_BUDGET` and `SCENARIO_ID` env filters to reproduce one scenario in isolation, and reuses `eino.NewOpenAIChatClient` — the same client the orchestrator itself uses when `YUMMI_EINO_MODEL_BASE_URL` points the Eino backend at a non-Ollama server.
+
+`context_probe` is a different kind of tool: a transparent reverse proxy in front of an OpenAI-compatible chat-completions server, not a scripted test.
+
+```bash
+go run ./cmd/context_probe -listen :8899 -target http://localhost:1234
+```
+
+Point `YUMMI_EINO_MODEL_BASE_URL` (or the harness's own model-base-URL flag) at the probe's `-listen` address instead of the real server, and it logs every `/chat/completions` turn — message/tool counts, the **server's own** `usage.prompt_tokens`/`completion_tokens`/`total_tokens` (not an estimate), `finish_reason`, and whether `tool_calls` fired — the only way to actually measure context growth turn-by-turn in a long Eino session instead of guessing whether it's building up. `-dump-dir` additionally saves each turn's full raw request/response JSON, useful for inspecting a turn whose content came back empty or malformed.
+
+All five compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchestrator/test_loop`, `orchestrator/test_openai_backend`, `orchestrator/context_probe` if built in place — already covered by `.gitignore`, so building one locally won't accidentally get committed.
 
 ## Agent quality gates
 

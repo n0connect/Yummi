@@ -7,10 +7,12 @@ import (
 
 // FuzzClassifyRisk drives arbitrary command strings through classifyRisk and
 // checks the invariants the allowlist rewrite depends on: the function must
-// never panic, must always return one of the two known risk labels, and any
+// never panic, must always return one of the three known risk labels, any
 // command containing a shell-significant character OUTSIDE a quoted span must
-// never be classified "low" — that's the whole point of replacing the old
-// blacklist-of-operators with a default-deny allowlist on command shape.
+// never be classified "low" (the whole point of the default-deny allowlist
+// on command shape), and — the newer isSafeLocalPipeline widening —
+// "medium" is only ever reached via a genuine multi-segment chain, never a
+// lone command.
 func FuzzClassifyRisk(f *testing.F) {
 	seeds := []string{
 		"nmap -sV 10.0.0.1",
@@ -26,6 +28,9 @@ func FuzzClassifyRisk(f *testing.F) {
 		"   ",
 		"\n",
 		strings.Repeat("nmap -p1-65535 10.0.0.1 ", 50),
+		"cat a.txt | sort -u | wc -l",
+		"cat a.txt | rm -rf /",
+		"cat a.txt | awk '{print}' | sort",
 	}
 	for _, s := range seeds {
 		f.Add(s)
@@ -33,13 +38,19 @@ func FuzzClassifyRisk(f *testing.F) {
 	f.Fuzz(func(t *testing.T, cmd string) {
 		got := classifyRisk(cmd) // must never panic
 
-		if got != "low" && got != "critical" {
+		if got != "low" && got != "medium" && got != "critical" {
 			t.Fatalf("classifyRisk(%q) returned unknown label %q", cmd, got)
 		}
 
 		if got == "low" && hasUnquotedShellMetachar(cmd) {
 			t.Fatalf("classifyRisk(%q) = %q but the command has an unquoted shell-significant "+
 				"character — the allowlist must never call this low risk", cmd, got)
+		}
+
+		if got == "medium" && !hasUnquotedShellMetachar(cmd) {
+			t.Fatalf("classifyRisk(%q) = medium but has no unquoted shell metachar at all — "+
+				"isSafeLocalPipeline requires a genuine multi-segment chain, never a lone command",
+				cmd)
 		}
 	})
 }

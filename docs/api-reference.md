@@ -22,7 +22,7 @@ The full REST + WebSocket surface orchestrator exposes, as wired in `orchestrato
 
 ## Conventions <a id="conventions"></a>
 
-- Every route lives under `/api/v1`, except the two WebSocket upgrade endpoints (`/ws/terminal`, `/ws/events`) and the plain health check (`/healthz`).
+- Every route lives under `/api/v1`, except the three WebSocket upgrade endpoints (`/ws/terminal`, `/ws/desktop`, `/ws/events`) and the plain health check (`/healthz`).
 - Errors follow **RFC 7807** problem-detail JSON (`Content-Type: application/problem+json`) — expect `{"type":"about:blank","title":"...","status":<code>,"detail":"..."}`, not a bespoke error format per endpoint. `type` is always the literal string `"about:blank"` today — no per-error-kind URIs are defined yet, so don't write client code that branches on it.
 - `{id}` / `{sessionID}` path segments are validated (`isValidSessionID`) before touching any store — a malformed ID is a `400`, not a store lookup that happens to fail.
 - Browser CORS and WebSocket origins are restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`). WebSocket clients without an `Origin` header, such as non-browser scripts or `curl`, are accepted (a real browser always sends one).
@@ -51,9 +51,9 @@ Owned by the [Knowledge Store](agent/memory-and-knowledge.md), not by the sessio
 | `GET` | `/sessions/{sessionID}/findings` | List structured findings |
 | `POST` | `/sessions/{sessionID}/findings` | Add a finding manually (operator-entered, `source: "manual"`) |
 
-## TRACE — observability (read-only) <a id="trace"></a>
+## TRACE — observability (read-only) & Operator <a id="trace"></a>
 
-Backs the [Trace tab](usage-guide.md#tab-trace). Most endpoints are read-only; explicit context deletion, skill decisions, and delegation interruption are operator control actions.
+Backs the [Trace tab](usage-guide.md#tab-trace) and operator briefing surfaces. Most endpoints are read-only; explicit context deletion, skill decisions, and delegation interruption are operator control actions.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -65,7 +65,9 @@ Backs the [Trace tab](usage-guide.md#tab-trace). Most endpoints are read-only; e
 | `GET` | `/skills/pending` | Curator-drafted skills awaiting operator review |
 | `POST` | `/skills/pending/{id}/approve` | Atomically activate a re-scanned draft through the writable `YUMMI_AUTO_SKILL_DIR`; failures return it to `pending` |
 | `POST` | `/skills/pending/{id}/reject` | Reject a drafted skill |
+| `GET` | `/operator/briefing` | Surfaced matching skills, tactics, and findings for the operator's manual workflow |
 | `GET` | `/agent/roles` | Available specialist sub-agent roles |
+| `GET` | `/agent/capabilities` | Runtime capabilities and active execution backend (e.g. native / Eino) |
 | `GET` | `/agent/delegations` | Active and recent addressable specialist runs |
 | `POST` | `/agent/delegations/{id}/interrupt` | Interrupt one specialist without stopping its parent/siblings |
 | `GET` | `/sessions/{sessionID}/audit` | Session-level audit trail (distinct from gateway's own network audit log below) |
@@ -91,6 +93,7 @@ Delegation records are addressable lifecycle objects, not just log lines. A reco
 | `POST` | `/tasks/{id}/start` | Start executing a planned task |
 | `POST` | `/tasks/{id}/stop` | Stop a running task |
 | `POST` | `/tasks/{id}/approve` | Resolve a task's pending approval gate (command risk, or threat-scan hold) |
+| `POST` | `/tasks/{id}/auto-approve` | Set per-task auto-approval toggle (overrides session default for this specific task) |
 
 ## Executions <a id="executions"></a>
 
@@ -146,15 +149,18 @@ Backs the [Gateway tab](usage-guide.md#tab-gateway) — every one of these is an
 | Path | Purpose |
 |---|---|
 | `/ws/terminal` | Bridges to a real interactive shell in the sandbox container — backs the [Bash tab](usage-guide.md#tab-bash) |
-| `/ws/events` | Fan-out event stream every other tab subscribes to |
+| `/ws/desktop` | Proxies noVNC / websockify stream to the sandbox's graphical desktop session — backs the [Desktop tab](usage-guide.md#tab-desktop) |
+| `/ws/events` | Monotonic, replayable fan-out event stream subscribed to by UI tabs |
 
-`/ws/events` carries four event `type`s today, each a thin JSON envelope around the relevant record:
+`/ws/events` delivers an initial `control.hello` handshake followed by typed event envelopes:
 
 | `type` | Fired when | Drives |
 |---|---|---|
-| `execution.status` | An execution's status changes (`queued` → `running` → `completed`/`failed`/`canceled`/`awaiting_egress_approval`/`awaiting_threat_approval`) — also re-fired periodically as `execution.running` with `elapsed_secs` set while a still-running command is in flight, so a long real command (a full `nikto`, `nmap`) doesn't look indistinguishable from a hang | Live command status and elapsed time in the Agent/Bash tabs |
+| `execution.status` | An execution's status changes (`queued` → `running` → `completed`/`failed`/`canceled`/`awaiting_egress_approval`/`awaiting_threat_approval`) — also re-fired periodically with elapsed time while a command runs | Live command status and elapsed time in the Agent/Bash tabs |
 | `task.status` | An agent task's status changes (running → awaiting_approval → completed/failed/stopped, etc.) | The Agent tab's live task tracker |
 | `agent.activity` | The graph records a public TRACE event (plan, command, result, memory, skill, handoff, finding, ask, finish) | The Trace timeline |
-| `gateway.status` | Gateway rules or mode differ from the previous health poll. The current wire payload contains the rule list; the mode is refreshed by the Gateway REST hook | The Gateway tab's live rule table |
+| `gateway.status` | Gateway rules or mode differ from the previous health poll | The Gateway tab's live rule table |
+| `skill.status` | A skill curation draft transitions state (`drafted`, `approved`, `rejected`) | The Trace tab's skill proposals |
+| `chat.stream` | Conductor streams live LLM response delta chunks (`chat.delta`, `chat.done`) | Live token streaming in Chat |
 
-Both WebSocket endpoints reject non-loopback browser origins. Non-browser clients that omit `Origin` remain supported.
+All WebSocket endpoints reject non-loopback browser origins. Non-browser clients that omit `Origin` remain supported.

@@ -1,0 +1,56 @@
+# .yummi.conf.example — template for Yummi's local configuration.
+#
+# You normally do NOT write this file by hand: run `make conf` for an
+# interactive setup that persists your choices to a gitignored `.yummi.conf`
+# (masked entry for any API key). This example documents every field that
+# file can hold, so you can see the options at a glance — or copy it to
+# `.yummi.conf` and edit directly if you prefer.
+#
+#   cp .yummi.conf.example .yummi.conf
+#
+# The real `.yummi.conf` is gitignored and never committed. This file is
+# make-syntax (KEY=value, `#` comments) because the root Makefile `-include`s
+# it, so every `make build`/`make start`/etc. picks these up automatically.
+
+# ── Container engine ────────────────────────────────────────────────────────
+# docker | podman. On macOS, OrbStack (used as the docker engine) is the
+# recommended, no-workarounds option — see docs/installation.md.
+CONTAINER_ENGINE=docker
+
+# ── Network mode ────────────────────────────────────────────────────────────
+# secure          — the default; yummi_internal is `internal: true`, so the
+#                   sandbox's only path out is through the gateway.
+# insecure-bridge — compatibility workaround that restores ordinary bridge
+#                   egress; weakens the fail-closed topology. Only if you
+#                   understand the trade-off (docs/installation.md).
+YUMMI_NETWORK_MODE=secure
+
+# ── UI display language (build-time) ────────────────────────────────────────
+# en | tr. Baked into the UI at build time; there is no runtime switch.
+YUMMI_LANG=en
+
+# ── Agentic engine ──────────────────────────────────────────────────────────
+# graph — tag-protocol state machine, tuned for smaller local models (default).
+# eino  — native tool-calling ReAct loop, better for larger tool-calling models.
+# Runtime-only: change it without rebuilding.
+YUMMI_AGENT_BACKEND=graph
+
+# ── Local model (Ollama) ────────────────────────────────────────────────────
+# Any Ollama model tag. Wins over YUMMI_OLLAMA_TIER when both are set.
+YUMMI_OLLAMA_MODEL=gpt-oss:20b
+# Optional: override the context window for a custom model tag (default: the
+# resolved tier's own value). Leave unset for the named tiers.
+#YUMMI_OLLAMA_NUM_CTX=32768
+
+# ── Optional: point ONLY the Eino backend at a different OpenAI-compatible
+#    server/model than Ollama (LM Studio, vLLM, llama.cpp, OpenRouter, …).
+#    All blank by default; the conductor (chat/intent) always stays on Ollama.
+#YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1
+#YUMMI_EINO_MODEL_NAME=openai/gpt-oss-20b
+#YUMMI_EINO_MODEL_API_KEY=
+#YUMMI_EINO_PROVIDER=            # ollama | openai | openrouter (auto-detected if blank)
+
+# ── Optional: "brain" frontier-model runner (docs: brain/README.md) ─────────
+#YUMMI_BRAIN_MODEL_BASE_URL=https://openrouter.ai/api/v1
+#YUMMI_BRAIN_MODEL_NAME=deepseek/deepseek-chat-v3.1
+#YUMMI_BRAIN_MODEL_API_KEY=      # your key — stored only in the gitignored .yummi.conf

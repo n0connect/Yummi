@@ -10,25 +10,55 @@ package eino
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 )
 
-// NewOllamaChatModel builds an Eino ChatModel pointed at Ollama's
-// OpenAI-compatible endpoint (baseURL is e.g. "http://localhost:11434/v1").
-// This project never talks to a cloud LLM provider — ByAzure is always
-// false and there is no real APIKey requirement (Ollama ignores it),
-// consistent with Yummi's privacy-first, local-only design.
-func NewOllamaChatModel(ctx context.Context, baseURL, modelName string) (model.ToolCallingChatModel, error) {
-	cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		APIKey:  "ollama", // required non-empty by the client; Ollama does not validate it
-		Model:   modelName,
-		BaseURL: baseURL,
-		ByAzure: false,
-	})
+// NewOllamaChatModel builds an Eino ChatModel pointed at an OpenAI-compatible
+// endpoint (Ollama, LM Studio, vLLM, OpenAI, or OpenRouter).
+//
+// timeout bounds every individual model call.
+func NewOllamaChatModel(ctx context.Context, baseURL, modelName, apiKey string, timeout time.Duration, numCtx int, reasoning bool) (model.ToolCallingChatModel, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	if apiKey == "" {
+		apiKey = "ollama"
+	}
+	// Temperature: 0 for deterministic output.
+	zeroTemp := float32(0)
+	cfg := &openai.ChatModelConfig{
+		APIKey:      apiKey,
+		Model:       modelName,
+		BaseURL:     baseURL,
+		ByAzure:     false,
+		Timeout:     timeout,
+		Temperature: &zeroTemp,
+	}
+	extra := map[string]any{}
+	// Only inject Ollama-specific options when talking to Ollama
+	isOllama := apiKey == "ollama" && !strings.Contains(baseURL, "openrouter.ai") && !strings.Contains(baseURL, "api.openai.com")
+	if numCtx > 0 && isOllama {
+		extra["options"] = map[string]any{"num_ctx": numCtx}
+	}
+	if reasoning {
+		extra["reasoning_effort"] = "high"
+	}
+	if strings.Contains(baseURL, "openrouter.ai") {
+		extra["headers"] = map[string]string{
+			"HTTP-Referer": "https://github.com/n0connect/yummi",
+			"X-Title":      "Yummi Pentest Conductor",
+		}
+	}
+	if len(extra) > 0 {
+		cfg.ExtraFields = extra
+	}
+	cm, err := openai.NewChatModel(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("eino: construct ollama chat model: %w", err)
+		return nil, fmt.Errorf("eino: construct chat model: %w", err)
 	}
 	return cm, nil
 }

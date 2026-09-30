@@ -41,6 +41,15 @@ func TestWrapUnknownTagDegradesToUnknown(t *testing.T) {
 	}
 }
 
+func TestWrapRegisteredOperationalTags(t *testing.T) {
+	for _, tag := range []string{"TASK_RECOVERED", "AWAITING_EGRESS_APPROVAL", "APPROVAL_DENIED", "INCOMPLETE_GOALS"} {
+		out := Wrap(tag, "content")
+		if !strings.HasPrefix(out, "["+tag+"]\n") {
+			t.Fatalf("tag %q should be registered and not degrade to UNKNOWN, got %q", tag, out)
+		}
+	}
+}
+
 func TestProtocolReferenceListsBothDirections(t *testing.T) {
 	ref := ProtocolReference()
 	for _, name := range []string{"TOOL_RESPONSE", "TOOL_FAILED", "UNKNOWN", "RUN_COMMAND", "STOP_TASK", "SEND_FULL"} {

@@ -207,8 +207,9 @@ func HandleCreateTarget(ks *knowledge.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "value is required", nil)
 			return
 		}
-		if len(req.Value) > 253 || scope.ExtractTarget("dummy "+req.Value) != req.Value {
-			writeError(w, http.StatusBadRequest, "value must be a valid IP, CIDR, or hostname (max 253 chars)", nil)
+		targetVal := scope.ExtractTarget("dummy " + req.Value)
+		if targetVal == "" || len(req.Value) > 253 {
+			writeError(w, http.StatusBadRequest, "value must be a valid IP, CIDR, hostname, or URL (max 253 chars)", nil)
 			return
 		}
 		if len(req.Notes) > 1000 {
@@ -219,7 +220,7 @@ func HandleCreateTarget(ks *knowledge.Store) http.HandlerFunc {
 		t := knowledge.Target{
 			ID:        uuid.New().String(),
 			SessionID: sessionID,
-			Value:     req.Value,
+			Value:     targetVal,
 			InScope:   req.InScope,
 			Notes:     req.Notes,
 			CreatedAt: time.Now().Unix(),

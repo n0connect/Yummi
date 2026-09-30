@@ -266,3 +266,33 @@ knowledge: migrated artifact
 		}
 	}
 }
+
+func TestLoadDir_AllBuiltinSkills(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "persona", "v0.1", "skills")
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir(%q): %v", dir, err)
+	}
+
+	expectedSkills := []string{
+		"web",
+		"vuln-scanning",
+		"api-pentest",
+		"parameter-discovery",
+		"secret-mining",
+		"auth-logic",
+		"cloud-recon",
+		"graphql-pentest",
+	}
+
+	names := make(map[string]bool)
+	for _, n := range reg.Names() {
+		names[n] = true
+	}
+
+	for _, exp := range expectedSkills {
+		if !names[exp] {
+			t.Errorf("expected builtin skill %q was not loaded (total loaded: %d)", exp, len(names))
+		}
+	}
+}

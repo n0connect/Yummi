@@ -206,6 +206,14 @@ type GraphState struct {
 	// the real failure output and is pushed to adapt rather than being silently
 	// blocked from retrying.
 	consecutiveFailures int
+
+	// incompleteFinishNudges counts how many times a premature FINISH (emitted
+	// while plan steps are still pending) has been bounced back with an
+	// INCOMPLETE_GOALS observation. Capped so a model that insists on finishing
+	// after being shown the remaining goals is ultimately obeyed rather than
+	// wedged — the guard buys exactly one forced reconsideration per unmet-goal
+	// situation, model-size-agnostic, not an infinite block.
+	incompleteFinishNudges int
 }
 
 // failureLimit is the number of consecutive command failures after which the
@@ -506,7 +514,7 @@ func observeResult(s *GraphState, result ToolResult) string {
 	s.lastObs = obs
 	markStepStatus(s.store, s.taskID, s.pendingAct.StepID, s.pendingCommand, StepDone, obs)
 	s.emit(ActCommandDone, "Command result processed", compressed)
-	if findings := sanitizeFindings(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
+	if findings := SanitizeFindings(s.pendingAct.Findings); len(findings) > 0 || len(s.pendingAct.FindingsDetail) > 0 {
 		task, ok := s.store.Get(s.taskID)
 		var records []FindingRecord
 		if ok {
@@ -524,7 +532,7 @@ func observeResult(s *GraphState, result ToolResult) string {
 		}
 		for _, d := range s.pendingAct.FindingsDetail {
 			if d.Title != "" {
-				s.emit(ActFinding, sanitizeAgentText(d.Title), sanitizeAgentText(d.Description))
+				s.emit(ActFinding, SanitizeAgentText(d.Title), SanitizeAgentText(d.Description))
 			}
 		}
 	}

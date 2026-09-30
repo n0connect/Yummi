@@ -76,7 +76,7 @@ func (v *Validator) ValidateChatResponse(resp ChatResponse) ChatResponse {
 
 		p.RequiresApproval = requiresApproval(p.RiskLevel)
 
-		if isHighSeverity(p.RiskLevel) {
+		if IsHighSeverity(p.RiskLevel) {
 			warnings = append(warnings, fmt.Sprintf("%s-risk proposal requires explicit approval: %s", p.RiskLevel, tool))
 		}
 		validated = append(validated, p)
@@ -166,13 +166,147 @@ var simpleCommandPattern = regexp.MustCompile(
 // shape — no tool-specific flag knowledge. The model's own risk_level field
 // is the primary source of truth; this function only provides a conservative
 // safety floor: "low" is granted only to commands matching the simple,
-// unchained shape above, and everything else — including command structures
-// this function doesn't recognize — is "critical" by default.
+// unchained shape above; a chained-but-all-local-file-processing shape (see
+// isSafeLocalPipeline) is floored at "medium", never "low" — FuzzClassifyRisk
+// asserts "low" never coincides with an unquoted shell metacharacter, and a
+// pipeline necessarily contains one (&&/;/|) by definition, so "medium" is
+// both the honest calibration (elevated structural complexity, but every
+// named program individually vetted — not the simplest possible shape,
+// not maximally dangerous either) and the one that doesn't fight that
+// invariant. Everything else — including command structures this function
+// doesn't recognize at all — is "critical" by default.
+//
+// Note for callers: in ask_permission mode, approval gating is mode-driven,
+// not risk-driven (agent/node_tool.go, eino/pentest_tools.go's
+// runToolPipeline) — EVERY proposal there requires an operator click
+// regardless of what this function returns. What this function's accuracy
+// actually buys is the risk BADGE shown at that approval prompt and in the
+// audit trail: a chained-but-harmless pipeline mislabeled "critical" is
+// alert-fatigue-inducing noise that erodes trust in the badge for commands
+// that are genuinely critical, not fewer approval clicks.
 func classifyRisk(cmd string) string {
 	if simpleCommandPattern.MatchString(cmd) {
 		return "low"
 	}
+	if isSafeLocalPipeline(cmd) {
+		return "medium"
+	}
 	return "critical"
+}
+
+// safeLocalBinaries is the set of programs a chained pipeline's segments may
+// invoke to qualify for isSafeLocalPipeline's floor below. Deliberately
+// excludes anything that can itself execute arbitrary code via its own
+// arguments even though it's common in real recon pipelines: awk (its
+// system() function runs a shell command), sed (GNU sed's "e" command/flag
+// does the same), find (-exec/-delete), xargs, env, eval, and any shell or
+// language interpreter. Those stay on classifyRisk's existing critical-by-
+// default floor unchanged — this list only covers programs with no such
+// escape hatch.
+var safeLocalBinaries = map[string]bool{
+	"cat": true, "sort": true, "uniq": true, "grep": true, "egrep": true, "fgrep": true,
+	"rg": true, "wc": true, "head": true, "tail": true, "echo": true, "cut": true,
+	"tr": true, "jq": true, "tee": true, "basename": true, "dirname": true,
+	"mkdir": true, "touch": true, "ls": true, "pwd": true, "cd": true, "which": true,
+	"true": true, "false": true, "date": true, "stat": true, "file": true,
+	"md5sum": true, "sha1sum": true, "sha256sum": true,
+}
+
+// isSafeLocalPipeline reports whether cmd is a chain of ONLY local,
+// read-only-or-append-only, non-network commands from safeLocalBinaries —
+// e.g. "cat a.txt b.txt | sort -u > out.txt" or "echo ---; ls -la". This is
+// a narrow, deliberate widening of classifyRisk's own allowlist-not-
+// blacklist philosophy: a chained shell command is not automatically less
+// safe than an unchained one when every segment individually names a
+// program known incapable of reaching the network or spawning arbitrary
+// other programs. Redirection (">"/">>") is allowed within a segment — it
+// opens a file, it doesn't execute anything — but command/process
+// substitution and background execution are refused outright, because the
+// shell evaluates those before any "safe" command in the pipeline ever
+// runs, regardless of which binaries are named. Anything this function
+// doesn't confidently recognize — including a single unrecognized binary,
+// or an unquoted-vs-quoted ambiguity it can't resolve — falls through to
+// classifyRisk's existing critical-by-default floor unchanged; this is a
+// discount on the risk BADGE only, see classifyRisk's own doc comment for
+// what it does and does not affect.
+func isSafeLocalPipeline(cmd string) bool {
+	if strings.Contains(cmd, "$(") || strings.Contains(cmd, "`") ||
+		strings.Contains(cmd, "<(") || strings.Contains(cmd, ">(") {
+		return false
+	}
+	segments, bareAmpersand := splitUnquotedPipeline(cmd)
+	if bareAmpersand || len(segments) < 2 {
+		// A single, unchained segment is already classifyRisk's job via
+		// simpleCommandPattern — this floor exists specifically for chains.
+		// A bare "&" (background execution) is refused outright.
+		return false
+	}
+	for _, seg := range segments {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 || !safeLocalBinaries[fields[0]] {
+			return false
+		}
+	}
+	return true
+}
+
+// splitUnquotedPipeline splits cmd into segments at &&, ||, ;, and | — but
+// only when those characters appear outside a '...'/"..." span, mirroring
+// hasUnquotedShellMetachar's own quote tracking (validator_fuzz_test.go) so
+// a literal operator character inside a quoted argument (e.g. grep "a|b")
+// is never mistaken for a real chain boundary — a bug the fuzzer caught in
+// an earlier, quote-blind version of this split. Text from an unquoted ">"
+// to the next real separator (a redirection target) is dropped from its
+// segment rather than treated as a new pipeline stage — the target is a
+// file path, not a command, but any operator characters INSIDE it must
+// still respect quoting, which is why this drop happens in the same
+// quote-tracking pass rather than as a separate naive string operation.
+// Also reports whether a standalone "&" (background execution) was found
+// outside quotes.
+func splitUnquotedPipeline(cmd string) (segments []string, bareAmpersand bool) {
+	var current strings.Builder
+	inSingle, inDouble, inRedirectTarget := false, false, false
+	runes := []rune(cmd)
+	flush := func() {
+		segments = append(segments, strings.TrimSpace(current.String()))
+		current.Reset()
+		inRedirectTarget = false
+	}
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		case inSingle || inDouble:
+			if !inRedirectTarget {
+				current.WriteRune(r)
+			}
+			continue
+		case r == '&' && i+1 < len(runes) && runes[i+1] == '&':
+			flush()
+			i++
+			continue
+		case r == '|' && i+1 < len(runes) && runes[i+1] == '|':
+			flush()
+			i++
+			continue
+		case r == '&':
+			bareAmpersand = true
+		case r == ';' || r == '|':
+			flush()
+			continue
+		case r == '>':
+			inRedirectTarget = true
+			continue
+		}
+		if !inRedirectTarget && r != '\'' && r != '"' {
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return segments, bareAmpersand
 }
 
 // destructiveFloor is a second, independent risk floor for a gap
@@ -220,8 +354,13 @@ func requiresApproval(risk string) bool {
 	}
 }
 
-// isHighSeverity reports whether the given risk label is high or critical.
-func isHighSeverity(risk string) bool {
+// IsHighSeverity reports whether the given risk label is high or critical.
+// Exported: agent/node_tool.go and agent/eino's runToolPipeline both call
+// this to decide whether a task's per-task AutoApproveNonCritical toggle may
+// skip the approval gate for a given proposal — "high"/"critical" always
+// gate regardless of the toggle, matching this function's own definition of
+// severe exactly rather than a second, potentially-diverging copy of it.
+func IsHighSeverity(risk string) bool {
 	switch strings.ToLower(strings.TrimSpace(risk)) {
 	case "high", "critical":
 		return true

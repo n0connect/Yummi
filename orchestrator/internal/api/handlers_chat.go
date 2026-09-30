@@ -3,21 +3,18 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
-
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
-	"github.com/n0connect/yummi/orchestrator/internal/health"
 	"github.com/n0connect/yummi/orchestrator/internal/llm"
 	"github.com/n0connect/yummi/orchestrator/internal/session"
-	"github.com/n0connect/yummi/orchestrator/internal/skillcurator"
 )
 
 // taskCreatorFunc creates an agent task from a chat start_task intent and
@@ -46,6 +43,11 @@ func applyStartTask(ctx context.Context, resp conductor.ChatResponse, sessionID 
 		return resp
 	}
 	resp.TaskID = taskID
+	// A start_task response may still contain the model's draft single-command
+	// proposals. The task runner owns execution from this point; surfacing the
+	// drafts would let auto mode execute them a second time outside the task.
+	resp.Proposals = nil
+	resp.Warnings = nil
 	return resp
 }
 
@@ -54,6 +56,7 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 		var req struct {
 			Message   string `json:"message"`
 			SessionID string `json:"session_id,omitempty"`
+			TurnID    string `json:"turn_id,omitempty"`
 			// FromFeedback marks an auto-generated turn (the UI feeding a
 			// command's output back to the conductor). It still flows into the
 			// model's in-memory context, but is NOT persisted to chat_messages —
@@ -69,11 +72,14 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			writeError(w, http.StatusBadRequest, "message is too long (max 10000 characters)", nil)
 			return
 		}
-		if req.SessionID != "" && req.SessionID != "default" {
-			if !isValidSessionID(req.SessionID) {
-				writeError(w, http.StatusBadRequest, "invalid session id format", nil)
-				return
-			}
+		if !checkOptionalSessionID(w, req.SessionID) {
+			return
+		}
+		if req.TurnID == "" {
+			req.TurnID = uuid.NewString()
+		} else if _, err := uuid.Parse(req.TurnID); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid turn_id", err)
+			return
 		}
 
 		if assistant == nil {
@@ -89,6 +95,7 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			writeJSON(w, http.StatusOK, map[string]any{
 				"reply":      resp.Message,
 				"session_id": sessionID,
+				"turn_id":    req.TurnID,
 				"data":       resp,
 			})
 			return
@@ -114,15 +121,32 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 				assistant.SeedHistory(sessionID, toLLMHistory(persisted))
 			}
 		}
+		if !req.FromFeedback {
+			appendLatestTerminalTaskOutcome(assistant, taskStore, sessionID)
+		}
 
-		// 90s budget covers qwen3:14b on CPU-constrained hosts; the server
-		// WriteTimeout (120s) leaves a 30s margin for response serialisation.
+		// 90s budget covers the default gpt-oss:20b on CPU-constrained hosts;
+		// the server WriteTimeout (120s) leaves a 30s margin for response
+		// serialisation.
 		chatCtx, chatCancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer chatCancel()
 
 		var resp conductor.ChatResponse
 		if sessionID != "" {
-			resp = assistant.ChatWithHistory(chatCtx, sessionID, req.Message)
+			var turnErr error
+			if req.FromFeedback {
+				resp, turnErr = assistant.ChatWithHistoryFeedbackTurn(chatCtx, sessionID, req.TurnID, req.Message)
+			} else {
+				resp, turnErr = assistant.ChatWithHistoryTurn(chatCtx, sessionID, req.TurnID, req.Message)
+			}
+			if turnErr != nil {
+				if errors.Is(turnErr, conductor.ErrTurnInProgress) {
+					writeError(w, http.StatusConflict, "turn in progress", turnErr)
+					return
+				}
+				writeError(w, http.StatusBadGateway, "chat turn failed", turnErr)
+				return
+			}
 		} else {
 			resp = assistant.Chat(chatCtx, req.Message)
 		}
@@ -147,10 +171,18 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			if err := taskRunner.Start(resp.TaskID, ""); err != nil {
 				slog.Warn("agent task start failed from chat", "task_id", resp.TaskID, "error", err)
 				resp.Intent = "decline"
-				resp.Message = "Görev başlatılamadı: " + err.Error()
+				if isLikelyTurkish(req.Message) {
+					resp.Message = "Görev başlatılamadı: " + err.Error()
+				} else {
+					resp.Message = "Failed to start task: " + err.Error()
+				}
 			} else {
 				resp.Intent = "explain"
-				resp.Message = "Görev başlatıldı. Plan ve adımlar aşağıda canlı olarak görüntüleniyor."
+				if isLikelyTurkish(req.Message) {
+					resp.Message = "Görev başlatıldı. Plan ve adımlar aşağıda canlı olarak görüntüleniyor."
+				} else {
+					resp.Message = "Task started. Plan and progress are streaming live below."
+				}
 			}
 		}
 
@@ -186,10 +218,34 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 		writeJSON(w, http.StatusOK, map[string]any{
 			"reply":                   resp.Message,
 			"session_id":              sessionID,
+			"turn_id":                 req.TurnID,
 			"approval_required_count": approvalRequiredCount,
 			"data":                    resp,
 		})
 	}
+}
+
+func appendLatestTerminalTaskOutcome(assistant *conductor.Engine, store *agent.Store, sessionID string) {
+	if assistant == nil || store == nil || sessionID == "" {
+		return
+	}
+	task, ok := latestCompletedTask(store, sessionID)
+	if !ok {
+		return
+	}
+	assistant.AppendTaskOutcome(sessionID, task.ID, task.Summary, task.Findings)
+}
+
+func latestCompletedTask(store *agent.Store, sessionID string) (agent.Task, bool) {
+	if store == nil || sessionID == "" {
+		return agent.Task{}, false
+	}
+	for _, task := range store.ListBySession(sessionID, 10) {
+		if task.Status == agent.StatusCompleted {
+			return task, true
+		}
+	}
+	return agent.Task{}, false
 }
 
 // maxSeedMessages bounds how many persisted turns are pulled back into the
@@ -249,11 +305,8 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 			writeError(w, http.StatusBadRequest, "invalid request", err)
 			return
 		}
-		if req.SessionID != "" && req.SessionID != "default" {
-			if !isValidSessionID(req.SessionID) {
-				writeError(w, http.StatusBadRequest, "invalid session id format", nil)
-				return
-			}
+		if !checkOptionalSessionID(w, req.SessionID) {
+			return
 		}
 		if req.ProposalID == "" {
 			writeError(w, http.StatusBadRequest, "proposal_id is required", nil)
@@ -320,182 +373,15 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 	}
 }
 
-// forwardEvent JSON-encodes and writes one event onto the shared /ws/events
-// socket, in the common {type, event, timestamp, data} envelope every event
-// kind on this socket uses. eventName is optional (omitted from the payload
-// when empty — gateway.status events carry no per-event name). Returns false
-// when the write failed (the connection is gone), matching every caller's
-// existing "stop the loop" behavior on a write error.
-func forwardEvent(conn *websocket.Conn, eventType, eventName string, timestamp int64, data any) bool {
-	payload := map[string]any{"type": eventType, "timestamp": timestamp, "data": data}
-	if eventName != "" {
-		payload["event"] = eventName
+func isLikelyTurkish(s string) bool {
+	lower := strings.ToLower(s)
+	if strings.ContainsAny(lower, "çğıöşü") {
+		return true
 	}
-	return conn.WriteJSON(payload) == nil
-}
-
-func HandleEventsWS(executions *execution.Store, tasks *agent.Store, agg *health.Aggregator, curatorStore *skillcurator.Store, assistant *conductor.Engine) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if executions == nil {
-			http.Error(w, "execution store unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		conn, err := wsUpgrader.Upgrade(w, r, nil)
-		if err != nil {
-			slog.Warn("events websocket upgrade failed", "error", err)
-			return
-		}
-		defer func() { _ = conn.Close() }()
-
-		sessionFilter := normalizeSessionID(r.URL.Query().Get("session_id"))
-		if r.URL.Query().Get("session_id") == "" {
-			sessionFilter = ""
-		}
-
-		subID, events, err := executions.Subscribe(64)
-		if err != nil {
-			slog.Warn("events subscribe failed", "error", err)
-			_ = conn.WriteJSON(map[string]any{
-				"type": "error",
-				"data": map[string]any{"message": err.Error()},
-			})
-			return
-		}
-		defer executions.Unsubscribe(subID)
-
-		// Task events share this websocket. nil task store (e.g. LLM disabled)
-		// simply means no task channel — execution events still flow.
-		var taskEvents <-chan agent.Event
-		if tasks != nil {
-			taskSubID, ch, terr := tasks.Subscribe(64)
-			if terr == nil {
-				taskEvents = ch
-				defer tasks.Unsubscribe(taskSubID)
-			}
-		}
-
-		// Agent activity events (the legible TRACE timeline) share this websocket.
-		var activityEvents <-chan agent.ActivityEnvelope
-		if tasks != nil {
-			actSubID, ch, aerr := tasks.SubscribeActivity(128)
-			if aerr == nil {
-				activityEvents = ch
-				defer tasks.UnsubscribeActivity(actSubID)
-			}
-		}
-
-		// Gateway rule-change events share this websocket too. A nil aggregator
-		// (or a failed subscribe) simply means no gateway channel.
-		var gatewayEvents <-chan health.GatewayEvent
-		if agg != nil {
-			gwSubID, ch, gerr := agg.SubscribeGateway(64)
-			if gerr == nil {
-				gatewayEvents = ch
-				defer agg.UnsubscribeGateway(gwSubID)
-			}
-		}
-
-		// Pending-skill lifecycle events (auto-skill-creation review queue)
-		// share this websocket too, so the TRACE page's pending-drafts panel
-		// updates live instead of polling. A nil curatorStore simply means no
-		// skill channel.
-		var skillEvents <-chan skillcurator.Event
-		if curatorStore != nil {
-			skillSubID, ch, serr := curatorStore.Subscribe(32)
-			if serr == nil {
-				skillEvents = ch
-				defer curatorStore.Unsubscribe(skillSubID)
-			}
-		}
-
-		// Chat display-token stream (see conductor/stream.go). A nil assistant
-		// (LLM unconfigured) simply means no stream channel — everything else
-		// on this websocket keeps working.
-		var streamEvents <-chan conductor.StreamEvent
-		if assistant != nil {
-			streamSubID, ch, cerr := assistant.SubscribeStream(64)
-			if cerr == nil {
-				streamEvents = ch
-				defer assistant.UnsubscribeStream(streamSubID)
-			}
-		}
-
-		pingTicker := time.NewTicker(20 * time.Second)
-		defer pingTicker.Stop()
-
-		for {
-			select {
-			case evt, ok := <-events:
-				if !ok {
-					return
-				}
-				if sessionFilter != "" && evt.Record.SessionID != sessionFilter {
-					continue
-				}
-				if !forwardEvent(conn, "execution.status", evt.Type, evt.Timestamp, evt.Record) {
-					return
-				}
-			case evt, ok := <-taskEvents:
-				if !ok {
-					taskEvents = nil
-					continue
-				}
-				if sessionFilter != "" && evt.Task.SessionID != sessionFilter {
-					continue
-				}
-				if !forwardEvent(conn, "task.status", evt.Type, evt.Timestamp, evt.Task) {
-					return
-				}
-			case env, ok := <-activityEvents:
-				if !ok {
-					activityEvents = nil
-					continue
-				}
-				if sessionFilter != "" && env.Event.SessionID != sessionFilter {
-					continue
-				}
-				if !forwardEvent(conn, "agent.activity", "", env.Event.Timestamp, env.Event) {
-					return
-				}
-			case evt, ok := <-gatewayEvents:
-				if !ok {
-					gatewayEvents = nil
-					continue
-				}
-				if !forwardEvent(conn, "gateway.status", evt.Type, evt.Timestamp, evt.Rules) {
-					return
-				}
-			case evt, ok := <-skillEvents:
-				if !ok {
-					skillEvents = nil
-					continue
-				}
-				if sessionFilter != "" && evt.Skill.SessionID != sessionFilter {
-					continue
-				}
-				if !forwardEvent(conn, "skill.status", evt.Type, evt.Timestamp, evt.Skill) {
-					return
-				}
-			case evt, ok := <-streamEvents:
-				if !ok {
-					streamEvents = nil
-					continue
-				}
-				if sessionFilter != "" && evt.SessionID != sessionFilter {
-					continue
-				}
-				eventName := "chat.delta"
-				if evt.Done {
-					eventName = "chat.done"
-				}
-				if !forwardEvent(conn, "chat.stream", eventName, time.Now().Unix(), evt) {
-					return
-				}
-			case <-pingTicker.C:
-				if err := conn.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(2*time.Second)); err != nil {
-					return
-				}
-			}
+	for _, k := range []string{"lütfen", "hedef", "tarama", "tara", "için", "ve", "nasıl"} {
+		if strings.Contains(lower, k) {
+			return true
 		}
 	}
+	return false
 }

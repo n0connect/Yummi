@@ -27,6 +27,11 @@ type TaskRunner interface {
 	// SetApprovalMode changes the mode applied to tasks started from this
 	// point on, propagating to configured sub-agents.
 	SetApprovalMode(mode ApprovalMode) error
+	// SetTaskAutoApprove flips one already-running task's own
+	// AutoApproveNonCritical override (see Task's own doc comment) — unlike
+	// SetApprovalMode, this targets a single in-flight task by ID, not the
+	// runner-wide default for future tasks.
+	SetTaskAutoApprove(taskID string, enable bool) error
 	// ResumeRecovered starts top-level tasks the store's startup recovery
 	// converted to a safe checkpoint. Returns the count started.
 	ResumeRecovered() (int, error)
@@ -41,4 +46,24 @@ type TaskRunner interface {
 	// InterruptDelegation cancels one addressable specialist without
 	// stopping its parent or siblings.
 	InterruptDelegation(id string) error
+	// Capabilities is the truthful, operator-visible contract for the selected
+	// backend. It prevents UI/docs from inferring parity from a backend name.
+	Capabilities() BackendCapabilities
+}
+
+type BackendCapabilities struct {
+	Backend                string       `json:"backend"`
+	ExecutionModel         string       `json:"execution_model"`
+	RecoveryModel          string       `json:"recovery_model"`
+	Resumable              bool         `json:"resumable"`
+	NativeToolCalling      bool         `json:"native_tool_calling"`
+	ApprovalMode           ApprovalMode `json:"approval_mode"`
+	Roles                  []string     `json:"roles"`
+	MaxHandoffDepth        int          `json:"max_handoff_depth"`
+	MaxConcurrentSubAgents int          `json:"max_concurrent_sub_agents"`
+	MemoryEnabled          bool         `json:"memory_enabled"`
+	RetrievalModel         string       `json:"retrieval_model"`
+	SkillsEnabled          bool         `json:"skills_enabled"`
+	SkillCount             int          `json:"skill_count"`
+	SkillGovernance        string       `json:"skill_governance"`
 }
