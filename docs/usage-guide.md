@@ -28,11 +28,17 @@ Yummi is managed through a single web UI served on port 3000 (`http://localhost:
 
 ## Starting an Engagement Session <a id="starting-a-session"></a>
 
-Start the full stack with:
+Before starting for the first time (or to change your UI language between English and Türkçe, switch models, or configure OpenRouter API keys), run the pre-build configuration wizard:
+
+```bash
+make conf
+```
+
+Then start the stack:
 ```bash
 make start
 ```
-The interface opens at `http://localhost:3000`. Every engagement is scoped to a **Session** that tracks conversation history, target scope, the hierarchical asset matrix, structured findings, and background tasks.
+The interface opens at `http://localhost:3000`. Every engagement is scoped to a **Session** that tracks conversation history, target scope, the hierarchical asset matrix, structured findings, and background tasks. Language (`YUMMI_LANG`), backend selection, and cloud model keys configured in `make conf` persist across sessions in `.yummi.conf`.
 
 ---
 
