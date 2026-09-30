@@ -44,7 +44,9 @@ var searchPentestToolsInfo = &schema.ToolInfo{
 	Desc: "List the pentest tools available in the sandbox beyond the ones you already have dedicated functions for " +
 		"(nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan). Returns each tool's name, " +
 		"description, and parameter schema. Call this before run_pentest_tool if you're not sure a tool exists or " +
-		"what arguments it takes.",
+		"what arguments it takes. IMPORTANT: a tool listed here (e.g. nuclei_scan, sqlmap_scan) is NOT itself a " +
+		"callable function — you cannot call it by name directly. Dispatch it through run_pentest_tool " +
+		"(tool=\"<name>\", args={...matching its schema...}).",
 	ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 		"query": {Type: "string", Desc: "Optional keyword to filter by (matches tool name or description); omit to list everything", Required: false},
 	}),
