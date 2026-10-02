@@ -83,6 +83,14 @@ export function AssistantPanel({
   newChatRequest = 0
 }: AssistantPanelProps): JSX.Element {
   const [messages, setMessages] = useState<Message[]>(loadDefaultMessages)
+  // Accordion state for execution rows: exactly one execution card is open
+  // at a time, always defaulting to the most recently dispatched command —
+  // the operator asked to stop having to manually re-collapse a finished
+  // command's output every time the agent fires the next one. Tracks the
+  // open execution's id (not an index) so it survives message-list
+  // reordering/insertion; an explicit operator click can still re-target it
+  // (collapse the latest, or reopen an older one) via onToggle below.
+  const [openExecutionId, setOpenExecutionId] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [proposals, setProposals] = useState<ChatProposal[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -337,6 +345,7 @@ export function AssistantPanel({
   // replace that card's data in place, making queued → running → output feel
   // like a continuous operation rather than three disconnected messages.
   const upsertExecutionMessage = useCallback((record: ExecutionRecord) => {
+    let isNewExecution = false
     setMessages((prev) => {
       const at = prev.findIndex(
         (msg) => msg.role === 'execution' && msg.execution?.id === record.id
@@ -352,6 +361,7 @@ export function AssistantPanel({
             : msg
         )
       }
+      isNewExecution = true
       const next: Message = {
         id: nextId(),
         role: 'execution',
@@ -361,6 +371,11 @@ export function AssistantPanel({
       }
       return [...prev, next].slice(-120)
     })
+    // Only a genuinely NEW execution id takes over the one open card — a
+    // status update (queued -> running -> completed) on an id already on
+    // screen must never reopen it if the operator (or a newer command)
+    // already moved the open card elsewhere.
+    if (isNewExecution) setOpenExecutionId(record.id)
   }, [])
 
   // cancelExecution stops a single in-flight command dispatched outside an
@@ -1293,6 +1308,10 @@ export function AssistantPanel({
                     execution={msg.execution}
                     liveOutput={liveOutputs[msg.execution.id]}
                     onCancel={cancelExecution}
+                    isOpen={openExecutionId === msg.execution.id}
+                    onToggle={(open) =>
+                      setOpenExecutionId(open ? msg.execution!.id : null)
+                    }
                   />
                 )
               }

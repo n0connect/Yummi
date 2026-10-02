@@ -228,7 +228,9 @@ export function ExecutionMessage({
   content,
   execution,
   liveOutput,
-  onCancel
+  onCancel,
+  isOpen: isOpenProp,
+  onToggle
 }: {
   content: string
   execution: ExecutionRecord
@@ -242,11 +244,21 @@ export function ExecutionMessage({
   // has, since the composer's Stop button is wired to activeTask and stays
   // hidden when there's no task, ever (see AssistantPanel's cancelExecution).
   onCancel?: (executionID: string) => void
+  // Controlled open/close, driven by AssistantPanel's single-open-card
+  // accordion (only the most recently dispatched execution stays expanded).
+  // Both omitted = uncommitted standalone mode (tests, Storybook-style
+  // usage): falls back to local state, defaulting open while active.
+  isOpen?: boolean
+  onToggle?: (open: boolean) => void
 }): JSX.Element {
   const status = execution.status
   const isActive = ['queued', 'running'].includes(status)
   const [userToggled, setUserToggled] = useState<boolean | null>(null)
-  const isOpen = userToggled ?? isActive
+  const isOpen = isOpenProp ?? userToggled ?? isActive
+  const toggle = () => {
+    if (onToggle) onToggle(!isOpen)
+    else setUserToggled(!isOpen)
+  }
 
   const visibleOutput =
     execution.output || (content !== execution.error ? content : '')
@@ -302,11 +314,11 @@ export function ExecutionMessage({
         className="execution-summary"
         role="button"
         tabIndex={0}
-        onClick={() => setUserToggled(!isOpen)}
+        onClick={toggle}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
-            setUserToggled(!isOpen)
+            toggle()
           }
         }}
         aria-label={`${execution.command} (${completedLabel})`}
