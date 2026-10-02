@@ -91,6 +91,16 @@ export function AssistantPanel({
   // reordering/insertion; an explicit operator click can still re-target it
   // (collapse the latest, or reopen an older one) via onToggle below.
   const [openExecutionId, setOpenExecutionId] = useState<string | null>(null)
+  // Execution ids already present in `messages`, tracked OUTSIDE React state
+  // so upsertExecutionMessage can check/update membership synchronously.
+  // Reading a `let` flag set inside a setMessages(prev => ...) updater right
+  // after calling setMessages is unsound: React does not guarantee that
+  // updater runs before the next line executes (it's queued and folded at
+  // render time), so the "is this a new execution?" check could read stale
+  // state — live-observed as the accordion sometimes never advancing to a
+  // genuinely new command. A plain ref makes the check immediate and
+  // deterministic regardless of React's batching/scheduling.
+  const knownExecutionIdsRef = useRef<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [proposals, setProposals] = useState<ChatProposal[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -195,6 +205,12 @@ export function AssistantPanel({
     setThreatHolds([])
     setTurnStatus(null)
     setLiveOutputs({})
+    // Same reasoning: the accordion tracker is session-scoped too — a stale
+    // entry from the previous session is harmless (UUIDs never collide) but
+    // clearing it keeps this reset block an honest, complete list of what a
+    // session switch resets, matching every other line here.
+    knownExecutionIdsRef.current = new Set()
+    setOpenExecutionId(null)
     // isLoading isn't session-scoped state, so it must be cleared here too:
     // an in-flight request from the previous session now skips its own
     // `finally` (sessionIDRef no longer matches), so nothing else would ever
@@ -242,6 +258,15 @@ export function AssistantPanel({
         setMessages(
           [...rebuildMessages(rows ?? []), ...hydratedExecutions].slice(-120)
         )
+        // Seed the new-execution tracker with everything just hydrated (so a
+        // later WS update to one of these doesn't get misread as "new" and
+        // steal the open card back), and default the accordion to the most
+        // recently dispatched one of them — the session-switch/reload
+        // counterpart to upsertExecutionMessage's own live-arrival behavior.
+        // `executions` is newest-first (hydratedExecutions reverses it for
+        // chronological append order above), so executions[0] is the latest.
+        knownExecutionIdsRef.current = new Set(executions.map((r) => r.id))
+        setOpenExecutionId(executions[0]?.id ?? null)
         // Re-derive the egress/threat approval bars from the same fetch —
         // both are otherwise populated ONLY by live onExecution WS events
         // (see below), so a command left holding at the gateway (Ask-mode
@@ -345,7 +370,12 @@ export function AssistantPanel({
   // replace that card's data in place, making queued → running → output feel
   // like a continuous operation rather than three disconnected messages.
   const upsertExecutionMessage = useCallback((record: ExecutionRecord) => {
-    let isNewExecution = false
+    // Checked/updated synchronously, BEFORE setMessages — see
+    // knownExecutionIdsRef's own doc comment for why this can't live inside
+    // the setMessages updater.
+    const isNewExecution = !knownExecutionIdsRef.current.has(record.id)
+    knownExecutionIdsRef.current.add(record.id)
+
     setMessages((prev) => {
       const at = prev.findIndex(
         (msg) => msg.role === 'execution' && msg.execution?.id === record.id
@@ -361,7 +391,6 @@ export function AssistantPanel({
             : msg
         )
       }
-      isNewExecution = true
       const next: Message = {
         id: nextId(),
         role: 'execution',
@@ -416,6 +445,12 @@ export function AssistantPanel({
     setThreatHolds([])
     setTurnStatus(null)
     setLiveOutputs({})
+    // Same reasoning: the accordion tracker is session-scoped too — a stale
+    // entry from the previous session is harmless (UUIDs never collide) but
+    // clearing it keeps this reset block an honest, complete list of what a
+    // session switch resets, matching every other line here.
+    knownExecutionIdsRef.current = new Set()
+    setOpenExecutionId(null)
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
         method: 'POST',
