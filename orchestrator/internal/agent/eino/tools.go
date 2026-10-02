@@ -11,6 +11,7 @@ import (
 
 	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
+	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
 	"github.com/n0connect/yummi/orchestrator/internal/security/threatscan"
 )
@@ -78,7 +79,7 @@ func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		taskID: rc.deps.taskID, approvalMode: rc.deps.approvalMode,
 	}, args.Command, args.Rationale, args.RiskLevel, "eino run_command: exec",
 		func(ctx context.Context, command string) (agent.ToolResult, error) {
-			return rc.deps.exec.Run(ctx, rc.deps.sessionID, command)
+			return rc.deps.exec.Run(execution.ContextWithRationale(ctx, args.Rationale), rc.deps.sessionID, command)
 		})
 }
 

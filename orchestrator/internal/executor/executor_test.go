@@ -550,7 +550,7 @@ func TestProcessFuncThreadsOutputSinkIntoBridge(t *testing.T) {
 	}
 	defer store.Unsubscribe(subID)
 
-	rec, err := store.Enqueue("s1", "p1", "for i in 1 2; do echo out-$i; sleep 0.1; done", "manual_terminal")
+	rec, err := store.Enqueue(context.Background(), "s1", "p1", "for i in 1 2; do echo out-$i; sleep 0.1; done", "manual_terminal")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

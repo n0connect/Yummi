@@ -127,6 +127,16 @@ type Record struct {
 	// command exits) remain the single source of truth.
 	OutputChunk  string `json:"output_chunk,omitempty"`
 	OutputSource string `json:"output_source,omitempty"`
+	// Rationale is the one-sentence "why this command, right now" the
+	// conductor's proposal or the agent's own tool call carried alongside
+	// it — surfaced so the operator can scan a long execution list by
+	// intent instead of decoding each raw command line. Short,
+	// model-stated text, not raw target output — same wire-exposure class
+	// as Command itself (also model-chosen), unlike agent.ActivityEvent's
+	// Detail field, which stays server-side-only. Empty for any execution
+	// whose caller didn't have one to give (e.g. a bare chat command with
+	// no accompanying rationale).
+	Rationale string `json:"rationale,omitempty"`
 }
 
 // Event is published whenever an execution lifecycle changes.
@@ -159,6 +169,33 @@ func OutputSink(ctx context.Context) func(source, chunk string) {
 		return fn
 	}
 	return func(string, string) {}
+}
+
+// rationaleCtxKey is the unexported context key ContextWithRationale/
+// rationaleFromContext use — same shape as chunkSinkKey/OutputSink above,
+// for the same reason: it lets a command's rationale reach Enqueue/
+// EnqueueMCP without agent.Execer/agent.MCPExecer's interface signatures
+// (shared by both the graph and Eino backends, many call sites each) ever
+// needing to carry an extra parameter. The caller already holds ctx at the
+// point it knows the rationale (node_tool.go, pentest_tools.go/tools.go);
+// wrapping it there is a one-line, purely additive change.
+type rationaleCtxKey struct{}
+
+// ContextWithRationale attaches a short, model-stated reason for the
+// command about to be enqueued. A caller with nothing to say can skip this
+// entirely — Enqueue/EnqueueMCP simply leave Record.Rationale empty.
+func ContextWithRationale(ctx context.Context, rationale string) context.Context {
+	if rationale == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, rationaleCtxKey{}, rationale)
+}
+
+// rationaleFromContext reads back what ContextWithRationale attached, or ""
+// if the context carries none.
+func rationaleFromContext(ctx context.Context) string {
+	r, _ := ctx.Value(rationaleCtxKey{}).(string)
+	return r
 }
 
 // Store keeps execution records with optional SQLite persistence.
@@ -213,7 +250,9 @@ func (s *Store) SetProcessor(fn ProcessFunc) {
 }
 
 // Enqueue creates a new execution and starts stub processing in background.
-func (s *Store) Enqueue(sessionID, proposalID, command, mode string) (Record, error) {
+// ctx carries an optional rationale (see ContextWithRationale) — pass
+// context.Background() if the caller has none to attach.
+func (s *Store) Enqueue(ctx context.Context, sessionID, proposalID, command, mode string) (Record, error) {
 	if s == nil {
 		return Record{}, ErrStoreNil
 	}
@@ -237,6 +276,7 @@ func (s *Store) Enqueue(sessionID, proposalID, command, mode string) (Record, er
 		Status:     StatusQueued,
 		CreatedAt:  now,
 		UpdatedAt:  now,
+		Rationale:  rationaleFromContext(ctx),
 	}
 	return s.enqueueRecord(rec), nil
 }
@@ -245,8 +285,9 @@ func (s *Store) Enqueue(sessionID, proposalID, command, mode string) (Record, er
 // Enqueue used by the sandbox-resident-MCP dispatch path. args is
 // JSON-encoded into Record.MCPArgs so Record stays a flat, DB-persistable
 // struct; displayCommand becomes Record.Command so audit/UI/approval show a
-// real command line exactly as the shell path does.
-func (s *Store) EnqueueMCP(sessionID, proposalID, tool string, args map[string]any, displayCommand, mode string) (Record, error) {
+// real command line exactly as the shell path does. ctx carries an optional
+// rationale, same as Enqueue.
+func (s *Store) EnqueueMCP(ctx context.Context, sessionID, proposalID, tool string, args map[string]any, displayCommand, mode string) (Record, error) {
 	if s == nil {
 		return Record{}, ErrStoreNil
 	}

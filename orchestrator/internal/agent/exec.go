@@ -29,7 +29,7 @@ func (e *StoreExecer) Start(ctx context.Context, sessionID, command string) (Exe
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rec, err := e.store.Enqueue(sessionID, "", command, "agent_task")
+	rec, err := e.store.Enqueue(ctx, sessionID, "", command, "agent_task")
 	if err != nil {
 		return nil, fmt.Errorf("enqueue: %w", err)
 	}
@@ -150,7 +150,7 @@ func (e *StoreMCPExecer) RunMCPTool(ctx context.Context, sessionID, tool string,
 	if err := ctx.Err(); err != nil {
 		return ToolResult{}, err
 	}
-	rec, err := e.store.EnqueueMCP(sessionID, "", tool, args, displayCommand, "agent_task")
+	rec, err := e.store.EnqueueMCP(ctx, sessionID, "", tool, args, displayCommand, "agent_task")
 	if err != nil {
 		return ToolResult{}, fmt.Errorf("enqueue mcp: %w", err)
 	}

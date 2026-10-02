@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
+	"github.com/n0connect/yummi/orchestrator/internal/execution"
 )
 
 // toolNode validates, gates, and executes the buffered command. It detects
@@ -105,7 +106,10 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 	}
 
 	// Supervised execution: wait up to SoftTimeout, then consult on long-running.
-	handle, err := s.exec.Start(ctx, task.SessionID, p.Command)
+	// Carrying the model's own stated rationale onto the Record this creates
+	// (see execution.ContextWithRationale's doc comment) — purely additive,
+	// Execer's own interface never needed to change.
+	handle, err := s.exec.Start(execution.ContextWithRationale(ctx, p.Rationale), task.SessionID, p.Command)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()

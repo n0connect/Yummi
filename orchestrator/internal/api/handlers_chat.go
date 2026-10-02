@@ -339,7 +339,8 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 		var executionPayload any = nil
 		assistantMessage := "Proposal approved. Run in terminal."
 		if executions != nil {
-			rec, err := executions.Enqueue(sessionID, item.Proposal.ID, item.Proposal.Command, "assistant_loop")
+			ctx := execution.ContextWithRationale(r.Context(), item.Proposal.Rationale)
+			rec, err := executions.Enqueue(ctx, sessionID, item.Proposal.ID, item.Proposal.Command, "assistant_loop")
 			if err != nil {
 				slog.Warn("approve: enqueue failed; falling back to manual terminal",
 					"session", sessionID, "proposal", item.Proposal.ID, "error", err)

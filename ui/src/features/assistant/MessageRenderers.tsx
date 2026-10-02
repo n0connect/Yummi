@@ -329,8 +329,15 @@ export function ExecutionMessage({
                 : '✗'}
         </span>
         <div className="execution-heading">
-          <code className="execution-cmd">{execution.command}</code>
-          <span className="execution-state">{completedLabel}</span>
+          {execution.rationale && (
+            <span className="execution-rationale" title={execution.rationale}>
+              {execution.rationale}
+            </span>
+          )}
+          <div className="execution-cmd-row">
+            <code className="execution-cmd">{execution.command}</code>
+            <span className="execution-state">{completedLabel}</span>
+          </div>
         </div>
       </div>
       {isOpen && (

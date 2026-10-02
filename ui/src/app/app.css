@@ -851,7 +851,20 @@ body::before {
 .status-ok  { color: var(--green); }
 .status-err { color: var(--red); }
 .status-live { color: var(--cyan); animation: pulse 1.15s ease-in-out infinite; }
-.execution-heading { min-width: 0; flex: 1; display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
+.execution-heading { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+/* The one-sentence "why this command, right now" carried on execution.rationale
+   (see execution.Store.Record's own doc comment) — a Claude-Code-style summary
+   line above the raw command so an operator can scan a long execution list by
+   intent instead of decoding each command string. Sans-serif/tertiary to read
+   as prose, visually subordinate to the monospace command below it. Empty for
+   an execution whose caller had no rationale to give (e.g. a manually-run
+   command) — rendered conditionally in MessageRenderers.tsx, never as a blank
+   line. */
+.execution-rationale {
+  font-family: var(--font-sans); font-size: var(--text-xs); color: var(--text-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.execution-cmd-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); min-width: 0; }
 .execution-cmd {
   font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;

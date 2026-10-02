@@ -68,6 +68,11 @@ export type ExecutionRecord = {
   // AssistantPanel's liveOutputs for how these get accumulated and rendered.
   output_chunk?: string
   output_source?: 'stdout' | 'stderr' | string
+  // The one-sentence "why this command, right now" the conductor's proposal
+  // or the agent's own tool call carried alongside it — lets the operator
+  // scan a long execution list by intent instead of decoding each raw
+  // command line. Empty for an execution whose caller had none to give.
+  rationale?: string
 }
 
 // ─── Session + persisted chat (from /api/v1/sessions[/{id}/messages]) ─────────
