@@ -765,6 +765,26 @@ body::before {
    ═══════════════════════════════════════════════════════════════════════════ */
 .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; background: transparent; }
 .chat-messages { flex: 1; overflow-y: auto; padding: var(--space-lg); min-height: 0; display: flex; flex-direction: column; gap: var(--space-md); }
+/* .chat-messages is a COLUMN flex SCROLL container. Its children are
+   flex items with the default flex-shrink:1. A flex item's automatic
+   minimum size (min-height:auto) normally equals its content height and
+   would prevent it from shrinking below that — EXCEPT the flexbox spec
+   says that auto minimum resolves to 0 for any item with `overflow`
+   other than `visible`. Message rows that set `overflow: hidden`
+   (.msg-execution and the task card's .tt-card) therefore get a 0 auto
+   minimum, so once enough messages accumulate to overflow this
+   container, the flex algorithm SHRINKS those rows all the way down to
+   their borders (~2px) instead of letting the container scroll — and
+   their own `overflow: hidden` then clips the real content, rendering it
+   as an invisible 2px hairline. (Plain text messages have no
+   overflow:hidden, keep their content-based minimum, and stayed fine —
+   which is exactly why only execution/task rows collapsed and only in
+   long sessions.) In a scroll container children must keep their natural
+   height and let the container scroll, so pin every direct child to
+   flex-shrink:0. Confirmed against the live DOM: the clipped row's own
+   .execution-cmd measured 238x18 with visible white text, while its
+   .msg-execution parent had collapsed to height 2. */
+.chat-messages > * { flex-shrink: 0; }
 
 .msg {
   font-size: var(--text-sm); line-height: 1.6;
