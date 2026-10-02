@@ -30,7 +30,7 @@ sandbox is the unified Dockerized Kali Linux environment where pentest commands 
 
 ## Sandbox MCP Server
 
-The Kali image includes a compiled binary at `/usr/local/bin/yummi-sandbox-mcp` (built from the host's `sandbox-mcp/` Go module via multi-stage build). It registers 39 pentest and recon tools that can be invoked via MCP stdio over persistent `docker exec -i` by orchestrator's Eino agent backend.
+The Kali image includes a compiled binary at `/usr/local/bin/yummi-sandbox-mcp` (built from the host's `sandbox-mcp/` Go module via multi-stage build). It registers 47 pentest, recon, and persistent terminal session tools (6 typed, 32 cataloged, 2 pure-Go utilities, and 7 tmux-backed terminal verbs) that can be invoked via MCP stdio over persistent `docker exec -i` by orchestrator's Eino agent backend.
 
 ---
 

@@ -67,8 +67,8 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 |   | yummi-gateway (Rust)          |   |  |   | sandbox (Hardened Kali Linux)  |   |
 |   |                               |   |  |   | UID 1000 (pentester user)      |   |
 |   | - nftables FORWARD Rules      |   |  |   |                                |   |
-|   | - Fail-Closed DROP Policy     |   |  |   | - 39 Native Pentest MCP Tools  |   |
-|   | - Hostname / IP Scope Engine  |   |  |   | - tmux Terminal Session        |   |
+|   | - Fail-Closed DROP Policy     |   |  |   | - 47 Native Pentest MCP Tools  |   |
+|   | - Hostname / IP Scope Engine  |   |  |   | - tmux Terminal Sessions       |   |
 |   | - SHA-256 Audit Hash Chain    |   |  |   | - XFCE / noVNC Graphical GUI   |   |
 |   +---------------+---------------+   |  |   +----------------+---------------+   |
 |                   |                   |  |                    |                   |
@@ -98,7 +98,7 @@ Two strictly segregated control channels reach the Kali sandbox:
 |---|---|---|---|
 | **orchestrator** | Go (`CGO_ENABLED=1`) | AI Conductor, Graph / Eino state machine, REST/WebSocket API, execution pipeline, ASM, and reporting engine. | Cannot open raw network sockets to target networks or modify firewall rules. |
 | **gateway** | Rust binary (`yummi-gateway`) | Installs fail-closed `nftables` FORWARD rules, evaluates egress scope, logs tamper-evident audit trail. | Isolated from LLM logic and direct command execution; manages network filter only. |
-| **sandbox** | Kali Linux container | Unified environment for tool execution (39 MCP tools), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
+| **sandbox** | Kali Linux container | Unified environment for tool execution (47 MCP & terminal tools), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
 | **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; container lifecycle mutations are blocked. |
 | **ui** | React 18 + TypeScript (nginx) | Web operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
 
@@ -127,17 +127,20 @@ Yummi includes a dedicated offensive security and bug bounty substrate:
 ```
 
 ### Key Subsystems:
-- **39 Sandbox-Resident MCP Tools (`sandbox-mcp`)**:
+- **47 Sandbox-Resident MCP Tools (`sandbox-mcp`)**:
   - **6 Typed Tools**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
-  - **31 Cataloged Pentest Tools**: `httpx_probe`, `dnsx_resolve`, `alterx_permute`, `gau_fetch`, `katana_crawl`, `dalfox_xss`, `nuclei_scan`, `wpscan_audit`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_search`, `dnsenum_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_dump`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`.
+  - **32 Cataloged Pentest Tools**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`.
   - **2 Concurrency Utilities**: `consolidate_hosts`, `passive_recon_batch`.
+  - **7 Persistent Terminal Session Tools**: `term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close` (persistent tmux sessions for background listeners, VPNs, and interactive CLI programs).
 - **Active Verification Exploit Oracles**:
   - `OracleActivePoC`: Confirms SQL injection errors, command execution, SSRF metadata responses.
   - `OracleDOMExecution`: Validates XSS and DOM sink execution.
   - `OracleOOBInteraction`: Confirms out-of-band DNS/HTTP callback markers.
   - `OracleDifferential`: Evaluates status code, timing, and response body divergence.
 - **Hierarchical Asset Tree Store**: SQLite-persisted graph indexing domains, subdomains, IPs, ports, endpoints, parameters, and metadata.
+- **Program Scope Rules & Report Gate**: Session-level scope definitions (`program_scope_rules`) with wildcard matching, real-time hostname classification, and automatic filtering of out-of-scope assets from final reports.
 - **Multi-Format Report Generator**: Produces HackerOne Markdown, Bugcrowd VRT, Executive Management summaries, and JSON.
+- **Two-Stage Exploitation Lab**: Built-in testbed container (`lab-target`, `198.51.100.10`) with Apache path-traversal RCE (CVE-2021-41773) and local SUID python privesc.
 - **Proxy & Traffic Ingestion Bridge**: Ingests HTTP flows from Burp Suite, Caido, and Mitmproxy into the Knowledge Graph.
 
 ---

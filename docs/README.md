@@ -22,7 +22,7 @@ docs/
     memory-and-knowledge.md Targets, findings, procedural tactics, ASM hierarchical asset graph
     skills-and-subagents.md 22 red team playbooks, 10 specialist subagents, depth-1 delegation
     quality-and-evaluation.md Objective quality metrics and assertion-bearing benchmarks
-    sandbox-execution.md    Single scoped execution path and 39 MCP tools catalog
+    sandbox-execution.md    Single scoped execution path and 47 MCP & terminal tools catalog
 
   modules/                  Component maps organized by implementation stack
     orchestrator.md         Go orchestrator packages, ASM/report/proxy handlers, API routes
@@ -38,11 +38,14 @@ The `brain/` directory (located at the repository root) contains an optional Pyt
 
 ## Key Subsystems & Features
 
-- **Attack Surface Management (ASM)**: Automatic discovery and maintenance of hierarchical asset graphs (Domain -> Subdomain -> IP -> Port -> Endpoint -> Parameter, Cloud Buckets, Secrets). See [Memory & Knowledge](agent/memory-and-knowledge.md#asm-matrix) and [API Reference](api-reference.md#asm-endpoints).
+- **Attack Surface Management (ASM)**: Automatic discovery and maintenance of hierarchical asset graphs (Domain -> Subdomain -> IP -> Port -> Endpoint -> Parameter, Cloud Buckets, Secrets). See [Memory & Knowledge](agent/memory-and-knowledge.md#asm-matrix) and [API Reference](api-reference.md#assets).
+- **Program Scope Rules & Report Gate**: Session-level bug-bounty scope directives (`include`/`exclude`), live hostname classifier, and automatic exclusion of out-of-scope findings from generated reports. See [Memory & Knowledge](agent/memory-and-knowledge.md#program-scope) and [API Reference](api-reference.md#scope-rules).
+- **Persistent Tmux Terminal Sessions**: First-class background terminal sessions (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`) enabling long-running listeners, VPN connections, and interactive shells. See [Sandbox Execution](agent/sandbox-execution.md#tier-4).
 - **Active Exploit Verification**: Finding validation using deterministic oracles (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`). See [Graph & Nodes](agent/graph-and-nodes.md#finding-verification).
-- **Multi-Format Report Engine**: One-click generation of professional penetration testing and bug bounty reports in HackerOne Markdown, Bugcrowd VRT, Executive Summary, or structured JSON. See [Usage Guide](usage-guide.md#reporting-engine) and [API Reference](api-reference.md#report-endpoints).
-- **HTTP Proxy Traffic Ingestion**: Live interception and injection of web requests and responses from Burp Suite, OWASP ZAP, or Caido directly into the agent's target scope and parameter catalog. See [API Reference](api-reference.md#proxy-endpoints).
-- **Fail-Closed Execution Sandbox**: Kali Linux container operating behind an isolated Rust gateway enforcing packet-level `nftables` policy rules with tamper-evident SHA-256 hash chains. See [Security Model](security-model.md) and [Sandbox Execution](agent/sandbox-execution.md).
+- **Multi-Format Report Engine**: One-click generation of professional penetration testing and bug bounty reports in HackerOne Markdown, Bugcrowd VRT, Executive Summary, or structured JSON. See [Usage Guide](usage-guide.md#reports-usage) and [API Reference](api-reference.md#reports).
+- **HTTP Proxy Traffic Ingestion**: Live interception and injection of web requests and responses from Burp Suite, OWASP ZAP, or Caido directly into the agent's target scope and parameter catalog. See [API Reference](api-reference.md#proxy).
+- **Two-Stage Exploitation Lab**: Deliberately vulnerable target container (`198.51.100.10`) with Apache path-traversal RCE (CVE-2021-41773) and SUID privilege escalation for full-autonomy evaluation (`make lab-target-up`). See [Quality & Evaluation](agent/quality-and-evaluation.md#lab-target).
+- **Fail-Closed Execution Sandbox**: Unified Kali Linux container operating behind an isolated Rust gateway enforcing packet-level `nftables` policy rules with tamper-evident SHA-256 hash chains. See [Security Model](security-model.md) and [Sandbox Execution](agent/sandbox-execution.md).
 
 ## Recommended Reading Paths
 

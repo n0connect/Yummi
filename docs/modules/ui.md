@@ -18,18 +18,30 @@ The web dashboard — the only piece of this repository built with Node/npm rath
 ```
 ui/src/
 |-- app/            App.tsx - top-level routing between the seven tabs (routes past the
-|                   first are React.lazy-loaded behind a Suspense boundary)
+|                   first are React.lazy-loaded behind a Suspense boundary), app.css design tokens
 |-- entities/       types.ts - shared TypeScript types mirroring orchestrator's JSON shapes
 |-- pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/
-|-- features/       One directory per data concern: assistant/, chat/, debuglog/, desktop/,
-|                   gateway/, health/, operator/, sessions/, skills/, statusbar/,
-|                   system/, tasks/, terminal/, trace/
+|-- features/       One directory per data concern:
+|                   |-- assistant/    Chat panel, message rendering with command rationales, proposal bar
+|                   |-- chat/         Chat/event stream hook (useChatStream — WS, jittered backoff)
+|                   |-- desktop/      Desktop panel — noVNC/websockify canvas & status
+|                   |-- operator/     Operator Trust Rail & Briefing panel
+|                   |-- tasks/        Agent task tracker (live plan steps, approval gate)
+|                   |-- trace/        TRACE tab panels: AssetTreePanel (ASM), ScopeRulesPanel
+|                   |                 (program scope), FindingsPanel, ProxyBridgePanel, ReportExportModal
+|                   |-- gateway/      GATEWAY tab — status, rules, egress mode, tamper-evident audit log
+|                   |-- terminal/     xterm.js PTY panel
+|                   |-- debuglog/     SSE log stream panel
+|                   |-- health/       Health page vitals & telemetry
+|                   |-- sessions/     Session rail and mutations
+|                   |-- skills/       Pending-skill review hooks
+|                   |-- statusbar/    Top navigation bar + Theme toggle (light/dark)
+|                   `-- system/       System status cards
 |-- shared/         api/http.ts (the one fetch wrapper everything else uses), api/runtime.ts
 |                   (apiURL/websocketURL - see below), i18n/ (strings.ts translation dictionary,
-|                   driven by YUMMI_LANG build time variable), lib/ (operatorText.ts,
-|                   activityPresentation.ts - client-side counterparts of the server's
-|                   model-text sanitization, see Security Model), reusable components
-|                   (StatusBadge, ModuleCard, MetricRow, LogLine), assets
+|                   driven by YUMMI_LANG build time variable), lib/ (useTheme.ts light/dark
+|                   engine, operatorText.ts, activityPresentation.ts), reusable components
+|                   (YummiLogo, StatusBadge, ModuleCard, MetricRow, LogLine), assets
 `-- test/           setup.ts - see "the one mock-adjacent file" below (no mocks/ directory exists)
 ```
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased] (2026-09 / 2026-10)
+
+### Features
+
+* **mcp/sandbox:** expanded sandbox-resident MCP tool suite to **47 registered tools** across 4 tiers:
+  - 6 individually-typed tools (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`)
+  - 32 cataloged pentest tools including modern bug bounty & recon tools (`httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `naabu_scan`, `tlsx_scan`, `arjun_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`)
+  - 2 pure-Go recon utilities (`consolidate_hosts`, `passive_recon_batch`) with zero external subprocess overhead
+  - 7 persistent tmux terminal session verbs (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`)
+* **terminal/tmux:** agent-driven persistent tmux terminal sessions over MCP, enabling multi-terminal workflows, background listeners, interactive CLI prompts (`sqlmap`, `msfconsole`, `gdb`), and streaming commands inside the sandbox
+* **scope/program:** program scope rules management (`program_scope_rules` table) supporting glob/wildcard patterns, in-scope/out-of-scope classification, and automated filtering of out-of-scope findings during pentest report generation
+* **reporting:** multi-format security report export supporting HackerOne Markdown, Bugcrowd VRT, Executive Summary, and structured JSON
+* **ui/trace:** comprehensive Trace tab expansion with Attack Surface Management (ASM) Asset Tree, Findings drawer, Program Scope rules editor, and Proxy Bridge panel
+* **proxy:** proxy traffic ingestion bridge for Burp Suite, Caido, and Mitmproxy HTTP flows, populating the asset map directly from intercepted traffic
+* **ui/theme:** light and dark mode theme engine with runtime toggle, persistent preferences, and CSS custom property tokens
+* **ui/assistant:** live command execution rationale rendering in the Assistant panel and task execution history
+* **sandbox/unification:** unified single hardened Kali sandbox container sharing the runtime between agent `docker exec`, operator Bash terminal (`tmux`), and desktop GUI (`noVNC`/XFCE), running unprivileged as UID 1000
+* **eval/lab:** two-stage exploitation target lab (`lab-target/`, `198.51.100.10`) featuring Apache 2.4.49 path traversal RCE (CVE-2021-41773) chained with GTFOBins SUID privilege escalation (`make lab-target-up` / `make lab-target-down`)
+* **agent/eino:** per-task auto-approval toggle (`AutoApproveNonCritical`), `UnknownToolsHandler` self-recovery for hallucinated tool names, non-fatal `TOOL_TIMEOUT` recovery, and real-time step activity instrumentation (`RecordActivity`)
+
+### Bug Fixes & Hardening
+
+* **sandbox/init:** enabled container `init: true` to eliminate zombie process accumulation from repeated `docker exec` sessions
+* **terminal/race:** resolved sentinel write races in `term_run` via unified multiline writes (`sendLines`)
+* **terminal/concurrency:** added per-session mutex locking (`sync.Map`) to serialize concurrent typing collisions on the same terminal
+* **terminal/reconnect:** implemented single-flight reconnection logic in `sandboxmcp.Client` to prevent cascading connection drops and process leaks
+* **terminal/idempotency:** ensured `term_open` is idempotent to handle transient network retries without failing existing sessions
+
 ## 1.0.0 (2026-08-16)
 
 

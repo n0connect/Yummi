@@ -71,8 +71,8 @@ Before opening a PR, these must all pass — CI runs the same set:
 ```bash
 make build     # CLI + orchestrator + gateway + UI
 make test      # all four test suites (root Go, orchestrator Go, gateway Rust, UI vitest, sandbox-mcp Go)
-make lint      # golangci-lint (root + orchestrator)
-make vuln      # govulncheck on both Go modules
+make lint      # golangci-lint (root + orchestrator + sandbox-mcp)
+make vuln      # govulncheck on all three Go modules
 ```
 
 There are **no mocks of Yummi's own components** — tests exercise real

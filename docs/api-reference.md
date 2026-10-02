@@ -12,6 +12,7 @@ The full HTTP REST and WebSocket interface exposed by the `orchestrator` service
 - [Sessions API](#sessions)
 - [Targets & Findings API](#targets-findings)
 - [Attack Surface Management (ASM) & Assets API](#assets)
+- [Program Scope Rules API](#scope-rules)
 - [Multi-Format Report Generator API](#reports)
 - [Proxy & Traffic Ingestion Bridge API](#proxy)
 - [TRACE Observability & Operator API](#trace)
@@ -75,6 +76,17 @@ The full HTTP REST and WebSocket interface exposed by the `orchestrator` service
 
 ### Asset Types:
 - `domain`, `subdomain`, `ip`, `port`, `endpoint`, `parameter`, `technology`, `cloud_bucket`, `secret`.
+
+---
+
+## Program Scope Rules API <a id="scope-rules"></a>
+
+| Method | Endpoint | Request Body | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/sessions/{sessionID}/scope-rules` | None | List configured in-scope and out-of-scope program rules. |
+| `POST` | `/api/v1/sessions/{sessionID}/scope-rules` | `{"pattern": "*.example.com", "kind": "include", "note": "..."}` or `{"rules": [...]}` | Add one or more program-scope wildcard rules (`include` or `exclude`). |
+| `DELETE` | `/api/v1/sessions/{sessionID}/scope-rules/{ruleID}` | None | Delete a specific program-scope rule by ID. |
+| `POST` | `/api/v1/sessions/{sessionID}/scope-rules/classify` | `{"target": "api.example.com"}` | Live classification of a host or URL against active scope rules. Returns `{"in_scope": bool, "reason": "...", "matched_rule": "..."}`. |
 
 ---
 
@@ -152,7 +164,7 @@ The full HTTP REST and WebSocket interface exposed by the `orchestrator` service
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/v1/sessions/{sessionID}/executions` | List command executions for a session. |
-| `GET` | `/api/v1/executions/{id}` | Get execution details and output buffers. |
+| `GET` | `/api/v1/executions/{id}` | Get execution details, output buffers, exit code, and command rationale. |
 | `POST` | `/api/v1/executions/{id}/cancel` | Cancel a running command execution. |
 | `POST` | `/api/v1/executions/{id}/resolve-egress` | Resolve an Ask-mode network egress hold. |
 | `POST` | `/api/v1/executions/{id}/resolve-threat` | Resolve a threat-scan content hold (`{"approved": true}`). |
@@ -204,10 +216,13 @@ The full HTTP REST and WebSocket interface exposed by the `orchestrator` service
 |---|---|
 | `/ws/terminal` | Interactive PTY shell bridge to the sandbox container (Bash tab). |
 | `/ws/desktop` | Proxy to noVNC / websockify graphical desktop stream (Desktop tab). |
-| `/ws/events` | High-throughput, typed JSON event bus for UI state synchronization. |
+| `/ws/events` | High-throughput, typed JSON event bus for UI state synchronization with monotonic replay support. |
 
 ### Key `/ws/events` Message Types:
 - `execution.status`: Live status transitions (`queued`, `running`, `completed`, `failed`, `awaiting_approval`).
+- `execution.heartbeat` / `execution.output`: Real-time streaming command output chunks.
 - `task.status`: Agent state machine transitions and plan step progress.
-- `gateway.status`: Real-time network policy and egress hold notifications.
+- `agent.activity`: Typed activity timeline stream (plans, commands with rationale, findings, memories).
+- `gateway.status` / `gateway.rules_changed`: Real-time network policy and egress hold notifications.
+- `skills.pending`: Real-time updates to curator-drafted skills queue.
 - `health.tick`: Periodic component health heartbeats.

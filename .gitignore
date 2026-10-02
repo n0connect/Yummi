@@ -80,6 +80,7 @@ orchestrator/internal/ui/dist/
 
 # ── Local runtime / work files ───────────────────────────────────────────────
 .yummi/
+.playwright-mcp/
 *.log
 *.tmp
 tmp/

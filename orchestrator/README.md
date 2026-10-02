@@ -40,14 +40,15 @@ internal/
     activity.go            Typed TRACE ActivityEvents
     oracle.go, verdict.go  Active exploit proof verification (ActivePoC, DOM, OOB, Diff)
     evaluation.go          Objective quality metrics and assertion gates
-    eino/                  Cloud / Eino-driven ReAct agent backend (alternate tool-calling engine)
+    eino/                  Cloud / Eino-driven ReAct agent backend (47 tools + 7 persistent terminal session verbs)
   knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
-    store.go               targets, findings, procedural_memory, persistent_context, assets
+    store.go               targets, findings, procedural_memory, persistent_context, assets, scope_rules
     assets.go              Hierarchical Attack Surface Management (ASM) tree matrix
+    program_scope.go       Bug-bounty in-scope/out-of-scope program rules & live classifier
     procedural.go          target-scrubbed tactic recording (the learning loop)
     retrieval.go           RetrievalStrategy — structured SQL recall (excludes current-task cmds)
     semantic_retrieval.go  Local Ollama embeddings with structured fallback
-  report/                Multi-format Pentest & Bug Bounty Report Generator (H1, VRT, Exec, JSON)
+  report/                Multi-format Pentest & Bug Bounty Report Generator (H1, VRT, Exec, JSON, out-of-scope filter)
   skill/                 Declarative skill registry (22 YAML playbooks, threat-scanned on load)
   skillcurator/          Autonomous skill creation from successful trajectories (quarantine store)
   security/              Content-layer fail-closed
@@ -60,13 +61,13 @@ internal/
     tier.go, persona.go    Ollama tier presets (standard / expert), persona YAML loader
     golden.go, policy.go   Deterministic persona boundary fixtures and policy
   scope/                 Single source of truth for ExtractTargets(command) (leaf)
-  execution/ executor/   Execution lifecycle store and processor (scope check -> sandbox)
+  execution/ executor/   Execution lifecycle store (rationale-aware) and processor (scope check -> sandbox)
   llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
   sandbox/ gateway/      Docker exec bridge, IPC client to the gateway daemon
-  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (39 tools)
+  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (47 tools & persistent terminal sessions)
   retention/             Background retention cleaner for aged session data
   session/ health/       SQLite session CRUD, ring-buffer health metrics
-  api/                   REST routes, domain handlers (assets, report, proxy), WS events/terminal
+  api/                   REST routes, domain handlers (assets, scope rules, report, proxy), WS events/terminal
   mcp/                   JSON-RPC MCP client — DORMANT (host-exec; unimported by production)
   tlsutil/ config/ ui/   mTLS certs, env config, embedded ui/dist
 ```

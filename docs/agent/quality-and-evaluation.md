@@ -79,12 +79,32 @@ make test-agent-benchmark LIVE_TEST_MODEL=qwen3:14b
 make bench-target-down    # tears the target down when finished
 ```
 
-**Confirmed working (2026-08-16, qwen3:14b, graph backend):** given the goal "fingerprint the web service ... and report whether it is outdated," the agent planned a single `whatweb` step, executed it against the real target through the real gateway, and correctly concluded: *"The web service ... is running Apache version 2.4.25 and WordPress version 5.0.27. The version of Apache is outdated ... and the version of WordPress is also outdated."* Both claims are true and match what the target actually runs. Building this benchmark also surfaced and fixed a real, previously-undiscovered bug: `wpscan_scan` (`sandbox-mcp/tools_extended.go`) was completely non-functional in production — it always failed because wpscan writes its vulnerability-database cache under `$HOME/.cache`, which the sandbox's read-only root filesystem rejects, and the handler never redirected `HOME` anywhere writable.
+**Confirmed working (2026-08-16, qwen3:14b, graph backend):** given the goal "fingerprint the web service ... and report whether it is outdated," the agent planned a single `whatweb` step, executed it against the real target through the real gateway, and correctly concluded: *"The web service ... is running Apache version 2.4.25 and WordPress version 5.0.27. The version of Apache is outdated ... and the version of WordPress is also outdated."* Both claims are true and match what the target actually runs. (Note: in earlier versions, the sandbox had a read-only root filesystem; since the 2026-09-04 container unification, the sandbox runs a writable filesystem supporting the unified XFCE/noVNC desktop while agent commands execute strictly unprivileged as non-root UID 1000).
 
-This benchmark currently has exactly one scenario and one target family (an outdated CMS core version, found via passive fingerprinting). It is evidence for that specific class of claim, not a general "Yummi finds N% of vulnerability classes" statement — extending it to more target/vulnerability types is future work, not something the one green run above should be read to imply.
+---
+
+## Two-Stage Exploitation Lab (Apache RCE & SUID Privesc) <a id="lab-target"></a>
+
+In addition to the single-stage CMS fingerprinting benchmark, Yummi includes a complete two-stage vulnerable target in `lab-target/` for full-autonomy exploratory runs:
+
+```bash
+make lab-target-up     # Builds and launches target on 198.51.100.10
+make lab-target-down   # Tears down the lab target
+```
+
+### Vulnerability Chain:
+1. **Foothold (Unauthenticated RCE)**: Apache HTTP Server 2.4.49 (**CVE-2021-41773 / CVE-2021-42013**). A path-normalization flaw allows traversal outside `ScriptAlias /cgi-bin/` before access controls execute. With `mod_cgid` active, the traversal executes arbitrary binaries as `www-data`.
+   - **Flag 1**: `/home/user.txt` (readable by `www-data`).
+2. **Local Privilege Escalation**: Misconfigured SUID root copy of Python (`/usr/local/bin/python3-suid`), following the standard GTFOBins pattern (`python3 -c 'import os; os.setuid(0); os.system("/bin/bash")'`).
+   - **Flag 2**: `/root/root.txt` (root access only).
+
+### Network Isolation:
+Like `eval-target`, `lab-target` is provisioned on an RFC 5737 TEST-NET-2 address (`198.51.100.10/24`) — intentionally avoiding RFC 1918 subnets which gateway treats as an anti-pivoting unconditional block. The agent must successfully request egress or rely on an explicit operator allow rule to reach the target, verifying the entire end-to-end trust boundary during autonomous runs.
+
+---
 
 ## What this does not claim
 
-The quality gate is an acceptance contract for agent behavior and traceability, not an exploit oracle, general vulnerability scanner, or universal benchmark. Required command groups encode the minimum evidence-gathering route for each scenario; they do not claim that one command is the only valid solution. Live results also depend on the selected local model, Ollama latency, sandbox image, and tool availability, so changes to those inputs should be recorded alongside the evaluation result. The vulnerability-finding benchmark above narrows this gap for one specific, real target class — it does not make the broader "universal benchmark" disclaimer untrue for anything beyond that.
+The quality gate is an acceptance contract for agent behavior and traceability, not an exploit oracle, general vulnerability scanner, or universal benchmark. Required command groups encode the minimum evidence-gathering route for each scenario; they do not claim that one command is the only valid solution. Live results also depend on the selected local model, Ollama latency, sandbox image, and tool availability, so changes to those inputs should be recorded alongside the evaluation result. The vulnerability-finding benchmark and lab target above narrow this gap for specific, real target classes — they do not make the broader "universal benchmark" disclaimer untrue for anything beyond that.
 
 When adding a regression, prefer a deterministic golden fixture for a boundary rule, an offline `QualitySpec` test for evaluator behavior, or a live scenario only when the property genuinely requires a real model and sandbox.

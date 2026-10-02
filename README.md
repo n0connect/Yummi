@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red Team agent drives a hardened Kali sandbox with 39 native pentest tools, 10 specialized sub-agents, and 22 web/bug bounty playbooks, while a lightweight Rust gateway enforces the documented network policy independently of the model-facing code.
+Yummi turns natural language into practical security workflows while keeping traffic control and operator authority explicit. An autonomous Red Team agent drives a hardened Kali sandbox with 47 native pentest and terminal tools, 10 specialized sub-agents, and 22 web/bug bounty playbooks, while a lightweight Rust gateway enforces the documented network policy independently of the model-facing code.
 </p>
 
 ---
@@ -35,13 +35,17 @@ Yummi turns natural language into practical security workflows while keeping tra
 - **Fail-Closed Security Trust Boundary** — Network traffic is strictly gated by a dedicated Rust gateway daemon (`nftables`) with default-deny rules installed at kernel startup. The AI agent never touches firewall rules directly.
 - **Local and Frontier Cloud AI Flexibility** — Run 100% locally with Ollama (`gpt-oss:20b`, `gpt-oss:120b`, `qwen3`), or connect frontier reasoning models (Claude 3.5 Sonnet, GPT-4o, DeepSeek-V3) via OpenRouter or any OpenAI-compatible API using the Eino ADK backend or the LangGraph multi-agent `brain/`.
 - **Target-First Web Pentest and Bug Bounty Engine** — One-click asset reconnaissance, subdomain enumeration, live probing, fuzzing, and vulnerability scanning.
-- **39 Sandbox-Resident MCP Tools** — 6 typed tools (`nmap`, `whatweb`, `curl`, `gobuster`, `ffuf`, `nikto`), 31 cataloged tools (`httpx`, `dnsx`, `alterx`, `gau`, `katana`, `dalfox`, `nuclei`, `wpscan`, `sqlmap`, `amass`, `subfinder`, `theharvester`, `dnsenum`, `enum4linux`, `onesixtyone`, `snmpwalk`, `dirb`, `hydra`, `medusa`, `checksec`, `radare2`, `arjun`, `naabu`, `tlsx`, `cloud_enum`, `jwt_tool`, `subzy`, `jsluice`, `graphql_cop`, `corsy`), and 2 concurrency utilities (`consolidate_hosts`, `passive_recon_batch`).
+- **47 Sandbox-Resident MCP Tools** — 6 typed tools (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`), 32 cataloged tools (`httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`), 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`), and 7 persistent terminal session tools (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`).
+- **Persistent Tmux Terminal Sessions** — First-class terminal session lifecycle for interactive programs, long-running listeners, background VPN tunnels, and reverse shells without blocking agent reasoning.
+- **Visual Bug-Bounty Triage** — Headless Chrome screenshot capture via `screenshot_triage` alongside HTTP status, technology stack, and page title extraction.
 - **Active Exploit Oracles & Verification** — Deterministic proof validation (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) that verifies vulnerabilities and prevents false positives before reporting.
 - **Attack Surface Management (ASM) & Asset Matrix** — Hierarchical graph tracking domains, subdomains, IPs, ports, endpoints, query parameters, secrets, and cloud storage buckets.
+- **Program Scope Rules & Report Gate** — Session-level bug bounty in-scope/out-of-scope rule definition (`program_scope_rules`), real-time target classifier, and automated exclusion of out-of-scope findings from final reports.
 - **Multi-Format Pentest & Bug Bounty Reporting** — Export findings in HackerOne Markdown, Bugcrowd VRT, Executive Management summaries, and structured JSON.
 - **Proxy & Traffic Ingestion Bridge** — Ingest HTTP/S traffic streams from external interception proxies (Burp Suite, Caido, Mitmproxy) directly into the knowledge graph.
-- **Unified Operator Workspace** — Web-managed interface (port 3000) featuring AI Chat, tmux-backed Web Terminal (Bash), full XFCE/noVNC Graphical Desktop (Burp Suite, Wireshark, Firefox), Trace timeline, live Gateway policy management, and Health monitoring.
+- **Unified Operator Workspace & Desktop** — Web-managed interface (port 3000) featuring AI Chat with live execution rationale, tmux-backed Web Terminal (Bash), full XFCE/noVNC Graphical Desktop (Burp Suite, Wireshark, Firefox), Trace timeline with ASM tree / scope rules / proxy / report panels, live Gateway policy management, Health monitoring, and Light/Dark themes.
 - **Knowledge and Memory System** — Persistent session context, target-scrubbed procedural tactics, structured security findings, 22 specialized attack playbooks, 10 specialized sub-agents, and automated skill drafting with sanitization.
+- **Two-Stage Exploitation Lab** — Built-in `lab-target` container (`198.51.100.10`) featuring an unauthenticated Apache path-traversal RCE foothold (CVE-2021-41773) and local SUID privilege escalation (`make lab-target-up`).
 
 ---
 
@@ -77,7 +81,7 @@ Yummi turns natural language into practical security workflows while keeping tra
 Five runtime components collaborate in a fail-closed architecture:
 1. **orchestrator (Go)** — AI conductor, agentic state machine (Graph / Eino), execution store, and REST/WebSocket API.
 2. **gateway (Rust)** — Fail-closed `nftables` policy engine, IP/hostname scope evaluator, and tamper-evident SHA-256 audit log.
-3. **sandbox (Kali Linux)** — Hardened container running 39 pentest MCP tools, tmux shell, and XFCE/noVNC desktop.
+3. **sandbox (Kali Linux)** — Hardened container running 47 pentest and terminal MCP tools, tmux shell, and XFCE/noVNC desktop.
 4. **docker-proxy** — Restricts orchestrator access strictly to container exec/inspect operations; denies host Docker daemon management.
 5. **ui (React 18 + Vite)** — Modern, web-only operator surface served via nginx on port 3000.
 
