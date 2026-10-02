@@ -239,11 +239,16 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	trace := &runTrace{}
 	capture := &finishCapture{}
 	ask := &askCapture{}
+	// One loopGuard per task run, shared by every tool call this task makes
+	// (shell and MCP alike) — see loop_guard.go. Safe without a mutex because
+	// ExecuteSequentially: true below guarantees tool calls within one task
+	// never run concurrently.
+	loop := &loopGuard{}
 
 	rcDeps := runCommandDeps{
 		taskID: task.ID, sessionID: t.SessionID, store: r.store, exec: r.exec, gate: r.gate,
 		validator: r.validator, approvalMode: func() agent.ApprovalMode { return r.cfg.ApprovalMode },
-		trace: trace,
+		trace: trace, loop: loop,
 	}
 	tools := []tool.BaseTool{
 		newRunCommandTool(rcDeps),
@@ -256,7 +261,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		pentestDeps := pentestToolDeps{
 			taskID: task.ID, sessionID: t.SessionID, store: r.store, mcpExec: r.cfg.MCPExec,
 			gate: r.gate, validator: r.validator, approvalMode: func() agent.ApprovalMode { return r.cfg.ApprovalMode },
-			trace: trace,
+			trace: trace, loop: loop,
 		}
 		for _, spec := range pentestToolSpecs {
 			tools = append(tools, newPentestTool(spec, pentestDeps))
@@ -744,7 +749,44 @@ func (r *EinoRunner) instruction(goal string) string {
 		// moment — the fix is timing, not honesty).
 		"IMPORTANT: never call finish in the same turn as another tool. Call finish alone, in its own " +
 		"turn, only after you have already seen a prior tool's actual result — that is the only way its " +
-		"summary can cite real evidence instead of being written blind."
+		"summary can cite real evidence instead of being written blind.\n\n" +
+		// ── Three rules derived from live operator observation ────────────────
+		// Fix 1 (rationale visibility): Live run showed the AGENT timeline was
+		// empty of any explanation — all the operator saw was raw command strings
+		// with no context. The rationale field exists in every tool schema and is
+		// already forwarded to the approval flow and activity log, but the model
+		// was treating it as bureaucratic noise rather than a genuine operator
+		// communication. Making it an explicit, non-negotiable step (not just
+		// "fill in this field") is the structural fix.
+		"OPERATOR RATIONALE RULE: Before every tool call, your rationale field must be a complete sentence " +
+		"that tells the operator what you expect to learn or achieve and why this action comes next. It is " +
+		"not a label (\"running nmap\") — it is a brief, specific justification visible in the operator's " +
+		"live activity feed. An operator reading only the rationale fields should be able to follow your " +
+		"entire reasoning chain without seeing the raw commands.\n\n" +
+		// Fix 2 (duplicate tool prevention): Live run ran gobuster_dir then
+		// ffuf_fuzz against the same target with the same common.txt wordlist —
+		// two different tools doing identical content-discovery work, burning two
+		// step-budget slots for one answer. The persona already says "never
+		// repeat a command whose result you hold", but that principle operates on
+		// identical commands, not semantically equivalent ones across different
+		// tool wrappers. An explicit, concrete form of the rule closes the gap.
+		"DUPLICATE WORK RULE: Never run two content-discovery tools (gobuster_dir, ffuf_fuzz, dirb, " +
+		"dirsearch, feroxbuster) against the same URL with the same wordlist. If one directory-enumeration " +
+		"tool has already run and returned results, that answer is in hand — a second tool with the same " +
+		"wordlist adds nothing. Move to the next logical step instead.\n\n" +
+		// Fix 3 (CVE-first ordering): Live run opened with whatweb → gobuster →
+		// ffuf generic recon even though the goal explicitly named CVE-2021-41773
+		// — a known, well-documented vulnerability with a specific exploit path.
+		// The model's default "reconnaissance before exploitation" reflex is
+		// correct for unknown targets, but when the goal already names the
+		// vulnerability, reconnaissance is redundant. The known exploit should be
+		// the first attempt; recon becomes fallback if that fails.
+		"CVE-FIRST RULE: If the goal names a specific CVE number or describes a known vulnerability " +
+		"(e.g. path traversal, SQL injection in a named product version, a SUID binary), attempt the " +
+		"known exploit directly as your first action — do not run generic reconnaissance (whatweb, " +
+		"gobuster, ffuf, nmap) before trying it. Reconnaissance is the fallback when exploitation fails " +
+		"or when no specific vulnerability is named. A goal that says 'exploit CVE-XXXX-YYYY' already " +
+		"tells you the vulnerability — use your knowledge of that CVE to attempt the exploit immediately."
 	if len(r.cfg.SubAgents) > 0 {
 		instr += " Use handoff to delegate a focused subtask to a specialist — call it more than once in the same " +
 			"turn to delegate to several specialists at once, they run concurrently."

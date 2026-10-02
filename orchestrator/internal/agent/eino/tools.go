@@ -32,6 +32,9 @@ type runCommandDeps struct {
 	// trace collects this task's tool outcomes for the optional SkillCurator
 	// hook; nil disables collection (e.g. in tests that don't need it).
 	trace *runTrace
+	// loop is the task-shared stuck/duplicate/thrash detector (loop_guard.go)
+	// — nil disables the check (tests that don't need it).
+	loop *loopGuard
 }
 
 type runCommandArgs struct {
@@ -76,7 +79,7 @@ func (rc *runCommandTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 
 	return runToolPipeline(ctx, toolPipelineDeps{
 		store: rc.deps.store, gate: rc.deps.gate, validator: rc.deps.validator,
-		taskID: rc.deps.taskID, approvalMode: rc.deps.approvalMode,
+		taskID: rc.deps.taskID, approvalMode: rc.deps.approvalMode, loop: rc.deps.loop,
 	}, args.Command, args.Rationale, args.RiskLevel, "eino run_command: exec",
 		func(ctx context.Context, command string) (agent.ToolResult, error) {
 			return rc.deps.exec.Run(execution.ContextWithRationale(ctx, args.Rationale), rc.deps.sessionID, command)
