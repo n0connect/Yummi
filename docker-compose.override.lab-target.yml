@@ -34,7 +34,7 @@ services:
       lab_target_net:
         ipv4_address: 198.51.100.10
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/')"]
       interval: 5s
       timeout: 5s
       retries: 10

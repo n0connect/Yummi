@@ -63,8 +63,13 @@ func TestRunToolPipeline_EmitsActCommandAndActCommandDoneOnSuccess(t *testing.T)
 	for _, e := range events {
 		if e.Kind == agent.ActCommand {
 			sawCommand = true
-			if !strings.Contains(e.Detail, "confirm host is up") {
-				t.Errorf("ActCommand detail = %q, want the rationale", e.Detail)
+			// rationale is now the Summary (operator-visible headline in the AGENT
+			// tab), command goes to Detail — so the operator sees WHY before WHAT.
+			if !strings.Contains(e.Summary, "confirm host is up") {
+				t.Errorf("ActCommand summary = %q, want the rationale as the headline", e.Summary)
+			}
+			if !strings.Contains(e.Detail, "nmap") {
+				t.Errorf("ActCommand detail = %q, want the command string", e.Detail)
 			}
 		}
 		if e.Kind == agent.ActCommandDone {
