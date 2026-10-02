@@ -21,6 +21,34 @@ import (
 // returns the new task id.
 type taskCreatorFunc func(ctx context.Context, sessionID, goal string) (string, error)
 
+// steerableTaskStatus reports whether a task is actively mid-loop in a way
+// an operator chat message can usefully steer — as opposed to StatusPlanned
+// (not started yet — nothing running to steer) or StatusPaused (already
+// stopped and waiting on the operator via its own ask_operator/resume flow,
+// which is a different, already-correct path).
+func steerableTaskStatus(status agent.TaskStatus) bool {
+	switch status {
+	case agent.StatusRunning, agent.StatusAwaitingApproval, agent.StatusRetryingLLM, agent.StatusSummarizing:
+		return true
+	default:
+		return false
+	}
+}
+
+// findActiveTask returns the most recently created non-terminal, steerable
+// task for a session, if any.
+func findActiveTask(taskStore *agent.Store, sessionID string) (agent.Task, bool) {
+	if taskStore == nil || sessionID == "" {
+		return agent.Task{}, false
+	}
+	for _, t := range taskStore.ListBySession(sessionID, 10) {
+		if steerableTaskStatus(t.Status) {
+			return t, true
+		}
+	}
+	return agent.Task{}, false
+}
+
 // applyStartTask converts a start_task chat response into a created task.
 // Falls back to ask_clarification when the goal is missing or creation fails.
 func applyStartTask(ctx context.Context, resp conductor.ChatResponse, sessionID string, create taskCreatorFunc) conductor.ChatResponse {
@@ -108,6 +136,43 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 		if req.SessionID != "" && sessionID != "default" && sm != nil {
 			if _, err := sm.Get(sessionID); err != nil {
 				writeError(w, http.StatusNotFound, "session not found", nil)
+				return
+			}
+		}
+
+		// A chat message for a session with an already-running task is
+		// STEERING, not a new request — route it straight into that task's
+		// PendingGuidance (see Task's doc comment) and skip conductor
+		// classification entirely. Deterministic (a status check, not a model
+		// judgment call) specifically because an LLM intent classifier kept
+		// misreading it as a fresh start_task and launching a SECOND,
+		// independent task against the same target — confirmed live. Skipped
+		// for FromFeedback turns (synthetic command-output replay, not
+		// operator-authored) and plain informational chit-chat has nowhere
+		// else to go anyway once a task owns the session.
+		if !req.FromFeedback && taskStore != nil {
+			if activeTask, ok := findActiveTask(taskStore, sessionID); ok {
+				if err := taskStore.AppendGuidance(activeTask.ID, req.Message); err != nil {
+					slog.Warn("failed to queue operator guidance", "task_id", activeTask.ID, "error", err)
+				}
+				reply := "Guidance sent — the agent will see it on its next step."
+				if isLikelyTurkish(req.Message) {
+					reply = "Yönlendirme gönderildi — agent bir sonraki adımda görecek."
+				}
+				appendAuditSafe(sm, sessionID, "assistant.guidance", "assistant", map[string]any{
+					"task_id": activeTask.ID,
+					"message": req.Message,
+				})
+				resp := conductor.ChatResponse{Intent: "guidance_queued", Message: reply, TaskID: activeTask.ID}
+				if sm != nil && sessionID != "" && sessionID != "default" {
+					persistChatTurn(sm, sessionID, req.Message, resp)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"reply":      resp.Message,
+					"session_id": sessionID,
+					"turn_id":    req.TurnID,
+					"data":       resp,
+				})
 				return
 			}
 		}

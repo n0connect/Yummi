@@ -173,6 +173,24 @@ type Task struct {
 	// lifetime, not across a restart.
 	AutoApproveNonCritical bool `json:"auto_approve_non_critical,omitempty"`
 
+	// PendingGuidance holds operator chat messages sent WHILE this task is
+	// already running, queued for delivery into the loop's own context at
+	// its next natural boundary (the next tool result, for the graph and
+	// Eino backends alike). Ephemeral like the Pending*/AutoApproveNonCritical
+	// fields above — never persisted, only needs to survive the running
+	// process's lifetime.
+	//
+	// Exists because, before this field, a chat message sent to a session
+	// with an already-running task was NOT steering — the conductor always
+	// re-classified it as a fresh start_task intent and launched a SECOND,
+	// independent task against the same target (confirmed live, see
+	// CLAUDE.md's live-full-autonomy-run entry). handlers_chat.go now checks
+	// for a non-terminal, non-paused task on the session BEFORE running
+	// conductor classification at all and, if one exists, appends here
+	// instead — deterministic routing, no model judgment call, so it can't
+	// misclassify under on its own.
+	PendingGuidance []string `json:"-"`
+
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
 }

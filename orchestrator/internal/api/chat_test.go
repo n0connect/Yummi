@@ -261,3 +261,61 @@ func TestLatestCompletedTaskSelectsServerRecordedOutcome(t *testing.T) {
 		t.Fatalf("selected findings = %+v", got.Findings)
 	}
 }
+
+// TestFindActiveTaskRoutesToRunningTask covers the mid-task operator-steering
+// gap: a chat message sent to a session with a task already mid-loop must be
+// recognized as steerable BEFORE the conductor ever classifies it, or it
+// gets misread as a fresh start_task (confirmed live — see Task's
+// PendingGuidance doc comment).
+func TestFindActiveTaskRoutesToRunningTask(t *testing.T) {
+	store, err := agent.NewStore(nil)
+	if err != nil {
+		t.Fatalf("new task store: %v", err)
+	}
+
+	if _, ok := findActiveTask(store, "s1"); ok {
+		t.Fatal("no task yet: findActiveTask should report none")
+	}
+
+	task, err := store.Create("s1", "compromise the box", 20)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, ok := findActiveTask(store, "s1"); ok {
+		t.Fatal("task still StatusPlanning (not started): should not be steerable yet")
+	}
+
+	if err := store.Transition(task.ID, agent.StatusPlanned, nil); err != nil {
+		t.Fatalf("plan task: %v", err)
+	}
+	if _, ok := findActiveTask(store, "s1"); ok {
+		t.Fatal("task StatusPlanned (awaiting operator start): should not be steerable yet")
+	}
+
+	if err := store.Transition(task.ID, agent.StatusRunning, nil); err != nil {
+		t.Fatalf("run task: %v", err)
+	}
+	got, ok := findActiveTask(store, "s1")
+	if !ok || got.ID != task.ID {
+		t.Fatalf("running task should be steerable, got ok=%v task=%+v", ok, got)
+	}
+
+	if err := store.Transition(task.ID, agent.StatusPaused, func(tk *agent.Task) {
+		tk.Question = "which host should I pivot to?"
+	}); err != nil {
+		t.Fatalf("pause task: %v", err)
+	}
+	if _, ok := findActiveTask(store, "s1"); ok {
+		t.Fatal("paused task (already waiting on operator via its own resume flow) should not be re-routed as guidance")
+	}
+
+	if err := store.Transition(task.ID, agent.StatusRunning, nil); err != nil {
+		t.Fatalf("resume task: %v", err)
+	}
+	if err := store.Transition(task.ID, agent.StatusCompleted, nil); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, ok := findActiveTask(store, "s1"); ok {
+		t.Fatal("completed task should never be steerable")
+	}
+}

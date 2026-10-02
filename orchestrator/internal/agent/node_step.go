@@ -43,8 +43,29 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 	// deterministically below instead of drifting into more commands.
 	terminalPlan := s.autoFinishTerminalPlan && task.StepsUsed > 0 && planTerminal(task.Plan) && planHasSuccess(task.Plan) && hasSynthesisEvidence(s.memCtx)
 
+	// Deliver any operator chat message sent WHILE this task was already
+	// running (see Task.PendingGuidance's doc comment / Store.DrainGuidance).
+	// stepNode runs on every single turn, so draining here — rather than at
+	// toolNode's many separate exit points — guarantees delivery exactly
+	// once, on the model's very next turn, regardless of which edge the
+	// previous node took. s.lastObs itself is left untouched (it feeds the
+	// budget-exhaustion message below and other callers); the guidance is
+	// folded only into this turn's rendered prompt.
+	stepObs := s.lastObs
+	if s.store != nil {
+		if notes := s.store.DrainGuidance(s.taskID); len(notes) > 0 {
+			guidance := Wrap("OPERATOR_GUIDANCE", "The operator sent this WHILE you were working. "+
+				"Read it and adjust your next action accordingly:\n"+strings.Join(notes, "\n"))
+			if stepObs == "" {
+				stepObs = guidance
+			} else {
+				stepObs = stepObs + "\n\n" + guidance
+			}
+		}
+	}
+
 	system := StepSystemPrompt(s.cfg.Persona)
-	prompt := BuildStepPrompt(task, s.lastObs, s.memCtx.Summary, s.buildPreamble(ctx, task))
+	prompt := BuildStepPrompt(task, stepObs, s.memCtx.Summary, s.buildPreamble(ctx, task))
 
 	// NeedsCompression's check above only tracks raw observation bytes added
 	// via AddObservation — it has no visibility into the persona, plan

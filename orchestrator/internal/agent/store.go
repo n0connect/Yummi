@@ -189,6 +189,7 @@ func cloneTaskSlices(t *Task) {
 	t.Checkpoint.RecentCommands = append([]string(nil), t.Checkpoint.RecentCommands...)
 	t.Checkpoint.ExecutedCommands = append([]string(nil), t.Checkpoint.ExecutedCommands...)
 	t.Checkpoint.MemoryObservations = append([]string(nil), t.Checkpoint.MemoryObservations...)
+	t.PendingGuidance = append([]string(nil), t.PendingGuidance...)
 }
 
 // Transition moves a task to a new status, applying mutate (may be nil) under
@@ -240,6 +241,43 @@ func (s *Store) Update(id string, mutate func(*Task)) error {
 	s.mu.Unlock()
 	s.publish(t)
 	return nil
+}
+
+// AppendGuidance queues an operator chat message for delivery into a
+// running task's own context — see Task.PendingGuidance's doc comment.
+func (s *Store) AppendGuidance(id, message string) error {
+	return s.Update(id, func(t *Task) {
+		t.PendingGuidance = append(t.PendingGuidance, message)
+	})
+}
+
+// DrainGuidance returns and clears all queued guidance for a task. Both
+// backends call this at a tool-call boundary (graph's node_tool.go, Eino's
+// runToolPipeline) so queued messages reach the model on its very next turn
+// — never silently lost, never delivered twice.
+func (s *Store) DrainGuidance(id string) []string {
+	s.mu.Lock()
+	t, ok := s.items[id]
+	if !ok || len(t.PendingGuidance) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	drained := t.PendingGuidance
+	t.PendingGuidance = nil
+	t.UpdatedAt = time.Now().Unix()
+	if err := s.persist(t); err != nil {
+		// Non-fatal: worst case the same guidance is drained and delivered
+		// again next call, which is a harmless duplicate instruction, not a
+		// lost one. Keep the in-memory drain so the model still sees it now.
+		s.items[id] = t
+		s.mu.Unlock()
+		s.publish(t)
+		return drained
+	}
+	s.items[id] = t
+	s.mu.Unlock()
+	s.publish(t)
+	return drained
 }
 
 // Subscribe registers a listener for task events (same pattern as execution.Store).
