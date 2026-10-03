@@ -1,29 +1,39 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: smb-enum
-description: SMB/Windows/Samba host enumeration with enum4linux.
+description: SMB, Windows, and Active Directory enumeration with netexec, enum4linux, smbmap, and kerbrute.
 triggers:
   - smb
   - samba
   - windows enum
   - netbios
   - enum4linux
+  - netexec
+  - nxc
+  - smbmap
+  - kerbrute
   - shares
   - null session
 tools:
+  - netexec
   - enum4linux
+  - smbmap
+  - kerbrute
 knowledge: |
-  SMB enumeration recovers a lot from an unauthenticated ("null") session where it's allowed:
-  1. `enum4linux -a <target>` for the full sweep — OS info, users, groups, shares, password
-     policy — a good single first command.
-  2. Shares and users are the highest-value findings: an accessible share may contain
-     sensitive files, and a valid username list feeds a later credential-attack subtask.
-  3. Record the OS/domain info too — it's low-cost evidence that helps later targeting
-     decisions (SMB signing status, domain vs workgroup, patch level hints).
-  4. A refused null session is itself a finding (the target isn't misconfigured this way) —
-     report it plainly rather than treating it as a failure.
+  SMB and Active Directory enumeration recovers high-value intelligence from null or authenticated sessions:
+  1. Null session & share check:
+     - `netexec smb <target> -u '' -p '' --shares` or `smbmap -H <target> -u ''` for fast share triage.
+     - `enum4linux -a <target>` for a full legacy sweep (OS, users, groups, shares, password policy).
+  2. Domain user enumeration & Kerberos pre-auth (when domain name is known):
+     - `kerbrute userenum -d <domain> --dc <dc_ip> $USERNAMES` for stealthy, lockout-free user validation.
+     - `netexec smb <target> -u '' -p '' --users`
+  3. Shares and permissions:
+     - Check read/write permissions on accessible shares (`smbclient -N -L //<target>`).
+     - Valid usernames feed subsequent credential-attack workflows.
+  4. Record SMB signing status (Signing: False indicates NTLM relay opportunity), OS build, and domain name.
+  5. A refused null session is itself a valid finding (target enforces authentication) — report plainly rather than treating as an error.
 references:
-  - persona:smb-enum-v1
+  - persona:smb-enum-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/smb-enum.yaml

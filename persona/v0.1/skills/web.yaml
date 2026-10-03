@@ -65,7 +65,9 @@ knowledge: |
 
   3. CONTENT & HIDDEN DIRECTORY DISCOVERY:
      - Fuzz directories and file extensions with status code filtering:
-       `ffuf_fuzz(url, wordlist="common.txt", match_codes="200,204,301,302,307,401,403", output_file)`.
+       `ffuf_fuzz(url, wordlist="common.txt", match_codes="200,204,301,302,307,401,403", output_file)`
+       or shell using pre-exported wordlists: `ffuf -u <url>/FUZZ -w $COMMON_TXT -mc 200,204,301,302,307,401,403`
+       (or `$MEDIUM_TXT` / `$BIG_TXT` for deeper sweeps).
      - For identified 403 Forbidden endpoints, test standard bypass headers:
        `curl_probe(url="<url>/admin", headers=["X-Forwarded-For: 127.0.0.1", "X-Custom-IP-Authorization: 127.0.0.1"])`.
 

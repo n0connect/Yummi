@@ -56,6 +56,12 @@ knowledge: |
      - Treat template matches with high/critical severity as priority investigation leads.
      - Verify version-detection hits against exact HTTP response headers / HTML bodies.
      - Record the Template ID, matched URL, and exact vulnerability classification as evidence.
+
+  5. EXPLOIT & CVE CROSS-REFERENCE:
+     - For identified product names and version banners, search local exploit databases:
+       `searchsploit <service> <version>`
+     - Check available verification modules via `msfconsole -q -x 'search <cve_or_service>; exit'`.
+     - Prioritize non-destructive verification of preconditions before proposing exploitation.
 references:
   - persona:vuln-scanning-v2
 provenance:

@@ -44,7 +44,7 @@ The system maintains two distinct persona loaders serving separate subsystems:
 `agent.yaml` shapes disposition, not specific commands:
 *"Deliberately model- and context-INDEPENDENT: it encodes a WAY OF REASONING — the disposition and guardrails of a disciplined expert operator — not tool names, not flags, not canned procedures, not answers. Strengthen the reasoning here; never script actions."*
 
-Tool-specific techniques belong in declarative [Skills](../agent/skills-and-subagents.md#skills), keeping the core reasoning loop clean and model-agnostic.
+It also grounds the agent in the `yummi-pwnbox` Kali environment with pre-exported wordlist environment variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$MEDIUM_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`), tactical helpers (`revshell`, `rlnc`, `penelope`, `openvpn`, Kerberos/AD suites), and `/workspace` mount awareness. Detailed tool-specific techniques belong in declarative [Skills](../agent/skills-and-subagents.md#skills), keeping the core reasoning loop token-efficient and model-agnostic.
 
 ---
 
