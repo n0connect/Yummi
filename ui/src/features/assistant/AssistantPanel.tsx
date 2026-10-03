@@ -13,6 +13,7 @@ import { useChatStream } from '../chat/useChatStream'
 import { acceptsTurnStream } from '../chat/turns'
 import { ContextBar, type ApprovalMode } from './ContextBar'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
+import { presentActivity } from '../../shared/lib/activityPresentation'
 import { t } from '../../shared/i18n/strings'
 import type { Message } from './messageTypes'
 import {
@@ -101,6 +102,13 @@ export function AssistantPanel({
   // genuinely new command. A plain ref makes the check immediate and
   // deterministic regardless of React's batching/scheduling.
   const knownExecutionIdsRef = useRef<Set<string>>(new Set())
+  // Activity-event ids already turned into a chat bubble by onActivity's
+  // 'command' branch below — prevents a WS reconnect/replay of the same
+  // event (onActivity's own taskActivities dedupe is a SEPARATE Set, keyed
+  // into a different piece of state) from appending the same rationale
+  // twice. Session-scoped, so it's cleared alongside knownExecutionIdsRef in
+  // both session-reset blocks.
+  const narratedActivityIdsRef = useRef<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [proposals, setProposals] = useState<ChatProposal[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -210,6 +218,7 @@ export function AssistantPanel({
     // clearing it keeps this reset block an honest, complete list of what a
     // session switch resets, matching every other line here.
     knownExecutionIdsRef.current = new Set()
+    narratedActivityIdsRef.current = new Set()
     setOpenExecutionId(null)
     // isLoading isn't session-scoped state, so it must be cleared here too:
     // an in-flight request from the previous session now skips its own
@@ -450,6 +459,7 @@ export function AssistantPanel({
     // clearing it keeps this reset block an honest, complete list of what a
     // session switch resets, matching every other line here.
     knownExecutionIdsRef.current = new Set()
+    narratedActivityIdsRef.current = new Set()
     setOpenExecutionId(null)
     try {
       const s = await fetchJSON<SessionSummary>('/api/v1/sessions', {
@@ -804,8 +814,26 @@ export function AssistantPanel({
         if (current.some((item) => item.id === ev.id)) return prev
         return { ...prev, [ev.task_id]: [...current, ev].slice(-80) }
       })
+      // Also surface a 'command' event's rationale as a plain assistant chat
+      // bubble, in the same flowing thread as everything else the model
+      // "says" — not only in the TaskTracker card's own structured Live Feed
+      // (a separate, detail-dense log that stays as-is for anyone who wants
+      // it). Operator-reported: reading the rationale only in that detached
+      // box, timestamped and boxed off above the command, didn't read as the
+      // agent talking — it read as a log the operator had to go check,
+      // breaking the live, conversational feel a ChatGPT-style tool-use
+      // trace has. presentActivity() is reused so this follows the exact
+      // same safe-summary rules as the Live Feed (never Detail, never raw
+      // target output — see its own doc comment). Deduped against
+      // narratedActivityIdsRef so a WS reconnect/replay of the same event
+      // can't post the same line twice.
+      if (ev.kind === 'command' && !narratedActivityIdsRef.current.has(ev.id)) {
+        narratedActivityIdsRef.current.add(ev.id)
+        const { summary } = presentActivity(ev)
+        if (summary) appendMessage({ role: 'assistant', content: summary })
+      }
     },
-    [sessionID]
+    [sessionID, appendMessage]
   )
 
   // onChatStream appends raw display tokens to the in-progress assistant
@@ -1214,6 +1242,15 @@ export function AssistantPanel({
   // ── Derived state ──────────────────────────────────────────────────────────
 
   const taskRunning = activeTask !== null && !TERMINAL.has(activeTask.status)
+  // Narrower than taskRunning on purpose: 'paused' is non-terminal (the task
+  // can resume) so it's included in taskRunning for the input-placeholder/
+  // stop-button logic below, which is still correct for a paused task. But
+  // the header's pulsing "Task running" indicator is not — a paused task's
+  // loop has stopped and is waiting on the operator (its own Resume/Abandon
+  // card is already showing), so a pulsing "running" dot right above that
+  // card contradicted it. Found live: the header kept showing "Task
+  // running" for a task that had been sitting paused since a prior session.
+  const taskPaused = activeTask?.status === 'paused'
   const isFreshWorkspace =
     !historyLoading &&
     !historyError &&
@@ -1245,9 +1282,14 @@ export function AssistantPanel({
       <MiniSandboxPreview />
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
-        {taskRunning && (
+        {taskRunning && !taskPaused && (
           <span className="running-indicator" role="status" aria-live="polite">
             <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.taskRunningIndicator')}
+          </span>
+        )}
+        {taskPaused && (
+          <span className="running-indicator" role="status" aria-live="polite">
+            <span aria-hidden="true">⏸</span> {t('taskTracker.status.paused')}
           </span>
         )}
         {!taskRunning && isLoading && (
