@@ -241,14 +241,14 @@ export function AssistantPanel({
     }
     setHistoryLoading(true)
     Promise.all([
-      fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sid}/messages`, {
+      fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${sid}/messages?limit=1000`, {
         signal: controller.signal
       }),
-      fetchJSON<ActivityEvent[]>(`/api/v1/sessions/${sid}/activity?limit=200`, {
+      fetchJSON<ActivityEvent[]>(`/api/v1/sessions/${sid}/activity?limit=1000`, {
         signal: controller.signal
       }).catch(() => []),
       fetchJSON<ExecutionRecord[]>(
-        `/api/v1/sessions/${sid}/executions?limit=100`,
+        `/api/v1/sessions/${sid}/executions?limit=1000`,
         { signal: controller.signal }
       ).catch(() => []),
       fetchJSON<AgentTask[]>(`/api/v1/sessions/${sid}/tasks`, {
@@ -318,7 +318,7 @@ export function AssistantPanel({
             ...hydratedTasks,
             ...hydratedExecutions,
             ...hydratedNarration
-          ]).slice(-120)
+          ])
         )
         // Seed the new-execution tracker with everything just hydrated (so a
         // later WS update to one of these doesn't get misread as "new" and
@@ -372,7 +372,7 @@ export function AssistantPanel({
   // are durably persisted server-side by the chat handler.
   useEffect(() => {
     if (sessionID !== 'default') return
-    sessionStorage.setItem(STORAGE_MSGS, JSON.stringify(messages.slice(-120)))
+    sessionStorage.setItem(STORAGE_MSGS, JSON.stringify(messages))
   }, [messages, sessionID])
 
   useEffect(() => {
@@ -413,17 +413,15 @@ export function AssistantPanel({
         msg.role === 'assistant'
           ? sanitizeOperatorText(msg.content)
           : capMessageContent(msg.content)
-      setMessages((prev) =>
-        [
-          ...prev,
-          {
-            ...msg,
-            content: visibleContent,
-            id: nextId(),
-            timestamp: new Date().toISOString()
-          }
-        ].slice(-120)
-      )
+      setMessages((prev) => [
+        ...prev,
+        {
+          ...msg,
+          content: visibleContent,
+          id: nextId(),
+          timestamp: new Date().toISOString()
+        }
+      ])
     },
     []
   )
@@ -460,7 +458,7 @@ export function AssistantPanel({
         timestamp: new Date().toISOString(),
         execution: record
       }
-      return [...prev, next].slice(-120)
+      return [...prev, next]
     })
     // Only a genuinely NEW execution id takes over the one open card — a
     // status update (queued -> running -> completed) on an id already on

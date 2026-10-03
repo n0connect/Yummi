@@ -274,8 +274,8 @@ func (m *Manager) ListAudit(sessionID string, limit int) ([]AuditEvent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	if limit > 500 {
-		limit = 500
+	if limit > 1000 {
+		limit = 1000
 	}
 
 	rows, err := m.db.Query(
