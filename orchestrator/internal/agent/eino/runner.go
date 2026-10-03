@@ -581,6 +581,21 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 			if question == "" {
 				question = "The agent needs operator input to continue."
 			}
+			// Guidance (agent.Task.PendingGuidance) is normally drained inside
+			// runToolPipeline's own defer — but ask_operator is a
+			// ReturnDirectly tool that never reaches that pipeline, so a
+			// message the operator sent in the gap between it being queued
+			// and the model instead choosing to ask something else would sit
+			// un-drained and never visible to the model at all. Rather than
+			// silently losing it, surface it on the very question the
+			// operator is about to answer — they placed it, so they're the
+			// right person to see it was never acted on, and can fold it
+			// into their answer.
+			if r.store != nil {
+				if notes := r.store.DrainGuidance(task.ID); len(notes) > 0 {
+					question += "\n\n[Operator guidance sent before this question was never seen by the agent — folding it in may help your answer]\n" + strings.Join(notes, "\n")
+				}
+			}
 			if err := r.store.Transition(task.ID, agent.StatusPaused, func(t *agent.Task) { t.Question = question }); err != nil {
 				return err
 			}
@@ -636,6 +651,26 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
 					Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing (%d/%d nudges)",
 						len(uncovered), len(enumParts), nudgeCount, maxNudges),
+				})
+				continue
+			}
+		}
+		// Same gap as ask_operator above, but worse here: finish is also
+		// ReturnDirectly (never reaches runToolPipeline's drain), and this
+		// path doesn't pause for the operator — it ends the task outright. A
+		// message queued between the operator sending it and the model
+		// instead choosing finish would otherwise be silently discarded
+		// forever, not just delayed. Mirrors the coverage-nudge mechanism
+		// immediately above: force one more iteration with the guidance
+		// folded into the prompt, rather than letting the task close without
+		// the model ever having seen a redirect the operator deliberately
+		// sent while it was still working.
+		if believesFinished && r.store != nil {
+			if notes := r.store.DrainGuidance(task.ID); len(notes) > 0 {
+				openingMessage = buildGuidanceBeforeFinishMessage(t.Goal, notes, trace)
+				r.store.RecordActivity(agent.ActivityEvent{
+					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+					Summary: "operator guidance arrived right before finish — continuing one more turn so the agent sees it",
 				})
 				continue
 			}
@@ -883,6 +918,30 @@ func buildIncompleteGoalsMessage(goal string, uncoveredParts []string, trace *ru
 		}
 	}
 	b.WriteString("\nRun a real command/tool for each part listed above, then call finish again once every part is genuinely done.")
+	return b.String()
+}
+
+// buildGuidanceBeforeFinishMessage forces one more ReAct iteration when the
+// model called finish while operator guidance (agent.Task.PendingGuidance)
+// was still sitting un-drained — see Run()'s own comment at its call site
+// for why finish, being ReturnDirectly, never reaches runToolPipeline's own
+// drain point. Mirrors buildIncompleteGoalsMessage/buildRetryAfterErrorMessage's
+// shape: restate the goal, show what's already done so nothing is repeated,
+// then the thing this particular continuation exists to surface.
+func buildGuidanceBeforeFinishMessage(goal string, notes []string, trace *runTrace) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Continuing the original goal: %s\n\n", goal)
+	b.WriteString("You called finish, but the operator sent guidance you have not seen yet. Read it and adjust before finishing:\n")
+	for _, n := range notes {
+		fmt.Fprintf(&b, "  - %s\n", strings.TrimSpace(n))
+	}
+	if pairs := trace.pairs(); len(pairs) > 0 {
+		b.WriteString("\nWork already completed (do NOT repeat these):\n")
+		for _, p := range pairs {
+			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
+		}
+	}
+	b.WriteString("\nAct on the operator's guidance, then call finish again once it's been addressed.")
 	return b.String()
 }
 
