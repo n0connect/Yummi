@@ -8,6 +8,7 @@ import { t } from '../shared/i18n/strings'
 
 const TerminalPage = lazy(() => import('../pages/terminal/TerminalPage').then(module => ({ default: module.TerminalPage })))
 const DesktopPage = lazy(() => import('../pages/desktop/DesktopPage').then(module => ({ default: module.DesktopPage })))
+const AgentTerminalsPage = lazy(() => import('../pages/agent-terminals/AgentTerminalsPage').then(module => ({ default: module.AgentTerminalsPage })))
 const TracePage = lazy(() => import('../pages/trace/TracePage').then(module => ({ default: module.TracePage })))
 const LogsPage = lazy(() => import('../pages/logs/LogsPage').then(module => ({ default: module.LogsPage })))
 const GatewayPage = lazy(() => import('../pages/gateway/GatewayPage').then(module => ({ default: module.GatewayPage })))
@@ -35,6 +36,7 @@ export function App(): JSX.Element {
           <Route path="/terminal" element={<TerminalPage />} />
           <Route path="/desktop" element={<DesktopPage />} />
           <Route path="/trace" element={<TracePage />} />
+          <Route path="/agent-terminals" element={<AgentTerminalsPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/gateway" element={<GatewayPage />} />
           <Route path="/health" element={<HealthPage />} />

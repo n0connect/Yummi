@@ -51,13 +51,17 @@ export function StatusBar(): JSX.Element {
         <nav className="nav-seg" aria-label={t('statusBar.navAriaLabel')}>
           {[
             { to: '/', label: t('statusBar.nav.agent'), end: true },
+            { to: '/agent-terminals', label: t('statusBar.nav.terminals'), end: false },
+            { to: '/trace', label: t('statusBar.nav.trace'), end: false },
+            { divider: true as const },
             { to: '/terminal', label: t('statusBar.nav.bash'), end: false },
             { to: '/desktop', label: t('statusBar.nav.desktop'), end: false },
-            { to: '/trace', label: t('statusBar.nav.trace'), end: false },
             { to: '/logs', label: t('statusBar.nav.logs'), end: false },
             { to: '/gateway', label: t('statusBar.nav.gateway'), end: false },
             { to: '/health', label: t('statusBar.nav.health'), end: false }
-          ].map(item => (
+          ].map((item, index) => ('divider' in item ? (
+            <span key={`divider-${index}`} className="nav-divider" aria-hidden="true" />
+          ) : (
             <NavLink
               key={item.to}
               to={item.to}
@@ -68,7 +72,7 @@ export function StatusBar(): JSX.Element {
             >
               {item.label}
             </NavLink>
-          ))}
+          )))}
         </nav>
         <button
           type="button"

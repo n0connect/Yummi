@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import type { SessionSummary } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { t } from '../../shared/i18n/strings'
-import { YummiLogo } from '../../shared/components/YummiLogo'
 import './SessionRail.css'
 
 function ConversationIcon({ open }: { open: boolean }): JSX.Element {
@@ -120,7 +119,6 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
       <aside className={`session-rail ${open ? 'open' : ''}`} role="dialog" aria-label={t('sessionRail.panelAriaLabel')} aria-modal="false">
         <div className="rail-header">
           <div className="rail-brand">
-            <YummiLogo height={16} className="rail-brand-logo" />
             <div className="rail-brand-text">
               <span className="rail-eyebrow">{t('sessionRail.eyebrow')}</span>
               <span className="rail-title">{t('sessionRail.title')}</span>

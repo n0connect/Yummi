@@ -458,6 +458,14 @@ body::before {
   scrollbar-width: none;
 }
 .nav-seg::-webkit-scrollbar { display: none; }
+/* Thin divider between the agent group and the operator group in the top nav. */
+.nav-divider {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  margin: 0 6px;
+  background: var(--border-subtle);
+}
 .status-nav-link {
   cursor: pointer;
   text-decoration: none;
@@ -625,12 +633,14 @@ body::before {
   position: relative; /* anchors the absolutely-positioned session rail + toggle */
   height: calc(100vh - var(--app-chrome-height));
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: hidden;
 }
 .chat-column {
+  flex: 1 1 auto;
   width: 100%;
   max-width: 880px;
+  margin: 0 auto; /* centred in whatever width the session rail leaves */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -810,6 +820,22 @@ body::before {
 .msg-user .msg-prefix { color: var(--accent-hover); }
 
 .msg-assistant { padding: var(--space-xs) 0; }
+/* Speaker change: a little air and a hairline glow. Agent blue, operator green. */
+.msg-assistant + .msg-user,
+.msg-user + .msg-assistant { margin-top: var(--space-md); position: relative; }
+.msg-assistant + .msg-user::before,
+.msg-user + .msg-assistant::before {
+  content: ''; position: absolute; left: 0; right: 0; top: calc(var(--space-md) * -0.5);
+  height: 1px; pointer-events: none;
+}
+.msg-assistant + .msg-user::before {
+  background: linear-gradient(90deg, transparent, rgba(74, 222, 128, 0.45), transparent);
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.25);
+}
+.msg-user + .msg-assistant::before {
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.45), transparent);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+}
 .msg-assistant .msg-prefix { color: var(--accent); }
 
 .msg-system { color: var(--text-tertiary); font-size: var(--text-xs); padding: var(--space-xs) 0; }

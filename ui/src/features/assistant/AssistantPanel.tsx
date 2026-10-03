@@ -264,8 +264,32 @@ export function AssistantPanel({
             timestamp: new Date((record.created_at ?? 0) * 1000).toISOString(),
             execution: record
           }))
+        // The agent's own narration ("[YUMMI] ..." rationale lines) is built
+        // live from command activity events in onActivity. A page opened after
+        // the task started never receives those events, so rebuild the same
+        // lines here from the persisted activity history. Ids are recorded so
+        // a later WS replay of the same event cannot post it twice.
+        const hydratedNarration: Message[] = activities
+          .filter(ev => ev.kind === 'command')
+          .flatMap(ev => {
+            const { summary } = presentActivity(ev)
+            if (!summary) return []
+            narratedActivityIdsRef.current.add(ev.id)
+            return [{
+              id: nextId(),
+              role: 'assistant' as const,
+              content: summary,
+              timestamp: new Date(ev.timestamp * 1000).toISOString(),
+              activity: ev
+            }]
+          })
+        // Chronological merge. Timestamps are whole seconds, so on a tie the
+        // narration sorts before the command it announces (narration first).
+        const rank = (m: Message) => (m.role === 'execution' ? 1 : 0)
         setMessages(
-          [...rebuildMessages(rows ?? []), ...hydratedExecutions].slice(-120)
+          [...rebuildMessages(rows ?? []), ...hydratedExecutions, ...hydratedNarration]
+            .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || rank(a) - rank(b))
+            .slice(-120)
         )
         // Seed the new-execution tracker with everything just hydrated (so a
         // later WS update to one of these doesn't get misread as "new" and
@@ -789,6 +813,7 @@ export function AssistantPanel({
         }
         if (task.last_error && task.status !== 'completed') {
           lines.push(t('assistant.taskFailedNote'))
+          lines.push(sanitizeOperatorText(task.last_error))
         }
         if (lines.length > 0) {
           appendMessage({ role: 'assistant', content: lines.join('\n') })

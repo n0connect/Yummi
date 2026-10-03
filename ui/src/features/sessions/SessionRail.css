@@ -1,5 +1,7 @@
-/* Collapsible conversation rail. Default-closed and overlaid (position
-   absolute) so opening it never reflows / squeezes the chat column. */
+/* Collapsible conversation rail. It sits beside the chat column and pushes it
+   (flex sibling, width transition), like a sidebar in a code editor: no overlay,
+   no backdrop, no spring. The inner content keeps a fixed width so text never
+   reflows mid-animation. */
 
 .rail-toggle {
   position: absolute;
@@ -39,47 +41,53 @@
 .rail-toggle.open .rail-toggle-label { display: none; }
 .rail-toggle-icon { width: 17px; height: 17px; flex: none; }
 
-.session-rail-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 18;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: rgba(2, 5, 6, 0.48);
-  cursor: default;
-  animation: rail-backdrop-in var(--transition-fast) ease-out;
-}
-.session-rail-backdrop:hover { background: rgba(2, 5, 6, 0.48); box-shadow: none; transform: none; }
-@keyframes rail-backdrop-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+/* Backdrop only on narrow screens, where the rail really does cover the chat. */
+.session-rail-backdrop { display: none; }
+@media (max-width: 720px) {
+  .session-rail-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 18;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgba(2, 5, 6, 0.48);
+    cursor: default;
+  }
 }
 
 .session-rail {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 300px;
-  z-index: 19;
-  background: linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));
-  border-right: 1px solid var(--border-strong);
-  box-shadow: 18px 0 50px -26px rgba(0,0,0,0.9);
-  transform: translateX(-100%);
-  transition: transform var(--transition-base, 0.22s) var(--transition-spring, ease);
+  flex: none;
+  width: 0;
+  height: 100%;
+  background: var(--bg-secondary);
+  border-right: 1px solid transparent;
+  transition: width 200ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 200ms ease;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.session-rail.open { transform: translateX(0); }
+.session-rail.open { width: 280px; border-right-color: var(--border-subtle); }
+.session-rail > * { min-width: 280px; }
+@media (max-width: 720px) {
+  .session-rail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 19;
+    background: linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));
+  }
+  .session-rail.open { width: 280px; }
+}
 
 .rail-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   padding: 18px var(--space-lg) var(--space-md);
-  padding-left: 68px; /* leaves a clean lane for the compact close control */
+  padding-left: 56px; /* leaves a clean lane for the compact close control */
   border-bottom: 1px solid var(--border-subtle);
   min-height: 68px;
 }
@@ -88,10 +96,6 @@
   align-items: center;
   gap: var(--space-sm);
   min-width: 0;
-}
-.rail-brand-logo {
-  flex-shrink: 0;
-  opacity: 0.92;
 }
 .rail-brand-text {
   display: flex;
@@ -110,7 +114,8 @@
 .rail-create { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; padding: 5px 8px; background: var(--accent-soft); border: 1px solid rgba(45, 212, 191, 0.28); border-radius: var(--radius-sm); color: var(--accent-hover); font-size: 10px; font-weight: 700; cursor: pointer; }
 .rail-create:hover { background: rgba(45, 212, 191, 0.2); transform: none; box-shadow: none; }
 .rail-search-wrap { display: flex; align-items: center; gap: var(--space-sm); margin: var(--space-md); padding: 0 var(--space-sm); height: 34px; background: var(--wash-soft); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); color: var(--text-muted); }
-.rail-search-wrap:focus-within { border-color: rgba(45, 212, 191, 0.4); box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.07); }
+.rail-search-wrap:focus-within { border-color: var(--border-strong); box-shadow: none; }
+.rail-search:focus { box-shadow: none; border-color: transparent; }
 .rail-search { width: 100%; min-width: 0; border: none; outline: none; background: transparent; color: var(--text-primary); font-family: var(--font-sans); font-size: var(--text-xs); }
 .rail-search::placeholder { color: var(--text-muted); }
 
