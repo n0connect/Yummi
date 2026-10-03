@@ -77,13 +77,15 @@ Direct Yummi using natural language or initiate autonomous red-team tasks:
   - Per-task override: Specific tasks can be granted auto-approval via the UI toggle without switching the global mode.
 
 ### 2. Bash <a id="tab-bash"></a>
-Interactive PTY web terminal directly into the Kali container over `/ws/terminal`:
+Interactive PTY web terminal directly into the Kali container (`yummi-pwnbox`) over `/ws/terminal`:
 - Backed by `tmux` so session state persists across reconnections.
 - Operates in the exact same container environment as the AI agent (`UID 1000:1000`).
+- Features a tactical ASCII greeting banner, live network IP & VPN indicators (`myip`, `ports`), reverse shell generator (`revshell [PORT]`), and wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`).
 
 ### 3. Desktop <a id="tab-desktop"></a>
 Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
-- Pre-installed with **Burp Suite**, **Wireshark**, and **Firefox**.
+- Pre-installed with **Metasploit Console**, **Burp Suite**, **Wireshark**, and **Firefox**.
+- Desktop & home folder shortcuts for **PayloadsAllTheThings**, **SecLists**, **Nishang**, **Wordlists**, **ExploitDB**, and **Workspace**.
 - Shares the sandbox filesystem and network namespace with the agent.
 - Resizes cleanly with remote display resolution matching the browser viewport.
 

@@ -15,7 +15,7 @@ The agent is the autonomous offensive security engine of Yummi. It translates hi
 |   1. Graph State Machine (Go)        2. Eino ADK Backend (Go)      3. Brain (Py)  |
 |   [YUMMI_AGENT_BACKEND=graph]        [YUMMI_AGENT_BACKEND=eino]    [LangGraph]    |
 |   - 11-node State Machine            - Native Tool Calling         - Multi-Agent  |
-|   - Tag Protocol ([TOOL], [FINISH])  - 47 MCP & Terminal Tools     - Supervisor   |
+|   - Tag Protocol ([TOOL], [FINISH])  - 54 MCP & Terminal Tools     - Supervisor   |
 |   - Optimized for local 8B models    - Scaled for 14B+ models      - Frontier LLM |
 |        |                                  |                             |         |
 |        +----------------------------------+-----------------------------+         |
@@ -46,7 +46,7 @@ The agent is the autonomous offensive security engine of Yummi. It translates hi
 | **Tag Protocol** | Closed agent-LLM tag vocabulary, robust token parsers, and prompt construction. | [Tag Protocol](tag-protocol.md) |
 | **Memory & Knowledge Store** | Factual targets, findings, target-scrubbed procedural tactics, persistent context, ASM asset tree, and program scope rules. | [Memory & Knowledge](memory-and-knowledge.md) |
 | **Skills & Sub-Agents** | 22 declarative offensive playbooks and 10 specialist sub-agents with depth-1 delegation bounding. | [Skills & Sub-agents](skills-and-subagents.md) |
-| **Sandbox Execution & MCP** | The 47 sandbox MCP tools across 4 tiers, persistent tmux sessions, direct argv execution, and network gating. | [Sandbox Execution](sandbox-execution.md) |
+| **Sandbox Execution & MCP** | The 54 sandbox MCP tools across 4 tiers, persistent tmux sessions, direct argv execution, and network gating. | [Sandbox Execution](sandbox-execution.md) |
 | **Quality & Evaluation** | Assertion-bearing golden test fixtures, persona boundary assertions, and live benchmark harnesses. | [Quality & Evaluation](quality-and-evaluation.md) |
 
 ---

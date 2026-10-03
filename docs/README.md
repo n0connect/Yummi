@@ -22,7 +22,7 @@ docs/
     memory-and-knowledge.md Targets, findings, procedural tactics, ASM hierarchical asset graph
     skills-and-subagents.md 22 red team playbooks, 10 specialist subagents, depth-1 delegation
     quality-and-evaluation.md Objective quality metrics and assertion-bearing benchmarks
-    sandbox-execution.md    Single scoped execution path and 47 MCP & terminal tools catalog
+    sandbox-execution.md    Single scoped execution path and 54 MCP & terminal tools catalog
 
   modules/                  Component maps organized by implementation stack
     orchestrator.md         Go orchestrator packages, ASM/report/proxy handlers, API routes

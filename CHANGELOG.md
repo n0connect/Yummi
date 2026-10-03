@@ -4,9 +4,15 @@
 
 ### Features
 
-* **mcp/sandbox:** expanded sandbox-resident MCP tool suite to **47 registered tools** across 4 tiers:
+* **sandbox/pwnbox:** transformed the unified Kali execution sandbox into **Yummi Pwnbox** (`yummi-pwnbox` hostname, tactical prompt, custom MOTD banner, and branded desktop wallpaper)
+* **arsenal/metasploit:** integrated full `metasploit-framework` (`msfconsole`, `msfvenom`, meterpreter stagers/handlers) with desktop GUI launcher and build-time verification
+* **arsenal/windows:** integrated `nishang` PowerShell framework with home and Desktop shortcuts, plus `kerbrute` in recontools for rapid Kerberos user enum and spraying
+* **vpn/lab:** integrated `openvpn` with auto-created `/dev/net/tun` for HackTheBox, TryHackMe, Proving Grounds, and client lab `.ovpn` files, routed via gateway nftables rules
+* **payloads/revshell:** built-in `/usr/local/bin/revshell [PORT]` auto-detecting `tun0`/`eth0` and outputting copy-paste payloads for 8+ languages
+* **wordlists/shortcuts:** exported `$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$MEDIUM_TXT`, `$USERNAMES`, `$PASSWORDS_TOP` in `.bashrc`
+* **mcp/sandbox:** expanded sandbox-resident MCP tool suite to **54 registered tools** across 4 tiers:
   - 6 individually-typed tools (`nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`)
-  - 32 cataloged pentest tools including modern bug bounty & recon tools (`httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `naabu_scan`, `tlsx_scan`, `arjun_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`)
+  - 39 cataloged pentest tools including modern bug bounty & recon tools (`httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `naabu_scan`, `tlsx_scan`, `arjun_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`, `whois_query`, etc.)
   - 2 pure-Go recon utilities (`consolidate_hosts`, `passive_recon_batch`) with zero external subprocess overhead
   - 7 persistent tmux terminal session verbs (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`)
 * **terminal/tmux:** agent-driven persistent tmux terminal sessions over MCP, enabling multi-terminal workflows, background listeners, interactive CLI prompts (`sqlmap`, `msfconsole`, `gdb`), and streaming commands inside the sandbox

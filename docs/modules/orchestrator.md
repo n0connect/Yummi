@@ -28,7 +28,7 @@ This page maps `orchestrator/` packages by **architectural boundary** — what e
 | Package | Responsibility | Deliberately Excluded Concerns |
 |---|---|---|
 | **`internal/agent`** | Defines `TaskRunner` lifecycle interface, graph state machine (`graph.go`), tag protocol (`protocol.go`), gates (`gate.go`), active verification exploit oracles (`oracle.go`), and delegation (`node_handoff.go`). | Command execution mechanics (`exec.go` strictly enqueues). |
-| **`internal/agent/eino`** | Alternate `TaskRunner` implementation using CloudWeGo Eino ADK for native tool-calling on larger models. Wires 47 sandbox tools, 7 persistent terminal session verbs (`terminal_tools.go`), and reuses `Execer`, `Verify`, `Gate`, `threatscan`, and `conductor.Validator`. | Process execution mechanics (uses orchestrator executor). |
+| **`internal/agent/eino`** | Alternate `TaskRunner` implementation using CloudWeGo Eino ADK for native tool-calling on larger models. Wires 54 sandbox tools, 7 persistent terminal session verbs (`terminal_tools.go`), and reuses `Execer`, `Verify`, `Gate`, `threatscan`, and `conductor.Validator`. | Process execution mechanics (uses orchestrator executor). |
 | **`internal/api`** | REST routes, WebSocket bridges (`terminal.go`, `desktop.go`), and SSE logs. Handlers organized by domain (`handlers_session.go`, `handlers_assets.go`, `handlers_report.go`, `handlers_proxy.go`, `handlers_gateway.go`, `handlers_system.go`, `handlers_extended.go`). | LLM internals and raw network socket access. |
 | **`internal/conductor`** | AI conductor engine (`engine.go`), risk classification floor (`validator.go`), TTL proposal store (`approval.go`), model tiers (`tier.go`), and persona fixtures (`golden.go`). | Network firewall rules and command execution. |
 | **`internal/knowledge`** | World model: targets, security findings, procedural tactics, persistent context, Attack Surface Management (`assets.go`), and program scope rules (`program_scope.go`). | Firewall manipulation and execution dispatch. |
@@ -40,7 +40,7 @@ This page maps `orchestrator/` packages by **architectural boundary** — what e
 | **`internal/scope`** | Single source of truth for `ExtractTargets(command)` across IPs, CIDRs, and URLs. | Reachability verdicts (sole authority is gateway). |
 | **`internal/execution`** | Execution lifecycle store: state transitions (`queued` -> `running` -> `completed` / `failed`), output buffering, rationale tracking (`execution.ContextWithRationale`), and heartbeat ticks. | Policy decisions. |
 | **`internal/executor`** | `RunScopedCommand` and `processMCP`: single execution path that queries gateway scope over IPC before invoking sandbox bridges. | Chat, proposals, and persona prompt logic. |
-| **`internal/sandboxmcp`** | Orchestrator client and catalog for the 47 sandbox-resident MCP and terminal session tools over persistent `docker exec -i`. | Direct shell pipelines. |
+| **`internal/sandboxmcp`** | Orchestrator client and catalog for the 54 sandbox-resident MCP and terminal session tools over persistent `docker exec -i`. | Direct shell pipelines. |
 | **`internal/sandbox`** | `bridge.go`: executes unprivileged commands (`UID 1000:1000`) inside the Kali container with timeout and buffer caps. | Scope decisions and risk classification. |
 | **`internal/gateway`** | Length-prefixed Unix IPC socket client connecting to the Rust gateway daemon. | Scope evaluation rationale. |
 | **`internal/session`** | SQLite CRUD persistence for sessions, chat turns, and audit trails. | Execution mechanics. |

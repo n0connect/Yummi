@@ -67,7 +67,7 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 |   | yummi-gateway (Rust)          |   |  |   | sandbox (Hardened Kali Linux)  |   |
 |   |                               |   |  |   | UID 1000 (pentester user)      |   |
 |   | - nftables FORWARD Rules      |   |  |   |                                |   |
-|   | - Fail-Closed DROP Policy     |   |  |   | - 47 Native Pentest MCP Tools  |   |
+|   | - Fail-Closed DROP Policy     |   |  |   | - 54 Native Pentest MCP Tools  |   |
 |   | - Hostname / IP Scope Engine  |   |  |   | - tmux Terminal Sessions       |   |
 |   | - SHA-256 Audit Hash Chain    |   |  |   | - XFCE / noVNC Graphical GUI   |   |
 |   +---------------+---------------+   |  |   +----------------+---------------+   |
@@ -98,7 +98,7 @@ Two strictly segregated control channels reach the Kali sandbox:
 |---|---|---|---|
 | **orchestrator** | Go (`CGO_ENABLED=1`) | AI Conductor, Graph / Eino state machine, REST/WebSocket API, execution pipeline, ASM, and reporting engine. | Cannot open raw network sockets to target networks or modify firewall rules. |
 | **gateway** | Rust binary (`yummi-gateway`) | Installs fail-closed `nftables` FORWARD rules, evaluates egress scope, logs tamper-evident audit trail. | Isolated from LLM logic and direct command execution; manages network filter only. |
-| **sandbox** | Kali Linux container | Unified environment for tool execution (47 MCP & terminal tools), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
+| **sandbox** | Kali Linux container (`yummi-pwnbox`) | Unified offensive operations workbench (54 MCP & terminal tools, Metasploit, Nishang, Kerbrute, OpenVPN), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
 | **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; container lifecycle mutations are blocked. |
 | **ui** | React 18 + TypeScript (nginx) | Web operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
 
