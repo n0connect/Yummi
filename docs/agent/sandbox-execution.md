@@ -10,9 +10,7 @@ This document traces the scoped execution pipeline used by agent tasks, approved
 
 - [The Single Execution Pipeline](#pipeline)
 - [Execution Flow & Gateway Trust Boundary](#execution-flow)
-- [The Single Execution Pipeline](#pipeline)
-- [Execution Flow & Gateway Trust Boundary](#execution-flow)
-- [The 47 Sandbox MCP Tools](#mcp-tools)
+- [The 54 Sandbox MCP Tools](#mcp-tools)
   - [Tier 1: Individually-Typed Tools](#tier-1)
   - [Tier 2: Cataloged Pentest Tools](#tier-2)
   - [Tier 3: Concurrency & Pure-Go Utilities](#tier-3)
@@ -76,7 +74,7 @@ Orchestrator                      Gateway Daemon                     Kali Sandbo
 
 ---
 
-## The 47 Sandbox MCP Tools <a id="mcp-tools"></a>
+## The 54 Sandbox MCP Tools <a id="mcp-tools"></a>
 
 `sandbox-mcp` is a standalone Go MCP server compiled directly into `/usr/local/bin/yummi-sandbox-mcp` inside the Kali container and accessed via persistent stdio over `docker exec -i`.
 
@@ -90,14 +88,14 @@ These tools expose explicit JSON schema parameters directly to the LLM's native 
 5. **`ffuf_fuzz`**: High-performance HTTP fuzzing for directories, parameters, and virtual hosts.
 6. **`nikto_scan`**: Web server vulnerability scanning, misconfiguration detection, and default files.
 
-### Tier 2: 32 Cataloged Pentest Tools <a id="tier-2"></a>
+### Tier 2: 39 Cataloged Pentest Tools <a id="tier-2"></a>
 Dispatched dynamically via `search_pentest_tools` and `run_pentest_tool`:
 
-- **Web & Bug Bounty**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `arjun_scan`, `corsy_scan`, `graphql_cop_scan`, `jsluice_scan`, `screenshot_triage`.
-- **Reconnaissance & OSINT**: `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `naabu_scan`, `tlsx_scan`, `subzy_scan`, `cloud_enum_scan`.
+- **Web & Bug Bounty**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `arjun_scan`, `corsy_scan`, `graphql_cop_scan`, `jsluice_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`.
+- **Reconnaissance & OSINT**: `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `dnsrecon_scan`, `naabu_scan`, `tlsx_scan`, `subzy_scan`, `cloud_enum_scan`, `whois_query`.
 - **Authentication & Database**: `sqlmap_scan`, `jwt_tool_inspect`, `hydra_bruteforce`, `medusa_bruteforce`.
-- **Infrastructure & Network**: `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`.
-- **Binary Triage & Reverse Engineering**: `checksec_audit`, `radare2_disasm`.
+- **Infrastructure & Network**: `masscan_scan`, `sslscan_probe`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`.
+- **Binary Triage & Secret Scanning**: `checksec_audit`, `radare2_disasm`, `gitleaks_scan`.
 
 ### Tier 3: Concurrency & Pure-Go Utilities <a id="tier-3"></a>
 1. **`consolidate_hosts`**: Merges, deduplicates, and validates multiple host lists without shell pipes.
@@ -126,12 +124,12 @@ MCP Tool Call Received
           |
           v
    NeedsTarget(tool)?
-     |-- NO  (e.g., checksec_audit, radare2_disasm, jwt_tool_inspect,
+     |-- NO  (e.g., checksec_audit, radare2_disasm, gitleaks_scan, jwt_tool_inspect,
      |             consolidate_hosts, term_open, term_run, term_read,
      |             term_wait, term_keys, term_list, term_close)
      |     \-- Executes immediately (No external network scope required, purely local)
      |
-     \-- YES (e.g., nmap_scan, httpx_probe, nuclei_scan, arjun_scan)
+     \-- YES (e.g., nmap_scan, httpx_probe, nuclei_scan, arjun_scan, feroxbuster_scan)
            \-- Extracts target argument -> gateway.CheckHostname & CheckEgress -> Opens nftables rule
 ```
 
@@ -148,9 +146,27 @@ Unlike shell execution (`/bin/bash -lc "..."`), direct argv invocation guarantee
 
 ---
 
-## Container Execution Constraints <a id="container-constraints"></a>
+## Container Execution Constraints & Workbench Assets <a id="container-constraints"></a>
 
-- **Non-Root Execution**: Runs strictly as UID 1000 (`pentester`). Capabilities (`NET_RAW`, `NET_ADMIN`) are granted selectively via `setcap` on specific binaries (e.g., `nmap`).
+- **Non-Root Execution**: Runs strictly as UID 1000 (`pentester`). Capabilities (`NET_RAW`, `NET_ADMIN`) are granted selectively via `setcap` on specific binaries (`nmap`, `masscan`, `ping`, `hping3`, `fping`, `dumpcap`).
 - **Execution Timeout**: Hard default ceiling of 10 minutes (`YUMMI_SANDBOX_EXEC_TIMEOUT`).
 - **Output Buffering**: Stdout and Stderr are capped at 1 MiB per stream to prevent memory exhaustion.
 - **Fail-Closed Default Route**: Sandbox container network routing directs all egress through the gateway daemon (`172.20.0.2`).
+- **Pre-Baked Arsenal \& Wordlists**:
+  - **Network \& Diagnostics**: `iputils-ping` (`ping`), `hping3`, `fping`, `telnet`, `tshark`, `tcpdump`, `procps` (`ps`, `top`), `ipcalc`, `sshpass`.
+  - **Active Directory \& Lateral Movement**: `impacket-scripts` (secretsdump, psexec, wmiexec, etc.), `smbmap`, `smbclient`, `responder`, `netexec` (`nxc`).
+  - **Kerberos Ticket Management** (`krb5-user`): `kinit`, `klist`, `kdestroy` for native TGT acquisition, Pass-the-Ticket, PKINIT, and Kerberoasting/AS-REP Roasting workflows alongside `certipy`, `impacket`, and `netexec`.
+  - **Lab VPN Connectivity** (`openvpn`): Connect to HackTheBox, TryHackMe, Proving Grounds, or client lab networks via a `.ovpn` file. `entrypoint.sh` creates `/dev/net/tun` at startup (requires `NET_ADMIN`). Agent usage: `term_run(session, "openvpn --config /workspace/lab.ovpn", wait=false)` → `term_wait(session, "Initialization Sequence Completed")` → `tun0` is then available as the reachable VPN interface.
+  - **Reverse Shell Generator** (`revshell`): `/usr/local/bin/revshell [PORT]` — auto-detects LHOST from `tun0` (VPN) or `eth0`, outputs copy-paste payloads for Bash, Python3, Netcat (both flavors), Socat (plain + TTY-upgrade), PHP, Perl, Ruby, and PowerShell, plus ready listener one-liners (`rlnc`, `penelope`). Eliminates mid-engagement web lookups to revshells.com.
+  - **Wordlist Shortcut Variables**: Exported in `.bashrc` for both operator terminal and agent shell — short tokens, zero path typos:
+    - `$ROCKYOU` → `/usr/share/wordlists/rockyou.txt`
+    - `$COMMON_TXT` → `/usr/share/seclists/Discovery/Web-Content/common.txt`
+    - `$BIG_TXT` → `/usr/share/seclists/Discovery/Web-Content/big.txt`
+    - `$MEDIUM_TXT` → `/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt`
+    - `$USERNAMES` → `/usr/share/seclists/Usernames/top-usernames-shortlist.txt`
+    - `$PASSWORDS_TOP` → `/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt`
+  - **Pivoting \& Tunnels**: `chisel`, `socat`, `proxychains4`, `ligolo-ng`.
+  - **Password \& Hash Cracking**: `john` (John the Ripper), `hashcat`, `crunch`.
+  - **Exploits \& Webshells**: Full `exploitdb` archive with `searchsploit`, plus standard webshells (`/usr/share/webshells`).
+  - **Wordlists**: Full SecLists (`/usr/share/seclists`), system wordlists with uncompressed `rockyou.txt` (`/usr/share/wordlists/rockyou.txt`), and host-mounted wordlists/payloads symlinked directly into `/home/pentester/`.
+

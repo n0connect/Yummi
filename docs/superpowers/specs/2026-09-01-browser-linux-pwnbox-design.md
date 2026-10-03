@@ -27,6 +27,27 @@ writable session state) — the network trust boundary (gateway's fail-closed
 nftables) is completely unaffected, since it never depended on which
 container held the tools.
 
+**Update 2026-10-03 — VPN, Kerberos, revshell, wordlist ergonomics.** Four
+operational improvements were added to reduce engagement friction to zero:
+- **`openvpn` + `/dev/net/tun`**: `entrypoint.sh` creates the TUN device at
+  startup (as root, before the privilege drop to pentester). `openvpn --config
+  lab.ovpn` in a `term_run(wait=false)` + `term_wait("Initialization Sequence
+  Completed")` pair brings up `tun0` — HackTheBox, TryHackMe, Proving Grounds,
+  and client lab connectivity from inside the sandbox, all still routed through
+  the gateway's fail-closed nftables boundary.
+- **`krb5-user`**: `kinit`/`klist`/`kdestroy` for native Kerberos ticket
+  management. Enables Pass-the-Ticket, PKINIT, and full Kerberoasting/AS-REP
+  Roasting workflows natively alongside `certipy`, `impacket`, and `netexec`.
+- **`revshell` CLI**: `/usr/local/bin/revshell [PORT]` auto-detects LHOST from
+  `tun0`/`eth0` and prints copy-paste payloads for Bash, Python3, Netcat,
+  Socat, PHP, Perl, Ruby, PowerShell, plus listener starters — no external
+  lookup required.
+- **Wordlist shortcut variables**: `$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`,
+  `$MEDIUM_TXT`, `$USERNAMES`, `$PASSWORDS_TOP` exported in `.bashrc` — both
+  operator and agent reference common wordlist paths without spelling out the
+  full `/usr/share/seclists/...` path.
+
+
 ## The ask
 
 Turn Yummi's sandbox into a browser-accessible full Linux the way HackTheBox

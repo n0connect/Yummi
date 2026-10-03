@@ -21,6 +21,22 @@ echo "[sandbox] routing external traffic through gateway (${GATEWAY_GW})..."
 ip route replace default via "${GATEWAY_GW}"
 echo "[sandbox] default gateway → ${GATEWAY_GW} (fail-closed)"
 
+# Ensure /dev/net/tun exists so openvpn can open a TUN device for VPN tunnels
+# (HackTheBox, TryHackMe, Proving Grounds, client lab .ovpn files).
+# The device is NOT present by default even with NET_ADMIN cap in a container —
+# it must be created explicitly. NET_ADMIN (granted in docker-compose.yml) is
+# already required for nftables and ip-route; /dev/net/tun creation needs no
+# additional capability beyond that. Done as root here (the only window where
+# this is possible) — the pentester user can then use openvpn normally.
+if [ ! -c /dev/net/tun ]; then
+  mkdir -p /dev/net
+  mknod /dev/net/tun c 10 200
+  chmod 0666 /dev/net/tun
+  echo "[sandbox] /dev/net/tun created (VPN-ready)"
+else
+  echo "[sandbox] /dev/net/tun already exists (VPN-ready)"
+fi
+
 # XDG_RUNTIME_DIR is required by dbus/XFCE for their own runtime sockets —
 # created here (root) so ownership is correct before anything drops to the
 # pentester user. Needs CAP_DAC_OVERRIDE (mkdir/write past normal
@@ -38,7 +54,53 @@ chmod 0700 /run/user/1000
 # ~/.vnc, fontconfig cache) that isn't worth chasing path-by-path. Explicit,
 # documented relaxation, not an oversight — it's the trade-off for a single
 # unified environment instead of a stripped-down read-only one.
-mkdir -p /home/pentester/.vnc
+# Prepare workspace and host bridge directory (/workspace <-> ~/.yummi/workspace)
+# Ensure pentester (UID 1000) has full read/write access without root ownership collisions
+echo "[sandbox] preparing workspace and host bridge..."
+mkdir -p /workspace
+chown -R 1000:1000 /workspace 2>/dev/null || true
+chmod 775 /workspace 2>/dev/null || true
+ln -sfn /workspace /home/pentester/workspace
+
+# This image is NOT read-only (see Dockerfile's own comment and
+# docs/superpowers/specs/2026-09-01-browser-linux-pwnbox-design.md) — XFCE,
+# dbus, and VNC all write scattered session state (~/.cache, ~/.config,
+# ~/.vnc, fontconfig cache) that isn't worth chasing path-by-path. Explicit,
+# documented relaxation, not an oversight — it's the trade-off for a single
+# unified environment instead of a stripped-down read-only one.
+mkdir -p /home/pentester/.vnc /home/pentester/Desktop
+
+# Symlink wordlists, seclists, exploits, webshells, payloads, and toolkits into user home for immediate exploration
+if [ -d /usr/share/seclists ]; then ln -sfn /usr/share/seclists /home/pentester/seclists; fi
+if [ -d /usr/share/wordlists ]; then ln -sfn /usr/share/wordlists /home/pentester/wordlists_system; fi
+if [ -d /usr/share/exploitdb ]; then ln -sfn /usr/share/exploitdb /home/pentester/exploitdb; fi
+if [ -d /usr/share/webshells ]; then ln -sfn /usr/share/webshells /home/pentester/webshells; fi
+if [ -d /opt/PayloadsAllTheThings ]; then ln -sfn /opt/PayloadsAllTheThings /home/pentester/payloadsallthethings; fi
+if [ -d /usr/share/peass ]; then ln -sfn /usr/share/peass /home/pentester/privesc_peass; fi
+if [ -d /usr/share/windows-resources ]; then ln -sfn /usr/share/windows-resources /home/pentester/windows_resources; fi
+if [ -d /payloads ]; then ln -sfn /payloads /home/pentester/payloads_mounted; fi
+if [ -d /wordlists ]; then ln -sfn /wordlists /home/pentester/wordlists_mounted; fi
+
+# Set up desktop launchers (Firefox, Burp, Wireshark, Terminal, Thunar) and folder shortcuts
+echo "[sandbox] setting up desktop launchers & resource shortcuts..."
+if [ -d /usr/share/yummi/desktop ]; then
+  cp -f /usr/share/yummi/desktop/*.desktop /home/pentester/Desktop/ 2>/dev/null || true
+fi
+chmod +x /home/pentester/Desktop/*.desktop 2>/dev/null || true
+
+# Desktop folder shortcuts
+if [ -d /workspace ]; then ln -sfn /workspace /home/pentester/Desktop/Workspace; fi
+if [ -d /opt/PayloadsAllTheThings ]; then ln -sfn /opt/PayloadsAllTheThings /home/pentester/Desktop/PayloadsAllTheThings; fi
+if [ -d /usr/share/seclists ]; then ln -sfn /usr/share/seclists /home/pentester/Desktop/SecLists; fi
+if [ -d /usr/share/wordlists ]; then ln -sfn /usr/share/wordlists /home/pentester/Desktop/Wordlists; fi
+if [ -d /usr/share/exploitdb ]; then ln -sfn /usr/share/exploitdb /home/pentester/Desktop/ExploitDB; fi
+
+# Pre-populate default XFCE panel configuration to suppress the first-run prompt
+mkdir -p /home/pentester/.config/xfce4/xfconf/xfce-perchannel-xml
+if [ -f /etc/xdg/xfce4/panel/default.xml ] && [ ! -f /home/pentester/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml ]; then
+  cp /etc/xdg/xfce4/panel/default.xml /home/pentester/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml 2>/dev/null || true
+fi
+
 chown -R 1000:1000 /home/pentester
 
 echo "[sandbox] starting Xtigervnc on :${DISPLAY_NUM}..."
@@ -74,9 +136,13 @@ su - pentester -c "
   export XDG_RUNTIME_DIR=/run/user/1000
   eval \$(dbus-launch --sh-syntax)
   export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
+
+  # Disable DPMS and screen blanking so the VNC session never blanks or locks out
+  xset -dpms s off s noblank 2>/dev/null || true
+
   xfce4-session > /tmp/xfce4-session.log 2>&1 &
 
-  # Applies the Yummi-branded wallpaper once xfwm4/Xtigervnc's RandR output
+  # Applies the Yummi-branded wallpaper and desktop settings once xfwm4/Xtigervnc's RandR output
   # is up (xrandr -q succeeding is the real readiness signal — xfce4-desktop
   # itself never pre-populates these xfconf properties at all on a fresh
   # profile). -n creates the property outright instead of overwriting one
@@ -89,6 +155,11 @@ su - pentester -c "
       if xrandr -q > /dev/null 2>&1; then
         xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitorVNC-0/workspace0/last-image -n -t string -s /usr/share/backgrounds/yummi/wallpaper.png 2>/dev/null || true
         xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitorVNC-0/workspace0/image-style -n -t int -s 5 2>/dev/null || true
+        # Disable screensaver and display power management in XFCE so VNC never locks or sleeps
+        xfconf-query -c xfce4-screensaver -p /saver/enabled -n -t bool -s false 2>/dev/null || true
+        xfconf-query -c xfce4-screensaver -p /lock/enabled -n -t bool -s false 2>/dev/null || true
+        xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/blank-on-ac -n -t int -s 0 2>/dev/null || true
+        xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-enabled -n -t bool -s false 2>/dev/null || true
         xfdesktop --reload > /dev/null 2>&1 || true
         break
       fi

