@@ -153,8 +153,11 @@ Unlike shell execution (`/bin/bash -lc "..."`), direct argv invocation guarantee
 - **Output Buffering**: Stdout and Stderr are capped at 1 MiB per stream to prevent memory exhaustion.
 - **Fail-Closed Default Route**: Sandbox container network routing directs all egress through the gateway daemon (`172.20.0.2`).
 - **Pre-Baked Arsenal \& Wordlists**:
+  - **Environment Identity (Yummi Pwnbox)**: Hostname `yummi-pwnbox`, customized dark tactical shell theme, interactive greeting banner, and custom desktop wallpaper branding (`YUMMI PWNBOX: Autonomous AI Offensive Operations & Tactical Range`).
+  - **Exploitation \& Frameworks**: Full `metasploit-framework` (`msfconsole`, `msfvenom`, meterpreter multi-handlers, auxiliary scanners) with XFCE desktop launcher and `/usr/share/metasploit-framework` symlinks.
   - **Network \& Diagnostics**: `iputils-ping` (`ping`), `hping3`, `fping`, `telnet`, `tshark`, `tcpdump`, `procps` (`ps`, `top`), `ipcalc`, `sshpass`.
-  - **Active Directory \& Lateral Movement**: `impacket-scripts` (secretsdump, psexec, wmiexec, etc.), `smbmap`, `smbclient`, `responder`, `netexec` (`nxc`).
+  - **Active Directory \& Lateral Movement**: `impacket-scripts` (secretsdump, psexec, wmiexec, etc.), `smbmap`, `smbclient`, `responder`, `netexec` (`nxc`), `kerbrute` (rapid Kerberos user enumeration & spraying).
+  - **Windows Post-Exploitation**: `nishang` (PowerShell offensive framework symlinked into `/home/pentester/nishang` and Desktop), `powersploit`, `mimikatz`.
   - **Kerberos Ticket Management** (`krb5-user`): `kinit`, `klist`, `kdestroy` for native TGT acquisition, Pass-the-Ticket, PKINIT, and Kerberoasting/AS-REP Roasting workflows alongside `certipy`, `impacket`, and `netexec`.
   - **Lab VPN Connectivity** (`openvpn`): Connect to HackTheBox, TryHackMe, Proving Grounds, or client lab networks via a `.ovpn` file. `entrypoint.sh` creates `/dev/net/tun` at startup (requires `NET_ADMIN`). Agent usage: `term_run(session, "openvpn --config /workspace/lab.ovpn", wait=false)` → `term_wait(session, "Initialization Sequence Completed")` → `tun0` is then available as the reachable VPN interface.
   - **Reverse Shell Generator** (`revshell`): `/usr/local/bin/revshell [PORT]` — auto-detects LHOST from `tun0` (VPN) or `eth0`, outputs copy-paste payloads for Bash, Python3, Netcat (both flavors), Socat (plain + TTY-upgrade), PHP, Perl, Ruby, and PowerShell, plus ready listener one-liners (`rlnc`, `penelope`). Eliminates mid-engagement web lookups to revshells.com.

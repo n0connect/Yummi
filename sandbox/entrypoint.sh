@@ -78,10 +78,12 @@ if [ -d /usr/share/webshells ]; then ln -sfn /usr/share/webshells /home/penteste
 if [ -d /opt/PayloadsAllTheThings ]; then ln -sfn /opt/PayloadsAllTheThings /home/pentester/payloadsallthethings; fi
 if [ -d /usr/share/peass ]; then ln -sfn /usr/share/peass /home/pentester/privesc_peass; fi
 if [ -d /usr/share/windows-resources ]; then ln -sfn /usr/share/windows-resources /home/pentester/windows_resources; fi
+if [ -d /usr/share/nishang ]; then ln -sfn /usr/share/nishang /home/pentester/nishang; fi
+if [ -d /usr/share/metasploit-framework ]; then ln -sfn /usr/share/metasploit-framework /home/pentester/metasploit; fi
 if [ -d /payloads ]; then ln -sfn /payloads /home/pentester/payloads_mounted; fi
 if [ -d /wordlists ]; then ln -sfn /wordlists /home/pentester/wordlists_mounted; fi
 
-# Set up desktop launchers (Firefox, Burp, Wireshark, Terminal, Thunar) and folder shortcuts
+# Set up desktop launchers (Firefox, Burp, Wireshark, Terminal, Thunar, Metasploit) and folder shortcuts
 echo "[sandbox] setting up desktop launchers & resource shortcuts..."
 if [ -d /usr/share/yummi/desktop ]; then
   cp -f /usr/share/yummi/desktop/*.desktop /home/pentester/Desktop/ 2>/dev/null || true
@@ -94,6 +96,7 @@ if [ -d /opt/PayloadsAllTheThings ]; then ln -sfn /opt/PayloadsAllTheThings /hom
 if [ -d /usr/share/seclists ]; then ln -sfn /usr/share/seclists /home/pentester/Desktop/SecLists; fi
 if [ -d /usr/share/wordlists ]; then ln -sfn /usr/share/wordlists /home/pentester/Desktop/Wordlists; fi
 if [ -d /usr/share/exploitdb ]; then ln -sfn /usr/share/exploitdb /home/pentester/Desktop/ExploitDB; fi
+if [ -d /usr/share/nishang ]; then ln -sfn /usr/share/nishang /home/pentester/Desktop/Nishang; fi
 
 # Pre-populate default XFCE panel configuration to suppress the first-run prompt
 mkdir -p /home/pentester/.config/xfce4/xfconf/xfce-perchannel-xml

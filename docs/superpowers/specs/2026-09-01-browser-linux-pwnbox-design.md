@@ -46,6 +46,14 @@ operational improvements were added to reduce engagement friction to zero:
   `$MEDIUM_TXT`, `$USERNAMES`, `$PASSWORDS_TOP` exported in `.bashrc` — both
   operator and agent reference common wordlist paths without spelling out the
   full `/usr/share/seclists/...` path.
+- **`metasploit-framework`**: Full Metasploit suite (`msfconsole`, `msfvenom`,
+  meterpreter payload generation and multi-handlers) baked in with desktop launcher.
+- **`nishang`**: Offensive PowerShell framework symlinked into user home and Desktop
+  for post-exploitation against Windows targets.
+- **`kerbrute`**: Rapid Go-based Kerberos user enumeration and password spraying.
+- **Environment Identity (`yummi-pwnbox`)**: Dedicated container hostname
+  `yummi-pwnbox`, tactical prompt, custom interactive greeting MOTD, and
+  branded desktop wallpaper (`YUMMI PWNBOX: Autonomous AI Offensive Operations & Tactical Range`).
 
 
 ## The ask

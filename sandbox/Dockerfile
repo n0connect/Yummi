@@ -50,6 +50,7 @@ RUN CGO_ENABLED=1 go install github.com/BishopFox/jsluice/cmd/jsluice@latest
 RUN go install github.com/hahwul/dalfox/v2@latest
 RUN go install github.com/lc/gau/v2/cmd/gau@latest
 RUN go install github.com/jpillora/chisel@latest
+RUN go install github.com/ropnop/kerbrute@latest
 
 FROM kalilinux/kali-rolling:latest
 
@@ -125,6 +126,7 @@ RUN apt-get update && \
       ltrace \
       masscan \
       medusa \
+      metasploit-framework \
       mimikatz \
       mtr-tiny \
       nano \
@@ -134,6 +136,7 @@ RUN apt-get update && \
       netexec \
       nftables \
       nikto \
+      nishang \
       nmap \
       novnc \
       nuclei \
@@ -214,7 +217,7 @@ RUN apt-get update && \
       (command -v batcat >/dev/null && [ ! -f /usr/local/bin/bat ] && ln -sf "$(command -v batcat)" /usr/local/bin/bat || true) && \
       (command -v fdfind >/dev/null && [ ! -f /usr/local/bin/fd ] && ln -sf "$(command -v fdfind)" /usr/local/bin/fd || true) && \
       (command -v /usr/share/peass/linpeas/linpeas.sh >/dev/null && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas.sh || true) && \
-      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium feroxbuster commix masscan whois sslscan dnsrecon gitleaks ping hping3 fping searchsploit smbmap john hashcat wfuzz cewl ps less nano 7z unzip tree rsync dirsearch evil-winrm certipy coercer bat fzf traceroute mtr nxc netexec rlwrap penelope openvpn kinit; do command -v "$tool" >/dev/null || { echo "tool missing: $tool" >&2; exit 1; }; done && \
+      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium feroxbuster commix masscan whois sslscan dnsrecon gitleaks ping hping3 fping searchsploit smbmap john hashcat wfuzz cewl ps less nano 7z unzip tree rsync dirsearch evil-winrm certipy coercer bat fzf traceroute mtr nxc netexec rlwrap penelope openvpn kinit msfconsole msfvenom; do command -v "$tool" >/dev/null || { echo "tool missing: $tool" >&2; exit 1; }; done && \
       rm -rf /var/lib/apt/lists/*
 
 # GitHub-sourced Python pentest tools with no Kali apt package: jwt_tool,
@@ -318,13 +321,32 @@ RUN groupadd --gid 1000 pentester && \
 RUN cat << 'EOF' >> /home/pentester/.bashrc
 
 # Yummi Pentest Workbench Environment
-export PS1='\[\033[01;31m\]┌──(\[\033[01;36m\]pentester㉿yummi\[\033[01;31m\])-[\[\033[01;37m\]\w\[\033[01;31m\]]\n\[\033[01;31m\]└─\[\033[01;36m\]\$\[\033[00m\] '
+export PS1='\[\033[01;31m\]┌──(\[\033[01;36m\]pentester㉿yummi-pwnbox\[\033[01;31m\])-[\[\033[01;37m\]\w\[\033[01;31m\]]\n\[\033[01;31m\]└─\[\033[01;36m\]\$\[\033[00m\] '
 
 # Multi-session command history preservation & immediate sync across terminals
 HISTSIZE=100000
 HISTFILESIZE=100000
 shopt -s histappend
 PROMPT_COMMAND="history -a; history -n; ${PROMPT_COMMAND:-}"
+
+# Yummi Pwnbox interactive greeting banner
+if [ -t 1 ] && [ -z "${YUMMI_QUIET_SHELL:-}" ] && [ -z "${YUMMI_BANNER_SHOWN:-}" ]; then
+  export YUMMI_BANNER_SHOWN=1
+  cat << 'BANNER'
+[01;36m __     __                          _   ____                  _               [00m
+[01;36m \ \   / /                         (_) |  _ \                | |              [00m
+[01;36m  \ \_/ /   _ _ __ ___  _ __ ___    _  | |_) |_      ___ __ | |__   _____  __[00m
+[01;36m   \   / | | | '_ ` _ \| '_ ` _ \  | | |  _ <\ \ /\ / / '_ \| '_ \ / _ \ \/ /[00m
+[01;36m    | |  | |_| | | | | | | | | | | | | | |_) |\ V  V /| | | | |_) | (_) >  < [00m
+[01;36m    |_|   \__,_|_| |_| |_|_| |_| |_|_| |____/  \_/\_/ |_| |_|_.__/ \___/_/\_\[00m
+[01;30m──────────────────────────────────────────────────────────────────────────────[00m
+[01;32m ⚡ Yummi Pwnbox: Autonomous AI Offensive Operations & Tactical Range[00m
+[01;33m [•] Shortcuts:[00m $ROCKYOU, $COMMON_TXT, $BIG_TXT, $USERNAMES, $PASSWORDS_TOP
+[01;33m [•] Helpers:[00m   revshell, rlnc, penelope, serve-workspace, msf, myip, ports
+[01;33m [•] VPN:[00m       openvpn --config /workspace/lab.ovpn (tun0)
+[01;30m──────────────────────────────────────────────────────────────────────────────[00m
+BANNER
+fi
 
 # Core aliases
 alias ll='ls -la --color=auto'
@@ -339,6 +361,8 @@ alias myip='ip -br -c a'
 alias ports='ss -tulpn'
 alias nmap-fast='nmap -T4 -v --open'
 alias linpeas='linpeas.sh'
+alias msf='msfconsole -q'
+alias msfconsole='msfconsole -q'
 
 # Reverse shell & listener helpers
 alias rlnc='rlwrap nc -lvnp'
@@ -354,6 +378,7 @@ alias wordlists='cd /home/pentester/wordlists_system'
 alias payloads='cd /home/pentester/payloadsallthethings'
 alias privesc='cd /home/pentester/privesc_peass'
 alias windows='cd /home/pentester/windows_resources'
+alias nishang='cd /home/pentester/nishang'
 alias workspace='cd /home/pentester/workspace'
 
 # Wordlist shortcut variables — save token budget for the agent and prevent
@@ -402,7 +427,7 @@ bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel
 
 # Yummi Cyan / Dark theme (#0a0c0e / #38bdf8)
 set -g status-style "bg=#0a0c0e,fg=#38bdf8"
-set -g status-left "#[fg=#38bdf8,bold] ⚡ YUMMI [#S] #[default]"
+set -g status-left "#[fg=#38bdf8,bold] ⚡ YUMMI PWNBOX [#S] #[default]"
 set -g status-right "#[fg=#6b7a80]%H:%M %d-%b#[default] "
 set -g window-status-current-style "bg=#38bdf8,fg=#0a0c0e,bold"
 set -g pane-border-style "fg=#1e293b"
@@ -478,6 +503,18 @@ Terminal=false
 Categories=System;FileManager;
 EOF
 ) && \
+    ( [ -f /usr/share/applications/kali-msfconsole.desktop ] && cp /usr/share/applications/kali-msfconsole.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/metasploit.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Metasploit Console
+Comment=Metasploit Penetration Testing Framework
+Exec=xfce4-terminal -T "Metasploit Console" --geometry=120x35 -e "msfconsole -q"
+Icon=utilities-terminal
+Terminal=false
+Categories=Network;Security;
+EOF
+) && \
     chmod +x /usr/share/yummi/desktop/*.desktop && \
     mkdir -p /home/pentester/Desktop && \
     cp -f /usr/share/yummi/desktop/*.desktop /home/pentester/Desktop/ && \
@@ -504,10 +541,10 @@ RUN su - pentester -c "nuclei -update-templates -silent" 2>&1 | tail -5
 RUN mkdir -p /usr/share/backgrounds/yummi && \
     convert -size 1920x1080 xc:'#0a0c0e' \
       -gravity center \
-      -font DejaVu-Sans-Mono-Bold -pointsize 120 -fill '#38bdf8' \
-      -annotate +0-40 'YUMMI' \
-      -font DejaVu-Sans-Mono -pointsize 28 -fill '#6b7a80' \
-      -annotate +0+70 'PENTEST WORKBENCH' \
+      -font DejaVu-Sans-Mono-Bold -pointsize 110 -fill '#38bdf8' \
+      -annotate +0-40 'YUMMI PWNBOX' \
+      -font DejaVu-Sans-Mono -pointsize 26 -fill '#6b7a80' \
+      -annotate +0+70 'OFFENSIVE SECURITY OPERATIONS & AI RANGE' \
       /usr/share/backgrounds/yummi/wallpaper.png
 
 COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -521,7 +558,7 @@ RUN chmod 0755 /usr/local/bin/yummi-sandbox-mcp
 # a broken install fails the build rather than surfacing as a mysterious
 # "command not found" mid-engagement.
 COPY --from=recontools /out/ /usr/local/bin/
-RUN for tool in httpx dnsx alterx gau katana dalfox naabu tlsx subzy jsluice chisel; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
+RUN for tool in httpx dnsx alterx gau katana dalfox naabu tlsx subzy jsluice chisel kerbrute; do command -v "$tool" >/dev/null || { echo "recon tool missing: $tool" >&2; exit 1; }; done
 
 # Pentest commands from orchestrator run as UID 1000 via docker exec --user;
 # the operator's Bash tab attaches a tmux session as the same user. The

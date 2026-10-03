@@ -83,6 +83,7 @@ services:
   # request — the network trust boundary is unaffected either way.
   sandbox:
     container_name: yummi-sandbox
+    hostname: yummi-pwnbox
     build:
       context: .
       dockerfile: sandbox/Dockerfile
