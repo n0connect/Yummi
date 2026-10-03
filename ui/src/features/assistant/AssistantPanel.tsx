@@ -26,7 +26,8 @@ import {
   rebuildMessages,
   loadApprovalMode,
   saveApprovalMode,
-  STORAGE_MSGS
+  STORAGE_MSGS,
+  sortHydratedMessages
 } from './messageStorage'
 import {
   TaskCardMessage,
@@ -282,16 +283,13 @@ export function AssistantPanel({
               id: nextId(),
               role: 'assistant' as const,
               content: summary,
-              timestamp: new Date(ev.timestamp * 1000).toISOString(),
+              timestamp: new Date(ev.timestamp > 1e11 ? ev.timestamp : ev.timestamp * 1000).toISOString(),
               activity: ev
             }]
           })
-        // Chronological merge. Timestamps are whole seconds, so on a tie the
-        // narration sorts before the command it announces (narration first).
-        // A task's goal and its final summary are part of the record even when
-        // the chat history has no row for them (tasks started through the API,
-        // or a chat row that never persisted). Add them unless the same text is
-        // already in the thread, so nothing is shown twice.
+        // Chronological merge. Timestamps are aligned to whole seconds so that
+        // execution records (seconds) and activity events (milliseconds) align,
+        // resolving ties by rank: goal (user), then agent words, then command cards.
         const known = new Set((rows ?? []).map(r => r.content))
         const hydratedTasks: Message[] = (tasks ?? []).flatMap(task => {
           const out: Message[] = []
@@ -314,13 +312,13 @@ export function AssistantPanel({
           }
           return out
         })
-        // Chronological merge. Timestamps are whole seconds, so on a tie the
-        // order is: goal (user), then the agent's words, then the command cards.
-        const rank = (m: Message) => (m.role === 'user' ? 0 : m.role === 'execution' ? 2 : 1)
         setMessages(
-          [...rebuildMessages(rows ?? []), ...hydratedTasks, ...hydratedExecutions, ...hydratedNarration]
-            .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || rank(a) - rank(b))
-            .slice(-120)
+          sortHydratedMessages([
+            ...rebuildMessages(rows ?? []),
+            ...hydratedTasks,
+            ...hydratedExecutions,
+            ...hydratedNarration
+          ]).slice(-120)
         )
         // Seed the new-execution tracker with everything just hydrated (so a
         // later WS update to one of these doesn't get misread as "new" and

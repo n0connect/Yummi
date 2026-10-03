@@ -93,3 +93,16 @@ export function saveApprovalMode(mode: ApprovalMode): void {
 
 // Terminal statuses where the task is no longer active.
 export const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'])
+
+// sortHydratedMessages merges reconstituted history items into chronological order.
+// Timestamps are aligned to whole seconds so that execution records (seconds)
+// and activity events (milliseconds) align properly, with ties resolved by rank:
+// goal/user prompt first, then agent words/narration, then execution cards.
+export function sortHydratedMessages(messages: Message[]): Message[] {
+  const rank = (m: Message) => (m.role === 'user' ? 0 : m.role === 'execution' ? 2 : 1)
+  return messages.slice().sort((a, b) => {
+    const secA = Math.floor(Date.parse(a.timestamp) / 1000)
+    const secB = Math.floor(Date.parse(b.timestamp) / 1000)
+    return (secA - secB) || (rank(a) - rank(b))
+  })
+}
