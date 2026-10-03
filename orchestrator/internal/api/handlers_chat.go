@@ -35,6 +35,20 @@ func steerableTaskStatus(status agent.TaskStatus) bool {
 	}
 }
 
+// findPausedTaskAwaitingAnswer returns the most recent paused task that has
+// an open question for the operator (budget pause or ask_operator).
+func findPausedTaskAwaitingAnswer(taskStore *agent.Store, sessionID string) (agent.Task, bool) {
+	if taskStore == nil || sessionID == "" {
+		return agent.Task{}, false
+	}
+	for _, t := range taskStore.ListBySession(sessionID, 10) {
+		if t.Status == agent.StatusPaused && strings.TrimSpace(t.Question) != "" {
+			return t, true
+		}
+	}
+	return agent.Task{}, false
+}
+
 // findActiveTask returns the most recently created non-terminal, steerable
 // task for a session, if any.
 func findActiveTask(taskStore *agent.Store, sessionID string) (agent.Task, bool) {
@@ -137,6 +151,38 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			if _, err := sm.Get(sessionID); err != nil {
 				writeError(w, http.StatusNotFound, "session not found", nil)
 				return
+			}
+		}
+
+		// A task paused with an open question is WAITING FOR THIS REPLY. The
+		// operator's message is the answer: resume the task with it, instead of
+		// letting the conductor answer in chat (which left the task waiting
+		// while a different voice replied). Covers budget pauses and ask_operator.
+		if !req.FromFeedback && taskStore != nil && taskRunner != nil {
+			if paused, ok := findPausedTaskAwaitingAnswer(taskStore, sessionID); ok {
+				if err := taskRunner.Start(paused.ID, req.Message); err != nil {
+					slog.Warn("failed to resume paused task with operator answer", "task_id", paused.ID, "error", err)
+				} else {
+					reply := "Your answer was passed to the agent, and the task is resuming."
+					if isLikelyTurkish(req.Message) {
+						reply = "Yanıtınız agent'a iletildi, görev devam ediyor."
+					}
+					appendAuditSafe(sm, sessionID, "assistant.task_answered", "assistant", map[string]any{
+						"task_id": paused.ID,
+						"message": req.Message,
+					})
+					resp := conductor.ChatResponse{Intent: "task_resumed", Message: reply, TaskID: paused.ID}
+					if sm != nil && sessionID != "" && sessionID != "default" {
+						persistChatTurn(sm, sessionID, req.Message, resp)
+					}
+					writeJSON(w, http.StatusOK, map[string]any{
+						"reply":      resp.Message,
+						"session_id": sessionID,
+						"turn_id":    req.TurnID,
+						"data":       resp,
+					})
+					return
+				}
 			}
 		}
 
