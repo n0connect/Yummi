@@ -178,7 +178,7 @@ _check-deps:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _check-network-mode:
 ifeq ($(YUMMI_NETWORK_MODE),insecure-bridge)
-	@printf "\n$(RED)$(BOLD)⚠️  YUMMI_NETWORK_MODE=insecure-bridge$(RESET)\n"
+	@printf "\n$(RED)$(BOLD)[WARNING] YUMMI_NETWORK_MODE=insecure-bridge$(RESET)\n"
 	@printf "$(RED)This removes docker-compose.yml's \`internal: true\` flag from yummi_internal.$(RESET)\n"
 	@printf "$(RED)sandbox's network stops being architecturally incapable of reaching the\n"
 	@printf "outside world — containment now depends ENTIRELY on gateway's nftables rules\n"

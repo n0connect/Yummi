@@ -73,6 +73,7 @@ ln -sfn /workspace /home/pentester/workspace
 # documented relaxation, not an oversight — it's the trade-off for a single
 # unified environment instead of a stripped-down read-only one.
 mkdir -p /home/pentester/.vnc /home/pentester/Desktop
+touch /home/pentester/.hushlogin
 
 # Symlink wordlists, seclists, exploits, webshells, payloads, and toolkits into user home for immediate exploration
 if [ -d /usr/share/seclists ]; then ln -sfn /usr/share/seclists /home/pentester/seclists; fi

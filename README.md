@@ -111,9 +111,9 @@ The [`docs/`](docs/) directory provides comprehensive reference material. Start 
 ## Quick Start
 
 ### Supported Platforms
-- 🐧 **Linux (x86_64 / arm64)**: Native Docker Engine (reference production platform).
-- 🍏 **macOS (Apple Silicon)**: Supported with Docker. **[OrbStack](https://orbstack.dev/)** is strongly recommended for seamless container bridge networking.
-- 🪟 **Windows 10/11**: Supported via **WSL2** (Ubuntu + Docker Desktop WSL2 engine). Clone and run inside the native WSL2 virtual disk (`~/yummi`), not `/mnt/c/`.
+- **Linux (x86_64 / arm64)**: Native Docker Engine (reference production platform).
+- **macOS (Apple Silicon)**: Supported with Docker. **[OrbStack](https://orbstack.dev/)** is strongly recommended for seamless container bridge networking.
+- **Windows 10/11**: Supported via **WSL2** (Ubuntu + Docker Desktop WSL2 engine). Clone and run inside the native WSL2 virtual disk (`~/yummi`), not `/mnt/c/`.
 
 ```bash
 # 1. Bootstrap environment & dependencies (Docker, Go, Rust, Node, Ollama)

@@ -282,9 +282,9 @@ if [ -z "$IP" ]; then
 fi
 
 BOLD='\033[1m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'; GREEN='\033[0;32m'; RESET='\033[0m'
-echo -e "${BOLD}${CYAN}⚡ Yummi Reverse Shell Generator${RESET}"
+echo -e "${BOLD}${CYAN}[*] Yummi Reverse Shell Generator${RESET}"
 echo -e "   LHOST: ${GREEN}${IP}${RESET}   LPORT: ${GREEN}${PORT}${RESET}"
-echo -e "   VPN interface: $(ip link show tun0 2>/dev/null | grep -q UP && echo 'tun0 ✓' || echo 'not up')\n"
+echo -e "   VPN interface: $(ip link show tun0 2>/dev/null | grep -q UP && echo 'tun0 [UP]' || echo 'not up')\n"
 
 show() { echo -e "${YELLOW}[$1]${RESET}\n${2}\n"; }
 
@@ -333,20 +333,23 @@ PROMPT_COMMAND="history -a; history -n; ${PROMPT_COMMAND:-}"
 # Yummi Pwnbox interactive greeting banner
 if [ -t 1 ] && [ -z "${YUMMI_QUIET_SHELL:-}" ] && [ -z "${YUMMI_BANNER_SHOWN:-}" ]; then
   export YUMMI_BANNER_SHOWN=1
-  cat << 'BANNER'
-[01;36m __     __                          _   ____                  _               [00m
-[01;36m \ \   / /                         (_) |  _ \                | |              [00m
-[01;36m  \ \_/ /   _ _ __ ___  _ __ ___    _  | |_) |_      ___ __ | |__   _____  __[00m
-[01;36m   \   / | | | '_ ` _ \| '_ ` _ \  | | |  _ <\ \ /\ / / '_ \| '_ \ / _ \ \/ /[00m
-[01;36m    | |  | |_| | | | | | | | | | | | | | |_) |\ V  V /| | | | |_) | (_) >  < [00m
-[01;36m    |_|   \__,_|_| |_| |_|_| |_| |_|_| |____/  \_/\_/ |_| |_|_.__/ \___/_/\_\[00m
-[01;30m──────────────────────────────────────────────────────────────────────────────[00m
-[01;32m ⚡ Yummi Pwnbox: Autonomous AI Offensive Operations & Tactical Range[00m
-[01;33m [•] Shortcuts:[00m $ROCKYOU, $COMMON_TXT, $BIG_TXT, $USERNAMES, $PASSWORDS_TOP
-[01;33m [•] Helpers:[00m   revshell, rlnc, penelope, serve-workspace, msf, myip, ports
-[01;33m [•] VPN:[00m       openvpn --config /workspace/lab.ovpn (tun0)
-[01;30m──────────────────────────────────────────────────────────────────────────────[00m
-BANNER
+  CYAN='\033[01;36m'
+  GRAY='\033[01;30m'
+  GREEN='\033[01;32m'
+  YELLOW='\033[01;33m'
+  RESET='\033[00m'
+  printf "${CYAN}%s\n%s\n%s\n%s\n%s${RESET}\n" \
+    ' __   __ _   _ __  __ __  __ ___   ____  __        __ _   _ ____   _____  __  __ ' \
+    ' \ \ / /| | | |  \/  |  \/  |_ _| |  _ \ \ \      / /| \ | | __ ) / _ \ \ \/ / ' \
+    '  \ V / | | | | |\/| | |\/| || |  | |_) | \ \ /\ / / |  \| |  _ \| | | | \  /  ' \
+    '   | |  | |_| | |  | | |  | || |  |  __/   \ V  V /  | |\  | |_) | |_| | /  \  ' \
+    '   |_|   \___/|_|  |_|_|  |_|___| |_|       \_/\_/   |_| \_|____/ \___/ /_/\_\ '
+  printf "${GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
+  printf "${GREEN}[*] Yummi Pwnbox: Autonomous AI Offensive Operations & Tactical Range${RESET}\n"
+  printf "${YELLOW}[+] Shortcuts:${RESET} %s\n" '$ROCKYOU, $COMMON_TXT, $BIG_TXT, $USERNAMES, $PASSWORDS_TOP'
+  printf "${YELLOW}[+] Helpers:${RESET}   revshell, rlnc, penelope, serve-workspace, msf, myip, ports\n"
+  printf "${YELLOW}[+] VPN:${RESET}       openvpn --config /workspace/lab.ovpn (tun0)\n"
+  printf "${GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 fi
 
 # Core aliases
@@ -418,7 +421,7 @@ bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel
 
 # Yummi Cyan / Dark theme (#0a0c0e / #38bdf8)
 set -g status-style "bg=#0a0c0e,fg=#38bdf8"
-set -g status-left "#[fg=#38bdf8,bold] ⚡ YUMMI PWNBOX [#S] #[default]"
+set -g status-left "#[fg=#38bdf8,bold] [PWNBOX] [#S] #[default]"
 set -g status-right "#[fg=#6b7a80]%H:%M %d-%b#[default] "
 set -g window-status-current-style "bg=#38bdf8,fg=#0a0c0e,bold"
 set -g pane-border-style "fg=#1e293b"
@@ -426,6 +429,10 @@ set -g pane-active-border-style "fg=#38bdf8"
 EOF
 RUN cp /home/pentester/.tmux.conf /etc/tmux.conf && \
     chown pentester:pentester /home/pentester/.tmux.conf
+
+# Suppress Kali minimal install message & MOTD noise
+RUN touch /home/pentester/.hushlogin /etc/skel/.hushlogin && \
+    chown pentester:pentester /home/pentester/.hushlogin
 
 # Editor ergonomics (vim & nano syntax and indentation)
 RUN printf "syntax on\nset number\nset mouse=\nset tabstop=4\nset shiftwidth=4\nset expandtab\nset autoindent\n" > /home/pentester/.vimrc && \
