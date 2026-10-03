@@ -23,12 +23,21 @@ make lab-target-down   # stop + remove
    (`python3 -c 'import os; os.setuid(0); os.system("/bin/bash")'`).
 4. **Flag 2:** `/root/root.txt`, root-only.
 
-See `Dockerfile` for exactly what's changed from stock `httpd:2.4.49` (one
-line: switching the commented `mod_cgid` load from its default
-`mpm_prefork`-only guard to the active `mpm_event` MPM this image actually
-runs — everything else, including the `Require all granted` `ScriptAlias
-/cgi-bin/` block the CVE needs, is the image's own unmodified default
-config).
+See `Dockerfile` for exactly what's changed from stock `httpd:2.4.49`. Two
+deliberate changes, both required:
+
+1. Enable `mod_cgid` (the commented `LoadModule` is re-enabled, since this
+   image runs the `mpm_event` MPM, not `mpm_prefork`).
+2. Change the stock `<Directory />` policy from `Require all denied` to
+   `Require all granted`. With the root denied, the traversal reaches
+   `authz_core` on the resolved path and returns `403 client denied by server
+   configuration` instead of executing. This is the vulnerable configuration
+   the public CVE-2021-41773 exploit assumes. Verified: the RCE returns
+   `uid=1(daemon)` and both flags read through the chain.
+
+The `ScriptAlias /cgi-bin/` block (`Require all granted`) is the image's own
+default and is unchanged. The runtime user is `daemon`, so `user.txt` is owned
+by `daemon`.
 
 ## Isolation
 

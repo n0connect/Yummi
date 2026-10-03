@@ -23,16 +23,20 @@ echo "[sandbox] default gateway → ${GATEWAY_GW} (fail-closed)"
 
 # Ensure /dev/net/tun exists so openvpn can open a TUN device for VPN tunnels
 # (HackTheBox, TryHackMe, Proving Grounds, client lab .ovpn files).
-# The device is NOT present by default even with NET_ADMIN cap in a container —
-# it must be created explicitly. NET_ADMIN (granted in docker-compose.yml) is
-# already required for nftables and ip-route; /dev/net/tun creation needs no
-# additional capability beyond that. Done as root here (the only window where
-# this is possible) — the pentester user can then use openvpn normally.
+# The device is NOT present by default in a container. Creating it needs
+# CAP_MKNOD, which docker-compose.yml's `cap_drop: ALL` does NOT grant, so the
+# mknod below fails there. That failure must not kill the sandbox (it did, on
+# every start, before this guard): VPN tunnels are simply unavailable until
+# the device is mapped in from the host (compose `devices:`) or MKNOD is
+# granted deliberately. Non-fatal by design.
 if [ ! -c /dev/net/tun ]; then
   mkdir -p /dev/net
-  mknod /dev/net/tun c 10 200
-  chmod 0666 /dev/net/tun
-  echo "[sandbox] /dev/net/tun created (VPN-ready)"
+  if mknod /dev/net/tun c 10 200 2>/dev/null; then
+    chmod 0666 /dev/net/tun
+    echo "[sandbox] /dev/net/tun created (VPN-ready)"
+  else
+    echo "[sandbox] WARNING: /dev/net/tun unavailable (no CAP_MKNOD) — openvpn tunnels disabled" >&2
+  fi
 else
   echo "[sandbox] /dev/net/tun already exists (VPN-ready)"
 fi

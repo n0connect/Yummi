@@ -31,9 +31,23 @@ RUN sed -i \
     -e 's/^\([[:space:]]*\)#LoadModule cgid_module/\1LoadModule cgid_module/' \
     /usr/local/apache2/conf/httpd.conf
 
+# 1b) Second, required change: the stock `<Directory />` block is `Require all
+#     denied`. CVE-2021-41773 maps the traversed path (e.g. /bin/sh) and then
+#     hits authz_core on that path; with the root denied, the request returns
+#     403 "client denied by server configuration" and no RCE happens (verified
+#     against this image). Opening the root directory is the vulnerable
+#     configuration the public exploit assumes. Range-limited to that one block
+#     so the .ht* protections elsewhere stay stock.
+RUN sed -i '/<Directory \/>/,/<\/Directory>/ s/Require all denied/Require all granted/' \
+    /usr/local/apache2/conf/httpd.conf && \
+    sed -n '/<Directory \/>/,/<\/Directory>/p' /usr/local/apache2/conf/httpd.conf | grep -q "Require all granted"
+
 # 2) Stage-1 flag: readable by www-data (the RCE lands you here).
+# Owner is the account httpd actually runs as in this image (`daemon`, uid 1 —
+# see `User` in httpd.conf), NOT www-data. Owning it as www-data made the flag
+# unreadable from the RCE shell (verified).
 RUN echo "user_flag{apache_2_4_49_cgi_path_traversal_rce}" > /home/user.txt && \
-    chown www-data:www-data /home/user.txt && chmod 440 /home/user.txt
+    chown daemon:daemon /home/user.txt && chmod 440 /home/user.txt
 
 # 3) Stage-2 privesc vector: a SUID-root copy of python3. Deliberately the
 #    plainest, most-documented GTFOBins pattern (`python3 -c 'import os;

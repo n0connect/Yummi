@@ -217,6 +217,7 @@ RUN apt-get update && \
       (command -v batcat >/dev/null && [ ! -f /usr/local/bin/bat ] && ln -sf "$(command -v batcat)" /usr/local/bin/bat || true) && \
       (command -v fdfind >/dev/null && [ ! -f /usr/local/bin/fd ] && ln -sf "$(command -v fdfind)" /usr/local/bin/fd || true) && \
       (command -v /usr/share/peass/linpeas/linpeas.sh >/dev/null && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas.sh || true) && \
+      (command -v certipy-ad >/dev/null && [ ! -f /usr/local/bin/certipy ] && ln -sf "$(command -v certipy-ad)" /usr/local/bin/certipy || true) && \
       for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium feroxbuster commix masscan whois sslscan dnsrecon gitleaks ping hping3 fping searchsploit smbmap john hashcat wfuzz cewl ps less nano 7z unzip tree rsync dirsearch evil-winrm certipy coercer bat fzf traceroute mtr nxc netexec rlwrap penelope openvpn kinit msfconsole msfvenom; do command -v "$tool" >/dev/null || { echo "tool missing: $tool" >&2; exit 1; }; done && \
       rm -rf /var/lib/apt/lists/*
 
