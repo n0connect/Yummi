@@ -130,7 +130,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
           </button>
         </div>
         <div className="rail-search-wrap">
-          <span aria-hidden="true">⌕</span>
+          <span className="rail-search-icon" aria-hidden="true">⌕</span>
           <input
             className="rail-search"
             value={query}

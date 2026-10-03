@@ -638,36 +638,61 @@ body::before {
 }
 .chat-column {
   flex: 1 1 auto;
-  width: 100%;
-  max-width: 880px;
-  margin: 0 auto; /* centred in whatever width the session rail leaves */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
   animation: panelRise 0.28s var(--ease) backwards;
 }
-.chat-column .panel { flex: 1; min-height: 0; background: transparent; }
+.chat-column .panel {
+  flex: 1;
+  min-height: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+}
 
-/* Slim, quiet header */
+/* Continuous, slim header spanning the entire chat area */
 .chat-column .panel-header {
   height: 52px;
   background: transparent;
   border-bottom: 1px solid var(--border-subtle);
-  padding: 0 var(--space-sm);
+  padding: 0 var(--space-xl);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  transition: padding-left var(--transition-fast);
+}
+
+.chat-page.rail-closed .chat-column .panel-header {
+  padding-left: 148px;
+}
+.chat-page.rail-open .chat-column .panel-header {
+  padding-left: var(--space-xl);
 }
 
 /* Roomy, centered message stream */
 .chat-column .chat-messages {
-  padding: var(--space-2xl) var(--space-sm) var(--space-lg);
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--space-2xl) var(--space-md) var(--space-lg);
   gap: var(--space-lg);
+  box-sizing: border-box;
 }
 .chat-column .msg { gap: var(--space-md); }
 
 /* Composer — floating, generous (Claude-style) */
 .chat-column .chat-input-area {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
   border-top: none;
-  padding: var(--space-md) var(--space-sm) var(--space-xl);
+  padding: var(--space-md) var(--space-md) var(--space-xl);
   gap: var(--space-md);
+  box-sizing: border-box;
 }
 .chat-column .chat-input-area input {
   padding: 14px 20px;
@@ -677,7 +702,16 @@ body::before {
   box-shadow: var(--shadow-md);
 }
 .chat-column .proposals-bar,
-.chat-column .tt-card { margin-left: var(--space-sm); margin-right: var(--space-sm); }
+.chat-column .tt-card,
+.chat-column .history-error-banner,
+.chat-column .history-loading-banner,
+.chat-column .chat-turn-status {
+  width: 100%;
+  max-width: 880px;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    FULL-PAGE VIEWS (Bash, Logs)
@@ -1201,9 +1235,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
   .grid { grid-template-columns: 380px 1fr; }
   .status-bar { padding: 0 var(--space-lg); gap: var(--space-md); }
   .left { gap: var(--space-sm); }
-  .right { gap: var(--space-sm); }
   .status-nav-link { padding: 6px 10px; }
-  .chat-column .panel-header { padding-left: 132px; }
+  .chat-page.rail-closed .chat-column .panel-header { padding-left: 140px; }
+  .chat-page.rail-open .chat-column .panel-header { padding-left: var(--space-lg); }
 }
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; grid-template-rows: minmax(320px, 1fr) 1fr; overflow-y: auto; }

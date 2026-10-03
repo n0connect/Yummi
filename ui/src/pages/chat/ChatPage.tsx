@@ -30,7 +30,7 @@ export function ChatPage(): JSX.Element {
   }, [])
 
   return (
-    <main className="chat-page">
+    <main className={`chat-page ${railOpen ? 'rail-open' : 'rail-closed'}`}>
       <SessionRail
         open={railOpen}
         onToggle={() => setRailOpen(o => !o)}
