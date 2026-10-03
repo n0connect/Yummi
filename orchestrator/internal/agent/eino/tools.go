@@ -287,3 +287,62 @@ func (u *updatePlanTool) InvokableRun(_ context.Context, argumentsInJSON string,
 	}
 	return "plan updated: " + args.Reason, nil
 }
+
+// ── report_progress ─────────────────────────────────────────────────────
+//
+// The model's own, optional, non-terminal progress note for the operator. It
+// is the model's judgment about when the operator should know where things
+// stand (a significant finding, a changed approach, a dead end, or a
+// question). Unlike ask_operator it does NOT pause the task: the note lands
+// in the live activity feed and the loop keeps going. Operator replies
+// arrive through the normal chat steering path (PendingGuidance).
+
+var reportProgressInfo = &schema.ToolInfo{
+	Name: "report_progress",
+	Desc: "Tell the operator where things stand, WITHOUT pausing. Use it when you have established something significant, " +
+		"changed approach, hit a dead end, or want the operator's view. Keep it factual: what is now proven, what you will do next and why. " +
+		"Optional question: asked without stopping you; the operator answers in chat.",
+	ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+		"status":   {Type: "string", Desc: "What is now established, with the concrete evidence (status codes, versions, paths, outputs)", Required: true},
+		"next":     {Type: "string", Desc: "The next step and why it follows from the status", Required: true},
+		"question": {Type: "string", Desc: "Optional question for the operator; does not pause the task"},
+	}),
+}
+
+type reportProgressArgs struct {
+	Status   string `json:"status"`
+	Next     string `json:"next"`
+	Question string `json:"question"`
+}
+
+type reportProgressTool struct {
+	store  *agent.Store
+	taskID string
+}
+
+func newReportProgressTool(store *agent.Store, taskID string) *reportProgressTool {
+	return &reportProgressTool{store: store, taskID: taskID}
+}
+func (reportProgressTool) Info(_ context.Context) (*schema.ToolInfo, error) {
+	return reportProgressInfo, nil
+}
+func (p *reportProgressTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+	var args reportProgressArgs
+	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil || strings.TrimSpace(args.Status) == "" {
+		return "report_progress needs a non-empty status", nil
+	}
+	detail := "Next: " + strings.TrimSpace(args.Next)
+	if q := strings.TrimSpace(args.Question); q != "" {
+		detail += "\nQuestion for operator: " + q
+	}
+	if p.store != nil {
+		t, ok := p.store.Get(p.taskID)
+		if ok {
+			p.store.RecordActivity(agent.ActivityEvent{
+				SessionID: t.SessionID, TaskID: p.taskID, Kind: agent.ActPlan,
+				Summary: agent.SanitizeAgentText(args.Status), Detail: agent.SanitizeAgentText(detail),
+			})
+		}
+	}
+	return "progress reported to the operator; continue with your next step", nil
+}

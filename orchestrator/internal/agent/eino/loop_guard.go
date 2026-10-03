@@ -3,7 +3,11 @@ package eino
 import (
 	"crypto/sha256"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/n0connect/yummi/orchestrator/internal/scope"
 )
 
 // loop_guard.go: the Eino backend's own copy of graph.go's stuck/duplicate/
@@ -34,8 +38,9 @@ const (
 // ExecuteSequentially: true specifically so per-task state like this is
 // never touched concurrently.
 type loopGuard struct {
-	hashes []string // commandHash fingerprints, most recent last
-	cmds   []string // raw commands, same order, for thrash/display
+	hashes   []string // commandHash fingerprints, most recent last
+	cmds     []string // raw commands, same order, for thrash/display
+	families []string // hypothesis-family keys (host + route), most recent last
 }
 
 // check records command and returns a non-empty block reason if the task
@@ -68,7 +73,66 @@ func (g *loopGuard) check(command string) string {
 			"information you already have — you are not learning anything new. STOP re-querying with `" + tool +
 			"`: analyze the output you already collected, switch to a DIFFERENT tool/approach, update the plan, or finish if the goal is met."
 	}
+	// Hypothesis-level repetition: different tools and encodings can still be
+	// one idea retried (e.g. printf/curl/for-loops all probing /cgi-bin/ on the
+	// same host). Counted per host+route; only URL-form commands are counted.
+	if fam := loopFamily(command); fam != "" {
+		g.families = loopPushWindow(g.families, fam, loopWindowSize)
+		if loopWindowCount(g.families, fam) >= loopFamilyLimit {
+			g.families = nil
+			return "You have made " + strconv.Itoa(loopFamilyLimit) + " attempts at the same route (" + fam + ") " +
+				"without changing the underlying assumption. Name the assumption that the failed attempts " +
+				"share, and test a DIFFERENT one (another route, another parameter, another technique), or " +
+				"update the plan / finish."
+		}
+	}
 	return ""
+}
+
+// loopFamilyLimit is how many URL-route attempts against one host+route are
+// allowed in the window before the guard forces a change of hypothesis.
+const loopFamilyLimit = 5
+
+var loopHTTPMethod = regexp.MustCompile(`(get|post|put|head) /`)
+
+// loopFamily returns a host+first-route-segment key for URL-form commands, or
+// "" if the command has no URL path (nmap-style host scans are not counted).
+// Encoded traversal sequences are decoded first so `.%2e/`, `%%2e`, and `..`
+// variants of the same route map to the same key.
+func loopFamily(cmd string) string {
+	host := scope.ExtractTarget(cmd)
+	if host == "" {
+		return ""
+	}
+	low := strings.ToLower(cmd)
+	low = strings.ReplaceAll(low, "%%", "%")
+	low = strings.ReplaceAll(low, "%2e", ".")
+	// Raw HTTP (printf/nc) carries the route after the method, not after the host.
+	var rest string
+	if m := loopHTTPMethod.FindStringIndex(low); m != nil {
+		rest = low[m[1]-1:] // keep the leading "/"
+	} else if idx := strings.Index(low, host); idx >= 0 {
+		rest = low[idx+len(host):]
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return ""
+	}
+	seg := strings.TrimLeft(rest, "/")
+	if end := strings.IndexAny(seg, "/ \"'\r\n\t"); end >= 0 {
+		seg = seg[:end]
+	}
+	// A traversal's first segment is "." or ".." — the real route is after it.
+	if seg == "" || strings.Trim(seg, ".") == "" {
+		rest2 := strings.TrimLeft(rest, "/.")
+		seg = rest2
+		if end := strings.IndexAny(seg, "/ \"'\r\n\t"); end >= 0 {
+			seg = seg[:end]
+		}
+	}
+	if seg == "" {
+		return ""
+	}
+	return host + "|" + seg
 }
 
 func loopCommandHash(cmd string) string {

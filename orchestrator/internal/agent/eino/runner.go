@@ -219,6 +219,20 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	operatorAnswer := r.resumeMsg[task.ID]
 	delete(r.resumeMsg, task.ID)
 	r.mu.Unlock()
+	// A budget pause is answered by the operator: "stop" ends the task here
+	// with the evidence digest as its summary; a number grants more steps
+	// (applied below, once the budget is computed).
+	budgetResume := wasPaused && strings.HasPrefix(priorQuestion, budgetPausePrefix)
+	budgetExtra := 0
+	if budgetResume {
+		extra, stop := parseBudgetAnswer(operatorAnswer)
+		if stop {
+			return r.store.Transition(task.ID, agent.StatusStopped, func(t *agent.Task) {
+				t.Summary = "Stopped by operator at the step budget. " + priorQuestion
+			})
+		}
+		budgetExtra = extra
+	}
 	if err := r.store.Transition(task.ID, agent.StatusRunning, func(t *agent.Task) {
 		t.Question = ""
 	}); err != nil {
@@ -256,6 +270,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		newAskOperatorTool(ask),
 		newFinishTool(capture),
 		newUpdatePlanTool(r.store, task.ID),
+		newReportProgressTool(r.store, task.ID),
 	}
 	if r.cfg.MCPExec != nil {
 		pentestDeps := pentestToolDeps{
@@ -333,6 +348,9 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	// live evidence behind it — shared with the graph backend so a scaling
 	// change only needs to happen once.
 	effectiveStepBudget := agent.ScaledStepBudget(r.cfg.StepBudget, len(enumParts))
+	if budgetExtra > 0 {
+		effectiveStepBudget = grantBudget(task.StepBudget, budgetExtra)
+	}
 	if effectiveStepBudget != task.StepBudget {
 		_ = r.store.Update(task.ID, func(t *agent.Task) { t.StepBudget = effectiveStepBudget })
 	}
@@ -568,6 +586,12 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 				})
 				continue
 			}
+			if isBudgetExhausted(runErr) {
+				q := budgetPauseQuestion(effectiveStepBudget)
+				if err := r.store.Transition(task.ID, agent.StatusPaused, func(t *agent.Task) { t.Question = q }); err == nil {
+					return nil
+				}
+			}
 			_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = runErr.Error() })
 			return runErr
 		}
@@ -771,7 +795,10 @@ func (r *EinoRunner) instruction(goal string) string {
 			"call run_pentest_tool with the tool name and matching args — but this is only relevant for " +
 			"tools actually in that catalog; use run_command directly for everything else. "
 	}
-	instr += "Use remember to persist durable facts. Use update_plan if your approach changes. Call finish with " +
+	instr += "Use remember to persist durable facts. Use update_plan if your approach changes. " +
+		"Use report_progress when the operator would benefit from knowing where things stand: a significant " +
+		"established fact, a changed approach, a dead end, or a question for them. It does not pause you; use " +
+		"your own judgment about when, not a fixed schedule. Call finish with " +
 		"a concrete, factual summary once the goal is achieved — cite exact ports/versions/paths from tool " +
 		"output, never vague claims. Call ask_operator only when genuinely blocked. " +
 		// Found via live long-form testing: finish was observed completing tasks
@@ -794,10 +821,18 @@ func (r *EinoRunner) instruction(goal string) string {
 		// communication. Making it an explicit, non-negotiable step (not just
 		// "fill in this field") is the structural fix.
 		"OPERATOR RATIONALE RULE: Before every tool call, your rationale field must be a complete sentence " +
-		"that tells the operator what you expect to learn or achieve and why this action comes next. It is " +
-		"not a label (\"running nmap\") — it is a brief, specific justification visible in the operator's " +
-		"live activity feed. An operator reading only the rationale fields should be able to follow your " +
-		"entire reasoning chain without seeing the raw commands.\n\n" +
+		"that names the LAST observed result it builds on, then what you expect this call to reveal and why " +
+		"it is the next step — e.g. \"The last request returned 403 'denied by server configuration' for " +
+		"/bin/sh, so the path resolves but authz blocks it; I'm checking whether the root directory policy " +
+		"is the blocker.\" If you cannot name a concrete prior result, you have no basis for this call: " +
+		"stop and reason from what you already hold. It is not a label (\"running nmap\"). " +
+		"An operator reading only the rationale fields should be able to follow your entire reasoning chain.\n\n" +
+		// A failed attempt is evidence about a HYPOTHESIS, not about one command.
+		// After a failure, the next call must change the hypothesis (or the
+		// assumption behind it), not just re-encode the same request.
+		"FAILURE RULE: A 4xx/5xx, a 'denied', a 'not found', or a timeout is evidence against the hypothesis " +
+		"that produced the request. Do not retry the same hypothesis with a cosmetic change (encoding, tool, " +
+		"flag, wordlist). Name the assumption that failed and test a different one.\n\n" +
 		// Fix 2 (duplicate tool prevention): Live run ran gobuster_dir then
 		// ffuf_fuzz against the same target with the same common.txt wordlist —
 		// two different tools doing identical content-discovery work, burning two

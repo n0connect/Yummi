@@ -350,7 +350,7 @@ func TestEinoRunner_Start_ResumeCarriesOperatorAnswerIntoNextRun(t *testing.T) {
 // at Eino's own hardcoded default of 20 regardless of StepBudget) and that a
 // run-time error from the ADK (adk.ErrExceedMaxIterations) fails the task
 // instead of silently completing it with a stale/empty summary.
-func TestEinoRunner_Run_ExceedsMaxIterations_FailsTask(t *testing.T) {
+func TestEinoRunner_Run_ExceedsMaxIterations_PausesForOperator(t *testing.T) {
 	// remember never blocks on the exec pipeline, so this loops purely on
 	// LLM round-trips — deterministic and fast.
 	srv := toolCallServer("remember", `{"key":"k","value":"v"}`)
@@ -366,15 +366,17 @@ func TestEinoRunner_Run_ExceedsMaxIterations_FailsTask(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := r.Run(ctx, &task); err == nil {
-		t.Fatal("Run: expected an error when MaxIterations is exceeded, got nil")
+	// Exhausting the budget pauses with an evidence digest and asks the
+	// operator whether to grant more steps — it no longer fails the task.
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: budget exhaustion should pause, not error: %v", err)
 	}
 	final, _ := store.Get(task.ID)
-	if final.Status != agent.StatusFailed {
-		t.Fatalf("status = %s, want failed", final.Status)
+	if final.Status != agent.StatusPaused {
+		t.Fatalf("status = %s, want paused", final.Status)
 	}
-	if final.LastError == "" {
-		t.Fatal("expected LastError to be set")
+	if !strings.HasPrefix(final.Question, budgetPausePrefix) {
+		t.Fatalf("question = %q, want a budget-pause question", final.Question)
 	}
 }
 
@@ -1581,10 +1583,16 @@ func TestEinoRunner_Run_DoesNotScaleSingleIntentGoals(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := r.Run(ctx, &task); err == nil {
-		t.Fatal("expected the unscaled 2-step budget to still be enforced for a single-intent goal, got nil error")
+	// Budget exhaustion now pauses for an operator decision (with an evidence
+	// digest) instead of failing; the unscaled 2-step budget must still be the
+	// limit that triggers it.
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("budget exhaustion should pause, not error: %v", err)
 	}
 	final, _ := store.Get(task.ID)
+	if final.Status != agent.StatusPaused || !strings.HasPrefix(final.Question, budgetPausePrefix) {
+		t.Fatalf("status=%s question=%q; want paused with a budget-pause question", final.Status, final.Question)
+	}
 	if final.StepBudget != 2 {
 		t.Fatalf("StepBudget = %d, want unchanged at the configured 2 for a single-intent goal", final.StepBudget)
 	}
