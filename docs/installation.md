@@ -195,6 +195,10 @@ make start
 
 `docker-compose.yml` sets `YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"` for the orchestrator container, so it can reach an Ollama daemon running directly on your host (outside Docker). `host.docker.internal` is a magic hostname that **Docker Desktop provides automatically on macOS/Windows, but that native Linux Docker Engine does not resolve by default.** This repository's `docker-compose.yml` already adds the fix for you (`extra_hosts: ["host.docker.internal:host-gateway"]` on the orchestrator service, which maps that name to the host's own IP on Linux) — so as of this repository state, **you don't need to do anything extra for this.** If you ever see the orchestrator's logs complaining it cannot reach `host.docker.internal:11434` specifically on a Linux host, check that this `extra_hosts` entry hasn't been removed, and that your Docker Engine is version 20.10 or newer (the `host-gateway` special value requires it).
 
+### SELinux Note (Fedora, RHEL, CentOS Stream)
+
+If running on a Linux distribution with SELinux in `enforcing` mode, ensure Docker daemon access to the socket is permitted. If `docker-proxy` logs permission errors mounting `/var/run/docker.sock`, ensure your user belongs to the `docker` group (`sudo usermod -aG docker $USER`) and check SELinux container socket policies.
+
 ---
 
 ## macOS <a id="macos"></a>
@@ -247,10 +251,20 @@ wsl --install
 # 2. Install Docker Desktop for Windows, and in its Settings -> General,
 #    confirm "Use the WSL 2 based engine" is checked (it is the default on
 #    current Docker Desktop releases).
+#    Under Settings -> Resources -> WSL Integration, enable integration with your distro.
 
-# 3. From inside your WSL2 distro (e.g. Ubuntu), follow the Linux instructions
-#    above verbatim — build tools, Go, Rust, Node, `make install`, `make start`.
+# 3. Inside your WSL2 terminal (e.g. Ubuntu):
+#    CRITICAL: Always clone into the native Linux filesystem (~/), NOT /mnt/c/.
+cd ~
+git clone https://github.com/n0connect/yummi.git
+cd yummi
+
+# 4. Follow the Linux instructions verbatim:
+#    build tools, Go, Rust, Node, make install, make start.
 ```
+
+> [!WARNING]
+> **WSL2 Filesystem Performance Pitfall**: Do **NOT** clone or run Yummi from `/mnt/c/Users/...` (the Windows host mount). The 9P translation layer severely degrades I/O performance and breaks Linux `inotify` file watchers. Always work in `~/yummi` inside the native WSL2 virtual disk.
 
 Everything after step 3 is identical to the [Linux](#linux) section — from inside a WSL2 shell, you *are* on a real Linux kernel with a real Docker daemon (shared with Docker Desktop), so the same commands apply unchanged.
 

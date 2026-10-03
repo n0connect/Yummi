@@ -31,11 +31,26 @@ else
   status=1
 fi
 
+os="$(uname -s)"
 arch="$(uname -m)"
-if [[ "${arch}" == "arm64" || "${arch}" == "aarch64" ]]; then
-  echo "[ok] architecture ${arch}"
+
+if [[ "${os}" == "Darwin" ]]; then
+  if [[ "${arch}" == "arm64" ]]; then
+    echo "[ok] platform macOS (${arch} Apple Silicon)"
+  else
+    echo "[warn] platform macOS (${arch}) — Apple Silicon is recommended for local model performance"
+  fi
+elif [[ "${os}" == "Linux" ]]; then
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "[ok] platform Windows WSL2 (${arch})"
+    if [[ "${PWD}" == /mnt/* ]]; then
+      echo "[warn] running from Windows mount (${PWD}) — clone into native Linux filesystem (~/) for 10x faster disk I/O"
+    fi
+  else
+    echo "[ok] platform Linux (${arch})"
+  fi
 else
-  echo "[warn] architecture ${arch} (ARM64 is recommended)"
+  echo "[ok] platform ${os} (${arch})"
 fi
 
 for d in "${YUMMI_HOME}" "${YUMMI_HOME}/wordlists" "${YUMMI_HOME}/workspace" "${YUMMI_HOME}/payloads" "${YUMMI_HOME}/logs"; do
