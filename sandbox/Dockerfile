@@ -431,9 +431,11 @@ RUN printf "syntax on\nset number\nset mouse=\nset tabstop=4\nset shiftwidth=4\n
     printf "set tabstospaces\nset tabsize 4\n" > /home/pentester/.nanorc && \
     chown pentester:pentester /home/pentester/.vimrc /home/pentester/.nanorc
 
-# Pre-packaged desktop launchers for noVNC / XFCE
+# Pre-packaged desktop launchers for noVNC / XFCE.
+# One RUN per launcher: a heredoc body must be the LAST line of its RUN,
+# or the Dockerfile parser reads the following text as new instructions.
 RUN mkdir -p /usr/share/yummi/desktop && \
-    ( [ -f /usr/share/applications/firefox-esr.desktop ] && cp /usr/share/applications/firefox-esr.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/firefox-esr.desktop
+    ( src=/usr/share/applications/firefox-esr.desktop; [ -f "$src" ] && cp "$src" /usr/share/yummi/desktop/firefox-esr.desktop || cat > /usr/share/yummi/desktop/firefox-esr.desktop ) << 'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -444,8 +446,8 @@ Icon=firefox-esr
 Terminal=false
 Categories=Network;WebBrowser;Security;
 EOF
-) && \
-    ( [ -f /usr/share/applications/burpsuite.desktop ] && cp /usr/share/applications/burpsuite.desktop /usr/share/yummi/desktop/ || [ -f /usr/share/applications/kali-burpsuite.desktop ] && cp /usr/share/applications/kali-burpsuite.desktop /usr/share/yummi/desktop/burpsuite.desktop || cat << 'EOF' > /usr/share/yummi/desktop/burpsuite.desktop
+RUN mkdir -p /usr/share/yummi/desktop && \
+    ( src=/usr/share/applications/burpsuite.desktop; [ -f "$src" ] || src=/usr/share/applications/kali-burpsuite.desktop; [ -f "$src" ] && cp "$src" /usr/share/yummi/desktop/burpsuite.desktop || cat > /usr/share/yummi/desktop/burpsuite.desktop ) << 'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -456,8 +458,8 @@ Icon=burpsuite
 Terminal=false
 Categories=Network;Security;
 EOF
-) && \
-    ( [ -f /usr/share/applications/wireshark.desktop ] && cp /usr/share/applications/wireshark.desktop /usr/share/yummi/desktop/ || [ -f /usr/share/applications/kali-wireshark.desktop ] && cp /usr/share/applications/kali-wireshark.desktop /usr/share/yummi/desktop/wireshark.desktop || cat << 'EOF' > /usr/share/yummi/desktop/wireshark.desktop
+RUN mkdir -p /usr/share/yummi/desktop && \
+    ( src=/usr/share/applications/wireshark.desktop; [ -f "$src" ] || src=/usr/share/applications/kali-wireshark.desktop; [ -f "$src" ] && cp "$src" /usr/share/yummi/desktop/wireshark.desktop || cat > /usr/share/yummi/desktop/wireshark.desktop ) << 'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -468,8 +470,8 @@ Icon=wireshark
 Terminal=false
 Categories=Network;Security;
 EOF
-) && \
-    ( [ -f /usr/share/applications/xfce4-terminal.desktop ] && cp /usr/share/applications/xfce4-terminal.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/xfce4-terminal.desktop
+RUN mkdir -p /usr/share/yummi/desktop && \
+    ( src=/usr/share/applications/xfce4-terminal.desktop; [ -f "$src" ] && cp "$src" /usr/share/yummi/desktop/xfce4-terminal.desktop || cat > /usr/share/yummi/desktop/xfce4-terminal.desktop ) << 'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -480,8 +482,8 @@ Icon=utilities-terminal
 Terminal=false
 Categories=System;TerminalEmulator;
 EOF
-) && \
-    ( [ -f /usr/share/applications/thunar.desktop ] && cp /usr/share/applications/thunar.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/thunar.desktop
+RUN mkdir -p /usr/share/yummi/desktop && \
+    ( src=/usr/share/applications/thunar.desktop; [ -f "$src" ] && cp "$src" /usr/share/yummi/desktop/thunar.desktop || cat > /usr/share/yummi/desktop/thunar.desktop ) << 'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -492,8 +494,8 @@ Icon=org.xfce.thunar
 Terminal=false
 Categories=System;FileManager;
 EOF
-) && \
-    ( [ -f /usr/share/applications/kali-msfconsole.desktop ] && cp /usr/share/applications/kali-msfconsole.desktop /usr/share/yummi/desktop/ || cat << 'EOF' > /usr/share/yummi/desktop/metasploit.desktop
+RUN mkdir -p /usr/share/yummi/desktop && \
+    ( src=/usr/share/applications/kali-msfconsole.desktop; [ -f "$src" ] && cp "$src" /usr/share/yummi/desktop/metasploit.desktop || cat > /usr/share/yummi/desktop/metasploit.desktop ) << 'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -504,8 +506,7 @@ Icon=utilities-terminal
 Terminal=false
 Categories=Network;Security;
 EOF
-) && \
-    chmod +x /usr/share/yummi/desktop/*.desktop && \
+RUN chmod +x /usr/share/yummi/desktop/*.desktop && \
     mkdir -p /home/pentester/Desktop && \
     cp -f /usr/share/yummi/desktop/*.desktop /home/pentester/Desktop/ && \
     chown -R pentester:pentester /home/pentester/Desktop
