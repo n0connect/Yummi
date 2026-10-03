@@ -222,7 +222,23 @@ impl PolicyEngine {
     /// Egress-mode-aware destination check — the entry point the IPC
     /// `CheckScope` handler uses. The always-blocked floor is checked first in
     /// **every** mode (Allow does not override it). Then:
-    /// - `Block` → `Block` (no external egress)
+    /// - `Block` → run `evaluate()`: an explicit allow (static `scope.allow`
+    ///   entry or an operator-added temporary rule) → `Allow`, otherwise →
+    ///   `Block`. This is the default mode, so it has to stay consistent with
+    ///   the rest of the codebase's fail-closed philosophy ("sandbox has zero
+    ///   connectivity until an explicit Allow rule lands" — see this crate's
+    ///   top-level doc comment): an operator who explicitly scoped a target
+    ///   via the GATEWAY tab must be able to reach it without ALSO flipping
+    ///   the separate egress-mode switch to Allow/Ask. Before this fix, Block
+    ///   mode ignored the per-IP allow list entirely and returned `Block`
+    ///   unconditionally — a live engagement found this live: an operator
+    ///   added a temporary allow rule for a target, the gateway accepted it
+    ///   and the nftables rule was genuinely live at the packet layer, yet
+    ///   every command against that target still failed with
+    ///   `GATEWAY_BLOCKED`, because `check_egress` never looked at the rule
+    ///   it had just accepted. `Allow` mode is unaffected (still an
+    ///   unconditional blanket-allow, independent of any per-IP state); `Ask`
+    ///   mode is unaffected (it already consulted `evaluate()`).
     /// - `Allow` → `Allow` (blanket egress)
     /// - `Ask`   → run the existing allow/block-list `evaluate()`; an allow
     ///   (static allow rule or already-opened temporary rule) → `Allow`,
@@ -238,7 +254,10 @@ impl PolicyEngine {
         // (which takes its own read-lock) — avoids re-entrant double-locking.
         let mode = self.egress_mode();
         match mode {
-            EgressMode::Block => EgressVerdict::Block,
+            EgressMode::Block => match self.evaluate(dst).0 {
+                Decision::Allow => EgressVerdict::Allow,
+                Decision::Block => EgressVerdict::Block,
+            },
             EgressMode::Allow => EgressVerdict::Allow,
             EgressMode::Ask => match self.evaluate(dst).0 {
                 Decision::Allow => EgressVerdict::Allow,
@@ -850,6 +869,35 @@ mod tests {
             ..Default::default()
         });
         // default mode is Block
+        assert_eq!(
+            engine.check_egress("8.8.8.8".parse().unwrap()),
+            EgressVerdict::Block
+        );
+    }
+
+    #[test]
+    fn test_check_egress_block_mode_honors_explicit_allow_rule() {
+        // Regression: a live engagement found that Block mode (the default)
+        // ignored the per-IP allow list entirely — an operator-added
+        // temporary rule (GATEWAY tab) was accepted, genuinely installed at
+        // the nftables layer, yet check_egress still returned Block
+        // unconditionally for that exact target. Block mode must stay
+        // consistent with the rest of the codebase's fail-closed philosophy:
+        // deny by default, but an explicit Allow rule still opens exactly
+        // what it names — without the operator also having to flip the
+        // separate egress-mode switch to Allow or Ask.
+        let scope = ScopeConfig {
+            allow: vec!["198.51.100.0/24".parse().unwrap()],
+            block: vec![],
+            ..Default::default()
+        };
+        let engine = PolicyEngine::new(&scope);
+        assert_eq!(engine.egress_mode(), EgressMode::Block); // default, unchanged
+        assert_eq!(
+            engine.check_egress("198.51.100.10".parse().unwrap()),
+            EgressVerdict::Allow
+        );
+        // An address the allow list does NOT cover is still blocked.
         assert_eq!(
             engine.check_egress("8.8.8.8".parse().unwrap()),
             EgressVerdict::Block
