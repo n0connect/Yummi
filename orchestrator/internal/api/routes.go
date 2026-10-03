@@ -22,7 +22,7 @@ import (
 )
 
 // NewRouter creates the Chi router with all routes.
-func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, resilientLLM *llm.Resilient, agg *health.Aggregator, taskStore *agent.Store, taskRunner agent.TaskRunner, curatorStore *skillcurator.Store) http.Handler {
+func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, resilientLLM *llm.Resilient, agg *health.Aggregator, taskStore *agent.Store, taskRunner agent.TaskRunner, curatorStore *skillcurator.Store, agentTerm agentTerminalCaller) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -134,6 +134,10 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		// Agent approval mode
 		r.Get("/agent/mode", HandleGetApprovalMode(taskRunner))
 		r.Post("/agent/mode", HandleSetApprovalMode(taskRunner))
+
+		// Agent-owned terminals: read-only watch view (control stays with the agent)
+		r.Get("/agent-terminals", HandleListAgentTerminals(agentTerm))
+		r.Get("/agent-terminals/{id}", HandleReadAgentTerminal(agentTerm))
 
 		// Agent tasks
 		r.Post("/tasks", HandleCreateTask(taskRunner))
