@@ -133,6 +133,8 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
       socketRef.current?.close()
       term.dispose()
     }
+    // Terminal and WebSocket connection lifecycle is established once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {

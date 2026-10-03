@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { ReportFormat } from '../../entities/types'
-import { t } from '../../shared/i18n/strings'
+import { t, type StringKey } from '../../shared/i18n/strings'
 import { YummiLogo } from '../../shared/components/YummiLogo'
 import './ReportExportModal.css'
 
@@ -9,7 +9,7 @@ interface ReportExportModalProps {
   onClose: () => void
 }
 
-const FORMAT_OPTIONS: { format: ReportFormat; labelKey: string }[] = [
+const FORMAT_OPTIONS: { format: ReportFormat; labelKey: StringKey }[] = [
   { format: 'hackerone', labelKey: 'trace.reports.hackerone' },
   { format: 'bugcrowd', labelKey: 'trace.reports.bugcrowd' },
   { format: 'executive', labelKey: 'trace.reports.executive' },
@@ -94,7 +94,7 @@ export function ReportExportModal({ sessionID, onClose }: ReportExportModalProps
                   className={`report-format-btn ${format === opt.format ? 'active' : ''}`}
                   onClick={() => setFormat(opt.format)}
                 >
-                  {t(opt.labelKey as any)}
+                  {t(opt.labelKey)}
                 </button>
               ))}
             </div>

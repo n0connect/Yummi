@@ -148,7 +148,7 @@ export function AssistantPanel({
   // 1 (a sub-agent cannot itself delegate further), but a SINGLE step can fan
   // out to several specialists at once (MaxHandoffsPerStep, default 4) that
   // run concurrently — so this must track a set, not a single slot.
-  const [subTasks, setSubTasks] = useState<Record<string, AgentTask>>({})
+  const [_subTasks, setSubTasks] = useState<Record<string, AgentTask>>({})
   // Keep snapshots independently of the currently-running task. A terminal
   // task remains a useful, inspectable part of the transcript instead of
   // vanishing the moment its final websocket event arrives.
