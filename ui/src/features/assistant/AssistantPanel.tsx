@@ -249,9 +249,12 @@ export function AssistantPanel({
       fetchJSON<ExecutionRecord[]>(
         `/api/v1/sessions/${sid}/executions?limit=100`,
         { signal: controller.signal }
-      ).catch(() => [])
+      ).catch(() => []),
+      fetchJSON<AgentTask[]>(`/api/v1/sessions/${sid}/tasks`, {
+        signal: controller.signal
+      }).catch(() => [])
     ])
-      .then(([rows, activities, executions]) => {
+      .then(([rows, activities, executions, tasks]) => {
         // Activity and execution history are observability aids: an older
         // server may not expose them, but that must never block chat history.
         const hydratedExecutions: Message[] = executions
@@ -285,9 +288,37 @@ export function AssistantPanel({
           })
         // Chronological merge. Timestamps are whole seconds, so on a tie the
         // narration sorts before the command it announces (narration first).
-        const rank = (m: Message) => (m.role === 'execution' ? 1 : 0)
+        // A task's goal and its final summary are part of the record even when
+        // the chat history has no row for them (tasks started through the API,
+        // or a chat row that never persisted). Add them unless the same text is
+        // already in the thread, so nothing is shown twice.
+        const known = new Set((rows ?? []).map(r => r.content))
+        const hydratedTasks: Message[] = (tasks ?? []).flatMap(task => {
+          const out: Message[] = []
+          if (task.goal && !known.has(task.goal)) {
+            out.push({
+              id: nextId(),
+              role: 'user' as const,
+              content: task.goal,
+              timestamp: new Date((task.created_at ?? 0) * 1000).toISOString()
+            })
+          }
+          const terminal = task.status === 'completed' || task.status === 'stopped' || task.status === 'failed'
+          if (terminal && task.summary && !known.has(task.summary)) {
+            out.push({
+              id: nextId(),
+              role: 'assistant' as const,
+              content: task.summary,
+              timestamp: new Date((task.updated_at ?? task.created_at ?? 0) * 1000).toISOString()
+            })
+          }
+          return out
+        })
+        // Chronological merge. Timestamps are whole seconds, so on a tie the
+        // order is: goal (user), then the agent's words, then the command cards.
+        const rank = (m: Message) => (m.role === 'user' ? 0 : m.role === 'execution' ? 2 : 1)
         setMessages(
-          [...rebuildMessages(rows ?? []), ...hydratedExecutions, ...hydratedNarration]
+          [...rebuildMessages(rows ?? []), ...hydratedTasks, ...hydratedExecutions, ...hydratedNarration]
             .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp) || rank(a) - rank(b))
             .slice(-120)
         )
