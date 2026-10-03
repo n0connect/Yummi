@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -52,6 +53,20 @@ type checkedTarget struct {
 	ips    []string
 }
 
+// hostForScope reduces a URL-shaped target to its host; anything else is
+// returned unchanged. Shell commands already come out of scope.ExtractTargets
+// as hosts; MCP tool arguments can still be full URLs.
+func hostForScope(target string) string {
+	if !strings.Contains(target, "://") {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Hostname() == "" {
+		return target
+	}
+	return u.Hostname()
+}
+
 // checkTargetScope asks the gateway's hostname policy and egress-verdict
 // machinery whether target may be reached, without opening any rule yet.
 // Extracted from RunScopedCommand's per-target loop so both the multi-target
@@ -61,6 +76,9 @@ func checkTargetScope(ctx context.Context, pc *gateway.Client, target string, pi
 	if pc == nil {
 		return checkedTarget{}, fmt.Errorf("gateway scope check unavailable: client not configured")
 	}
+	// MCP catalog tools pass URL-shaped targets (http://host:port/path). The
+	// gateway scopes by host only, so reduce the URL to its host first.
+	target = hostForScope(target)
 
 	// Name-level scope gate, BEFORE resolution: for a hostname target,
 	// consult the gateway's hostname allow/block policy. A "block" verdict
