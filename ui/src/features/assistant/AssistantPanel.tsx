@@ -289,29 +289,31 @@ export function AssistantPanel({
           })
         // Chronological merge. Timestamps are aligned to whole seconds so that
         // execution records (seconds) and activity events (milliseconds) align,
-        // resolving ties by rank: goal (user), then agent words, then command cards.
+        // resolving ties by rank: user prompt (0), agent words (1), task card (2), command cards (3).
         const known = new Set((rows ?? []).map(r => r.content))
-        const hydratedTasks: Message[] = (tasks ?? []).flatMap(task => {
-          const out: Message[] = []
-          if (task.goal && !known.has(task.goal)) {
-            out.push({
-              id: nextId(),
-              role: 'user' as const,
-              content: task.goal,
-              timestamp: new Date((task.created_at ?? 0) * 1000).toISOString()
-            })
-          }
-          const terminal = task.status === 'completed' || task.status === 'stopped' || task.status === 'failed'
-          if (terminal && task.summary && !known.has(task.summary)) {
-            out.push({
-              id: nextId(),
-              role: 'assistant' as const,
-              content: task.summary,
-              timestamp: new Date((task.updated_at ?? task.created_at ?? 0) * 1000).toISOString()
-            })
-          }
-          return out
-        })
+        const hydratedTasks: Message[] = (tasks ?? [])
+          .filter((task) => !task.parent_task_id)
+          .flatMap((task) => {
+            const out: Message[] = [
+              {
+                id: `task-${task.id}`,
+                role: 'task' as const,
+                content: task.goal,
+                taskID: task.id,
+                timestamp: new Date((task.created_at ?? 0) * 1000).toISOString()
+              }
+            ]
+            const terminal = task.status === 'completed' || task.status === 'stopped' || task.status === 'failed'
+            if (terminal && task.summary && !known.has(task.summary)) {
+              out.push({
+                id: nextId(),
+                role: 'assistant' as const,
+                content: task.summary,
+                timestamp: new Date((task.updated_at ?? task.created_at ?? 0) * 1000).toISOString()
+              })
+            }
+            return out
+          })
         setMessages(
           sortHydratedMessages([
             ...rebuildMessages(rows ?? []),
@@ -347,6 +349,19 @@ export function AssistantPanel({
             {}
           )
         )
+        setTaskSnapshots((prev) => {
+          const next = { ...prev }
+          for (const task of (tasks ?? [])) {
+            next[task.id] = task
+          }
+          return next
+        })
+        const live = (tasks ?? []).find((task) => !TERMINAL.has(task.status) && !task.parent_task_id)
+        if (live) {
+          setActiveTask(live)
+          const children = (tasks ?? []).filter((task) => task.parent_task_id === live.id)
+          setSubTasks(Object.fromEntries(children.map((c) => [c.id, c])))
+        }
         setHistoryError(false)
       })
       .catch((err) => {

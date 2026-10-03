@@ -97,9 +97,14 @@ export const TERMINAL = new Set(['completed', 'failed', 'stopped', 'interrupted'
 // sortHydratedMessages merges reconstituted history items into chronological order.
 // Timestamps are aligned to whole seconds so that execution records (seconds)
 // and activity events (milliseconds) align properly, with ties resolved by rank:
-// goal/user prompt first, then agent words/narration, then execution cards.
+// user prompt first, then assistant words/narration, then task plan card, then execution cards.
 export function sortHydratedMessages(messages: Message[]): Message[] {
-  const rank = (m: Message) => (m.role === 'user' ? 0 : m.role === 'execution' ? 2 : 1)
+  const rank = (m: Message) => {
+    if (m.role === 'user') return 0
+    if (m.role === 'task') return 2
+    if (m.role === 'execution') return 3
+    return 1
+  }
   return messages.slice().sort((a, b) => {
     const secA = Math.floor(Date.parse(a.timestamp) / 1000)
     const secB = Math.floor(Date.parse(b.timestamp) / 1000)

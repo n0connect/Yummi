@@ -58,4 +58,15 @@ describe('sortHydratedMessages', () => {
     const sorted = sortHydratedMessages([execMsg, userMsg, assistMsg])
     expect(sorted.map(m => m.id)).toEqual(['user', 'assist', 'exec'])
   })
+
+  it('places task card between assistant reply and execution cards on same-second tie', () => {
+    const timestamp = new Date(1700000000000).toISOString()
+    const execMsg: Message = { id: 'exec', role: 'execution', content: 'output', timestamp }
+    const userMsg: Message = { id: 'user', role: 'user', content: 'hello', timestamp }
+    const assistMsg: Message = { id: 'assist', role: 'assistant', content: 'reply', timestamp }
+    const taskMsg: Message = { id: 'task', role: 'task', content: 'plan', taskID: 't1', timestamp }
+
+    const sorted = sortHydratedMessages([execMsg, taskMsg, userMsg, assistMsg])
+    expect(sorted.map(m => m.id)).toEqual(['user', 'assist', 'task', 'exec'])
+  })
 })
