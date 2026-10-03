@@ -904,6 +904,89 @@ func TestBuildIncompleteGoalsMessage_CarriesPartsAndWorkForward(t *testing.T) {
 	}
 }
 
+func TestBuildGuidanceBeforeFinishMessage_CarriesNotesAndWorkForward(t *testing.T) {
+	tr := &runTrace{}
+	tr.record("nmap -sV 198.51.100.10", "80/tcp open http")
+	msg := buildGuidanceBeforeFinishMessage("compromise the target", []string{"focus on port 80 only"}, tr)
+
+	for _, want := range []string{"compromise the target", "focus on port 80 only", "nmap", "80/tcp open http", "finish"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("re-run message missing %q\n---\n%s", want, msg)
+		}
+	}
+}
+
+// TestEinoRunner_Run_GuidanceQueuedBeforeFinish_ForcesAnotherTurn is the
+// regression test for a gap found live: finish (like ask_operator) is a
+// ReturnDirectly tool, so it never reaches runToolPipeline's own guidance
+// drain (see d9221ff). An operator message queued on Task.PendingGuidance
+// right before the model called finish would previously be silently
+// discarded — the task just ended, guidance unseen. The model here finishes
+// on its very first turn, before any tool pipeline call could ever have
+// drained anything; Run() must still notice the queued guidance and force
+// one more turn instead of completing immediately.
+func TestEinoRunner_Run_GuidanceQueuedBeforeFinish_ForcesAnotherTurn(t *testing.T) {
+	var calls int
+	reactSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		summary := `{"summary":"done","findings":[]}`
+		if calls > 1 {
+			// Second turn only happens if the guidance forced a re-run; prove
+			// it by finishing cleanly here instead.
+			summary = `{"summary":"adjusted per guidance","findings":[]}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "1", "object": "chat.completion", "model": "test",
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role": "assistant", "content": "",
+					"tool_calls": []map[string]any{{
+						"id": "call_1", "type": "function",
+						"function": map[string]any{"name": "finish", "arguments": summary},
+					}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+		})
+	}))
+	defer reactSrv.Close()
+
+	store, err := agent.NewStore(nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	r := NewEinoRunner(store, nil, nil, Config{
+		ModelBaseURL: reactSrv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
+	})
+	task, err := r.CreateAndPlan(context.Background(), "session-1", "scan the target")
+	if err != nil {
+		t.Fatalf("CreateAndPlan: %v", err)
+	}
+	// First turn: finish immediately, ignoring the goal — exactly the
+	// scenario that used to silently swallow the queued guidance.
+	if err := store.AppendGuidance(task.ID, "focus on port 80 only"); err != nil {
+		t.Fatalf("AppendGuidance: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, &task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("expected the queued guidance to force a second turn, got %d call(s)", calls)
+	}
+	reloaded, ok := store.Get(task.ID)
+	if !ok {
+		t.Fatal("task not found after Run")
+	}
+	if len(reloaded.PendingGuidance) != 0 {
+		t.Fatalf("PendingGuidance after Run = %v, want drained", reloaded.PendingGuidance)
+	}
+}
+
 // TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged proves the
 // AuditGoalParts fallback wired via PlanLLM: a goal with NO numbered markers
 // ("check the OS ... and also list the open ports" — real operator phrasing)

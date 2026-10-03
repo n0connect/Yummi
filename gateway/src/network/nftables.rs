@@ -316,12 +316,31 @@ impl NftablesController {
 
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(NetworkError::InstallFailed(format!(
-                "nft add element failed: {stderr}"
-            )));
+            // "interval overlaps with an existing one" is nft's rejection
+            // when the new element's address range is already fully covered
+            // by a broader interval already in the set — e.g. an operator
+            // scoped a /24 via the static config or a manual GATEWAY-tab
+            // rule, and a later per-command auto-unlock then tries to add a
+            // narrower /32 for one IP inside it. Found live: every command
+            // against a target already covered this way surfaced a raw
+            // kernel error as a noisy execution "warning", even though
+            // nothing was actually blocked — the broader interval already
+            // permits exactly that traffic, so the narrower add was always
+            // redundant. Not a real failure: the end state (target
+            // reachable) is exactly what was requested, so this falls
+            // through to the same bookkeeping update as a real success,
+            // the same way remove_allowed_target already treats "already
+            // absent" as a benign no-op rather than an error.
+            if !stderr.contains("interval overlaps with an existing one") {
+                return Err(NetworkError::InstallFailed(format!(
+                    "nft add element failed: {stderr}"
+                )));
+            }
+            tracing::debug!(target = %element, "nftables: target already covered by a broader allowed interval");
+        } else {
+            tracing::info!(target = %element, ttl_secs, "nftables: target added to allowed_targets");
         }
 
-        tracing::info!(target = %element, ttl_secs, "nftables: target added to allowed_targets");
         let expires_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -470,19 +489,33 @@ impl NftablesController {
             }
         }
 
-        // Block mode is documented as "no external egress" with no
-        // exceptions, so it must be airtight at the kernel level too: skip
-        // both the static config allow list AND the dynamic @allowed_targets
-        // set (populated by AddTemporaryRule/AddManualRule, which don't
-        // themselves check egress_mode). Without this, a target opened while
-        // in Allow/Ask mode — or a manual rule added directly via the
-        // gateway management API — would stay reachable after switching to
-        // Block, since set_egress_mode's install_rules() rebuild is the only
-        // thing that can retract a live kernel accept rule.
-        let block_all = mode == EgressMode::Block;
-
-        // Static allow rules from config.
-        if !block_all {
+        // Block mode is the default and means "deny by default" — but, like
+        // Ask mode, it still honors an EXPLICIT allow: the static config
+        // allow list and the dynamic @allowed_targets set (populated by
+        // AddTemporaryRule/AddManualRule) are emitted in every mode except
+        // Allow (which is already a kernel-level blanket accept, so emitting
+        // these too would be redundant). This mirrors policy::PolicyEngine's
+        // check_egress, whose own doc comment explains why: an operator who
+        // explicitly scopes a target via the GATEWAY tab must be able to
+        // reach it without ALSO flipping the separate egress-mode switch —
+        // confirmed live, a temporary rule the gateway had genuinely
+        // accepted and installed was still unreachable because this
+        // function alone skipped emitting its accept line while in Block.
+        //
+        // This used to be stricter — Block omitted both lists entirely, so
+        // switching INTO Block mid-session was a hard instant kill-switch
+        // that revoked every previously-opened target, static or dynamic, no
+        // exceptions. That is still true for anything NOT covered by an
+        // explicit rule (there is no blanket accept in Block mode — compare
+        // the Allow-only `ip saddr {ip} accept` below), and for the
+        // always-blocked floor and the config block list (checked earlier,
+        // above, and unaffected by this). What changed is narrower: a
+        // specific target an operator has explicitly allowed now stays
+        // explicitly allowed in Block mode too, exactly as it already does
+        // in Ask mode. An operator who wants a true no-exceptions lockdown
+        // removes or lets expire the specific rules first (GATEWAY tab), or
+        // the config's static allow list.
+        if mode != EgressMode::Allow {
             for cidr in &self.allow_cidrs {
                 if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
                     let safe = net.to_string();
@@ -862,31 +895,34 @@ mod tests {
         assert!(!ruleset.contains("ip saddr !="));
     }
 
-    // Block mode is documented as "no external egress" with no exceptions —
-    // but the static config allow list and the dynamic @allowed_targets set
-    // (populated by AddTemporaryRule/AddManualRule, which don't themselves
-    // check egress_mode) used to be emitted into the ruleset unconditionally.
-    // That meant a target opened while in Allow/Ask mode — or a manual rule
-    // added directly via the gateway management API — stayed reachable at
-    // the kernel level even after the operator switched to Block, since
-    // set_egress_mode's install_rules() rebuild never dropped those accept
-    // lines. Block must be airtight: switching to it should immediately
-    // revoke every allow exception, static or dynamic.
+    // Block mode is the default and means "deny unless explicitly allowed" —
+    // it still honors the static config allow list and the dynamic
+    // @allowed_targets set (an operator-opened GATEWAY-tab rule), same as
+    // Ask mode, so a scoped target is reachable without the operator also
+    // having to flip the separate egress-mode switch (see build_ruleset_for's
+    // own doc comment for the live bug this fixes and what stayed the same:
+    // there is still no blanket accept in Block mode, so anything NOT
+    // explicitly listed is still dropped).
     #[test]
-    fn test_block_mode_excludes_all_allow_rules() {
+    fn test_block_mode_honors_explicit_allow_rules() {
         let ctrl = NftablesController::new(&test_config()); // default mode: Block
         let ruleset = ctrl.build_ruleset();
 
-        // Static config allow list (10.0.0.0/24, 192.168.1.0/24 in test_config) must not appear.
+        // Static config allow list (10.0.0.0/24, 192.168.1.0/24 in test_config) IS honored.
         assert!(
-            !ruleset.contains("10.0.0.0/24 accept") && !ruleset.contains("192.168.1.0/24 accept"),
-            "Block mode must not emit static config allow rules:\n{ruleset}"
+            ruleset.contains("10.0.0.0/24 accept") && ruleset.contains("192.168.1.0/24 accept"),
+            "Block mode must still honor the static config allow list:\n{ruleset}"
         );
-        // Dynamic set (IPC-opened temporary/manual rules) must not be referenced either.
+        // Dynamic set (IPC-opened temporary/manual rules) is referenced too.
         assert!(
-            !ruleset.contains("@allowed_targets accept")
-                && !ruleset.contains("@allowed_targets_v6 accept"),
-            "Block mode must not emit dynamic allowed_targets accept rules:\n{ruleset}"
+            ruleset.contains("@allowed_targets accept")
+                && ruleset.contains("@allowed_targets_v6 accept"),
+            "Block mode must still honor the dynamic allowed_targets set:\n{ruleset}"
+        );
+        // No blanket accept-everything line — only the explicit lists above.
+        assert!(
+            !ruleset.contains(&format!("ip saddr {} accept", ctrl.sandbox_ip)),
+            "Block mode must not emit a blanket accept-all line:\n{ruleset}"
         );
         // The block (drop) list and the always-on DNS allowance are unaffected.
         assert!(ruleset.contains("ip daddr 127.0.0.0/8 drop"));
