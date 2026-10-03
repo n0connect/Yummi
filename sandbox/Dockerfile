@@ -365,7 +365,6 @@ alias msf='msfconsole -q'
 alias msfconsole='msfconsole -q'
 
 # Reverse shell & listener helpers
-alias rlnc='rlwrap nc -lvnp'
 alias rlsocat='rlwrap socat file:`tty`,raw,echo=0'
 alias pen='penelope'
 alias serve='python3 -m http.server 8000'
@@ -381,17 +380,8 @@ alias windows='cd /home/pentester/windows_resources'
 alias nishang='cd /home/pentester/nishang'
 alias workspace='cd /home/pentester/workspace'
 
-# Wordlist shortcut variables — save token budget for the agent and prevent
-# typos when typing long paths. Both operator and LLM use these directly:
-#   ffuf -u http://target/FUZZ -w $COMMON_TXT
-#   john --wordlist=$ROCKYOU hash.txt
-#   hydra -L $USERNAMES -P $ROCKYOU ssh://target
-export ROCKYOU='/usr/share/wordlists/rockyou.txt'
-export COMMON_TXT='/usr/share/seclists/Discovery/Web-Content/common.txt'
-export BIG_TXT='/usr/share/seclists/Discovery/Web-Content/big.txt'
-export MEDIUM_TXT='/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt'
-export USERNAMES='/usr/share/seclists/Usernames/top-usernames-shortlist.txt'
-export PASSWORDS_TOP='/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt'
+# Wordlist shortcut variables (ROCKYOU, COMMON_TXT, ...) live in
+# /etc/profile.d/yummi-pwnbox.sh, not here — see the profile COPY below.
 
 # Fast fuzzy shell search (fzf) with Yummi styling
 export FZF_DEFAULT_COMMAND='fdfind --type f --strip-cwd-prefix --hidden --follow --exclude .git 2>/dev/null || find . -type f'
@@ -549,6 +539,17 @@ RUN mkdir -p /usr/share/backgrounds/yummi && \
 
 COPY sandbox/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Workbench env for login shells (agent `bash -lc` included) — see the file's
+# header for why this is not in .bashrc. Manifest the model reads on demand.
+COPY sandbox/profile-yummi.sh /etc/profile.d/yummi-pwnbox.sh
+RUN sh -n /etc/profile.d/yummi-pwnbox.sh && chmod 0644 /etc/profile.d/yummi-pwnbox.sh
+COPY sandbox/pwnbox.md /etc/yummi/pwnbox.md
+RUN chmod 0644 /etc/yummi/pwnbox.md
+
+# Non-interactive listener for the agent: `rlnc PORT` must be a real binary,
+# because aliases do not expand under `bash -lc`.
+RUN printf '#!/bin/sh\nexec rlwrap nc -lvnp "$@"\n' > /usr/local/bin/rlnc && chmod 0755 /usr/local/bin/rlnc
 
 COPY --from=mcpbuilder /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
 RUN chmod 0755 /usr/local/bin/yummi-sandbox-mcp

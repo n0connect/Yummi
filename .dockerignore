@@ -56,13 +56,15 @@ scripts/
 Makefile
 docker-compose*.yml
 *.md
+# The sandbox's on-box environment manifest IS consumed by sandbox/Dockerfile.
+!sandbox/pwnbox.md
 LICENSE
 CHANGELOG.md
 .yummi.conf.example
 
 # ── KEEP (do NOT add these to the excludes above) ───────────────────────────
 #   gateway/          — gateway/Dockerfile: Cargo.{toml,lock}, src/, config/
-#   sandbox/          — sandbox/Dockerfile: entrypoint.sh
+#   sandbox/          — sandbox/Dockerfile: entrypoint.sh, profile-yummi.sh, pwnbox.md
 #   sandbox-mcp/      — sandbox/Dockerfile: go.mod/go.sum/*.go (MCP server build stage)
 #   orchestrator/     — orchestrator/Dockerfile: the whole module
 #   persona/          — orchestrator/Dockerfile: COPY persona /persona
