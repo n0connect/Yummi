@@ -1,0 +1,85 @@
+schema_version: 1
+version: 3.0.0
+name: email-dns-security
+description: >
+  Comprehensive email security and domain reputation posture assessment. Covers SPF record syntax
+  and lookup limit (10 DNS lookups) flaws, DKIM signature verification and key length analysis,
+  DMARC policy alignment and 'p=none' misconfiguration, SMTP open relay testing, and mail spoofing risks.
+triggers:
+  - email security
+  - spf
+  - dkim
+  - dmarc
+  - email spoofing
+  - smtp relay
+  - mail security
+  - mx record
+  - dns txt
+  - email authentication
+tools:
+  - python3
+knowledge: |
+  Email authentication relies on three interrelated protocols: SPF (Sender Policy Framework),
+  DKIM (DomainKeys Identified Mail), and DMARC (Domain-based Message Authentication, Reporting, and Conformance).
+  Misconfigurations in these DNS records allow adversaries to send forged emails appearing to originate
+  from the target domain, bypassing spam filters and anti-phishing protections.
+
+  1. SPF (SENDER POLICY FRAMEWORK) RECORD AUDIT:
+     Query domain SPF TXT records:
+       dig TXT target.com +short | grep "v=spf1"
+     Critical Vulnerability Patterns:
+       a. Permissive Mechanisms:
+          - '?all' (Neutral) or '+all' (Allow all): Anyone can send email as target.com!
+          - '~all' (SoftFail): Many mail receivers accept SoftFail emails into the inbox without warning.
+          - '-all' (HardFail): Only permitted IPs allowed (most secure).
+       b. Exceeding 10 DNS Lookup Limit (RFC 7208 Section 4.6.4):
+          SPF evaluators abort with 'PermError' if processing requires more than 10 DNS queries
+          (include, a, mx, ptr, exists, redirect mechanisms).
+          If PermError occurs, many receiving MTAs fall back to treating SPF as non-existent!
+       c. Dangling / Broken includes:
+          SPF includes pointing to decommissioned services (e.g. include:old-crm.com) where the external
+          domain expired allow an attacker to claim that domain and authorize their own mail servers.
+
+  2. DMARC POLICY & ALIGNMENT ANALYSIS:
+     Query DMARC policy at _dmarc.target.com:
+       dig TXT _dmarc.target.com +short
+     Inspect DMARC parameters:
+       - p=none: Monitoring only! The domain owner takes NO action on failed emails; spoofed emails
+         are delivered normally.
+       - p=quarantine: Failed emails placed in spam/junk folder.
+       - p=reject: Failed emails rejected at SMTP gateway (recommended).
+       - sp= (subdomain policy): If absent, subdomains inherit parent policy; if sp=none, subdomains are spoofable!
+       - aspf= / adkim= (alignment mode): 'r' (relaxed) vs 's' (strict). Relaxed allows subdomain variations.
+       - pct= (percentage): If pct=50, half of spoofed emails bypass filtering.
+
+  3. DKIM (DOMAINKEYS IDENTIFIED MAIL) ANALYSIS:
+     Query selector public keys:
+       dig TXT selector._domainkey.target.com +short
+     Audit Checklist:
+       - Key length: Check if RSA key is 1024-bit or less (1024-bit RSA is vulnerable to factorization factoring).
+         Recommend modern 2048-bit RSA or Ed25519.
+       - Selector discovery: Extract common selectors from email headers (google, default, k1, s1, mail).
+
+  4. SMTP OPEN RELAY & STARTTLS VERIFICATION:
+     Find MX hosts:
+       dig MX target.com +short
+     Test SMTP gateway directly via nc / python:
+       Test for unauthenticated mail relaying (attempt to route external sender to external recipient):
+         EHLO test.com
+         MAIL FROM:<test@external.com>
+         RCPT TO:<victim@other-external.com>
+       Expected: 550 Relaying Denied or 530 Authentication Required.
+     Verify STARTTLS encryption support:
+       Ensure opportunistic TLS is enforced to prevent passive eavesdropping of mail traffic in transit.
+
+  5. SYNTHESIS & RISK RATING:
+     - CRITICAL: SPF '+all' OR DMARC missing with SPF '?all' -> Trivial email spoofing accepted by major providers.
+     - HIGH: DMARC 'p=none' on primary corporate domain -> Spoofed emails delivered to inbox.
+     - MEDIUM: Subdomain lacking explicit SPF/DMARC while parent has p=reject -> Subdomain spoofing possible.
+references:
+  - https://datatracker.ietf.org/doc/html/rfc7208
+  - https://datatracker.ietf.org/doc/html/rfc7489
+  - https://attack.mitre.org/techniques/T1586/002/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/email-dns-security.yaml

@@ -63,6 +63,13 @@ func TestLoadSubAgentDefs_AllBuiltinSubAgents(t *testing.T) {
 		"cloud-privesc-specialist":  false,
 		"iot-firmware-analyst":      false,
 		"saas-identity-specialist":  false,
+		"spa-hunter":                false,
+		"rf-sdr-specialist":         false,
+		"memory-analyst":            false,
+		"email-security-specialist": false,
+		"apt-emulation-operator":    false,
+		"dfir-investigator":         false,
+		"smart-spray-operator":      false,
 	}
 
 	for _, d := range defs {

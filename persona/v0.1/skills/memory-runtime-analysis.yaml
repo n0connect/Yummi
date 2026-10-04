@@ -1,0 +1,82 @@
+schema_version: 1
+version: 3.0.0
+name: memory-runtime-analysis
+description: >
+  Live process memory analysis, heap/stack examination, and volatile artifact inspection for Linux systems.
+  Covers process virtual address mapping (/proc/$PID/maps), RWX memory segment identification,
+  cleartext credential recovery in unmapped heap pages, dynamic library hooking, and gdb memory dump triage.
+triggers:
+  - memory analysis
+  - process memory
+  - /proc/pid/maps
+  - heap inspection
+  - rwx memory
+  - core dump
+  - memory dump
+  - runtime analysis
+  - gdb dump
+  - memory forensics
+tools:
+  - python3
+knowledge: |
+  Runtime process memory contains decrypted API keys, database connection strings, plain-text session tokens,
+  and unencrypted network buffers that never touch disk. Analyzing virtual address spaces provides
+  high-fidelity evidence of runtime data exposure and unsafe memory layout configurations.
+
+  1. PROCESS VIRTUAL ADDRESS SPACE INSPECTION (/proc/$PID/maps):
+     Inspect memory region layout and permission flags for a running process:
+       PID=$(pgrep -f target_service)
+       head -n 30 /proc/$PID/maps
+     Column format: [start-end] [permissions] [offset] [dev] [inode] [pathname]
+     Identify Dangerous RWX Segments:
+       grep "rwx" /proc/$PID/maps
+       (Regions marked readable, writable, AND executable violate W^X / DEP protections,
+        indicating JIT compilers, injected code, or lack of modern binary hardening).
+
+  2. HEAP & STACK STRINGS EXTRACTION:
+     Locate heap boundary from maps file:
+       HEAP_RANGE=$(grep "\[heap\]" /proc/$PID/maps | awk '{print $1}')
+     Dump process memory range safely using gdb or Python:
+       python3 -c "
+       import sys
+       pid = '$PID'
+       with open(f'/proc/{pid}/maps') as f:
+           for line in f:
+               if '[heap]' in line or '[stack]' in line:
+                   parts = line.split()
+                   start, end = [int(x, 16) for x in parts[0].split('-')]
+                   with open(f'/proc/{pid}/mem', 'rb') as mem:
+                       mem.seek(start)
+                       data = mem.read(end - start)
+                       # Process data for pattern searches
+                       print(f'Extracted {len(data)} bytes from {parts[-1]}')
+       "
+     Search extracted dump for authorization tokens, headers, and credentials:
+       strings heap.raw | grep -iE "(authorization:\s*bearer|password|apikey|db_connection)"
+
+  3. CORE DUMP TRIAGE:
+     When an application crashes or an administrator generates a core dump (gcore):
+       gcore -o /tmp/target_app $PID
+     Analyze core dump using gdb:
+       gdb /path/to/binary /tmp/target_app.$PID -batch -ex "info proc mappings" -ex "info registers" -ex "bt"
+     Inspect sensitive variables remaining in memory after execution finishes.
+
+  4. PROCESS INJECTION & HOOKING DETECTION:
+     Check for unexpected shared libraries loaded into process:
+       grep -E "\.so" /proc/$PID/maps | grep -vE "(/usr/lib|/lib)"
+       (Shared objects loaded from /tmp, /dev/shm, or user home directories indicate LD_PRELOAD injection).
+     Verify memory protection features using checksec:
+       checksec --file=/path/to/binary
+       Verifies: RELRO (Full/Partial), Stack Canaries, NX/DEP (No-Execute), PIE (Position Independent Executable).
+
+  5. SECURE STORAGE & RECOVERY RECOMMENDATIONS:
+     - Clear sensitive variables immediately after use using explicit memory zeroing (explicit_bzero / SecureZeroMemory).
+     - Disable core dump creation in production via prctl(PR_SET_DUMPABLE, 0) or ulimit -c 0.
+     - Prevent memory paging to swap for secret-bearing processes using mlock() or mlockall().
+references:
+  - https://www.kernel.org/doc/Documentation/filesystems/proc.txt
+  - https://attack.mitre.org/techniques/T1003/001/
+  - https://github.com/slimm609/checksec.sh
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/memory-runtime-analysis.yaml

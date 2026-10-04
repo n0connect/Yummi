@@ -1,0 +1,82 @@
+schema_version: 1
+version: 3.0.0
+name: dfir-triage-investigation
+description: >
+  Digital Forensics and Incident Response (DFIR) live triage and post-incident investigation.
+  Covers volatile state collection (memory, network sockets, active processes), log timeline
+  reconstruction (auth.log, syslog, journalctl), persistence mechanism auditing, and MACB file timestamps.
+triggers:
+  - dfir
+  - incident response
+  - forensic triage
+  - post incident
+  - log analysis
+  - persistence audit
+  - volatile collection
+  - macb timeline
+  - evidence preservation
+  - root cause analysis
+tools:
+  - python3
+knowledge: |
+  Digital Forensics and Incident Response (DFIR) requires rapid, structured evidence collection
+  following the Order of Volatility: volatile data (memory, network state, running processes)
+  must be preserved before non-volatile data (disk logs, configuration files) is touched.
+
+  1. ORDER OF VOLATILITY & LIVE TRIAGE COLLECTION:
+     Collect ephemeral data before rebooting or executing intrusive tools:
+     Step 1: System Date and Uptime:
+       date -u; uptime; uname -a
+     Step 2: Active Network Sockets & Connections:
+       ss -tulpn (listening services and associated PIDs)
+       ss -antp (established connections to remote IPs)
+       ip neigh (ARP cache table)
+     Step 3: Process Execution Tree:
+       ps auxwwf (hierarchical process forest showing parent-child relationships)
+       lsof -P -i -n (open files and network descriptors per process)
+     Step 4: Logged In Users:
+       w; who; last -n 20 (recent login sessions)
+
+  2. PERSISTENCE MECHANISM AUDITING:
+     Threat actors establish persistence to survive system restarts:
+     Linux Persistence Checklist:
+       - Systemd services and timers:
+         systemctl list-unit-files --type=service | grep -E "(enabled|generated)"
+         ls -lat /etc/systemd/system/ /lib/systemd/system/
+       - Cron jobs:
+         for u in $(cut -f1 -d: /etc/passwd); do crontab -u $u -l 2>/dev/null; done
+         ls -la /etc/cron* /etc/crontab /var/spool/cron/crontabs/
+       - Shell Profile / Bash init scripts:
+         ls -la /etc/profile /etc/profile.d/ /etc/bash.bashrc ~/.bashrc ~/.profile
+       - Dynamic Linker (LD_PRELOAD / ld.so.preload):
+         cat /etc/ld.so.preload 2>/dev/null (MUST be empty in standard systems)
+       - Udev rules & MOTD scripts:
+         ls -la /etc/update-motd.d/ /etc/udev/rules.d/
+
+  3. LOG TIMELINE RECONSTRUCTION:
+     Reconstruct adversary activity using system authentication and syslog:
+     Journalctl query around incident window:
+       journalctl --since "2026-10-04 12:00:00" --until "2026-10-04 15:00:00" -p err..info
+     Authentication and sudo abuse checks:
+       grep -iE "(accepted|failed|sudo|session opened|useradd)" /var/log/auth.log 2>/dev/null
+     Web server access logs for anomalous requests (HTTP 500, web shell paths, SQLi):
+       grep -E "(POST|PUT)" /var/log/nginx/access.log | awk '{print $1, $4, $7, $9}' | head -n 30
+
+  4. FILE SYSTEM TIMELINE ANALYSIS (MACB):
+     MACB represents Modification, Access, Change (inode), and Birth/Creation times:
+     Find files modified within the incident window:
+       find / -type f -mtime -2 -exec ls -la {} + 2>/dev/null | head -n 50
+     Detect deleted files with open descriptors (unlinked malware):
+       ls -l /proc/*/fd/* 2>/dev/null | grep "(deleted)"
+
+  5. CHAIN OF CUSTODY & EVIDENCE INTEGRITY:
+     - Compute SHA-256 hashes immediately upon collecting any log, memory dump, or suspect file.
+     - Store evidence in write-protected or read-only storage partitions.
+     - Document collector identity, host hostname, MAC address, and collection methodology.
+references:
+  - https://www.sans.org/posters/cheat-sheet-linux-cli/
+  - https://attack.mitre.org/tactics/TA0003/
+  - https://csrc.nist.gov/publications/detail/sp/800-86/final
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/dfir-triage-investigation.yaml

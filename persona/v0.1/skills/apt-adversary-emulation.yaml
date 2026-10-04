@@ -1,0 +1,75 @@
+schema_version: 1
+version: 3.0.0
+name: apt-adversary-emulation
+description: >
+  Advanced Persistent Threat (APT) adversary emulation tradecraft adhering to MITRE ATT&CK.
+  Focuses on living-off-the-land binaries (LOLBAS/GTFOBins), low-and-slow operational tempo,
+  reversibility discipline, minimal artifact footprint, and multi-stage campaign path modeling.
+triggers:
+  - apt emulation
+  - adversary emulation
+  - mitre attack
+  - living off the land
+  - lolbas
+  - gtfobins
+  - low and slow
+  - stealth campaign
+  - threat actor emulation
+  - purple team
+tools:
+  - python3
+knowledge: |
+  Adversary emulation tests enterprise defensive postures (EDR, SIEM, SOC alert rules) by replicating
+  the observed tactics, techniques, and procedures (TTPs) of sophisticated threat actors.
+  Every operation must be methodical, intelligence-driven, strictly bounded by Rules of Engagement,
+  and 100% reversible.
+
+  1. THE TRACE LOOP (OPERATIONAL DISCIPLINE):
+     Before executing any significant action, complete the 5-step TRACE evaluation:
+       - Think: What is the specific intelligence objective of this technique?
+       - Plan: What is the least noisy tool or system native binary available?
+       - Act: Execute the minimal atomic probe required to confirm the hypothesis.
+       - Observe: Analyze target response, return codes, and defensive indicators.
+       - Decide: If the technique meets friction, adapt immediately — never spam failing commands.
+
+  2. LIVING OFF THE LAND BINARIES (LOLBAS / GTFOBINS):
+     Avoid dropping external binaries to disk; leverage trusted system-native binaries:
+     Linux (GTFOBins):
+       - File transfer via native utilities:
+         python3 -m http.server (transient)
+         curl, wget, or bash socket redirects: exec 3<>/dev/tcp/HOST/PORT
+       - System state discovery without extra tools:
+         uname -a, ip route, ss -tulpn, find / -perm -4000 2>/dev/null
+       - Scheduled tasks review:
+         crontab -l, ls -la /etc/cron*, systemctl list-timers
+     Windows (LOLBAS):
+       - BITSAdmin / Certutil for staged file delivery
+       - WMIC / PowerShell for process and service enumeration
+       - Schtasks / Reg for scheduled persistence evaluation
+
+  3. OPERATIONAL TEMPO & LOW-AND-SLOW DISCIPLINE:
+     High-volume port scans and rapid brute-force trigger automated SIEM threshold rules.
+     Adversary emulation paces actions:
+       - Jitter: Introduce randomized delays between requests (e.g. 15-45 seconds)
+       - Passive observation before active probing: Read existing logs and network maps before scanning
+       - Targeted queries: Query specifically for known domain controllers or database ports rather than /16 sweeps.
+
+  4. REVERSIBILITY & ARTIFACT HYGIENE:
+     Every red team modification to target state must have a pre-recorded rollback procedure:
+     - Document created temporary files, test accounts, and configuration flags with exact timestamps.
+     - Maintain an engagement execution ledger:
+       [Timestamp] [Actor/Tool] [Exact Command] [Affected Host] [Artifacts Created] [Rollback Command]
+     - At engagement conclusion: Execute verified cleanup script to restore target to pristine state.
+
+  5. PURPLE TEAM COLLABORATION & DETECTION VALIDATION:
+     The value of adversary emulation lies in validating detection coverage:
+       - Correlate each emulated technique with the MITRE ATT&CK technique ID (e.g. T1059, T1087, T1053).
+       - Review SOC alerts generated during the emulation window.
+       - Identify detection blindspots: Did EDR flag the LOLBAS execution? Did network sensors alert on egress?
+references:
+  - https://attack.mitre.org/
+  - https://lolbas-project.github.io/
+  - https://gtfobins.github.io/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/apt-adversary-emulation.yaml

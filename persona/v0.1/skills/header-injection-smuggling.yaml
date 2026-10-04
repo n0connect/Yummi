@@ -1,0 +1,82 @@
+schema_version: 1
+version: 3.0.0
+name: header-injection-smuggling
+description: >
+  Advanced HTTP header injection, CRLF injection, response splitting, request queue poisoning,
+  host header poisoning, and hop-by-hop cache deception. Covers reverse proxy normalization gaps,
+  intermediate gateway cache manipulation, and password reset poisoning vectors.
+triggers:
+  - crlf injection
+  - header injection
+  - response splitting
+  - host header poisoning
+  - request queue poisoning
+  - hop-by-hop
+  - x-forwarded-for
+  - cache deception
+  - http splitting
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  HTTP header injection exploits parsing differentials between front-end reverse proxies (Nginx,
+  HAProxy, Cloudflare, Envoy) and backend application servers. Injected carriage returns and line feeds
+  (\r\n or %0d%0a) allow attackers to set arbitrary response headers or split HTTP response streams.
+
+  1. CRLF INJECTION & RESPONSE SPLITTING:
+     Inject CRLF characters into parameters that reflect into response headers:
+       Common injection points: redirect URLs, Set-Cookie parameters, download filenames.
+     Payload syntax:
+       %0d%0aSet-Cookie:%20session=compromised;%20Path=/;%20HttpOnly
+       %0d%0aContent-Length:%200%0d%0a%0d%0aHTTP/1.1%20200%20OK%0d%0aContent-Type:%20text/html...
+     Test with curl:
+       curl -s -I "https://target/redirect?url=https://example.com%0d%0aX-Test-Header:%20injected"
+     Check if the response headers contain the injected 'X-Test-Header'.
+
+  2. HOST HEADER POISONING (PASSWORD RESET & CACHE POISONING):
+     Applications often construct absolute URLs using the incoming HTTP 'Host' header:
+     a. Password reset link poisoning:
+        POST /auth/forgot-password HTTP/1.1
+        Host: attacker.com
+        X-Forwarded-Host: attacker.com
+        (If application constructs reset email as https://{Host}/reset?token=XYZ,
+         victim clicks link sending reset token to attacker.com).
+     b. Cache poisoning via Host header:
+        If web cache keys on path only (ignoring Host header), injecting a foreign Host header
+        can cause the cache to store script imports pointing to attacker domain:
+          <script src="https://attacker.com/app.js"></script>
+
+  3. HOP-BY-HOP HEADER ABUSE (RFC 2616 SECTION 13.5.1):
+     Hop-by-hop headers are removed by proxies when listed in the 'Connection' header:
+       Connection: close, X-Forwarded-For, X-Real-IP
+     Attack vector:
+       Send 'Connection: X-Forwarded-For' to cause front-end proxy to strip the header before
+       forwarding to backend. If the backend relies on X-Forwarded-For for IP restriction or rate limiting,
+       it now sees an empty value or falls back to internal proxy IP!
+
+  4. CACHE DECEPTION VIA EXTENSION TRICK:
+     When web cache rules treat static extensions (.css, .js, .png, .jpg) as publicly cacheable:
+       Request private user profile with fake static extension:
+         GET /api/v1/user/profile/avatar.css HTTP/1.1
+       If backend framework ignores the trailing '/avatar.css' and returns the JSON profile data,
+       while the CDN cache caches it because of the '.css' suffix:
+       An unauthenticated visitor requesting /api/v1/user/profile/avatar.css receives the victim's cached profile!
+
+  5. REQUEST QUEUE POISONING (HTTP/1.1 PIPELINING):
+     When front-end and back-end reuse keep-alive connections across multiple client requests:
+     A request with ambiguous Content-Length or malformed trailing bytes desynchronizes the socket stream.
+     The backend interprets the remaining bytes as the start of the NEXT client's request:
+       Next request gets prepended with attacker payload or stolen response headers.
+
+  6. VERIFICATION METHODOLOGY:
+     - Use safe custom header names (e.g., X-Probe-Status, X-Security-Audit) to verify CRLF injection.
+     - Document raw HTTP request and response wire captures showing header boundary corruption.
+     - Confirm cache poisoning safely on non-production paths using unique test parameters.
+references:
+  - https://portswigger.net/web-security/host-header-attacks
+  - https://portswigger.net/research/http-desync-attacks-request-smuggling-reborn
+  - https://attack.mitre.org/techniques/T1190/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/header-injection-smuggling.yaml

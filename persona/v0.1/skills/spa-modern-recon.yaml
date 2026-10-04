@@ -1,0 +1,87 @@
+schema_version: 1
+version: 3.0.0
+name: spa-modern-recon
+description: >
+  Single-Page Application (SPA) reconnaissance and client-side vulnerability discovery.
+  Covers JavaScript source-map (.js.map) reconstruction, unauthenticated REST/GraphQL endpoint
+  discovery, client-side route and parameter extraction, postMessage event listener auditing,
+  DOM XSS sinks, and client-side secret mining.
+triggers:
+  - spa
+  - single page application
+  - source maps
+  - js.map
+  - react recon
+  - vue recon
+  - angular recon
+  - client side routing
+  - postmessage
+  - dom xss
+tools:
+  - katana
+  - httpx
+  - curl
+  - python3
+knowledge: |
+  Modern Single-Page Applications (React, Vue, Angular, Svelte) bundle complex client-side routing,
+  API clients, state managers, and authentication logic into JavaScript chunks. Standard scanners
+  frequently miss entire API attack surfaces because they do not deconstruct client-side bundles.
+
+  1. SOURCE-MAP (.JS.MAP) DISCOVERY & CODE RECOVERY:
+     Production builds often accidentally publish .js.map files alongside minified bundles:
+     Step 1: Discover bundle files from index.html:
+       curl -s "https://target.com" | grep -oE 'src="[^"]+\.js"'
+     Step 2: Probe for source map comment or adjacent .map file:
+       curl -s -I "https://target.com/static/js/main.12345.js.map"
+     Step 3: Extract original unminified TypeScript/React source code:
+       Use source-map-unpack or shuji on extracted .map:
+         npx source-map-unpack main.js.map ./recovered-source/
+       This restores the original developer directory structure (src/controllers, src/api, src/config)
+       with full comments, internal API routes, and developer notes!
+
+  2. CLIENT-SIDE ROUTE & ENDPOINT EXTRACTION:
+     Extract all registered React Router / Vue Router paths:
+       grep -rE "path:\s*['\"][^'\"]+" dist/
+       grep -rE "(createBrowserRouter|Route\s+path|react-router)" dist/
+     Extract API client endpoint definitions:
+       grep -rE "(axios\.(get|post|put|delete)|fetch\()['\"][^'\"]+" dist/
+       grep -rE "(api/v[0-9]+/[a-zA-Z0-9_-]+)" dist/
+     Fuzz unauthenticated access to discovered endpoints:
+       Many endpoints referenced in admin views (e.g. /api/admin/metrics) may lack backend auth!
+
+  3. POSTMESSAGE EVENT LISTENER AUDITING:
+     Inspect window.addEventListener("message", ...) implementations for origin validation flaws:
+     Vulnerable pattern:
+       window.addEventListener("message", function(event) {
+           // MISSING: if (event.origin !== "https://trusted.com") return;
+           eval(event.data); // or document.body.innerHTML = event.data;
+       });
+     Exploitation vector:
+       An attacker iframe hosts malicious HTML sending postMessage payloads across origins:
+         iframe.contentWindow.postMessage({action: "navigate", url: "javascript:alert(1)"}, "*");
+
+  4. DOM XSS SINKS & CLIENT-SIDE TEMPLATE INJECTION:
+     Search client scripts for dangerous DOM sinks receiving location.search / location.hash / document.referrer:
+       - document.write, element.innerHTML, outerHTML
+       - location.href, location.assign, location.replace
+       - eval, setTimeout, Function constructor
+     DOM Cloaking:
+       Form elements with id="parentNode" or id="length" confusing naive JS sanitizer checks.
+
+  5. HARDCODED SECRETS & CLIENT STORAGE AUDIT:
+     Grep recovered sources or JS chunks for API configurations:
+       - Firebase config (apiKey, authDomain, projectId) -> test via firebase-security skill
+       - Supabase config (SUPABASE_URL, ANON_KEY) -> test via supabase-security skill
+       - Algolia, Mapbox, Stripe publishable keys (ensure secret keys are NOT bundled)
+       - LocalStorage / SessionStorage schema inspection for unencrypted tokens and PII.
+
+  VALIDATION & REPORTING:
+     - Document exact bundle URL, line numbers, and recovered source snippet.
+     - Provide reproducible curl command for any unauthenticated backend endpoint discovered.
+references:
+  - https://portswigger.net/web-security/cross-site-scripting/dom-based
+  - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/
+  - https://attack.mitre.org/techniques/T1190/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/spa-modern-recon.yaml

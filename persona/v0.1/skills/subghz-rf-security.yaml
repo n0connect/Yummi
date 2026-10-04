@@ -1,0 +1,79 @@
+schema_version: 1
+version: 3.0.0
+name: subghz-rf-security
+description: >
+  Sub-GHz Software-Defined Radio (SDR) physical security assessment for 315/433/868/915 MHz bands.
+  Covers spectrum scanning, IQ signal capture/demodulation, fixed code replay verification,
+  rolling code (Keeloq) analysis, and radio frequency telemetry inspection using SDR platforms.
+triggers:
+  - subghz
+  - sdr
+  - rf security
+  - radio frequency
+  - rtl-sdr
+  - hackrf
+  - 433mhz
+  - 868mhz
+  - 315mhz
+  - 915mhz
+  - rolling code
+  - signal replay
+  - rtl_433
+tools:
+  - python3
+knowledge: |
+  Sub-GHz radio frequency signals control physical perimeters: gates, garage doors, industrial
+  telemetry, wireless alarms, key fobs, and smart utility meters. Many legacy devices lack
+  cryptographic authentication, transmitting fixed binary sequences or vulnerable rolling codes.
+
+  1. ISM SPECTRUM SCANNING & FREQUENCY RECONNAISSANCE:
+     Common ISM (Industrial, Scientific, and Medical) bands:
+       - 315 MHz: North American automotive keyless entry, legacy garage remotes
+       - 433.92 MHz: Global consumer telemetry, weather stations, smart plugs, alarms
+       - 868 MHz: European smart meters, IoT (LoRa, Zigbee Sub-GHz), home automation
+       - 915 MHz: North American smart meters, industrial remotes, RFID
+     Tool-assisted wideband scanning using rtl_power:
+       rtl_power -f 433M:435M:10k -g 30 -i 5 -e 1h spectrum_433.csv
+     Real-time telemetry packet decoding using rtl_433:
+       rtl_433 -f 433.92M -G (decodes hundreds of known wireless sensor protocols)
+
+  2. IQ RAW SIGNAL CAPTURE & RECORDING:
+     Capture raw In-phase/Quadrature (IQ) samples:
+       rtl_sdr -f 433920000 -s 2000000 -g 30 capture.iq
+     Inspect captured waveforms in Universal Radio Hacker (URH) or Inspectrum:
+       - Identify modulation type: ASK/OOK (Amplitude Shift Keying), FSK (Frequency Shift Keying)
+       - Measure symbol rate / baud rate
+       - Detect preamble, sync word, and payload boundaries
+
+  3. FIXED CODE REPLAY VULNERABILITY VERIFICATION:
+     Many remotes and alarm sensors send the exact same bit sequence upon every button press:
+     Demodulation to bitstream:
+       Decode OOK pulses: long pulse = 1, short pulse = 0 (Pulse Width Modulation - PWM).
+     Replay test (authorized lab/bench testing only):
+       If the receiving receiver acts upon re-transmitting the identical recorded IQ waveform,
+       the system is vulnerable to trivial Signal Replay.
+
+  4. ROLLING CODE (KEELOQ / HOPPING) ANALYSIS:
+     Rolling code systems (e.g. Microchip HCS301 KeeLoq) transmit a counter encrypted with a secret key:
+     Analysis checklist:
+       - Capture 5 sequential button presses from the same remote.
+       - Compare bitstreams:
+         * Fixed part: Serial number / device ID (remains constant across presses)
+         * Hopping part: Encrypted 32-bit counter (changes every transmission)
+       - Desynchronization test:
+         Press remote 10 times out of receiver range; verify if receiver accepts the next transmission
+         (sliding window synchronization test).
+       - Rolljam / Re-synchronization attack analysis:
+         Theoretical vulnerability where dual-receiver capture intercepts sequential codes while jamming.
+
+  5. SAFETY & REGULATORY COMPLIANCE DISCIPLINE:
+     - All RF testing MUST strictly adhere to local telecommunications regulations (FCC / ETSI / BTK).
+     - NEVER transmit on restricted emergency, aviation, or licensed cellular bands.
+     - Transmission power must be kept to minimum laboratory levels or conducted over coax attenuators.
+references:
+  - https://github.com/jopohl/urh
+  - https://github.com/merbanan/rtl_433
+  - https://attack.mitre.org/matrices/ics/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/subghz-rf-security.yaml

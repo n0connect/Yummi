@@ -1,0 +1,104 @@
+schema_version: 1
+version: 3.0.0
+name: supabase-security
+description: >
+  Comprehensive Supabase BaaS security assessment covering PostgREST query injection, Row-Level
+  Security (RLS) policy bypasses, service_role JWT key exposure, GoTrue authentication logic flaws,
+  unauthenticated Storage bucket access, and Edge Functions tenant isolation verification.
+triggers:
+  - supabase
+  - postgrest
+  - row level security
+  - rls bypass
+  - gotrue
+  - supabase storage
+  - service_role
+  - anon key
+  - supabase edge functions
+  - supabase rls
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  Supabase builds on PostgreSQL, PostgREST, GoTrue auth, and custom Storage/Functions engines.
+  A critical failure occurs when developers assume the public 'anon' key enforces authorization;
+  the anon key only authenticates the client to PostgREST, while data protection depends entirely
+  on PostgreSQL Row-Level Security (RLS) policies.
+
+  1. CLIENT CONFIGURATION EXTRACTION & KEY AUDIT:
+     From client JS bundles or mobile app configs:
+       Look for: SUPABASE_URL, SUPABASE_ANON_KEY, and leaked SUPABASE_SERVICE_ROLE_KEY.
+     Decode both JWTs to check role and privileges:
+       - anon key payload: {"role": "anon", "iss": "supabase"}
+       - service_role key: {"role": "service_role", "iss": "supabase"} (MUST NEVER LEAK TO CLIENT)
+     If service_role key is exposed in client bundle: full DB takeover via PostgREST bypass.
+
+  2. ROW-LEVEL SECURITY (RLS) POLICY VERIFICATION:
+     PostgREST maps HTTP endpoints directly to Postgres tables (/rest/v1/<table_name>):
+     Unauthenticated / Anon probe:
+       curl -s "https://PROJECT.supabase.co/rest/v1/profiles?select=*" \
+         -H "apikey: ANON_KEY" -H "Authorization: Bearer ANON_KEY"
+     Evaluate table response:
+       - 200 with full rows: RLS is either disabled (ALTER TABLE ... DISABLE ROW LEVEL SECURITY)
+         or policy permits public read (USING (true)).
+       - 401/403 or empty array: table requires user token or RLS filters correctly.
+     Cross-tenant horizontal read (IDOR in RLS):
+       Sign up as User-A and User-B. Capture User-A JWT.
+       curl -s "https://PROJECT.supabase.co/rest/v1/tenant_data?select=*&tenant_id=eq.ORG_B" \
+         -H "apikey: ANON_KEY" -H "Authorization: Bearer USER_A_JWT"
+       If rows returned: RLS policy failed to bind auth.uid() or organization claim to tenant_id.
+
+  3. POSTGREST OPERATOR & FILTER FUZZING:
+     PostgREST provides rich filtering syntax that can bypass naive input validation:
+       - Horizontal filter: ?column=eq.val, ?column=neq.val, ?column=in.(val1,val2)
+       - Null check bypass: ?is_deleted=is.null (reveals soft-deleted records)
+       - Pattern matching: ?secret_field=like.* or ?phone=ilike.%25123%25
+       - Full-text search leaks: ?description=fts.admin or ?content=wfts.confidential
+       - Embedded resource traversal: ?select=*,orders(*),payments(*) (child relation joins)
+
+  4. RPC (REMOTE PROCEDURE CALL) SECURITY:
+     Postgres stored functions exposed via /rest/v1/rpc/<function_name>:
+       curl -s -X POST "https://PROJECT.supabase.co/rest/v1/rpc/get_user_metrics" \
+         -H "apikey: ANON_KEY" -H "Authorization: Bearer USER_A_JWT" \
+         -H "Content-Type: application/json" -d '{"user_id": "VICTIM_UUID"}'
+     Audit stored functions for SECURITY DEFINER vs SECURITY INVOKER:
+       SECURITY DEFINER functions run with the privileges of the database owner (postgres),
+       bypassing all RLS unless explicitly checked inside the PL/pgSQL function body.
+
+  5. STORAGE BUCKET AUDIT:
+     Supabase Storage endpoints: https://PROJECT.supabase.co/storage/v1/
+     List public buckets:
+       curl -s "https://PROJECT.supabase.co/storage/v1/bucket" \
+         -H "apikey: ANON_KEY" -H "Authorization: Bearer ANON_KEY"
+     Public object read test on private paths:
+       curl -s "https://PROJECT.supabase.co/storage/v1/object/public/avatars/private_doc.pdf"
+     File upload with executable or HTML mime types:
+       curl -s -X POST "https://PROJECT.supabase.co/storage/v1/object/public_bucket/test.html" \
+         -H "apikey: ANON_KEY" -H "Authorization: Bearer USER_A_JWT" \
+         -H "Content-Type: text/html" -d '<script>alert(1)</script>'
+
+  6. GOTRUE (AUTH) CONFIGURATION FLAWS:
+     Endpoints: /auth/v1/signup, /auth/v1/token, /auth/v1/recover, /auth/v1/user
+     - Self-assigned metadata: POST /auth/v1/signup with {"data": {"role": "admin"}}
+       Check if raw_user_meta_data is read by downstream SQL triggers or RLS policies.
+     - Email confirmation bypass: test if protected REST routes accept unconfirmed user JWTs.
+     - Redirect URI open redirect: /auth/v1/authorize?provider=google&redirect_to=https://attacker.com
+
+  7. EDGE FUNCTIONS SECRETS & TENANT ISOLATION:
+     Supabase Deno Edge Functions at https://PROJECT.supabase.co/functions/v1/<fn_name>
+     - Call functions without Authorization header to test if authentication is enforced.
+     - Pass manipulated user IDs in JSON request body to verify server-side auth.uid() extraction.
+     - SSRF testing: if Edge Function fetches webhook URLs or remote avatars, test cloud metadata.
+
+  VALIDATION & PROOF:
+     - Compare User-A vs User-B query responses proving unauthorized cross-tenant row access.
+     - Extract service_role key proof (if exposed) showing full admin bypass on PostgREST.
+     - Document exact Postgres table, RLS policy expression, and PostgREST endpoint.
+references:
+  - https://supabase.com/docs/guides/database/postgres/row-level-security
+  - https://postgrest.org/en/stable/references/api/tables_views.html
+  - https://attack.mitre.org/techniques/T1190/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/supabase-security.yaml

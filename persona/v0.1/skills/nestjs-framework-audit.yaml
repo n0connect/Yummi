@@ -1,0 +1,87 @@
+schema_version: 1
+version: 3.0.0
+name: nestjs-framework-audit
+description: >
+  Deep NestJS enterprise framework security assessment. Covers class-validator whitelist bypasses,
+  TypeORM and Prisma ORM query injections, microservices transport authorization gaps (gRPC/NATS/RabbitMQ),
+  execution lifecycle order flaws between Guards and Interceptors, and JWT Passport strategy pitfalls.
+triggers:
+  - nestjs
+  - class-validator
+  - typeorm
+  - prisma
+  - nestjs guards
+  - nestjs interceptor
+  - validationpipe
+  - nest microservices
+  - nestjs idor
+  - nestjs rce
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  NestJS provides enterprise TypeScript architecture with modular controllers, providers, guards,
+  and interceptors. Common vulnerabilities arise from loose ValidationPipe configuration,
+  Guards vs Interceptors execution order confusion, and ORM query mapping flaws.
+
+  1. VALIDATIONPIPE & CLASS-VALIDATOR AUDIT:
+     Check ValidationPipe settings in main.ts or controller level:
+       app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
+     Vulnerability Scenarios:
+       a. Missing whitelist: true: Attacker sends undeclared properties in JSON body.
+          If DTO does not declare the field, but it is passed directly to Prisma/TypeORM create/update,
+          Mass Assignment occurs (e.g., {"role": "admin", "verified": true}).
+       b. transform: true without forbidUnknownValues:
+          Prototype pollution or unexpected prototype keys passed through deserialization.
+       c. Nested objects without @ValidateNested() and @Type(() => ChildDto):
+          Nested properties bypass all child field validators entirely!
+
+  2. GUARDS VS INTERCEPTORS EXECUTION ORDER FLAWS:
+     NestJS Request Lifecycle Order:
+       1. Middleware -> 2. Guards -> 3. Interceptors (pre) -> 4. Pipes -> 5. Controller Handler -> 6. Interceptors (post)
+     Critical Architectural Pitfalls:
+       - Guards execute BEFORE Pipes (ValidationPipe):
+         If a Guard inspects request.body for authorization (e.g., checking request.body.organizationId),
+         the body has NOT been transformed or validated by Pipes yet! An attacker can pass type-juggling
+         payloads (array vs string, object with prototype) that confuse the Guard check.
+       - Interceptors execute AFTER Guards:
+         If tenant scoping or database transaction setup is placed in an Interceptor, the Guard runs
+         against an unscoped context, leading to tenant isolation failures.
+
+  3. ORM QUERY INJECTION (TYPEORM & PRISMA):
+     TypeORM:
+       - Where query concatenation:
+         repository.createQueryBuilder("user").where("user.name = " + input) -> SQL injection
+       - Unsafe orderBy/sort injection:
+         repository.find({ order: { [userInputField]: "ASC" } }) -> column enumeration or blind SQLi
+       - FindOptionsWhere injection with operator keys:
+         Passing { "password": { $ne: null } } or nested relations to findOne.
+     Prisma:
+       - prisma.$queryRawUnsafe(rawSql) with unsanitized user inputs.
+       - Excessive relation inclusion (?include=user.credentials) exposing sensitive models.
+
+  4. MICROSERVICES TRANSPORT SECURITY (NATS, RABBITMQ, GRPC):
+     NestJS microservices often communicate over internal message brokers:
+       - Missing Authentication Guards on @MessagePattern and @EventPattern handlers.
+       - Microservice endpoints assume internal network is completely trusted; SSRF to the broker
+         port (e.g., RabbitMQ 5672, NATS 4222) allows forging RPC messages that execute internal handlers.
+
+  5. PASSPORT JWT STRATEGY MISCONFIGURATIONS:
+     - IgnoreExpiration: true in JwtStrategy options -> accepts expired tokens indefinitely.
+     - SecretOrKey fallback: process.env.JWT_SECRET || 'secretKey' -> uses default dev secret in production.
+     - Missing user validation in validate(payload): if user was banned or deleted after token issuance,
+       token remains valid until expiration unless verified against database in validate().
+
+  6. TESTING METHODOLOGY & VALIDATION:
+     Step 1: Test ValidationPipe by sending extra fields on all POST/PATCH/PUT endpoints.
+     Step 2: Fuzz nested DTO fields with unexpected types (arrays, numbers, nulls) to detect unvalidated objects.
+     Step 3: Test Guard authorization bypass by swapping org IDs and roles with type variants.
+     Step 4: Audit white-box code for createQueryBuilder string interpolation and raw queries.
+references:
+  - https://docs.nestjs.com/security/authentication
+  - https://docs.nestjs.com/techniques/validation
+  - https://attack.mitre.org/techniques/T1190/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/nestjs-framework-audit.yaml

