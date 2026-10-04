@@ -1,0 +1,107 @@
+schema_version: 1
+version: 3.0.0
+name: django-framework-audit
+description: >
+  Comprehensive Django / Django REST Framework (DRF) security assessment covering ORM SQL injection,
+  SSTI via mark_safe, CSRF bypass on session-authenticated APIs, IDOR via missing object-level
+  permissions, mass assignment through DRF serializers, and SECRET_KEY forgery.
+triggers:
+  - django
+  - drf
+  - django rest framework
+  - viewset
+  - serializer
+  - csrf_exempt
+  - mark_safe
+  - secret_key
+  - django admin
+  - django idor
+  - django orm
+  - bandit
+  - semgrep django
+tools:
+  - curl
+  - httpx
+  - python3
+  - semgrep
+knowledge: |
+  Django's defaults (CSRF middleware, template auto-escape) help, but DRF, raw SQL, custom
+  permissions, and deployment settings introduce frequent gaps. Test every endpoint with
+  role-separated principals and verify object-level enforcement on querysets.
+
+  1. FINGERPRINTING & SURFACE MAPPING:
+     curl -I https://target/ -H "Cookie: sessionid=test"
+       → X-Frame-Options, Set-Cookie (sessionid, csrftoken), Server header
+     Admin panel detection: GET /admin/login/  (default path — check for weak creds)
+     DRF schema / Swagger:
+       GET /api/schema/   GET /swagger.json   GET /api/v1/  (enumerable endpoints)
+     Debug page trigger (if DEBUG=True leaks remain):
+       GET /does-not-exist  → Django yellow debug page may expose SECRET_KEY, DB creds, installed apps
+
+  2. ORM SQL INJECTION (LEGACY PATTERNS):
+     Vulnerable DRF filter: ?username__icontains= on unintended columns (no field whitelist)
+     Ordering injection: ?ordering=malicious_field (if ordering filter lacks whitelist)
+     Raw SQL in views: User.objects.raw(f"SELECT * FROM auth_user WHERE username = '{input}'")
+     Test payloads: admin' OR '1'='1' --   |  1 AND SLEEP(5)
+
+  3. TEMPLATE INJECTION (SSTI) VIA MARK_SAFE:
+     Where mark_safe(user_input) or |safe filter used → SSTI if Jinja2 backend without autoescape
+     SSTI probe: {{ 7*7 }}   →  response contains 49?
+     If Jinja2 sandbox misconfigured, escalate to RCE via __class__.__mro__ gadget chains
+     White-box: semgrep --config p/django .    →  flags mark_safe, |safe, csrf_exempt, RawSQL
+
+  4. CSRF BYPASS ON DRF SESSION AUTH:
+     DRF with session authentication and no CSRF enforcement on unsafe methods:
+       a. Check for @csrf_exempt decorator on state-changing views
+       b. Test: cross-origin POST with victim session cookie and arbitrary Content-Type
+       c. JSON endpoints with session auth: try Content-Type application/json
+       d. Validate CSRF_TRUSTED_ORIGINS not overly broad (*.app.com accepted from attacker.app.com?)
+
+  5. IDOR VIA MISSING OBJECT-LEVEL PERMISSIONS:
+     DRF ViewSets often protect list but forget destroy or custom @action routes:
+       a. GET /api/v1/orders/   → 200 (protected list)
+       b. GET /api/v1/orders/OTHER_USER_ID/  → should 403; if 200 → IDOR
+       c. PATCH /api/v1/orders/OTHER_USER_ID/  with user-A token
+       d. DELETE /api/v1/users/OTHER_USER_ID/  — often forgotten in destroy action
+     Generic views with queryset = Model.objects.all() and no filter by request.user.
+
+  6. MASS ASSIGNMENT VIA DRF SERIALIZERS:
+     fields = '__all__' exposing is_staff, is_superuser, role, balance
+     Test: PATCH /api/v1/users/SELF_ID/  {"is_staff": true, "is_superuser": true}
+     Nested writes updating foreign keys across tenants:
+       PATCH /api/v1/orders/OWN_ID/  {"customer": OTHER_TENANT_CUSTOMER_ID}
+
+  7. SESSION COOKIE FORGERY (SECRET_KEY LEAK):
+     If SECRET_KEY is exposed (debug page, git leak, env file, S3):
+       python3 -c "
+       from django.core.signing import TimestampSigner
+       import os; os.environ['DJANGO_SECRET_KEY'] = 'LEAKED_KEY'
+       s = TimestampSigner(); print(s.sign('admin'))
+       "
+     Password reset token forgery: uid + token from django.contrib.auth.tokens.PasswordResetTokenGenerator
+     Signed cookie backend: forge session cookie using signing.dumps() with leaked SECRET_KEY
+
+  8. DJANGO ADMIN ATTACK SURFACE:
+     Default /admin/ path + weak credentials (admin/admin, admin/password)
+     ModelAdmin exposing sensitive fields in list_display or CSV export
+     Unauthenticated admin panel routes if missing @staff_member_required on custom views
+     Channel consumer (ASGI WebSocket): verify same auth as HTTP REST equivalents
+
+  9. HOST HEADER INJECTION (PASSWORD RESET POISONING):
+     ALLOWED_HOSTS = ['*'] or *.app.com accepting attacker.app.com as Host
+     Password reset email built from HTTP Host header → poisoned reset link
+     Test: POST /accounts/password/reset/  with Host: attacker.com → email with attacker link
+
+  TOOLING (white-box):
+     bandit -r . -ll                     →  marks mark_safe, extra(), subprocess, weak crypto
+     semgrep --config p/django .         →  extra(), RawSQL, |safe, csrf_exempt
+     pipx install pip-audit && pip-audit -r requirements.txt  →  CVE scan on Django/DRF versions
+     ast-grep run -p 'mark_safe($X)' -l python   →  structural pattern for injection sinks
+references:
+  - https://docs.djangoproject.com/en/5.0/topics/security/
+  - https://www.django-rest-framework.org/api-guide/permissions/
+  - https://attack.mitre.org/techniques/T1190/
+  - https://portswigger.net/web-security/csrf
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/django-framework-audit.yaml

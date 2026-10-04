@@ -1,0 +1,126 @@
+schema_version: 1
+version: 3.0.0
+name: sast-dependency-audit
+description: >
+  Source-aware SAST and software composition analysis (SCA) playbook using semgrep, bandit,
+  gitleaks, trufflehog, trivy, ast-grep, and pip-audit. Converts static scanner output into
+  validated exploit-ready findings with OAST oracle and bounded PoC.
+triggers:
+  - sast
+  - static analysis
+  - semgrep
+  - bandit
+  - gitleaks
+  - trufflehog
+  - trivy
+  - dependency scan
+  - cve scan
+  - supply chain
+  - source code analysis
+  - ast-grep
+  - pip-audit
+  - source aware
+tools:
+  - semgrep
+  - python3
+knowledge: |
+  Static analysis is the fastest path to high-signal sinks in white-box or grey-box scopes.
+  Use scanners to triage; always convert static signals to dynamic proof before reporting.
+  Rules are NOT static findings — a scanner hit without dynamic validation is a lead, not a vulnerability.
+
+  1. BASELINE COVERAGE BUNDLE (run once per repo):
+     ART=/workspace/.yummi-sast
+     mkdir -p "$ART"
+     # Semgrep — default + language-specific + secrets configs
+     semgrep scan --config p/default --config p/golang --config p/secrets \
+       --metrics=off --json --output "$ART/semgrep.json" .
+     # AST-grep — structural function-call mapping
+     xargs -r -n 200 sg run --pattern '$F($$$ARGS)' --json=stream \
+       < <(python3 -c "import json; d=json.load(open('$ART/semgrep.json')); print('\n'.join(r['path'] for r in d.get('results',[])))") \
+       > "$ART/ast-grep.json" 2>"$ART/ast-grep.log" || true
+     # Secret scanning
+     gitleaks detect --source . --report-format json --report-path "$ART/gitleaks.json" || true
+     trufflehog filesystem --no-update --json --no-verification . > "$ART/trufflehog.json" || true
+     # Dependency + misconfig (vuln/misconfig only — secrets already covered)
+     trivy fs --scanners vuln,misconfig --timeout 30m --offline-scan \
+       --format json --output "$ART/trivy-fs.json" . || true
+
+  2. LANGUAGE-SPECIFIC STATIC PASSES:
+     Python:
+       bandit -r . -ll                                    →  mark_safe, subprocess, weak crypto, hardcoded secrets
+       semgrep --config p/django --config p/flask .       →  framework-specific sinks
+       pip-audit -r requirements.txt                      →  CVE scan on installed packages
+     JavaScript/TypeScript:
+       retire --path . --outputformat json --outputpath "$ART/retire.json" || true
+       eslint --no-config-lookup --rule '{"no-eval":2,"no-implied-eval":2}' -f json -o "$ART/eslint.json" . || true
+     Go:
+       semgrep --config p/golang .                        →  SQL, path traversal, unsafe crypto
+       gosec -fmt json -out "$ART/gosec.json" ./...       →  Go security linter
+     Java:
+       semgrep --config p/java .                          →  log4shell patterns, deserialization sinks
+     Secrets (all languages):
+       gitleaks detect --source . --report-format json --report-path "$ART/gitleaks.json"
+
+  3. HIGH-PRIORITY SINK PATTERNS (AST-GREP):
+     Missing auth near route handlers:
+       sg run -p 'router.$METHOD($PATH, $HANDLER)' -l go .
+     Dynamic query construction:
+       sg run -p 'db.Query($$$, fmt.Sprintf($$$))' -l go .
+       sg run -p 'cursor.execute(f"$SQL")' -l python .
+     Unsafe deserialization:
+       sg run -p 'pickle.loads($DATA)' -l python .
+       sg run -p 'yaml.load($DATA)' -l python .
+     File operations with user input:
+       sg run -p 'os.ReadFile($PATH)' -l go .
+       sg run -p 'open($PATH)' -l python .
+
+  4. DEPENDENCY CVE WORKFLOW:
+     trivy fs output parsing:
+       python3 -c "
+       import json
+       data = json.load(open('/workspace/.yummi-sast/trivy-fs.json'))
+       for result in data.get('Results', []):
+           for vuln in result.get('Vulnerabilities', []):
+               if vuln.get('Severity') in ['CRITICAL','HIGH']:
+                   print(vuln['VulnerabilityID'], vuln['PkgName'], vuln.get('InstalledVersion'), vuln.get('FixedVersion'))
+       "
+     For each CVE finding:
+       a. Verify CVE ID via NVD or GHSA (never hallucinate an ID)
+       b. Check if the vulnerable code path is actually reachable from user input
+       c. Report with advisory CVSS score (not guessed severity)
+       d. Note lockfile path for remediation traceability
+
+  5. SECRET MINING FROM SCANNER OUTPUT:
+     gitleaks/trufflehog hits → extract commit hash and secret value:
+       cat "$ART/gitleaks.json" | python3 -c "
+       import json,sys
+       for f in json.load(sys.stdin):
+           print(f['Description'], f.get('Secret',''), f.get('File',''), f.get('Commit',''))
+       "
+     Validate secrets by testing against known APIs (GitHub token → GET /user, AWS key → sts:GetCallerIdentity)
+
+  6. CONVERTING STATIC SIGNALS TO EXPLOITS:
+     Priority ranking:
+       CRITICAL: RCE sinks (eval, exec, system, Process.start), deserialization, SSTI with user input
+       HIGH:     SQL injection (format string in query), path traversal, hardcoded secrets
+       MEDIUM:   Missing auth on routes, mass assignment, CSRF gaps
+       LOW:      Weak crypto, verbose error messages, missing security headers
+     Triage flow:
+       a. Rank by impact × exploitability
+       b. Trace source-to-sink data flow for top-3 candidates
+       c. Build dynamic PoC that reproduces the suspected issue
+       d. Report ONLY after dynamic validation succeeds
+
+  ANTI-PATTERNS:
+     - Never treat scanner output as final truth (false positive rate is high)
+     - Never report source-only findings without validation evidence
+     - Never batch multiple CVEs into one report — each gets its own entry
+     - Never omit advisory CVSS score — it determines severity classification
+references:
+  - https://semgrep.dev/docs/
+  - https://trivy.dev/latest/docs/
+  - https://github.com/gitleaks/gitleaks
+  - https://attack.mitre.org/techniques/T1195/002/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/sast-dependency-audit.yaml

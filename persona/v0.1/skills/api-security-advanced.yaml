@@ -1,0 +1,118 @@
+schema_version: 1
+version: 3.0.0
+name: api-security-advanced
+description: >
+  Advanced REST/API security testing covering BFLA (broken function-level authorization),
+  mass assignment in JSON APIs, HTTP verb tampering, versioning exploitation, rate limit bypass
+  via request manipulation, API gateway misconfiguration, internal API exposure via SSRF pivot,
+  and gRPC/WebSocket transport parity gaps. Complements api-pentest with deep authorization logic.
+triggers:
+  - api security
+  - bfla
+  - broken function level authorization
+  - verb tampering
+  - api versioning
+  - api gateway
+  - api mass assignment
+  - http verb
+  - api rate limit
+  - rest api authorization
+  - api swagger
+  - openapi security
+  - api idor
+tools:
+  - httpx
+  - ffuf
+  - curl
+  - python3
+knowledge: |
+  API security failures most often occur at the function-level (what operations are permitted)
+  and object-level (which records can a principal access). Systematically test every endpoint
+  with all HTTP methods and multiple principals at different privilege levels.
+
+  1. API SURFACE DISCOVERY:
+     OpenAPI/Swagger: GET /swagger.json  GET /openapi.yaml  GET /api-docs  GET /v1/spec
+     Auto-discovery with httpx:
+       echo "https://target" | httpx -path /swagger.json,/openapi.json,/api/v1,/graphql -mc 200 -silent
+     Route brute-force via ffuf:
+       ffuf -u https://target/api/v1/FUZZ -w /usr/share/seclists/Discovery/Web-Content/api/api-endpoints.txt \
+         -mc 200,201,401,403 -H "Authorization: Bearer USER_TOKEN"
+     Extract from JS bundles: grep -rE '"/api/v[0-9]+/[a-zA-Z/]+' dist/ --include="*.js"
+
+  2. BROKEN FUNCTION-LEVEL AUTHORIZATION (BFLA):
+     Create full HTTP method × endpoint × principal matrix:
+       Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD, TRACE, CUSTOM_VERBS
+       Principals: unauthenticated, standard-user, premium-user, admin
+     High-value targets: /admin/, /export/, /bulk/, /internal/, /system/, /batch/
+     Test patterns:
+       - Admin endpoint accessible by non-admin:   GET /api/v1/admin/users  with user token
+       - Create with privileged fields:            POST /api/v1/products {"isApproved": true}
+       - Export endpoint without scope check:       GET /api/v1/reports/export?format=csv
+
+  3. HTTP VERB TAMPERING:
+     Same URL, different method may bypass auth middleware:
+       GET /api/v1/admin/settings → 403
+       POST /api/v1/admin/settings → 200 (if POST not protected)
+       HEAD /api/v1/admin/settings → 200 (leaks endpoint existence)
+     Method override headers (reverse proxies / legacy frameworks):
+       X-HTTP-Method-Override: DELETE
+       X-Method-Override: PUT
+       _method=DELETE  (query param or body)
+
+  4. API VERSIONING EXPLOITATION:
+     v1 endpoint with weaker auth than v2:
+       GET /api/v2/users/  → 403 (correct)
+       GET /api/v1/users/  → 200 (outdated version still live)
+     Version probing:
+       for v in v1 v2 v3 v4 2023-01 2024-01; do
+         httpx -u "https://target/api/$v/users" -mc 200 -silent; done
+
+  5. MASS ASSIGNMENT IN JSON APIs:
+     Test with additional fields that should be read-only:
+       POST /api/v1/users/signup {"email":"a@b.com","password":"pw","role":"admin","isVerified":true}
+       PATCH /api/v1/profile/me  {"email":"a@b.com","isAdmin":true,"balance":99999}
+     Discover unexposed fields: compare API schema with DB model in white-box
+     Fuzzing for hidden writable fields:
+       ffuf -u https://target/api/v1/profile -X PATCH \
+         -d '{"FUZZ":"test"}' -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt \
+         -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN" \
+         -fr "unknown field"
+
+  6. RATE LIMIT BYPASS TECHNIQUES:
+     Header manipulation to shift identity:
+       X-Forwarded-For: 1.2.3.FUZZ   →  rotate IP each request
+       X-Real-IP, X-Client-IP, CF-Connecting-IP
+     Origin shifting:  Referer: https://trusted.app.com
+     Request variation:  whitespace in Authorization token, different capitalization
+     Parallel bursting: ffuf with -t 50 to exceed time-window limits
+     Endpoint variation: /api/v1/login vs /api/v1/auth/login vs /api/authenticate
+
+  7. API GATEWAY MISCONFIGURATION:
+     JWT validation not enforced at gateway → forward unsigned token to backend:
+       Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.PAYLOAD.
+     Path traversal through gateway normalization:
+       /api/v1/../admin/settings  (if gateway normalizes, backend may not)
+     Cached authenticated responses served to unauthenticated users:
+       Set X-Forwarded-For + X-Cache-Status probe
+
+  8. INTERNAL API EXPOSURE:
+     APIs bound to localhost only — reach via SSRF (pivot through app feature):
+       Webhook target: http://127.0.0.1:8080/internal/admin
+     Kubernetes service discovery via DNS:
+       svc-name.namespace.svc.cluster.local  →  may be reachable from SSRF pivot
+     Cloud function-to-function calls without auth:
+       Identify function URLs from env vars or logs, call directly without token
+
+  VALIDATION:
+     a. Side-by-side request pairs showing unauthorized access (user vs admin role)
+     b. Mass assignment PoC: field in response confirming server accepted and applied privileged value
+     c. Rate limit bypass: demonstrate N+1 requests succeeding beyond documented limit
+     d. Verb tampering: GET returns 403 but DELETE returns 200/204 on same endpoint
+references:
+  - https://owasp.org/www-project-api-security/
+  - https://portswigger.net/web-security/api-testing
+  - https://attack.mitre.org/techniques/T1190/
+  - https://github.com/OWASP/API-Security
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/api-security-advanced.yaml

