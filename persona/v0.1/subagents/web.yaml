@@ -31,3 +31,6 @@ skills:
   - api-pentest
   - parameter-fuzzing
   - js-recon
+  - ssrf
+  - ssti
+  - file-upload

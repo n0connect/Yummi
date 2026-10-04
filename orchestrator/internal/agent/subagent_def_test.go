@@ -28,6 +28,8 @@ func TestLoadSubAgentDefs_AllBuiltinSubAgents(t *testing.T) {
 		"js-miner":        false,
 		"auth-auditor":    false,
 		"cloud-recon":     false,
+		"ad-operator":     false,
+		"privesc-operator": false,
 	}
 
 	for _, d := range defs {

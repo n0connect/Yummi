@@ -283,6 +283,11 @@ func TestLoadDir_AllBuiltinSkills(t *testing.T) {
 		"auth-logic",
 		"cloud-recon",
 		"graphql-pentest",
+		"ssrf",
+		"ssti",
+		"file-upload",
+		"active-directory",
+		"privesc-linux",
 	}
 
 	names := make(map[string]bool)
