@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.1.0
+version: 3.0.0
 name: vuln-scanning
-description: Senior template-based vulnerability scanning and signature triage with nuclei.
+description: Senior vulnerability scanning, signature triage, and CVE verification with nuclei and searchsploit.
 triggers:
   - nuclei
   - vulnerability scan
@@ -13,57 +13,38 @@ triggers:
   - subdomain takeover
   - takeover
   - dangling cname
+  - searchsploit
+  - zafiyet
 tools:
   - nuclei
+  - searchsploit
 knowledge: |
-  nuclei matches targeted CVE and misconfiguration signatures against
-  verified live services.
+  Perform targeted vulnerability scanning and signature triage with senior red-team precision and zero wasted network traffic.
 
-  TOOLING: prefer `nuclei_scan(target, tags, severity, output_file)` over a
-  raw shell command — one tool call instead of a shell chain avoids the
-  operator-approval system's chained-command risk floor. `target` can be a
-  single URL/host OR an absolute path to a file of many hosts (one per
-  line, e.g. `/home/pentester/work/<domain>/subs.txt`) — passing a file
-  path automatically switches to a bulk scan with concurrency/timeout/retry
-  values already tuned for scanning many hosts without exhausting the whole
-  call on a handful of slow/unresponsive ones.
+  1. TARGETED TEMPLATE FILTERING (Avoid Library Floods):
+     - Never execute Nuclei against an entire 50,000+ template library without strict filtering.
+     - Fast, High-Value Vulnerability Triage:
+       `nuclei -u <target> -tags cve,exposure,auth-bypass,misconfig -severity medium,high,critical -no-interactsh`
+     - Why `-no-interactsh`: Prevents scanner threads from blocking or hanging on out-of-band (OOB) polling when outbound egress is constrained or gateway-controlled.
+     - Stack-Specific Precision: When web fingerprinting (whatweb/wappalyzer) reveals exact technology (e.g. Apache, Nginx, Spring, Laravel, WordPress, Jenkins):
+       `nuclei -u <target> -tags <technology>,cve -severity medium,high,critical -no-interactsh`
 
-  1. TARGETED TEMPLATE FILTERING:
-     - Run targeted template categories rather than dumping the entire template library:
-       `nuclei_scan(target, tags="cve,exposure,auth-bypass,misconfig", severity="low,medium,high,critical")`.
-     - When specific technology was already identified (e.g. Spring, Laravel, Jenkins, Nginx):
-       `nuclei_scan(target, tags=<technology>)`.
+  2. SUBDOMAIN TAKEOVER DISCIPLINE:
+     - Run takeover scans against resolved subdomain lists produced during reconnaissance:
+       `nuclei -l <path_to_subs.txt> -tags takeover -no-interactsh`
+     - A dangling CNAME pointing to an unclaimed cloud resource (S3, GitHub Pages, Heroku, Azure) is a verified high-impact finding.
 
-  2. SUBDOMAIN TAKEOVER — run this against EVERY subdomain list osint-enum
-     produces, not just the primary target. One of the highest-value,
-     lowest-effort bug classes: a dangling CNAME pointing at an unclaimed
-     cloud resource (S3, GitHub Pages, Heroku, Azure, etc.) is a full
-     takeover, not a "maybe":
-       `nuclei_scan(target=<path to subs.txt>, tags="takeover")`.
-     A hit here is a critical/high finding on its own — don't bury it in
-     general scan noise. A name with no DNS record at all cannot have a
-     dangling CNAME, so if a very large candidate list is taking too long
-     even with this tool's own bulk tuning, prioritize finishing the
-     smaller real-enumeration + resolved-hosts set first and report which
-     set was actually covered.
+  3. VERIFICATION BEFORE ASSERTION (Eliminate False Positives):
+     - Treat automated scanner output as a qualified lead, not final truth.
+     - For any critical or high finding, independently confirm the underlying HTTP condition with a single targeted probe (e.g. `curl -s -i "<target>/vulnerable_endpoint"`).
+     - Confirm that status codes, response headers, or error disclosures genuinely reflect an exploitable state before reporting.
 
-  3. OPERATIONAL TEMPO & RATE DISCIPLINE:
-     - A single-target scan already runs at nuclei's own sane defaults; bulk
-       (file-path target) mode is auto-tuned by the tool itself — no extra
-       concurrency/rate flags to set yourself in either case.
-
-  4. TRIAGE & FALSE-POSITIVE FILTERING:
-     - Treat template matches with high/critical severity as priority investigation leads.
-     - Verify version-detection hits against exact HTTP response headers / HTML bodies.
-     - Record the Template ID, matched URL, and exact vulnerability classification as evidence.
-
-  5. EXPLOIT & CVE CROSS-REFERENCE:
-     - For identified product names and version banners, search local exploit databases:
-       `searchsploit <service> <version>`
-     - Check available verification modules via `msfconsole -q -x 'search <cve_or_service>; exit'`.
-     - Prioritize non-destructive verification of preconditions before proposing exploitation.
+  4. LOCAL EXPLOIT DATABASE & VERSION CORRELATION:
+     - Cross-reference confirmed service banners and product versions against local exploit databases:
+       `searchsploit <product> <version>`
+     - Inspect exploit code to verify prerequisites, required parameters, and execution safety before proposing any action.
 references:
-  - persona:vuln-scanning-v2
+  - persona:vuln-scanning-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/vuln-scanning.yaml

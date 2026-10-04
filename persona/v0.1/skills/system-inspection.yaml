@@ -1,25 +1,23 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: system-inspection
-description: Grounded local host inspection for files, packages, resources, and privilege configuration.
+description: Senior local host triage, privilege escalation vectors, SUID/capability discovery, and system architecture inspection.
 triggers:
   - system
   - sistem
   - hostname
-  - python
   - shell
   - uptime
   - memory
-  - ram usage
-  - free ram
-  - mysql
-  - postgresql
-  - largest
-  - büyük
-  - dosya
-  - /var
+  - privilege escalation
+  - privesc
+  - suid
   - sudo
-  - yönetici
+  - capabilities
+  - cron
+  - yetki yükseltme
+  - id
+  - whoami
 tools:
   - find
   - stat
@@ -27,22 +25,48 @@ tools:
   - id
   - awk
   - sort
+  - sudo
+  - getcap
+  - ss
 knowledge: |
-  Treat local inspection as an evidence-collection task, not a privilege-escalation task:
-  1. Match the primitive to the noun in the goal. For largest FILES, use the portable pattern
-     `find <path> -type f -printf '%s\t%p\n' 2>/dev/null | sort -nr | head -3` (largest first);
-     `du <path>/*` ranks directories and does not answer a largest-files question. Suppress
-     inaccessible-path noise only after preserving useful output. Plan this as ONE atomic step:
-     the pipeline both collects and ranks the files, so a second "sort/analyze" step is redundant.
-  2. To identify administrative users without root, inspect identity databases with `getent group`
-     (sudo, admin, wheel) and readable sudoers configuration. Do not invoke `sudo` merely to learn
-     who has sudo rights; that tests the current process, not the system's membership data.
-  3. For optional software, probe both the executable path and version. A missing executable is
-     valid negative evidence; report absence plainly and never invent a version.
-  4. Prefer focused resource sources such as `/proc/meminfo`, `uptime`, and explicit version commands.
-     Preserve exact values and units in the final report.
+  Perform local host inspection and privilege escalation analysis with senior systems engineering discipline and zero guesswork.
+
+  1. IDENTITY & PRIVILEGE ENUMERATION:
+     - Check user context and assigned groups: `id` and `whoami`.
+     - Non-Interactive Sudo Check:
+       `sudo -l -n 2>/dev/null`
+       Using `-n` (non-interactive) is essential: it reports executable sudo commands without blocking or hanging on password prompts.
+     - Dangerous Group Membership:
+       Inspect membership in groups that confer root access: `docker`, `lxd`, `disk`, `sudo`, `wheel`.
+       (e.g., membership in `docker` allows mounting host root `/` inside a container).
+
+  2. SUID/SGID BINARIES & LINUX CAPABILITIES:
+     - Locate all SUID binaries on the filesystem:
+       `find / -perm -4000 -type f -exec ls -la {} + 2>/dev/null`
+       Cross-reference unusual binaries against GTFOBins primitives (e.g. pkexec, find, bash, cp, vim, python, gdb).
+     - Inspect POSIX File Capabilities:
+       `getcap -r / 2>/dev/null`
+       Look for capabilities like `cap_setuid+ep` on scripting runtimes (python, perl, ruby) which permit instant UID switching.
+
+  3. INTERNAL NETWORK SERVICES & PROCESS ARCHITECTURE:
+     - Inspect local loopback services that were invisible during external network scans:
+       `ss -tulpn` or `netstat -tulpn`
+       Identify internal admin panels, redis, memcached, or local databases bound to 127.0.0.1.
+     - Inspect active processes running under privileged accounts:
+       `ps aux | grep root`
+
+  4. SCHEDULED TASKS & WRITABLE PATHS:
+     - Inspect system-wide and user cron tables:
+       `cat /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* 2>/dev/null`
+     - Check write permissions on scripts executed by root cron jobs:
+       `ls -la <script_path>`
+     - Locate world-writable scripts or configuration files in sensitive trees:
+       `find /etc /opt /var/www /usr/local -maxdepth 3 -writable -type f 2>/dev/null`
+
+  5. STRUCTURED EVIDENCE REPORTING:
+     - Record exact paths, ownership, permission bits, and command outputs as verifiable findings.
 references:
-  - persona:system-inspection-v1
+  - persona:system-inspection-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/system-inspection.yaml

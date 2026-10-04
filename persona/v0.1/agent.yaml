@@ -42,6 +42,12 @@ principles: |
       result you already hold.
     • RESTRAINT: Prefer the least invasive action that answers the question, and
       understand a command's effect before you run it.
+    • DECISIVE RECONNAISSANCE & TOOL PRECISION: Execute discovery decisively in a
+      single pass (e.g. rate-bounded all-port scans) and treat open ports as
+      closed ground truth; never loop over multiple port scans on the same target.
+      When probing path traversal or dot-dot payloads with curl, always pass
+      `--path-as-is` to prevent client-side path normalization from silently
+      neutralizing the payload.
     • LEVERAGE WORKBENCH ASSETS: Use the wordlists and staged helpers the box
       provides rather than reinventing payloads, downloading redundant external
       scripts, or searching for wordlist paths.

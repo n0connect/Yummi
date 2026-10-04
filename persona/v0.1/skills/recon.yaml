@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: recon
-description: Senior host and network reconnaissance — port sweeps, service/version detection, and safe NSE script enumeration.
+description: Senior host and network reconnaissance — decisive single-pass sweeps, service/version detection, safe NSE enumeration, and strict anti-redundancy discipline.
 triggers:
   - recon
   - reconnaissance
@@ -10,6 +10,9 @@ triggers:
   - scan
   - ports
   - port
+  - portlar
+  - keşif
+  - tarama
   - nmap
   - discover
   - footprint
@@ -18,28 +21,49 @@ triggers:
 tools:
   - nmap
 knowledge: |
-  Perform host and network enumeration systematically with disciplined stealth and accuracy:
+  Perform host and network reconnaissance with senior red-team precision, rate discipline, and zero step waste.
 
-  1. FAST PORT SWEEP (Establish Live Ports First):
-     - Scan the top TCP ports quickly without DNS resolution delays:
-       `nmap -sT -T4 --top-ports 1000 --open -n <target>`
-     - For broad IP ranges, run discovery ping sweeps before detailed port scanning:
-       `nmap -sn -n <target_cidr>`
+  1. TARGET TRIAGE & THE DECISIVE SINGLE-PASS RULE:
+     Reconnaissance exists to feed application and protocol analysis — do NOT fragment port scanning across multiple sequential attempts.
+     
+     A) Focused Single Target / CTF / Lab Host (Authorized Direct Assessment):
+        - Step 1: Pre-flight Liveness Check. Confirm connectivity with a bounded ping:
+          `ping -c 2 -W 2 <target>`
+          If ICMP is filtered or dropped by a host firewall, confirm reachability via `nmap -sn -Pn <target>` before launching heavy sweeps.
+        - Step 2: Decisive All-Port Single-Pass Scan. Execute ONE comprehensive, rate-bounded all-port TCP sweep with version and default script detection:
+          `nmap -sS -sV -sC -p- --min-rate 1000 --open -n -Pn <target>`
+          Critical flags rationale:
+          • `-sS`: TCP SYN half-open; fast, lightweight, does not establish full socket state on target.
+          • `-p-`: Scans all 65,535 TCP ports in one sweep. Completely eliminates the risk of missing non-standard administrative or development ports (e.g. 3000, 8080, 8443, 9001, 27017).
+          • `--min-rate 1000`: Vital flag. Prevents Nmap from dropping probe rates on filtered ports, guaranteeing the entire 65k sweep finishes in seconds rather than stalling for tens of minutes.
+          • `--open`: Suppresses closed and filtered ports, keeping output compact and preserving LLM context budget.
+          • `-n`: Disables reverse DNS lookup, eliminating DNS latency and query leakage.
+          • `-Pn`: Treats host as online, bypassing host-discovery drops once reachability is verified.
+          • `-sV -sC`: Inspects service banners and executes safe default NSE scripts ONLY against ports confirmed open by the SYN pass.
 
-  2. TARGETED SERVICE & VERSION DETECTION:
-     - Run detailed service detection and default NSE scripts ONLY against open ports:
-       `nmap -sV -sC -p <open_ports> -n <target>`
-     - Extract banners, protocol versions, and service names without aggressive timing.
+     B) Broad Subnet / Multi-Host Range (CIDR):
+        - Step 1: Discover live hosts via ping sweep: `nmap -sn -n <cidr>`.
+        - Step 2: Sweep discovered live hosts on standard ports: `nmap -sS -T4 --top-ports 1000 --open -n <live_hosts>`.
 
-  3. FOCUSED UDP RECONNAISSANCE:
-     - Probe high-value UDP services (DNS, SNMP, NTP, DHCP, TFTP, IKE):
-       `nmap -sU --top-ports 25 -n <target>`
+  2. STRICT ANTI-PATTERN SCANNING LOCK (Never Re-scan):
+     - ONCE Nmap completes and reports open ports for a host, port discovery is PERMANENTLY COMPLETE.
+     - NEVER run follow-up port scans against the same target (e.g., do NOT execute `nmap -p 1-65535`, `nmap -sV -p top-25`, or plain `nmap <target>`).
+     - Negative evidence is conclusive: if only port 80/tcp is open, accept it as established ground truth. Do not doubt the result or retry with alternative flags.
+     - Immediately transition to protocol-specific enumeration on discovered services (web, smb-enum, credential-attack).
 
-  4. STRUCTURED FINDINGS & SHARED MEMORY:
-     - Record each open port, transport protocol (tcp/udp), service name, product version, and host banner as a structured finding.
-     - These findings feed subsequent specialized subagents (web, smb-enum, snmp-enum, exploiter).
+  3. FOCUSED UDP RECONNAISSANCE (Only When Justified):
+     - Probe UDP ONLY when TCP reveals no actionable entry points or specific high-value UDP protocols are suspected (DNS, SNMP, NTP, TFTP, IKE):
+       `nmap -sU --top-ports 25 -n -Pn --min-rate 500 <target>`
+
+  4. STRUCTURED FINDINGS & MEMORY PIPELINE:
+     - Record each open port, protocol, service banner, and version as structured evidence.
+     - Pipe identified services to dedicated sub-skills:
+       • Port 80/443/8080/8443 -> web / api-pentest
+       • Port 139/445 -> smb-enum
+       • Port 22/21/23 -> credential-attack
+       • Port 161 -> snmp-enum
 references:
-  - persona:recon-v2
+  - persona:recon-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/recon.yaml

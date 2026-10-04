@@ -1,7 +1,7 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: parameter-discovery
-description: Advanced HTTP parameter discovery and fuzzing for hidden GET, POST, JSON, and XML parameters.
+description: Heuristic HTTP parameter discovery and mining with arjun, ffuf, and curl across GET, POST, JSON, and XML bodies.
 triggers:
   - parameter discovery
   - arjun
@@ -16,27 +16,28 @@ tools:
   - ffuf
   - curl
 knowledge: |
-  Discover hidden request parameters across endpoints to uncover unlinked functionality,
-  debug switches, administrative overrides, and injection entry points.
+  Discover hidden request parameters across endpoints to uncover unlinked functionality, administrative overrides, and injection entry points.
 
-  TOOLING: Prefer `arjun_scan` for heuristic parameter discovery across HTTP methods.
-  Use `ffuf_fuzz` or `curl_probe` for follow-up parameter validation.
+  1. HEURISTIC AUTOMATED MINING (arjun):
+     - Use `arjun` to discover hidden parameters using heuristic response-differential chunking:
+       • GET query parameters: `arjun -u "<url>" -m GET`
+       • POST form parameters: `arjun -u "<url>" -m POST`
+       • POST JSON object keys: `arjun -u "<url>" -m JSON`
+       • XML attributes: `arjun -u "<url>" -m XML`
+     - Save discovered parameters for immediate behavioral verification.
 
-  1. AUTOMATED HEURISTIC PARAMETER DISCOVERY:
-     - Discover hidden query parameters: `arjun_scan(url, method="GET")`.
-     - Discover hidden body parameters: `arjun_scan(url, method="POST")`.
-     - Discover hidden JSON payload keys: `arjun_scan(url, method="JSON")`.
-     - Discover hidden XML payload attributes: `arjun_scan(url, method="XML")`.
+  2. MANUAL & FFUF DIFFERENTIAL CONFIRMATION:
+     - Confirm response variations between baseline requests and candidate parameters:
+       `curl -s "<url>?<discovered_param>=1"` vs `curl -s "<url>"`
+     - Observe changes in HTTP status codes, response lengths, reflected values, or execution headers.
 
-  2. PARAMETER BEHAVIOR VALIDATION:
-     - Test discovered parameters for differential response handling (status codes, body length, reflected values).
-     - Check common administrative and debug parameters: `debug`, `test`, `admin`, `role`, `impersonate`, `redirect_to`.
-     - Probe discovered parameters for injection vulnerabilities (SQLi, XSS, SSRF, IDOR).
-
-  3. STRUCTURED REPORTING:
-     - Record endpoint, HTTP method, discovered parameter name, parameter type, and proof of response deviation.
+  3. PRIVILEGED OVERRIDES & DEBUG FLAGS:
+     - Check common administrative and debugging override parameters:
+       `debug=true`, `test=1`, `admin=1`, `show_errors=1`, `format=json`, `impersonate=<user>`
+     - When a parameter accepts file paths or URLs (`file=`, `url=`, `redirect=`):
+       Immediately apply the `web` skill standard: verify directory traversal using `curl --path-as-is` with standard and nested dot-dot sequences.
 references:
-  - persona:parameter-discovery-v1
+  - persona:parameter-discovery-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/parameter-discovery.yaml

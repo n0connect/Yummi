@@ -1,7 +1,7 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: auth-logic
-description: Penetration testing of JSON Web Tokens (JWT), session state machines, OAuth2 flows, and authentication logic.
+description: Senior authentication architecture assessment — JWT cryptographic attacks, OAuth2 flow weaknesses, session state machines, and multi-factor bypasses.
 triggers:
   - auth logic
   - jwt tool
@@ -11,35 +11,46 @@ triggers:
   - session hijacking
   - none algorithm
   - privilege escalation
+  - kimlik doğrulama
+  - token
 tools:
   - jwt_tool
   - curl
 knowledge: |
-  Audit JSON Web Tokens, session tokens, and authentication logic for cryptographic and implementation flaws.
+  Audit authentication architectures, cryptographic tokens, and state machines with senior red-team precision.
 
-  TOOLING: Prefer `jwt_tool_inspect` for decoding, analyzing, and tampering with JWT tokens.
-  Use `curl_probe` to send manipulated tokens to protected endpoints.
+  1. JSON WEB TOKEN (JWT) CRYPTOGRAPHIC ATTACKS:
+     - Token Claim Inspection:
+       Decode base64url header and payload: inspect `alg`, `typ`, `kid`, `jku`, `iss`, `sub`, `exp`, `role`.
+     - The `alg: none` Vulnerability:
+       Tamper token header to `"alg": "none"` (or `"alg": "None"`), modify claims (e.g. `"role": "admin"`), and strip the signature component (preserving the trailing dot `.`):
+       `jwt_tool <token> -X a`
+     - Key Confusion Attack (RS256 -> HS256):
+       If the backend uses an asymmetric RSA public key to verify signatures, re-sign the token using symmetric HMAC-SHA256 where the HMAC secret is set to the server's public key (PEM format):
+       `jwt_tool <token> -T -S hs256 -k <public_key.pem>`
+     - Header Parameter Injection (`kid` / `jku`):
+       Probe SQLi, command injection, or path traversal inside the `kid` header parameter:
+       e.g., `"kid": "../../../dev/null"` (where secret becomes empty string) or `"kid": "key1' OR '1'='1"`.
+     - Offline HMAC Secret Cracking:
+       Crack weak signing secrets locally without network noise:
+       `jwt_tool <token> -C -d $PASSWORDS_TOP`
 
-  1. JWT DECODING & ANALYSIS:
-     - Decode header, payload, and signature: `jwt_tool_inspect(jwt="<token>", mode="decode")`.
-     - Inspect claims: `alg`, `typ`, `kid`, `jku`, `iss`, `sub`, `exp`, `role`.
+  2. OAUTH2 FLOW & REDIRECT_URI TAMPERING:
+     - Test `redirect_uri` validation against open redirects and path traversal:
+       • Parameter pollution: `&redirect_uri=https://trusted.com&redirect_uri=https://attacker.com`
+       • Subdomain bypass: `https://trusted.com.attacker.com`
+       • Path traversal: `https://trusted.com/oauth/callback/../../attacker`
+     - Verify `state` parameter enforcement; missing or unvalidated `state` allows Cross-Site Request Forgery (CSRF) in account linking flows.
 
-  2. COMMON JWT ATTACK VECTORS:
-     - None Algorithm Attack: Forge token with `"alg": "none"` or `"alg": "None"`:
-       `jwt_tool_inspect(jwt="<token>", mode="tamper", tamper_claims="role=admin", key="")`.
-     - Key Confusion (RS256 to HS256): Sign token using public key as HMAC secret:
-       `jwt_tool_inspect(jwt="<token>", mode="tamper", tamper_claims="role=admin", key="<public_key_pem>")`.
-     - Weak HMAC Secret Brute-forcing: Test signature against standard wordlists.
+  3. MULTI-FACTOR AUTHENTICATION (MFA / 2FA) LOGIC FLAWS:
+     - Direct Route Access: Check if navigating directly to post-auth endpoints (`/dashboard`, `/profile`) succeeds after step 1 without completing step 2.
+     - Response Code Manipulation: Test intercepting and modifying the 2FA verification response from `{"status": "fail"}` or `401 Unauthorized` to `{"status": "success"}` or `200 OK`.
+     - Rate-Limiting Check: Probe OTP endpoints with sequential inputs to check if brute-force protection is enforced.
 
-  3. OAUTH2 & SESSION LOGIC:
-     - Test OAuth2 `redirect_uri` validation against open redirects and parameter pollution.
-     - Check state parameter validation against CSRF in auth flows.
-     - Test session invalidation upon password reset or logout.
-
-  4. REPORTING:
-     - Record original token, forged token, endpoint tested, and proof of elevated access.
+  4. EVIDENCE COLLECTION:
+     - Document original token, manipulated token, request/response headers, and proof of elevated privilege.
 references:
-  - persona:auth-logic-v1
+  - persona:auth-logic-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/auth-logic.yaml

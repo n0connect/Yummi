@@ -1,7 +1,7 @@
 schema_version: 1
-version: 1.2.0
+version: 2.0.0
 name: parameter-fuzzing
-description: Query and body parameter mining, hidden parameter discovery, input reflection testing, and XSS confirmation.
+description: Senior parameter mining, hidden query/body parameter fuzzing, differential response analysis, and reflection confirmation.
 triggers:
   - parameter
   - parameters
@@ -13,52 +13,44 @@ triggers:
   - open redirect
   - ssrf parameter
   - xss
-  - cross-site scripting
   - dalfox
+  - parametre
 tools:
   - gau
   - ffuf
   - curl
   - dalfox
 knowledge: |
-  Discover hidden query/body parameters that unlock injection, SSRF, open
-  redirect, and IDOR vulnerabilities.
+  Discover hidden query and body parameters with senior red-team differential analysis and zero false-positive floods.
 
-  TOOLING: prefer `gau_fetch`/`ffuf_fuzz`/`dalfox_scan` over a raw shell
-  command — one tool call instead of a shell chain, and it avoids the
-  operator-approval system's chained-command risk floor. Give `output_file`
-  (an absolute path under `/home/pentester/work/<target>/`) when a result
-  feeds a later step.
+  1. CALIBRATED DIFFERENTIAL RESPONSE FUZZING:
+     - Uncalibrated parameter fuzzing creates false-positive noise due to dynamic server timestamps or reflected query strings.
+     - Always baseline the response length: `curl -s "<url>?invalid_key_xyz=1" | wc -c`
+     - Filter baseline size using `-fs <baseline_size>` or word count using `-fw <baseline_words>`.
+     - Fuzz GET Query Parameters:
+       `ffuf -u "<url>?FUZZ=test" -w $COMMON_TXT -mc 200,302 -fs <baseline_size>`
+     - Fuzz POST JSON Request Keys:
+       `ffuf -u "<url>" -X POST -H "Content-Type: application/json" -d '{"FUZZ":"test"}' -w $COMMON_TXT -mc 200,201,302 -fs <baseline_size>`
 
-  1. HISTORICAL & PASSIVE PARAMETER EXTRACTION:
-     - Extract historical URLs containing query parameters from passive search engines and archives:
-       `gau_fetch(domain, output_file)`, then `grep -E '\?'` the saved file
-       for URLs that actually carry a query string (raw shell — pure text
-       filtering on already-fetched content, no dedicated tool for that).
-     - Extract and de-duplicate unique parameter names across endpoints.
+  2. HIGH-VALUE SECURITY PARAMETER MATRIX:
+     - Prioritize testing against high-impact parameter families:
+       • File Inclusion & SSRF: `file`, `path`, `doc`, `url`, `dest`, `redirect`, `uri`, `domain`, `src`, `load`, `page`
+       • Debugging & Privileged State: `debug`, `test`, `admin`, `root`, `role`, `priv`, `show_debug`, `impersonate`
+       • Command Injection & Code Eval: `cmd`, `exec`, `command`, `run`, `ping`, `query`, `eval`
 
-  2. HIDDEN PARAMETER FUZZING:
-     - Fuzz for unlinked/hidden GET parameters on high-interest endpoints (e.g. `/profile`, `/api/item`, `/search`):
-       `ffuf_fuzz(url="<url>?FUZZ=test", wordlist="common.txt", match_codes="200,302", output_file)`.
-     - Fuzz POST JSON parameters on API endpoints:
-       `ffuf_fuzz(url, wordlist="common.txt", method="POST", headers=["Content-Type: application/json"], data='{"FUZZ":"test"}', output_file)`.
+  3. REFLECTION & XSS VERIFICATION:
+     - Identify parameters whose values are reflected in HTML or HTTP headers.
+     - Test for context-aware cross-site scripting confirmation using dalfox:
+       `dalfox url "<url>?<param>=test"`
+     - A dalfox hit is verified proof of vulnerability — record the parameter, context, and working payload.
 
-  3. REFLECTION & BEHAVIOR TRIAGE:
-     - Identify parameters whose values are reflected in the HTTP response body or headers (candidates for XSS or header injection).
-     - Identify parameters accepting URLs or file paths (`url=`, `redirect=`, `file=`, `dest=`, `src=`) as candidates for SSRF or Open Redirect.
-
-  4. XSS CONFIRMATION — don't stop at "reflected," confirm it. For every URL
-     with a reflected parameter found in step 3, run it through dalfox:
-       `dalfox_scan(url="<url>?param=test")`.
-     A dalfox hit is a confirmed XSS finding (payload + injection point), not
-     just a candidate — record it as such, distinct from an unconfirmed
-     reflection.
-
-  5. RECORDING FINDINGS:
-     - Record each discovered parameter, the target URL, the request method, and the observable differential response.
-     - Confirmed XSS findings get their own entry with the exact payload and parameter, separate from the general parameter inventory.
+  4. IMMEDIATE ESCALATION TO SPECIALIZED VECTORS:
+     - When a discovered parameter accepts a file path (e.g. `file=`, `template=`, `include=`):
+       Immediately apply the `web` skill standard: execute `curl --path-as-is` with standard (`../../../../etc/passwd`) and nested (`....//....//....//etc/passwd`) traversal payloads.
+     - When a parameter accepts external URLs (e.g. `url=`, `redirect=`):
+       Test SSRF against loopback addresses (`http://127.0.0.1:80/`) and cloud metadata endpoints.
 references:
-  - persona:parameter-fuzzing-v1
+  - persona:parameter-fuzzing-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/parameter-fuzzing.yaml

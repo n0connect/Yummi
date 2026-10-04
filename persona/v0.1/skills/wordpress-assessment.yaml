@@ -1,33 +1,49 @@
 schema_version: 1
-version: 1.1.0
+version: 2.0.0
 name: wordpress-assessment
-description: WordPress-specific vulnerability and enumeration scanning with wpscan.
+description: Senior WordPress security assessment — plugin/theme CVE identification, XML-RPC amplification triage, user enumeration, and config file recovery.
 triggers:
   - wordpress
   - wp-admin
   - wp-content
   - wpscan
   - wp-login
+  - wp-json
 tools:
   - wpscan
+  - curl
 knowledge: |
-  Only reach for this once whatweb/curl has actually confirmed WordPress (wp-content in a
-  response, an X-Powered-By or generator meta tag, /wp-login.php resolving) — wpscan against
-  a non-WordPress target just wastes a step.
-  1. `wpscan_scan(url, output_file)` for a baseline pass — core version, exposed
-     plugins/themes, users. Prefer this over a raw shell command: one tool
-     call instead of a shell chain avoids the operator-approval system's
-     chained-command risk floor, and `output_file` (an absolute path under
-     `/home/pentester/work/<target>/`) persists the result for a later
-     credential-attack subtask to reference.
-  2. An outdated core/plugin/theme version with a known CVE is a strong finding — record the
-     exact version and the CVE if wpscan cites one.
-  3. Enumerated usernames feed a later credential-attack subtask against wp-login.php — record
-     them even if wpscan doesn't flag them as a vulnerability by itself.
-  4. Don't attempt login brute-forcing from within this skill — that's credential-attack's job
-     (hydra's http-post-form module), keep concerns separated.
+  Perform targeted WordPress security analysis with senior offensive engineering rigor and zero wasted execution cycles.
+
+  1. PRE-CONDITION GATE (Verify WordPress First):
+     - Only reach for WordPress tooling once web fingerprinting confirms WordPress markers:
+       Check for `/wp-login.php`, `wp-content/` in source, `X-Powered-By: WordPress`, or `<meta name="generator" content="WordPress">`.
+     - Running WPScan against non-WordPress targets wastes steps and produces zero findings.
+
+  2. WPSCAN TARGETED VULNERABILITY & USER ENUMERATION:
+     - Execute WPScan with selective enumeration to avoid noise:
+       `wpscan --url <url> --enumerate vp,vt,u --detection-mode aggressive -o /home/pentester/work/wpscan.txt`
+       • `vp`: Enumerate ONLY vulnerable plugins (filters out noise from dozens of secure plugins).
+       • `vt`: Enumerate ONLY vulnerable themes.
+       • `u`: Enumerate valid author usernames.
+     - Record identified CVEs, vulnerable plugin versions, and valid usernames.
+
+  3. REST API & XML-RPC OPERATIONAL TRIAGE:
+     - User Enumeration via WP-JSON:
+       Query the REST API directly: `curl -s "<url>/wp-json/wp/v2/users"`
+       Discloses user IDs, administrative login slugs, and display names even when author archives (`/?author=1`) are disabled.
+     - XML-RPC Attack Surface:
+       Check if `/xmlrpc.php` is active:
+       `curl -s -X POST -d '<methodCall><methodName>system.listMethods</methodName></methodCall>' <url>/xmlrpc.php`
+       • `pingback.ping` enables internal network port scanning and SSRF.
+       • `system.multicall` enables high-speed credential brute-forcing, bundling hundreds of login attempts into a single HTTP POST request to bypass application-layer rate limits.
+
+  4. SENSITIVE ARTIFACT & CONFIG EXPOSURE:
+     - Probe common backup files and debug logs:
+       • Configuration backups: `/wp-config.php.bak`, `/wp-config.php.save`, `/wp-config.old`, `/wp-config.txt`
+       • Debug logs: `/wp-content/debug.log` (frequently contains PHP fatal errors, database connection strings, and plaintext credentials).
 references:
-  - persona:wordpress-assessment-v1
+  - persona:wordpress-assessment-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/wordpress-assessment.yaml

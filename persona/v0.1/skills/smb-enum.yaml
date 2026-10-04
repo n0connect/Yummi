@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: smb-enum
-description: SMB, Windows, and Active Directory enumeration with netexec, enum4linux, smbmap, and kerbrute.
+description: Senior SMB, RPC, and Active Directory enumeration — null/guest sessions, share access triage, RID cycling, and signing assessment.
 triggers:
   - smb
   - samba
@@ -14,26 +14,42 @@ triggers:
   - kerbrute
   - shares
   - null session
+  - paylaşım
+  - rpc
 tools:
   - netexec
   - enum4linux
   - smbmap
   - kerbrute
+  - smbclient
 knowledge: |
-  SMB and Active Directory enumeration recovers high-value intelligence from null or authenticated sessions:
-  1. Null session & share check:
-     - `netexec smb <target> -u '' -p '' --shares` or `smbmap -H <target> -u ''` for fast share triage.
-     - `enum4linux -a <target>` for a full legacy sweep (OS, users, groups, shares, password policy).
-  2. Domain user enumeration & Kerberos pre-auth (when domain name is known):
-     - `kerbrute userenum -d <domain> --dc <dc_ip> $USERNAMES` for stealthy, lockout-free user validation.
-     - `netexec smb <target> -u '' -p '' --users`
-  3. Shares and permissions:
-     - Check read/write permissions on accessible shares (`smbclient -N -L //<target>`).
-     - Valid usernames feed subsequent credential-attack workflows.
-  4. Record SMB signing status (Signing: False indicates NTLM relay opportunity), OS build, and domain name.
-  5. A refused null session is itself a valid finding (target enforces authentication) — report plainly rather than treating as an error.
+  Enumerate SMB and RPC services systematically like a senior red-team operator, extracting high-value assets with minimal footprints.
+
+  1. NULL & GUEST SESSION TRIAGE (First Action):
+     - Test anonymous and guest binds across shares:
+       `netexec smb <target> -u '' -p '' --shares` or `smbmap -H <target> -u ''`
+     - Identify read or write access on standard or custom shares (`Backups`, `Data`, `IT`, `Public`, `SYSVOL`, `NETLOGON`).
+     - Access readable shares directly using smbclient without authentication:
+       `smbclient -N //<target>/<share_name> -c 'ls'`
+
+  2. SMB SIGNING & DEFENSIVE CONFIGURATION CHECK:
+     - Inspect SMB signing state in netexec output:
+       • `signing: False` represents a critical security defect: NTLM relaying is viable against this host.
+       • Note exact OS build (e.g. Windows Server 2019 vs Samba 4.x) and domain membership.
+
+  3. USER ENUMERATION & RID CYCLING:
+     - When IPC$ or RPC binds succeed under anonymous/guest credentials:
+       Execute RID cycling to extract all local and domain accounts:
+       `netexec smb <target> -u '' -p '' --rid-brute`
+     - In Active Directory environments with Kerberos exposed (port 88):
+       Validate user lists without generating logon failures:
+       `kerbrute userenum -d <domain> --dc <dc_ip> $USERNAMES`
+
+  4. REPORTING & GROUND TRUTH:
+     - If null sessions return `STATUS_ACCESS_DENIED` or `STATUS_LOGON_FAILURE`, record that the host enforces SMB authentication.
+     - Never loop or re-try guest binds once denied. Transition immediately to credential-attack or web vector analysis.
 references:
-  - persona:smb-enum-v2
+  - persona:smb-enum-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/smb-enum.yaml

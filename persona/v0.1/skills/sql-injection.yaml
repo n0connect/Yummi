@@ -1,28 +1,51 @@
 schema_version: 1
-version: 1.0.0
+version: 2.0.0
 name: sql-injection
-description: Test a URL/parameter for SQL injection with sqlmap.
+description: Targeted SQL injection detection, verification, and non-destructive proof-of-concept with sqlmap and manual heuristic probing.
 triggers:
   - sql injection
   - sqli
   - sqlmap
   - injection
   - database
+  - sql
+  - veritabanı
+  - blind sqli
+  - union injection
 tools:
   - sqlmap
+  - curl
 knowledge: |
-  sqlmap is powerful but slow and loud if used broadly — scope it tightly:
-  1. Target a SPECIFIC URL with a SPECIFIC parameter already showing signs of dynamic
-     behavior (a query string, a form field) — never point it at a whole site.
-  2. Always run in `--batch` (non-interactive) mode inside the sandbox; there is no
-     terminal for it to prompt on.
-  3. A confirmed injection point is the finding — record the exact parameter and injection
-     type (boolean/time/error-based/UNION). Don't proceed to `--dump`/data extraction unless
-     the subtask explicitly calls for demonstrating impact, since that touches real data.
-  4. If sqlmap finds nothing on a suspected parameter, that's still a valid, reportable
-     negative result — don't escalate to riskier tampering techniques without explicit direction.
+  Conduct SQL injection assessment with strict scope control, non-destructive execution, and zero terminal-blocking hangs.
+
+  1. MANUAL HEURISTIC PROBING FIRST:
+     - Never point sqlmap blindly at an entire website.
+     - Identify dynamic query/body parameters (`id=`, `search=`, `cat=`, `user=`, `filter=`).
+     - Test input boundary breaks manually using curl:
+       `curl -s "<url>?id=1'"` or `curl -s "<url>?id=1\""`
+     - Inspect response for diagnostic SQL errors (e.g. MySQL syntax error, PostgreSQL unclosed quotation, ORA-01756, SQLite syntax error).
+
+  2. SQLMAP BATCH & CRITICAL OPERATIONAL FLAGS:
+     - ALWAYS pass `--batch` in headless sandbox mode; sqlmap must never block waiting for interactive stdin confirmation.
+     - Scope tightly to the candidate parameter: `-p <parameter_name>` (prevents wasteful fuzzing of unaffected query keys).
+     - Specify backend DBMS if known from error leaks or technology banners:
+       `--dbms=mysql` (or `postgresql`, `mssql`, `sqlite`), slashing scan duration by up to 80%.
+     - Risk and Level Strategy:
+       • Baseline standard: `--level 1 --risk 1` (covers standard GET/POST parameters).
+       • Escalate to `--level 2 --risk 1` only when testing HTTP Cookie or User-Agent headers.
+       • Keep `--risk 1` to prevent destructive OR-based boolean injection payloads from modifying database state.
+
+  3. DECISIVE NON-DESTRUCTIVE PROOF OF IMPACT:
+     - Execute sqlmap with bounded non-destructive information gathering:
+       `sqlmap -u "<url>?id=1" -p id --batch --dbms=<known_dbms> --banner --current-user --current-db`
+     - Confirming the injection type (Boolean-based blind, Error-based, UNION query, or Time-based blind) and capturing the database banner / current user is definitive proof.
+     - Do NOT perform table dumps (`--dump` or `--dump-all`) unless explicitly authorized.
+
+  4. CONCLUSIVE NEGATIVE RESULTS:
+     - If sqlmap concludes that parameters are not injectable, treat this as valid, conclusive negative evidence.
+     - Record the negative finding and transition to other attack vectors (e.g. command injection, auth logic, path traversal).
 references:
-  - persona:sql-injection-v1
+  - persona:sql-injection-v2
 provenance:
   origin: builtin
   source: persona/v0.1/skills/sql-injection.yaml
