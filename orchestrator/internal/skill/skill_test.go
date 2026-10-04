@@ -320,6 +320,11 @@ func TestLoadDir_AllBuiltinSkills(t *testing.T) {
 		"monitoring-telemetry-security",
 		"ad-kerberos-advanced",
 		"edge-vpn-gateways",
+		"information-disclosure",
+		"open-redirect",
+		"database-security",
+		"network-sniffing-mitm",
+		"nextjs-react-security",
 	}
 
 	names := make(map[string]bool)

@@ -1,0 +1,61 @@
+schema_version: 1
+version: 3.0.0
+name: network-sniffing-mitm
+description: Senior internal network link-layer and Man-in-the-Middle (MITM) assessment — LLMNR/NBT-NS poisoning, SMB signing auditing, NTLM relaying, and WPAD spoofing.
+triggers:
+  - mitm
+  - responder
+  - llmnr
+  - nbt-ns
+  - smb relay
+  - ntlmrelayx
+  - wpad
+  - arp spoofing
+  - smb signing
+tools:
+  - responder
+  - nmap
+knowledge: |
+  Audit internal broadcast domains, link-layer name resolution protocols, and SMB relay opportunities with senior offensive engineering precision.
+
+  1. LINK-LAYER NAME RESOLUTION POISONING (LLMNR / NBT-NS):
+     When Windows endpoints fail to resolve a host via authoritative DNS, they broadcast requests across the local subnet:
+     - Target Broadcast Protocols:
+       • LLMNR (Link-Local Multicast Name Resolution): UDP port 5355.
+       • NBT-NS (NetBIOS Name Service): UDP port 137.
+       • mDNS (Multicast DNS): UDP port 5353.
+     - Poisoning Mechanics:
+       An adversary running `responder` answers these broadcast queries, claiming to be the requested resource.
+       When the victim connects to authenticate, `responder` captures the challenge-response NetNTLMv1 or NetNTLMv2 hash.
+     - Execution Command:
+       `responder -I <interface> -A` (Analyze-only passive listening mode — maps vulnerable broadcast traffic without answering).
+       `responder -I <interface> -wrf` (Active poisoning with rogue HTTP, SMB, and WPAD servers).
+
+  2. SMB SIGNING AUDITING & NTLM RELAYING:
+     Capturing NetNTLMv2 hashes requires offline dictionary cracking; however, un-signed SMB connections can be relayed in real-time:
+     - SMB Signing Verification:
+       Check whether SMB message signing is required on target hosts:
+       `nmap -p 445 --script smb2-security-mode <subnet>`
+       Hosts reporting `Message signing enabled but not required` are vulnerable to SMB relaying.
+     - NTLM Relay Execution (`ntlmrelayx`):
+       When SMB signing is disabled on target servers:
+       1. Turn off SMB and HTTP servers in `Responder.conf` (`SMB = Off`, `HTTP = Off`).
+       2. Start NTLM relay proxy:
+          `ntlmrelayx.py -tf /home/pentester/work/unsigned_smb_targets.txt -smb2support`
+       3. As incoming NTLM authentications arrive from LLMNR/NBT-NS or forced connections, `ntlmrelayx` relays the credentials to target servers, executing administrative actions or dumping local SAM hashes.
+
+  3. WPAD (WEB PROXY AUTO-DISCOVERY) SPOOFING:
+     - Vulnerability Mechanism:
+       Windows clients periodically query the network for `wpad.<domain>` to retrieve proxy configuration files (`wpad.dat`).
+     - Rogue PAC File Injection:
+       `responder` can serve a rogue PAC file directing all client web traffic through an attacker-controlled proxy, enabling credential harvesting and cleartext traffic inspection.
+
+  4. SAFE AUDITING & DEFENSIVE STANDARDS:
+     - Passive analysis first: Always run Responder in analyze-only mode (`-A`) first to measure broadcast traffic volume.
+     - Never poison broadcast traffic on production networks where service availability could be degraded.
+     - Document the percentage of endpoints with SMB signing disabled and active LLMNR/NBT-NS broadcast traffic.
+references:
+  - persona:network-sniffing-mitm-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/network-sniffing-mitm.yaml

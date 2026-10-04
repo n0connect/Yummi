@@ -1,7 +1,7 @@
 schema_version: 1
-version: 1.0.0
+version: 3.0.0
 name: largest-files
-description: Find and rank the largest regular files below an explicit local path.
+description: Senior regular file storage analysis — find and rank the largest regular files under an explicit path in one atomic step.
 triggers:
   - largest files
   - largest 3 files
@@ -14,12 +14,16 @@ tools:
   - head
 plan_step_limit: 1
 knowledge: |
-  This capability is one atomic evidence step: collect regular-file sizes and rank them in the
-  same pipeline. Use `find <path> -type f -printf '%s\t%p\n' 2>/dev/null | sort -nr | head -3`.
-  Preserve the three size/path lines as the answer. Do not use `du <path>/*`, which ranks
-  directories, and do not add a second analysis/sort plan step after the pipeline already ranked.
+  Execute storage analysis and large-file discovery as a single atomic evidence pipeline with zero redundant steps:
+  - Use POSIX printf formatting to rank regular files:
+    `find <path> -type f -printf '%s\t%p\n' 2>/dev/null | sort -nr | head -3`
+  - Output format preserves raw byte size and absolute path.
+  - Anti-patterns to avoid:
+    • Do not use `du <path>/*` (ranks directories and fails on deep file trees).
+    • Do not split discovery, sorting, and interpretation into multiple plan steps.
+    • Filter pseudo-filesystems (`/proc`, `/sys`) when searching root (`/`).
 references:
-  - persona:largest-files-v1
+  - persona:largest-files-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/largest-files.yaml

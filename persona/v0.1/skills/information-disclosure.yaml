@@ -1,0 +1,65 @@
+schema_version: 1
+version: 3.0.0
+name: information-disclosure
+description: Senior sensitive data disclosure and architectural leak assessment — version control (.git/.svn), backup files (.bak/.swp), Spring Boot actuators, and environment dumps.
+triggers:
+  - information disclosure
+  - git leak
+  - backup files
+  - actuator
+  - spring boot actuator
+  - stack trace
+  - heapdump
+  - sensitive data
+  - env leak
+tools:
+  - curl
+knowledge: |
+  Audit web servers, cloud storage, and application frameworks for sensitive information disclosure with senior red-team precision.
+
+  1. VERSION CONTROL SYSTEM (VCS) LEAKS:
+     Web servers frequently deploy directly from source repositories without blocking VCS metadata:
+     - Git Repository Exposure:
+       • Check index: `curl -s "<target_url>/.git/HEAD"` -> look for `ref: refs/heads/`
+       • Check config: `curl -s "<target_url>/.git/config"` -> discloses internal repository URLs, branches, and author details.
+       • Reconstruct complete repository history using `git-dumper` to extract historical commits containing removed credentials.
+     - Subversion (SVN) & Bazaar Metadata:
+       `curl -s "<target_url>/.svn/entries"` or `/.svn/wc.db` (SQLite database containing all source files and paths).
+
+  2. BACKUP, TEMPORARY & EDITOR ARTIFACTS:
+     Automated backups, developer text editors, and archive scripts leave sensitive files in web roots:
+     - Common Backup Extensions:
+       Probe target URLs with `.bak`, `.old`, `.save`, `.orig`, `~`, `.swp`, `.swo`:
+       `/index.php.bak`, `/config.php.old`, `/database.yml.bak`, `/settings.py.bak`
+     - Archive Bundles:
+       `/backup.zip`, `/site.tar.gz`, `/www.tar.bz2`, `/dump.sql`, `/db.sql`
+     - Text Editor Swap Files:
+       `/.index.php.swp` (Vim swap file containing unsaved buffer text).
+
+  3. SPRING BOOT ACTUATOR & FRAMEWORK TELEMETRY:
+     Java Spring Boot applications often leave administration and monitoring actuators unauthenticated:
+     - Critical Actuator Endpoints:
+       • `/actuator/env`: Discloses all environment variables, configuration properties, and database connection strings.
+       • `/actuator/mappings`: Discloses complete internal REST API routing table and HTTP method mappings.
+       • `/actuator/heapdump`: Downloads raw JVM heap dump (extractable with strings or Eclipse Memory Analyzer to recover all in-memory keys, user sessions, and credentials).
+       • `/actuator/beans`: Discloses application components and configuration classes.
+       • `/actuator/loggers`: Allows inspecting and modifying runtime logging levels.
+
+  4. SERVER STATUS, CONFIGURATION & DIAGNOSTICS:
+     - Web Server Internal Status:
+       `/server-status` (Apache status module disclosing active client IPs, URLs, and queries).
+       `/server-info` (detailed Apache configuration and module listing).
+       `/nginx_status` (Nginx stub status module).
+     - PHP Diagnostics:
+       `/phpinfo.php`, `/info.php`, `/test.php` (discloses PHP compilation flags, environment variables, and enabled modules).
+     - ASP.NET & IIS Configuration:
+       `/web.config`, `/trace.axd` (ASP.NET application trace log exposing recent request headers and session IDs).
+
+  5. VERIFICATION STANDARDS & MINIMAL STEPS:
+     - Verify exposure using HTTP HEAD or byte-range GET requests (`curl -s -I`) to confirm availability without downloading multi-gigabyte heap dumps.
+     - Document the exposed path, response status code, sensitive content sample, and business risk level deterministically.
+references:
+  - persona:information-disclosure-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/information-disclosure.yaml

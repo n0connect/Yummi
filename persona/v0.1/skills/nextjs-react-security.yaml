@@ -1,0 +1,64 @@
+schema_version: 1
+version: 3.0.0
+name: nextjs-react-security
+description: Senior Next.js and React Server Components (RSC) security assessment — Server Actions authorization gaps, Flight protocol deserialization, and SSG revalidation flaws.
+triggers:
+  - nextjs
+  - next.js
+  - react server components
+  - rsc
+  - server actions
+  - next-action
+  - flight protocol
+  - ssg cache
+tools:
+  - curl
+knowledge: |
+  Audit Next.js full-stack frameworks, React Server Components (RSC), and Server Actions with senior frontend/backend offensive rigor.
+
+  1. NEXT.JS SERVER ACTIONS ARCHITECTURE:
+     Next.js introduces Server Actions allowing client-side React components to execute asynchronous server-side code without explicit API route definitions:
+     - Request Format:
+       `POST /<page_path> HTTP/1.1`
+       `Next-Action: <32_character_hash_id>`
+       `Content-Type: application/json` or `multipart/form-data`
+       `["argument_1", "argument_2"]`
+     - Critical Authorization Assumption Gap:
+       Developers frequently treat Server Actions as private client-component helpers rather than public REST APIs, omitting explicit session and authorization checks inside the action body.
+       Any client armed with the `Next-Action` ID (extractable from client JavaScript bundles) can directly invoke the server action with arbitrary arguments.
+
+  2. SERVER ACTION HARVESTING & DIRECT INVOCATION:
+     - Extraction from Client Bundles:
+       Search client chunks for `$$typeof` and action identifiers:
+       `grep -oE '"[a-f0-9]{40,}"' /home/pentester/work/chunks/*.js`
+       Look for action bindings in form handlers: `action="$$ACTION_ID"`.
+     - Direct Invocation & Parameter Fuzzing:
+       Invoke the action via curl, passing unexpected parameter types or privileged IDs:
+       `curl -s -X POST -H "Next-Action: <action_id>" -H "Content-Type: application/json" -d '["admin", true]' "https://target.local/"`
+       Verify if the server executes state modifications without verifying user session context.
+
+  3. REACT SERVER COMPONENTS (RSC) FLIGHT PROTOCOL:
+     RSC streams serialized component trees from server to client using the Flight wire format (`text/x-component`):
+     - Wire Format: Lines prefixed with stream chunk IDs (`0:["$","div",null,{"children":"..."}]`).
+     - Prototype Pollution & Serialization Deserialization:
+       Audit whether custom unmarshaling logic trusts incoming Flight payloads containing `__proto__` or `constructor` properties.
+     - Sensitive Data Leakage in Flight Streams:
+       Server components often fetch entire database records, intending to render only the user's name.
+       The Flight response stream frequently transmits the ENTIRE backend database model (including password hashes, internal flags, and tokens) in the serialized JSON payload.
+       Inspect `_rsc` query responses: `curl -s "https://target.local/?_rsc=<hash>"`.
+
+  4. ON-DEMAND REVALIDATION & SSG CACHE PURGE:
+     Next.js Incremental Static Regeneration (ISR) allows on-demand cache revalidation:
+     - Revalidation API Endpoints:
+       `/api/revalidate?path=/&secret=<token>` or `/api/revalidate?tag=posts`
+     - Secret Gaps & Timing:
+       If the revalidation handler omits secret validation, accepts empty secrets, or uses loose equality, adversaries can trigger continuous cache purges, causing Denial of Service or caching manipulated content.
+
+  5. VERIFICATION STANDARDS & SAFETY:
+     - Extract `Next-Action` IDs statically before issuing invocation requests.
+     - Limit direct invocations to read-only test arguments; never execute destructive database deletions via unauthenticated Server Actions.
+references:
+  - persona:nextjs-react-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/nextjs-react-security.yaml

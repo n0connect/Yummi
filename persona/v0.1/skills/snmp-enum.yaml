@@ -1,30 +1,64 @@
 schema_version: 1
-version: 1.0.0
+version: 3.0.0
 name: snmp-enum
-description: SNMP community-string discovery and MIB enumeration.
+description: Senior SNMP community string discovery, SNMPv3 user enumeration, and targeted MIB hierarchy analysis (processes, software, network topology).
 triggers:
   - snmp
   - onesixtyone
   - snmpwalk
+  - snmp-check
   - community string
   - mib
+  - snmpv3
+  - hrswrun
 tools:
   - onesixtyone
   - snmpwalk
+  - snmp-check
 knowledge: |
-  SNMP recon is a two-step pair, in this order:
-  1. `onesixtyone <target>` first — probes for a working community string (default: public/
-     private and a small built-in list). Nothing else here works without one.
-  2. Once a community string is confirmed, walk the MIB tree with `snmpwalk -c <community>
-     -v1 <target>` — this can reveal running processes, installed software, network
-     interfaces, and sometimes routing tables, depending on what the device exposes.
-  3. A device answering to the default "public" community string is itself a finding
-     (SNMP should require a non-default string, ideally SNMPv3) — report it even before
-     walking the tree.
-  4. No response to onesixtyone means stop here — don't guess at snmpwalk without a
-     confirmed community string, it will just fail.
+  Perform targeted SNMP reconnaissance and MIB enumeration with senior systems engineering rigor and zero wasted execution cycles.
+
+  1. TWO-STEP RECONNAISSANCE GATING:
+     SNMP runs over UDP port 161. Never run generic tree-walking without a confirmed community string:
+     - Step 1 (Community String Discovery):
+       Probe default and common strings using `onesixtyone`:
+       `onesixtyone -c /usr/share/seclists/Discovery/SNMP/snmp.txt <target_ip>`
+       Default candidates: `public`, `private`, `manager`, `internal`, `community`.
+       If `onesixtyone` receives no response, stop immediately — do not guess blind walks.
+     - Step 2 (MIB Hierarchy Targeted Walk):
+       Once a valid community string is confirmed, proceed directly to targeted OID queries.
+       A device responding to the default string "public" is itself a finding (RFC 1157 default credential).
+
+  2. TARGETED HIGH-SIGNAL MIB OBJECT IDENTIFIERS (OIDs):
+     Avoid walking the entire enterprise MIB space blindly (which can dump megabytes of redundant data). Query specific high-signal OID trees directly:
+     - System Description & Host Identity:
+       `snmpwalk -v2c -c <community> <target_ip> 1.3.6.1.2.1.1`
+       Discloses exact OS kernel version, device hardware model, sysContact, and uptime.
+     - Running Processes & Command-Line Arguments:
+       `snmpwalk -v2c -c <community> <target_ip> 1.3.6.1.2.1.25.4.2.1.2` (hrSWRunName)
+       `snmpwalk -v2c -c <community> <target_ip> 1.3.6.1.2.1.25.4.2.1.4` (hrSWRunParameters - reveals plaintext credentials in process arguments)
+     - Installed Software Inventory:
+       `snmpwalk -v2c -c <community> <target_ip> 1.3.6.1.2.1.25.6.3.1.2` (hrSWInstalledName - enumerates unpatched local software packages)
+     - Network Interfaces & Internal IP Topology:
+       `snmpwalk -v2c -c <community> <target_ip> 1.3.6.1.2.1.4.20.1.1` (ipAdEntAddr - discovers secondary internal network subnets)
+     - Storage Units & Mounted Filesystems:
+       `snmpwalk -v2c -c <community> <target_ip> 1.3.6.1.2.1.25.2.3.1.3` (hrStorageDescr)
+
+  3. SNMPV3 SECURITY EVALUATION:
+     When SNMPv1/v2c are disabled, audit SNMPv3 security levels:
+     - Security Levels:
+       • `noAuthNoPriv`: No authentication or encryption.
+       • `authNoPriv`: Authentication via MD5/SHA, communication in plaintext.
+       • `authPriv`: Authentication via MD5/SHA, encryption via DES/AES.
+     - Username Enumeration:
+       Probe candidate usernames with `snmpwalk -v3 -u <user> -l noAuthNoPriv <target_ip>`.
+       An error response containing `Unknown user name` confirms valid user enumeration.
+
+  4. STRUCTURED EVIDENCE COLLECTION:
+     - Record identified community string, SNMP version, host operating system, and internal IP subnets.
+     - Document plaintext credentials discovered within process command-line arguments.
 references:
-  - persona:snmp-enum-v1
+  - persona:snmp-enum-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/snmp-enum.yaml

@@ -1,25 +1,26 @@
 schema_version: 1
-version: 1.0.0
+version: 3.0.0
 name: software-presence
-description: Determine whether named optional command-line software is installed and report versions or explicit absence.
+description: Senior binary presence and version auditing — verify command-line utilities and report version or explicit absence in one atomic step.
 triggers:
   - mysql
   - postgresql
   - kurulu mu
   - installed
   - version
+  - binary check
 tools:
   - command
   - printf
 plan_step_limit: 1
 knowledge: |
-  Presence and absence are two successful outcomes of one atomic probe. Use an exit-0 reporting
-  pattern such as `for bin in mysql psql; do if command -v "$bin" >/dev/null; then "$bin"
-  --version; else printf '%s: not installed\n' "$bin"; fi; done`. This records an explicit line
-  for every requested binary and avoids treating an expected "not installed" result as a failed
-  task. Do not split collection and interpretation into separate plan steps.
+  Perform software presence and version discovery as one atomic probe with guaranteed exit-0 semantics:
+  - Command pattern:
+    `for bin in mysql psql sqlite3 nmap python3; do if command -v "$bin" >/dev/null 2>&1; then printf '%s: ' "$bin"; "$bin" --version 2>&1 | head -n 1; else printf '%s: not installed\n' "$bin"; fi; done`
+  - Records an explicit status line for every evaluated utility without failing the step on missing binaries.
+  - Avoid splitting detection, execution, and interpretation across multiple plan turns.
 references:
-  - persona:software-presence-v1
+  - persona:software-presence-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/software-presence.yaml
