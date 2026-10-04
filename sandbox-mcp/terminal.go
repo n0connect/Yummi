@@ -168,11 +168,21 @@ func tmuxAvailable() bool {
 	return err == nil
 }
 
+func defaultShell() string {
+	if p, err := exec.LookPath("bash"); err == nil {
+		return p
+	}
+	if p, err := exec.LookPath("sh"); err == nil {
+		return p
+	}
+	return ""
+}
+
 // capturePane returns the pane contents. When full is true the entire
 // scrollback is returned (bounded afterwards by the caller); otherwise only
 // the last `lines` visible/history lines.
 func capturePane(ctx context.Context, id string, full bool, lines int) (string, error) {
-	args := []string{"capture-pane", "-t", tmuxName(id), "-p"}
+	args := []string{"capture-pane", "-t", tmuxName(id), "-p", "-J"}
 	if full {
 		args = append(args, "-S", "-")
 	} else {
@@ -268,8 +278,12 @@ func termOpenHandler(ctx context.Context, _ *mcp.CallToolRequest, args termOpenA
 	if rows <= 0 {
 		rows = defaultRows
 	}
-	if _, err := runTmux(ctx, "new-session", "-d", "-s", tmuxName(id),
-		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows)); err != nil {
+	sessArgs := []string{"new-session", "-d", "-s", tmuxName(id),
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows)}
+	if sh := defaultShell(); sh != "" {
+		sessArgs = append(sessArgs, sh)
+	}
+	if _, err := runTmux(ctx, sessArgs...); err != nil {
 		return errResult(err.Error())
 	}
 	// Generous scrollback so long scans are not lost from history.
@@ -495,43 +509,104 @@ func isAllTmuxKeys(s string) bool {
 	return true
 }
 
+// isTmuxChordOrFuncKey reports whether token is an unambiguous key chord or function key.
+func isTmuxChordOrFuncKey(token string) bool {
+	lower := strings.ToLower(token)
+	for _, prefix := range []string{"c-", "ctrl-", "m-", "alt-", "s-", "shift-"} {
+		if strings.HasPrefix(lower, prefix) {
+			suffix := lower[len(prefix):]
+			if suffix != "" && (len(suffix) == 1 || tmuxNamedKeys[suffix]) {
+				return true
+			}
+		}
+	}
+	if strings.HasPrefix(lower, "f") && len(lower) >= 2 && len(lower) <= 3 {
+		if n, err := strconv.Atoi(lower[1:]); err == nil && n >= 1 && n <= 24 {
+			return true
+		}
+	}
+	if strings.HasPrefix(lower, "kp") && tmuxNamedKeys[lower] {
+		return true
+	}
+	return false
+}
+
+// isTmuxKeyInMixedText reports whether token should be treated as a tmux key
+// when parsing mixed text (i.e. where !isAllTmuxKeys).
+// Unlike isTmuxKey which matches case-insensitively for pure key sequences
+// (like "Up Up Enter"), mixed text must not hijack ordinary English words
+// (e.g. "echo disk space is low", "press enter to continue", "delete from table")
+// as keypresses.
+func isTmuxKeyInMixedText(token string, inQuotes bool, isShortPrefix bool) bool {
+	if inQuotes || token == "" {
+		return false
+	}
+	if isTmuxChordOrFuncKey(token) {
+		return true
+	}
+	// For named keys in mixed text, require proper capitalization (e.g. "Enter", "Tab", "Escape")
+	// or permit "enter"/"return" if responding to an interactive prompt with a short answer (e.g. "y enter").
+	switch token {
+	case "Enter", "Return", "Tab", "BTab", "Escape", "Esc", "BackSpace", "BSpace":
+		return true
+	case "enter", "return":
+		return isShortPrefix
+	}
+	return false
+}
+
 type keySegment struct {
 	text  string
 	isKey bool
 }
 
 func parseKeySegments(s string) []keySegment {
-	fields := strings.Fields(s)
-	hasAnyKey := false
-	for _, f := range fields {
-		if isTmuxKey(f) {
-			hasAnyKey = true
-			break
-		}
-	}
-	if !hasAnyKey {
+	// If the string contains shell control metacharacters, it is a shell command/pipeline,
+	// not an interactive key sequence like "y Enter" or "admin Tab". Send literally.
+	if strings.ContainsAny(s, "|&;<>$`\\") {
 		return []keySegment{{text: s, isKey: false}}
 	}
 
 	var segments []keySegment
 	var currentText strings.Builder
+	var inQuote rune
 
 	i := 0
 	for i < len(s) {
-		if s[i] == ' ' || s[i] == '	' {
+		r := rune(s[i])
+		if inQuote != 0 {
+			currentText.WriteByte(s[i])
+			if r == inQuote {
+				inQuote = 0
+			}
+			i++
+			continue
+		}
+		if r == '\'' || r == '"' {
+			inQuote = r
 			currentText.WriteByte(s[i])
 			i++
 			continue
 		}
+
+		if s[i] == ' ' || s[i] == '\t' {
+			currentText.WriteByte(s[i])
+			i++
+			continue
+		}
+
 		start := i
-		for i < len(s) && s[i] != ' ' && s[i] != '	' {
+		for i < len(s) && s[i] != ' ' && s[i] != '\t' && s[i] != '\'' && s[i] != '"' {
 			i++
 		}
 		token := s[start:i]
 
-		if isTmuxKey(token) {
+		prefix := strings.TrimSpace(currentText.String())
+		isShort := len(prefix) <= 3
+
+		if isTmuxKeyInMixedText(token, false, isShort) {
 			if currentText.Len() > 0 {
-				trimmed := strings.TrimRight(currentText.String(), " 	")
+				trimmed := strings.TrimRight(currentText.String(), " \t")
 				if trimmed != "" {
 					segments = append(segments, keySegment{text: trimmed, isKey: false})
 				}
