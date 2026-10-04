@@ -1,0 +1,64 @@
+schema_version: 1
+version: 3.0.0
+name: cloud-iam-privesc
+description: Senior cloud IAM privilege escalation and lateral movement — AWS IAM policy abuse, sts:AssumeRole chaining, Azure Managed Identity token harvesting, and GCP service account impersonation.
+triggers:
+  - cloud iam
+  - iam privesc
+  - aws iam
+  - azure rbac
+  - gcp iam
+  - passrole
+  - assumerole
+  - imds
+  - managed identity
+  - sts
+tools:
+  - curl
+knowledge: |
+  Audit multi-cloud IAM permissions, role trust relationships, and metadata services with senior offensive cloud engineering rigor.
+
+  1. AWS IAM POLICY MISCONFIGURATIONS & PRIVILEGE ESCALATION:
+     Audit identified AWS credentials or API tokens against the 21 classic IAM escalation primitives:
+     - `iam:CreatePolicyVersion`: Create a new default policy version with `Effect: Allow, Action: *, Resource: *`.
+     - `iam:SetDefaultPolicyVersion`: Switch active version to an older version that retains administrative permissions.
+     - `iam:AttachUserPolicy` / `iam:AttachRolePolicy`: Attach `AdministratorAccess` directly to the current identity.
+     - `iam:PutUserPolicy` / `iam:PutRolePolicy`: Inject inline administrative policies.
+     - `iam:PassRole` + Compute Creation:
+       Pass a high-privilege IAM role to an AWS compute service:
+       • Lambda: `lambda:CreateFunction` + `lambda:InvokeFunction`
+       • EC2: `ec2:RunInstances` with an administrative instance profile
+       • ECS / Glue / CloudFormation: Execute tasks under assumed privileged execution roles.
+     - `sts:AssumeRole`: Check role trust policies (`AssumeRolePolicyDocument`) allowing cross-account or intra-account privilege escalation.
+
+  2. AWS INSTANCE METADATA SERVICE (IMDS) AUDITING:
+     - Detect IMDSv1 vs IMDSv2 enforcement on EC2 instances:
+       • IMDSv1 (Direct GET — vulnerable to SSRF):
+         `curl -s -m 2 http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+         Fetch temporary AccessKeyId, SecretAccessKey, and security credentials:
+         `curl -s -m 2 http://169.254.169.254/latest/meta-data/iam/security-credentials/<role_name>`
+       • IMDSv2 (Session Token Required — resistant to simple headerless SSRF):
+         Request session token: `curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+         Pass token header: `curl -s -H "X-aws-ec2-metadata-token: <session_token>" http://169.254.169.254/latest/meta-data/iam/security-credentials/<role_name>`
+
+  3. AZURE MANAGED IDENTITY & TOKEN ACQUISITION:
+     - Query the Azure Instance Metadata Service (IMDS) to harvest OAuth2 access tokens for the attached Managed Identity:
+       `curl -s -H "Metadata:true" "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"`
+     - Extract JWT `access_token` and inspect RBAC roles across Azure subscriptions and Key Vaults.
+     - Token for Azure Resource Manager (ARM), Graph API (`https://graph.microsoft.com/`), or Azure Key Vault (`https://vault.azure.net`).
+
+  4. GCP METADATA & SERVICE ACCOUNT IMPERSONATION:
+     - Query Google Cloud Metadata service from compute engines / Cloud Run:
+       `curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"`
+       `curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/scopes"`
+     - Check Service Account Impersonation permissions:
+       If the current identity has `roles/iam.serviceAccountTokenCreator`, generate OAuth2 tokens for higher-privilege service accounts without credentials.
+
+  5. SAFE AUDITING STANDARDS:
+     - Restrict commands to read-only metadata enumeration and permission simulation (`aws iam simulate-principal-policy`).
+     - Never attach persistent administrative policies to unmanaged user accounts in production cloud environments.
+references:
+  - persona:cloud-iam-privesc-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/cloud-iam-privesc.yaml

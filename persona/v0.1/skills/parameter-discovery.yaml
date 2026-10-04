@@ -1,10 +1,11 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: parameter-discovery
-description: Heuristic HTTP parameter discovery and mining with arjun, ffuf, and curl across GET, POST, JSON, and XML bodies.
+description: Senior heuristic HTTP parameter mining with arjun, x8, ffuf, and curl across GET, POST, JSON, and XML request bodies.
 triggers:
   - parameter discovery
   - arjun
+  - x8
   - hidden params
   - query fuzzing
   - post fuzzing
@@ -16,28 +17,34 @@ tools:
   - ffuf
   - curl
 knowledge: |
-  Discover hidden request parameters across endpoints to uncover unlinked functionality, administrative overrides, and injection entry points.
+  Discover hidden query parameters, API body attributes, and administrative overrides with senior heuristic response-differential analysis.
 
-  1. HEURISTIC AUTOMATED MINING (arjun):
-     - Use `arjun` to discover hidden parameters using heuristic response-differential chunking:
-       • GET query parameters: `arjun -u "<url>" -m GET`
-       • POST form parameters: `arjun -u "<url>" -m POST`
-       • POST JSON object keys: `arjun -u "<url>" -m JSON`
-       • XML attributes: `arjun -u "<url>" -m XML`
-     - Save discovered parameters for immediate behavioral verification.
+  1. HEURISTIC PARAMETER MINING ACROSS HTTP METHODS (arjun):
+     - Use `arjun` to discover hidden query parameters and request bodies:
+       • GET query parameters: `arjun -u "<url>" -m GET -oT /home/pentester/work/arjun_get.txt`
+       • POST form parameters: `arjun -u "<url>" -m POST -oT /home/pentester/work/arjun_post.txt`
+       • POST JSON object keys: `arjun -u "<url>" -m JSON -oT /home/pentester/work/arjun_json.txt`
+       • XML request bodies: `arjun -u "<url>" -m XML -oT /home/pentester/work/arjun_xml.txt`
 
-  2. MANUAL & FFUF DIFFERENTIAL CONFIRMATION:
-     - Confirm response variations between baseline requests and candidate parameters:
-       `curl -s "<url>?<discovered_param>=1"` vs `curl -s "<url>"`
-     - Observe changes in HTTP status codes, response lengths, reflected values, or execution headers.
+  2. HIGH-VALUE ADMINISTRATIVE & OVERRIDE CANDIDATES:
+     - Always test common routing and authorization override parameters:
+       `debug=true`, `test=1`, `admin=1`, `dev=1`, `view_as=admin`, `impersonate=1`, `format=json`, `raw=1`, `enable_feature=all`.
+     - Test environment and configuration switches:
+       `env=test`, `show_debug=true`, `internal=true`, `dry_run=false`.
 
-  3. PRIVILEGED OVERRIDES & DEBUG FLAGS:
-     - Check common administrative and debugging override parameters:
-       `debug=true`, `test=1`, `admin=1`, `show_errors=1`, `format=json`, `impersonate=<user>`
-     - When a parameter accepts file paths or URLs (`file=`, `url=`, `redirect=`):
-       Immediately apply the `web` skill standard: verify directory traversal using `curl --path-as-is` with standard and nested dot-dot sequences.
+  3. DIFFERENTIAL CONFIRMATION & BEHAVIORAL VERIFICATION:
+     - Establish baseline response:
+       `curl -s "<url>" | wc -c`
+     - Compare candidate parameter response:
+       `curl -s "<url>?<discovered_param>=1" | wc -c`
+     - Note significant differences: HTTP status changes (403 -> 200, 200 -> 500), new response headers, or additional JSON properties returned.
+
+  4. HANDOFF TO EXPLOITATION PLAYBOOKS:
+     - Discovered file parameters (`file=`, `path=`, `doc=`) -> Immediately pass to `path-traversal-lfi`.
+     - Discovered URL parameters (`url=`, `redirect=`, `next=`, `dest=`) -> Pass to `ssrf` and `open-redirect`.
+     - Discovered command parameters (`cmd=`, `exec=`, `run=`) -> Pass to `command-injection`.
 references:
-  - persona:parameter-discovery-v2
+  - persona:parameter-discovery-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/parameter-discovery.yaml

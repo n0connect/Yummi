@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: parameter-fuzzing
-description: Senior parameter mining, hidden query/body parameter fuzzing, differential response analysis, and reflection confirmation.
+description: Senior parameter value fuzzing, payload boundary testing, differential response calibration, and reflection validation.
 triggers:
   - parameter
   - parameters
@@ -21,36 +21,35 @@ tools:
   - curl
   - dalfox
 knowledge: |
-  Discover hidden query and body parameters with senior red-team differential analysis and zero false-positive floods.
+  Fuzz parameter values, test input boundaries, and analyze differential server behaviors with senior red-team precision.
 
   1. CALIBRATED DIFFERENTIAL RESPONSE FUZZING:
-     - Uncalibrated parameter fuzzing creates false-positive noise due to dynamic server timestamps or reflected query strings.
-     - Always baseline the response length: `curl -s "<url>?invalid_key_xyz=1" | wc -c`
-     - Filter baseline size using `-fs <baseline_size>` or word count using `-fw <baseline_words>`.
-     - Fuzz GET Query Parameters:
-       `ffuf -u "<url>?FUZZ=test" -w $COMMON_TXT -mc 200,302 -fs <baseline_size>`
+     - Always baseline dynamic server response size before fuzzing to filter false positives:
+       `BASE_SIZE=$(curl -s "<url>?invalid_key_probe_xyz=1" | wc -c)`
+       `BASE_WORDS=$(curl -s "<url>?invalid_key_probe_xyz=1" | wc -w)`
+     - Fuzz GET Query Parameter Names:
+       `ffuf -u "<url>?FUZZ=test" -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -mc 200,302 -fs $BASE_SIZE`
      - Fuzz POST JSON Request Keys:
-       `ffuf -u "<url>" -X POST -H "Content-Type: application/json" -d '{"FUZZ":"test"}' -w $COMMON_TXT -mc 200,201,302 -fs <baseline_size>`
+       `ffuf -u "<url>" -X POST -H "Content-Type: application/json" -d '{"FUZZ":"test"}' -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -mc 200,201,302 -fs $BASE_SIZE`
 
-  2. HIGH-VALUE SECURITY PARAMETER MATRIX:
-     - Prioritize testing against high-impact parameter families:
-       • File Inclusion & SSRF: `file`, `path`, `doc`, `url`, `dest`, `redirect`, `uri`, `domain`, `src`, `load`, `page`
-       • Debugging & Privileged State: `debug`, `test`, `admin`, `root`, `role`, `priv`, `show_debug`, `impersonate`
-       • Command Injection & Code Eval: `cmd`, `exec`, `command`, `run`, `ping`, `query`, `eval`
+  2. PARAMETER BOUNDARY & TYPE CONFUSION TESTING:
+     - Array / Object Mutation:
+       Convert scalar parameters to arrays: `id[]=1`, `id[0]=1`, `id[$ne]=null` (NoSQL injection probe).
+     - Integer Overflows & Boundary Values:
+       Test boundary values: `0`, `-1`, `2147483647`, `9223372036854775807`, `NaN`, `Infinity`.
+     - Null Byte & Format Strings:
+       Inject `%00`, `%0d%0a`, `%s%s%s%s`, `{{7*7}}`.
 
-  3. REFLECTION & XSS VERIFICATION:
-     - Identify parameters whose values are reflected in HTML or HTTP headers.
-     - Test for context-aware cross-site scripting confirmation using dalfox:
-       `dalfox url "<url>?<param>=test"`
-     - A dalfox hit is verified proof of vulnerability — record the parameter, context, and working payload.
+  3. REFLECTION & XSS CONTEXT CONFIRMATION:
+     - Identify parameters whose values are reflected in the HTML body or HTTP response headers.
+     - Execute context-aware verification using dalfox:
+       `dalfox url "<url>?<param>=test" --silence --skip-bav`
+     - Record confirmed reflections, escaping contexts (attribute, script tag, innerHTML), and working verification vectors.
 
-  4. IMMEDIATE ESCALATION TO SPECIALIZED VECTORS:
-     - When a discovered parameter accepts a file path (e.g. `file=`, `template=`, `include=`):
-       Immediately apply the `web` skill standard: execute `curl --path-as-is` with standard (`../../../../etc/passwd`) and nested (`....//....//....//etc/passwd`) traversal payloads.
-     - When a parameter accepts external URLs (e.g. `url=`, `redirect=`):
-       Test SSRF against loopback addresses (`http://127.0.0.1:80/`) and cloud metadata endpoints.
+  4. TRIAGE & EVIDENCE CONSOLIDATION:
+     - Isolate verified parameter vulnerabilities, group by attack class (Reflection, Boundary Error, Logic Variation), and forward to specialized exploitation skills.
 references:
-  - persona:parameter-fuzzing-v2
+  - persona:parameter-fuzzing-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/parameter-fuzzing.yaml

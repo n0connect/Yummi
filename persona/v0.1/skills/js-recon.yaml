@@ -1,55 +1,61 @@
 schema_version: 1
-version: 1.1.0
+version: 3.0.0
 name: js-recon
-description: Client-side JavaScript bundle mining, endpoint extraction, and API key/secret leakage discovery.
+description: Senior client-side JavaScript architecture analysis — Webpack/Vite chunk mapping, React/Vue routing table extraction, and hidden API endpoint discovery.
 triggers:
   - javascript
   - js
   - js mining
   - js analysis
   - client side
-  - secrets
-  - api key
-  - hardcoded token
-  - source maps
+  - webpack
+  - vite
+  - react router
+  - spa routing
 tools:
   - katana
   - curl
-  - grep
   - rg
 knowledge: |
-  Extract hidden API endpoints, routing patterns, and hardcoded secrets from
-  client-side JavaScript bundles.
+  Extract hidden API endpoints, client-side routing tables, and single-page application (SPA) architectures with senior red-team precision.
 
-  TOOLING: `katana_crawl`/`curl_probe` with `output_file` (an absolute path
-  under `/home/pentester/work/<target>/`) so a saved crawl/fetch result feeds
-  the `grep`/`rg` filtering steps below — those stay raw shell, since pure
-  text filtering on already-fetched content has no dedicated tool.
+  1. JAVASCRIPT ASSET CRAWLING & CHUNK HARVESTING:
+     Modern web applications bundle code into asynchronous, dynamically-loaded chunks:
+     - Crawl Application Scripts:
+       `katana -u "<target_url>" -jc -d 2 -o /home/pentester/work/js_urls.txt`
+     - Webpack & Vite Runtime Chunk Analysis:
+       Inspect the main entrypoint bundle (`app.js`, `main.js`, `runtime.js`) for the chunk-loading map:
+       Look for chunk mapping arrays: `__webpack_require__.u = function(chunkId) { ... }` or `import("/assets/" + chunk + ".js")`.
+       Download all secondary chunks to discover administrative dashboards and unlinked features.
 
-  1. SCRAPING JS ASSETS:
-     - Use katana to crawl the web application and isolate all loaded `.js` scripts:
-       `katana_crawl(url, depth=2, output_file)`, then
-       `grep -E '\.js(\?|$)' <output_file> | sort -u`.
+  2. CLIENT-SIDE ROUTING TABLE RECONSTRUCTION:
+     Frontend routing frameworks (React Router, Vue Router, Angular RouterModule, Next.js Pages/App router) declare the application's entire page hierarchy in client-side code:
+     - Extract Declared Route Paths:
+       `rg -o -e 'path\s*:\s*["'\''"][^"'\'']+["'\''"]' /home/pentester/work/js_bundles/ | sort -u`
+       `rg -o -e '<Route\s+[^>]*path=["'\''"][^"'\'']+["'\''"]' /home/pentester/work/js_bundles/`
+     - High-Value Discovered Routes:
+       Look for unlinked administrative interfaces: `/admin/*`, `/internal/*`, `/superadmin/*`, `/debug/*`, `/dashboard/settings/tenants`.
 
-  2. HIDDEN API ROUTE EXTRACTION:
-     - Download discovered JS files and search for API routes and URL paths:
-       `curl_probe(url=<js_url>, follow_redirects=true, output_file)`, then
-       `rg -o -e '(\/api\/[a-zA-Z0-9_\-\/]+)' <output_file> | sort -u`.
+  3. API ENDPOINT & CONTRACT HARVESTING:
+     Extract all hardcoded API routes, backend services, and parameter signatures:
+     - Route Pattern Extraction:
+       `rg -o -i -e '["'\''](\/api\/[a-zA-Z0-9_\-\/]+)["'\'']' /home/pentester/work/js_bundles/ | sort -u`
+       `rg -o -i -e '["'\''](\/v[0-9]\/[a-zA-Z0-9_\-\/]+)["'\'']' /home/pentester/work/js_bundles/ | sort -u`
+     - Axios & Fetch Call Analysis:
+       Extract HTTP methods and headers passed to backend services:
+       `rg -C 3 -e 'axios\.(get|post|put|delete|patch)\(' /home/pentester/work/js_bundles/`
+       `rg -C 3 -e 'fetch\(' /home/pentester/work/js_bundles/`
 
-  3. SECRET & CREDENTIAL LEAK PATTERNS:
-     - Scan JS files for high-signal secret patterns (API keys, JWTs, AWS tokens, Firebase configs):
-       reuse step 2's saved file —
-       `rg -i -e '(api[_-]?key|access[_-]?token|bearer|secret|aws_key|firebaseConfig|authorization)' -C 2 <output_file>`.
+  4. SOURCE MAP VERIFICATION:
+     - Check if production builds accidentally exposed source maps:
+       `curl -s -I "<bundle_url>.map" | grep -iE '^(http/|content-type:)'`
+     - A 200 response confirms unminified source code availability.
 
-  4. SOURCE MAP DISCOVERY:
-     - Check if production source maps (`.js.map`) are exposed:
-       `curl_probe(url="<js_url>.map", headers_only=true, follow_redirects=true)`.
-     - If exposed, note the full client-side source code recovery opportunity as a finding.
-
-  5. STRUCTURED EVIDENCE:
-     - Record the specific JS file URL, the exact regex/line match, and the discovered route or credential snippet.
+  5. VERIFICATION & PIPELINE EFFICIENCY:
+     - Save all discovered endpoints to a unified file (`/home/pentester/work/discovered_endpoints.txt`) in a single pass.
+     - Hand off discovered routes directly to `api-pentest` or `idor-bfla` for authorization evaluation.
 references:
-  - persona:js-recon-v1
+  - persona:js-recon-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/js-recon.yaml

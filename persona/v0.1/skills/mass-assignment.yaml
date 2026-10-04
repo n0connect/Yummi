@@ -1,0 +1,55 @@
+schema_version: 1
+version: 3.0.0
+name: mass-assignment
+description: Senior Broken Object Property-Level Authorization (BOPLA) and mass assignment assessment — auto-binding exploitation, privileged field injection, and state manipulation across modern web frameworks.
+triggers:
+  - mass assignment
+  - bopla
+  - overposting
+  - autobinding
+  - parameter binding
+  - object property
+  - excessive data exposure
+  - role tampering
+tools:
+  - curl
+knowledge: |
+  Audit application frameworks for mass assignment, over-posting, and Broken Object Property-Level Authorization (BOPLA) with senior application security rigor.
+
+  1. FRAMEWORK AUTO-BINDING MECHANICS & VULNERABILITY ROOT CAUSE:
+     Modern web frameworks automatically bind incoming HTTP request parameters (JSON, multipart, form) directly to backend data models / ORM entities:
+     - Spring Boot / Java: Jackson ObjectMapper directly deserializing JSON into JPA `@Entity` classes without `@JsonIgnore` or dedicated DTOs.
+     - Ruby on Rails: Strong Parameters bypasses or missing `params.require().permit()`.
+     - Node.js / Express / NestJS: Passing `req.body` directly to Mongoose `.create(req.body)`, Prisma `.update({ data: req.body })`, or Sequelize `.update()`.
+     - Python / Django / FastAPI: Pydantic models or Django ModelForms missing explicit `fields = [...]` whitelists.
+     - ASP.NET Core: Model binders binding properties directly to EF Core DbContext entities without `[Bind]` attributes or ViewModel separation.
+
+  2. HIGH-VALUE PRIVILEGED PROPERTY INJECTION MATRIX:
+     During user creation (`POST /api/users`), profile update (`PUT /api/users/me`), or organization checkout (`POST /api/orders`):
+     - Role & Permission Elevation:
+       `"role": "admin"`, `"roles": ["admin", "superadmin"]`, `"is_admin": true`, `"isAdmin": true`, `"is_staff": true`, `"group": "Administrators"`.
+     - Account Status & Verification Bypass:
+       `"status": "active"`, `"email_verified": true`, `"is_verified": true`, `"mfa_enabled": false`, `"phone_verified": true`.
+     - Multi-Tenant & Identity Boundaries:
+       `"organization_id": 1`, `"tenant_id": "root"`, `"account_id": "primary"`, `"company_id": 0`.
+     - Billing, Pricing & Financial Tampering:
+       `"price": 0.00`, `"total": 0`, `"discount": 100`, `"tier": "enterprise"`, `"plan": "unlimited"`, `"credit_balance": 99999`.
+
+  3. METHOD & CONTENT-TYPE MUTATION PROBING:
+     - Test parameter injection across varying HTTP methods:
+       Compare `POST /api/user` with `PUT /api/user` and `PATCH /api/user`.
+     - Test JSON property nesting variations:
+       • Flat injection: `{"user": "alice", "is_admin": true}`
+       • Nested object injection: `{"user": {"username": "alice", "roles": {"name": "admin"}}}`
+       • Array wrapper injection: `[{"role": "admin"}]`
+
+  4. SAFE VERIFICATION & CANARY VALIDATION:
+     - Always test with benign canary attributes first before attempting administrative elevation:
+       Inject harmless dummy properties like `"test_canary_field": "yummi_probe"`.
+     - If the server reflects `"test_canary_field": "yummi_probe"` in its response or database query, auto-binding is confirmed.
+     - For production engagements, verify privilege escalation using a designated test account (`role: test_auditor`) rather than modifying live administrative accounts.
+references:
+  - persona:mass-assignment-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/mass-assignment.yaml

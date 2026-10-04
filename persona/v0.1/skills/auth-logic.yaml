@@ -1,56 +1,62 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: auth-logic
-description: Senior authentication architecture assessment — JWT cryptographic attacks, OAuth2 flow weaknesses, session state machines, and multi-factor bypasses.
+description: Senior authentication state machine assessment — password reset poisoning, MFA/2FA workflow bypasses, session fixation, and credential stuffing rate-limit evasion.
 triggers:
   - auth logic
-  - jwt tool
-  - jwt
-  - token tampering
-  - oauth
-  - session hijacking
-  - none algorithm
-  - privilege escalation
+  - authentication logic
+  - password reset
+  - 2fa bypass
+  - mfa bypass
+  - session fixation
+  - credential stuffing
+  - brute force
+  - account lockout
   - kimlik doğrulama
-  - token
 tools:
-  - jwt_tool
   - curl
+  - ffuf
 knowledge: |
-  Audit authentication architectures, cryptographic tokens, and state machines with senior red-team precision.
+  Audit application authentication architectures, state machine transitions, and multi-factor validation flows with senior red-team precision.
 
-  1. JSON WEB TOKEN (JWT) CRYPTOGRAPHIC ATTACKS:
-     - Token Claim Inspection:
-       Decode base64url header and payload: inspect `alg`, `typ`, `kid`, `jku`, `iss`, `sub`, `exp`, `role`.
-     - The `alg: none` Vulnerability:
-       Tamper token header to `"alg": "none"` (or `"alg": "None"`), modify claims (e.g. `"role": "admin"`), and strip the signature component (preserving the trailing dot `.`):
-       `jwt_tool <token> -X a`
-     - Key Confusion Attack (RS256 -> HS256):
-       If the backend uses an asymmetric RSA public key to verify signatures, re-sign the token using symmetric HMAC-SHA256 where the HMAC secret is set to the server's public key (PEM format):
-       `jwt_tool <token> -T -S hs256 -k <public_key.pem>`
-     - Header Parameter Injection (`kid` / `jku`):
-       Probe SQLi, command injection, or path traversal inside the `kid` header parameter:
-       e.g., `"kid": "../../../dev/null"` (where secret becomes empty string) or `"kid": "key1' OR '1'='1"`.
-     - Offline HMAC Secret Cracking:
-       Crack weak signing secrets locally without network noise:
-       `jwt_tool <token> -C -d $PASSWORDS_TOP`
+  1. PASSWORD RESET FLOW & TOKEN POISONING:
+     - Host Header Poisoning for Reset Links:
+       Submit password reset requests while tampering with the `Host` or `X-Forwarded-Host` headers:
+       `curl -s -X POST -H "Host: attacker.com" -d "email=victim@target.com" "<url>/api/reset-password"`
+       If the backend uses the Host header to construct the password reset link (`https://attacker.com/reset?token=...`), the user's secret token is delivered to the attacker's server upon click.
+     - Reset Token Entropy & Predictability:
+       Request multiple consecutive reset tokens and analyze randomness (check for timestamp-based generation, weak PRNG seeds, or sequential identifiers).
+     - Parameter Tampering in Reset Completion:
+       Test if the final password update POST endpoint accepts an explicit user identifier (e.g. `userId=123`, `email=victim@target.com`) overriding the token context.
 
-  2. OAUTH2 FLOW & REDIRECT_URI TAMPERING:
-     - Test `redirect_uri` validation against open redirects and path traversal:
-       • Parameter pollution: `&redirect_uri=https://trusted.com&redirect_uri=https://attacker.com`
-       • Subdomain bypass: `https://trusted.com.attacker.com`
-       • Path traversal: `https://trusted.com/oauth/callback/../../attacker`
-     - Verify `state` parameter enforcement; missing or unvalidated `state` allows Cross-Site Request Forgery (CSRF) in account linking flows.
+  2. MULTI-FACTOR AUTHENTICATION (MFA / 2FA) BYPASSES:
+     - Direct Forced Browsing (State Skipping):
+       Navigate directly to authenticated endpoints (`/dashboard`, `/api/user/profile`, `/settings`) immediately after completing step 1 (password verification) without submitting step 2 (OTP code).
+     - Response Code & Body Tampering:
+       Submit an intentionally incorrect OTP code and tamper with the response:
+       Change HTTP `401 Unauthorized` or `{"success": false}` to HTTP `200 OK` or `{"success": true, "status": "authenticated"}`.
+     - Race Conditions in OTP Consumption:
+       Send concurrent identical OTP validation requests to test whether single-use codes can be validated multiple times before invalidation.
+     - 2FA Code Leakage:
+       Inspect HTTP response bodies, client-side JavaScript bundles, and API responses during 2FA initiation to verify whether the OTP code or secret seed is accidentally leaked to the client.
 
-  3. MULTI-FACTOR AUTHENTICATION (MFA / 2FA) LOGIC FLAWS:
-     - Direct Route Access: Check if navigating directly to post-auth endpoints (`/dashboard`, `/profile`) succeeds after step 1 without completing step 2.
-     - Response Code Manipulation: Test intercepting and modifying the 2FA verification response from `{"status": "fail"}` or `401 Unauthorized` to `{"status": "success"}` or `200 OK`.
-     - Rate-Limiting Check: Probe OTP endpoints with sequential inputs to check if brute-force protection is enforced.
+  3. SESSION MANAGEMENT & CONCURRENCY CONTROLS:
+     - Session Fixation:
+       Obtain a pre-login session cookie; verify whether the session ID changes after successful authentication. If the server retains the same session ID post-authentication, an attacker can fix the victim's session.
+     - Incomplete Logout & Token Revocation:
+       Verify whether session tokens remain valid after explicit logout or password change:
+       Send an API request using the old token after logout. If HTTP 200 is returned, server-side revocation is missing.
+     - Concurrent Session Hijacking:
+       Verify whether logging in from a new IP/device properly invalidates or alerts existing sessions according to organizational policy.
 
-  4. EVIDENCE COLLECTION:
-     - Document original token, manipulated token, request/response headers, and proof of elevated privilege.
+  4. BRUTE-FORCE & ACCOUNT LOCKOUT LOGIC:
+     - Rate-Limit Evasion Techniques:
+       Rotate client IP headers across brute-force probes:
+       `X-Forwarded-For: 10.0.0.$i`, `X-Real-IP: 192.168.1.$i`, `Client-IP: 172.16.0.$i`.
+     - Denial-of-Service via Lockout:
+       Test whether unauthenticated login attempts trigger system-wide account lockouts for administrative accounts, enabling denial-of-service against legitimate operators.
 references:
-  - persona:auth-logic-v2
+  - persona:auth-logic-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/auth-logic.yaml

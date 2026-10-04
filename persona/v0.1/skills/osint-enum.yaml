@@ -1,5 +1,5 @@
 schema_version: 1
-version: 2.5.0
+version: 3.0.0
 name: osint-enum
 description: Complete senior subdomain + attack-surface enumeration for a domain (bug-bounty recon).
 triggers:
@@ -208,7 +208,7 @@ knowledge: |
   say so in the triage output rather than silently under-reporting the
   surface as if the free-tier result were the ceiling.
 references:
-  - persona:osint-enum-v2
+  - persona:osint-enum-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/osint-enum.yaml

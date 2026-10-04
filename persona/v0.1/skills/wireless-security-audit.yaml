@@ -1,0 +1,62 @@
+schema_version: 1
+version: 3.0.0
+name: wireless-security-audit
+description: Senior 802.11 wireless network and Bluetooth LE assessment — passive reconnaissance, PMKID capture without deauth, WPA2/WPA3 enterprise auditing, rogue AP detection, and BLE GATT characteristic enumeration.
+triggers:
+  - wireless
+  - wifi
+  - wpa2
+  - wpa3
+  - pmkid
+  - 802.11
+  - aircrack
+  - bluetooth
+  - ble
+  - rogue ap
+  - evil twin
+tools:
+  - aircrack-ng
+  - nmap
+knowledge: |
+  Audit IEEE 802.11 wireless networks, Bluetooth Low Energy (BLE) perimeters, and RF trust boundaries with senior operational restraint.
+
+  1. PASSIVE 802.11 WIRELESS RECONNAISSANCE:
+     - Passive monitoring captures RF beacon frames and probe requests without transmitting detectable packets:
+       `airodump-ng --band abg -w /home/pentester/work/wifi_recon <interface>`
+     - Catalog target wireless landscape:
+       • Target ESSIDs and associated BSSIDs (MAC addresses).
+       • Supported authentication and cipher suites (OPEN, WEP, WPA-TKIP, WPA2-CCMP, WPA3-SAE, 802.1X Enterprise).
+       • Operational channels and client association relationships.
+
+  2. CLIENT-LESS PMKID CAPTURE (WPA2 / WPA3):
+     - Modern WPA/WPA2/WPA3 routers implementing 802.11r (Fast BSS Transition) append the PMKID into the first EAPOL frame of association:
+       `hcxdumptool -i <interface> -o /home/pentester/work/pmkid.pcapng --filterlist_ap=targets.txt --filtermode=2`
+     - Advantages over traditional handshake capture:
+       • Does NOT require an active client to be connected to the access point.
+       • Does NOT require sending aggressive deauthentication frames that disrupt users or trigger WIPS/WIDS alarms.
+     - Convert captured PMKID hash for offline recovery:
+       `hcxpcapngtool -o /home/pentester/work/pmkid.hash /home/pentester/work/pmkid.pcapng`
+
+  3. 802.1X ENTERPRISE & CERTIFICATE VALIDATION AUDITING:
+     - Enterprise WiFi networks rely on EAP methods (EAP-PEAP, EAP-TLS, EAP-TTLS) authenticated via central RADIUS/NPS servers.
+     - Test for Client Certificate Validation Bypasses:
+       Verify whether corporate laptops and mobile devices validate the RADIUS server certificate authority (CA) anchor:
+       Misconfigured clients that fail to validate server certificates can be seduced by rogue access points, exposing corporate NetNTLM / MSCHAPv2 challenge-response hashes.
+
+  4. BLUETOOTH LOW ENERGY (BLE) PERIMETER ENUMERATION:
+     - Discover active Bluetooth LE peripheral devices and beacons:
+       `hcitool lescan --passive`
+     - Connect and enumerate Generic Attribute Profile (GATT) services and characteristics:
+       `gatttool -b <device_mac> --primary`
+       `gatttool -b <device_mac> --characteristics`
+     - Audit characteristic permissions:
+       Test for unauthenticated read/write handles controlling sensitive physical locks, firmware updates, or telemetry data.
+
+  5. SAFE AUDITING & RF COMPLIANCE STANDARDS:
+     - Never emit continuous deauthentication floods on production corporate networks.
+     - Ensure all RF testing strictly observes authorized physical site boundaries and regulatory spectral frequency allocations.
+references:
+  - persona:wireless-security-audit-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/wireless-security-audit.yaml

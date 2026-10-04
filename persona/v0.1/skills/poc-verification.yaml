@@ -1,0 +1,53 @@
+schema_version: 1
+version: 3.0.0
+name: poc-verification
+description: Senior deterministic vulnerability proof-of-concept verification — eliminating false positives through differential response calibration and reproducible non-destructive curl/python harnesses.
+triggers:
+  - poc
+  - verify
+  - proof of concept
+  - reproduce
+  - false positive
+  - deterministic test
+  - canary
+  - verification harness
+tools:
+  - curl
+knowledge: |
+  Verify suspected vulnerabilities deterministically with senior proof-of-concept engineering, strict baseline comparison, and zero false positives.
+
+  1. DIFFERENTIAL RESPONSE CALIBRATION & BASELINE ACQUISITION:
+     - Automated scanners frequently flag static responses, WAF error pages, or generic 200 OK bodies as false positives.
+     - Always establish baseline metrics before concluding vulnerability existence:
+       • Baseline Request: `curl -s -i "<target_url>"` -> Record HTTP status code, content-length header, response byte count, and reflection count.
+       • Benign Perturbation: `curl -s -i "<target_url>?benign_param=test"` -> Verify that benign input does NOT alter baseline characteristics.
+
+  2. NON-DESTRUCTIVE CANARY PAYLOAD METHODOLOGY:
+     - Mathematical & Arithmetic Proofs:
+       When testing numeric parameters for SQLi or SSTI:
+       `curl -s "<url>?id=2-1"` -> Must evaluate to `id=1` result.
+       `curl -s "<url>?id=3-1"` -> Must evaluate to `id=2` result.
+     - Diagnostic Read-Only Proofs:
+       • Command Injection: Use `id`, `whoami`, `uname -a`. Never use `rm`, `chmod`, `wget <untrusted>`, or destructive binaries.
+       • SQL Injection: Use `SELECT @@version`, `SELECT version()`, `sqlite_version()`.
+       • Path Traversal: Read non-sensitive system markers with static structure: `/etc/issue`, `/proc/version`, `/etc/hosts` (instead of `/etc/shadow` or sensitive keys).
+     - Time-Based Canary Calibration:
+       Baseline latency: Measure 3 consecutive requests (`curl -w "%{time_total}\n" -o /dev/null -s "<url>"`).
+       If baseline is 0.2s, test with a 3.0s sleep canary (`sleep 3` or `pg_sleep(3)`). The response must precisely reflect 3.2s ± 0.3s.
+
+  3. REVERSE / NEGATIVE CONTROL PROOFS:
+     - To conclusively prove that an observed behavior is driven by the exploit vector rather than coincidental server delay:
+       • Send Positive Vector: Trigger canary delay or syntax error.
+       • Send Negative Vector: Invert logic (`AND 1=2` vs `AND 1=1`), verify response immediately reverts to baseline.
+       • If both vectors yield identical responses, classify as a FALSE POSITIVE and terminate exploration.
+
+  4. CLEAN, SELF-CONTAINED REPRODUCIBLE HARNESSES:
+     - Produce a single, self-contained `curl` command line that an operator or security engineer can execute independently:
+       • Include all required headers (`-H "Content-Type: application/json"`).
+       • Specify explicit HTTP method (`-X POST`).
+       • Provide verbatim request body and document expected response substring.
+references:
+  - persona:poc-verification-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/poc-verification.yaml

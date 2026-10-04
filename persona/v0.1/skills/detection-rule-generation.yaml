@@ -1,0 +1,89 @@
+schema_version: 1
+version: 3.0.0
+name: detection-rule-generation
+description: Senior purple-team detection engineering — synthesizing Sigma rules, Splunk SPL queries, and Microsoft Sentinel KQL rules mapped to MITRE ATT&CK for verified offensive findings.
+triggers:
+  - detection
+  - sigma
+  - splunk
+  - kql
+  - sentinel
+  - blue team
+  - siem
+  - mitre att&ck
+  - purple team
+  - detection rule
+tools:
+  - rg
+knowledge: |
+  Bridge red-team offensive findings to blue-team defensive telemetry by engineering production-ready detection rules and MITRE ATT&CK mappings.
+
+  1. MITRE ATT&CK TAXONOMY MAPPING:
+     Classify verified findings into standardized ATT&CK Enterprise techniques:
+     - T1190 (Exploit Public-Facing Application): Web injection (SQLi, Command Injection, SSTI, Deserialization).
+     - T1059 (Command and Scripting Interpreter): Bash, PowerShell, Python, JavaScript execution.
+     - T1558 (Steal or Forge Kerberos Tickets): Kerberoasting, AS-REP Roasting, Silver/Golden Tickets.
+     - T1078 (Valid Accounts): Default credentials, leaked API keys, compromised tokens.
+     - T1090 (Proxy): SSRF, proxy pivoting, HTTP tunneling.
+     - T1046 (Network Service Discovery): Port scanning, active service sweeps.
+     - T1552 (Unsecured Credentials): Hardcoded secrets in client bundles or public repositories.
+
+  2. SIGMA RULE SYNTHESIS (PORTABLE DETECTION FORMAT):
+     Generate valid, structured Sigma YAML for each verified vulnerability class:
+     ```yaml
+     title: Suspicious Web Command Injection Attempt
+     id: <unique-uuid4>
+     status: experimental
+     description: Detects command injection patterns in HTTP request URIs and POST body payloads.
+     references:
+       - https://attack.mitre.org/techniques/T1190/
+     tags:
+       - attack.initial_access
+       - attack.t1190
+     logsource:
+       category: webserver
+     detection:
+       selection:
+         c-uri|contains:
+           - ';id'
+           - '|whoami'
+           - '`id`'
+           - '$(whoami)'
+       condition: selection
+     falsepositives:
+       - Legitimate administrative interfaces with embedded shell commands.
+     level: high
+     ```
+
+  3. SPLUNK SPL QUERY ENGINEERING:
+     Produce targeted, performant Splunk search queries tailored to relevant sourcetypes:
+     - Web Server Access Logs (`sourcetype=access_combined` or `sourcetype=iis`):
+       `index=web sourcetype=*access* (uri="*;*" OR uri="*|*" OR uri="*`*" OR uri="*$(*") | stats count min(_time) as firstTime max(_time) as lastTime by src_ip, uri, status, user_agent | where count > 3`
+     - Windows Security Events (`sourcetype=WinEventLog:Security`):
+       `index=wineventlog EventCode=4769 Ticket_Encryption_Type=0x17 Service_Name!="*$" | stats count by TargetUserName, Service_Name, Client_Address`
+
+  4. MICROSOFT SENTINEL KQL QUERY ENGINEERING:
+     Craft optimized Kusto Query Language (KQL) queries for Microsoft Sentinel analytics:
+     - W3CIISLog Analysis:
+       ```kql
+       W3CIISLog
+       | where csUriQuery has_any (";", "|", "`", "$(") or csMethod == "POST"
+       | where csUriStem has_any ("/api/", "/admin/", "/cgi-bin/")
+       | summarize RequestCount = count(), StartTime = min(TimeGenerated), EndTime = max(TimeGenerated) by cIP, csUriStem, csUriQuery, scStatus
+       | where RequestCount > 2
+       ```
+     - DeviceProcessEvents (Defender for Endpoint EDR):
+       ```kql
+       DeviceProcessEvents
+       | where InitiatingProcessFileName in~ ("w3wp.exe", "httpd.exe", "nginx.exe", "node.exe")
+       | where FileName in~ ("sh", "bash", "cmd.exe", "powershell.exe", "whoami.exe", "id")
+       | project TimeGenerated, DeviceName, InitiatingProcessFileName, FileName, ProcessCommandLine, AccountName
+       ```
+
+  5. ACTIONABLE REMEDIATION & DETECTION TESTING:
+     - Provide the defensive team with both the prevention control (e.g. parameterized queries, strict input allowlisting) and the exact telemetry search to verify whether the attack was detected during testing.
+references:
+  - persona:detection-rule-generation-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/detection-rule-generation.yaml

@@ -1,45 +1,66 @@
 schema_version: 1
-version: 1.0.0
+version: 3.0.0
 name: cloud-recon
-description: Multi-cloud asset enumeration, cloud storage bucket permission auditing, and subdomain takeover verification.
+description: Senior multi-cloud asset enumeration — Amazon S3, Google Cloud Storage, Azure Blob containers, CDN origin unmasking, and serverless endpoint discovery.
 triggers:
   - cloud recon
   - cloud enum
   - s3 buckets
   - gcs buckets
   - azure blob
-  - subdomain takeover
-  - subzy
-  - cname takeover
+  - cloud storage
+  - cloudflare bypass
+  - aws asset
+  - gcp asset
+  - azure asset
 tools:
   - cloud_enum
-  - subzy
+  - curl
   - tlsx
   - naabu
 knowledge: |
-  Enumerate public cloud infrastructure, storage assets, and dangling DNS records across cloud providers.
+  Enumerate public cloud infrastructure, object storage assets, CDN origins, and exposed serverless APIs with senior red-team precision.
 
-  TOOLING: Prefer `cloud_enum_scan` for AWS/GCP/Azure storage bucket discovery, `subzy_scan`
-  for subdomain takeover verification, and `tlsx_scan` for SAN/TLS reconnaissance.
+  1. MULTI-CLOUD STORAGE ENUMERATION & KEYWORD MUTATIONS:
+     - Generate focused mutation wordlists based on target brand, subsidiaries, and environment names:
+       Keywords: `<company>`, `<company>-dev`, `<company>-prod`, `<company>-staging`, `<company>-backup`, `<company>-data`, `<company>-assets`, `<company>-internal`.
+     - Automated Cloud Enumeration:
+       `cloud_enum_scan(keyword="<target_keyword>", mutator="cloudenum_mutations.txt")`
+       • Amazon S3: `https://<bucket>.s3.amazonaws.com`
+       • Azure Blob Storage: `https://<account>.blob.core.windows.net/<container>`
+       • Google Cloud Storage: `https://storage.googleapis.com/<bucket>`
 
-  1. MULTI-CLOUD STORAGE ENUMERATION:
-     - Enumerate Amazon S3, Google Cloud Storage, and Azure Blob containers based on target keywords:
-       `cloud_enum_scan(keyword="<target_keyword>", mutator="cloudenum_mutations.txt")`.
-     - Check public read permissions (anonymous listing) and public write permissions safely.
+  2. UNPROTECTED STORAGE PERMISSION AUDITING:
+     - Anonymous Read & Bucket Listing:
+       Probe for public XML index listings without authentication:
+       `curl -s -I "https://<bucket>.s3.amazonaws.com/?max-keys=5"`
+       `curl -s "https://storage.googleapis.com/<bucket>/?prefix="`
+       HTTP 200 with `<ListBucketResult>` confirms unauthenticated bucket listing.
+     - Unauthenticated Write & Object Upload:
+       Test for public write permissions using an ephemeral canary filename:
+       `curl -s -X PUT -d "CANARY_VERIFICATION" "https://<bucket>.s3.amazonaws.com/test_canary_probe.txt"`
+       (Immediately delete canary probe if write succeeds).
 
-  2. SUBDOMAIN TAKEOVER AUDITING:
-     - Scan discovered subdomains for dangling DNS CNAME records pointing to deprovisioned services:
-       `subzy_scan(targets=["sub1.target.com", "sub2.target.com"])`.
-     - Check vulnerable services: GitHub Pages, AWS S3, Heroku, Azure Apps, Shopify, Fastly.
+  3. CDN ORIGIN UNMASKING & DIRECT CLOUD ACCESS:
+     - When a web target sits behind Cloudflare, CloudFront, or Akamai:
+       Enumerate historical DNS and certificate transparency records using `tlsx`:
+       `tlsx_scan(targets=["<target_ip_range>"], san=true)`
+     - Compare direct web response vs CDN-cached response:
+       `curl -s -H "Host: target.com" "http://<direct_cloud_ip>"`
+       Bypassing the CDN exposes origin web servers, unauthenticated APIs, and internal debugging interfaces.
 
-  3. TLS & CERTIFICATE SAN ENUMERATION:
-     - Extract Subject Alternative Names (SANs) and TLS configuration:
-       `tlsx_scan(targets=["<target>"], san=true)`.
+  4. SERVERLESS & CLOUD API ENDPOINT MAPPING:
+     - Check for unlinked AWS API Gateway, Azure App Service, and GCP Cloud Run instances:
+       • AWS API Gateway: `https://<api_id>.execute-api.<region>.amazonaws.com/<stage>/`
+       • Azure App Services: `https://<app_name>.azurewebsites.net/`
+       • Google Cloud Run: `https://<service_name>-<hash>-<region>.a.run.app/`
+     - Extract service configuration, CORS policies, and authentication headers.
 
-  4. REPORTING:
-     - Record identified cloud asset URI, cloud provider, access permissions, and DNS verification records.
+  5. SAFE AUDITING STANDARDS:
+     - Only verify read access or metadata listing.
+     - Never download bulk customer datasets or modify production cloud resources.
 references:
-  - persona:cloud-recon-v1
+  - persona:cloud-recon-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/cloud-recon.yaml

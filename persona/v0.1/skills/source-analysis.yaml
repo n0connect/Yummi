@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: source-analysis
-description: Senior static application security testing (SAST) — dependency auditing, untrusted input sink tracing, secret detection, and code vulnerability mapping.
+description: Senior static application security testing (SAST) — source code auditing, AST-based pattern matching, input-to-sink taint analysis, and dependency CVE mapping.
 triggers:
   - source
   - source code
@@ -11,35 +11,47 @@ triggers:
   - repository
   - static analysis
   - sast
+  - semgrep
   - vulnerability
   - audit
   - code audit
   - secrets scan
 tools:
-  - grep
+  - semgrep
   - rg
   - git
 knowledge: |
-  Perform static application security testing (SAST) systematically across the target repository:
+  Perform static application security testing (SAST) systematically across the target repository using pattern matching and taint tracking.
 
   1. MANIFEST & DEPENDENCY TRIAGE:
-     - Inspect project descriptors to identify the framework, language version, and third-party dependencies:
-       `find . -maxdepth 2 -name "package.json" -o -name "go.mod" -o -name "pom.xml" -o -name "requirements.txt" -o -name "Cargo.toml"`
+     - Identify project ecosystem, framework, language version, and package manager:
+       `find . -maxdepth 2 \( -name "package.json" -o -name "go.mod" -o -name "pom.xml" -o -name "requirements.txt" -o -name "Cargo.toml" -o -name "Gemfile" \)`
+     - Audit third-party dependencies for known critical CVEs and outdated libraries.
 
-  2. DANGEROUS INPUT-TO-SINK TRACING:
-     - Command Execution / Injection: `rg -n -i -e '(exec|spawn|os\.system|subprocess|eval|Runtime\.getRuntime)'`
-     - SQL Query Concatenation: `rg -n -i -e '(SELECT|INSERT|UPDATE|DELETE).*\+.*' -e 'rawQuery|db\.query'`
-     - Path Traversal & File System Access: `rg -n -i -e '(fs\.readFile|open\(|FileInputStream|os\.Open).*\+'`
-     - Insecure Deserialization & Template Injection: `rg -n -i -e '(pickle\.loads|unserialize|yaml\.load\(|render_template_string)'`
+  2. SEMGREP AUTOMATED SAST AUDIT:
+     - Run targeted Semgrep rulesets against source trees:
+       `semgrep scan --config auto --json -o /home/pentester/work/semgrep_findings.json .`
+     - Run security-focused community audit packs:
+       `semgrep scan --config "p/security-audit" --config "p/secrets" .`
 
-  3. HARDCODED SECRET & KEY EXTRACTION:
-     - Scan for exposed credentials, private keys, and API tokens:
-       `rg -n -i -e '(api_key|jwt_secret|private_key|aws_access_key|client_secret|password)\s*[:=]\s*["'\''][^"'\'']+'`
+  3. TAINT-FLOW TRACING (SOURCES TO SINKS):
+     - Command Execution / RCE:
+       `rg -n -i -e '(child_process\.exec|execFile|os\.system|subprocess\.(Popen|run)|Runtime\.getRuntime|ProcessBuilder)'`
+     - SQL Query Concatenation (Raw SQLi):
+       `rg -n -i -e '(SELECT|INSERT|UPDATE|DELETE).*\+.*' -e '(rawQuery|db\.raw|execute\(f["'\''])'`
+     - Path Traversal & File System Sinks:
+       `rg -n -i -e '(fs\.readFile|open\(|FileInputStream|os\.Open).*\+'`
+     - Insecure Deserialization & Template Injection:
+       `rg -n -i -e '(pickle\.loads|yaml\.load\(.*Loader=|unserialize\(|render_template_string)'`
 
-  4. STRUCTURED EVIDENCE:
-     - Record findings with exact `file_path:line_number`, code context snippets, and the data flow path from input to sink.
+  4. HARDCODED SECRETS & CLOUD TOKEN MINING:
+     - Scan for exposed credentials, private keys, API tokens, and JWT secrets:
+       `rg -n -i -e '(api_key|jwt_secret|private_key|aws_access_key_id|client_secret|password)\s*[:=]\s*["'\''][A-Za-z0-9_\-\.]{8,}["'\'']'`
+
+  5. STRUCTURED EVIDENCE REPORTING:
+     - Document findings with exact `file_path:line_number`, surrounding code context, tainted parameter name, and remediation recommendation.
 references:
-  - persona:source-analysis-v2
+  - persona:source-analysis-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/source-analysis.yaml

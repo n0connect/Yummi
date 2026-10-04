@@ -1,5 +1,5 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: wordpress-assessment
 description: Senior WordPress security assessment — plugin/theme CVE identification, XML-RPC amplification triage, user enumeration, and config file recovery.
 triggers:
@@ -15,9 +15,9 @@ tools:
 knowledge: |
   Perform targeted WordPress security analysis with senior offensive engineering rigor and zero wasted execution cycles.
 
-  1. PRE-CONDITION GATE (Verify WordPress First):
+  1. PRE-CONDITION GATE (Fingerprint WordPress First):
      - Only reach for WordPress tooling once web fingerprinting confirms WordPress markers:
-       Check for `/wp-login.php`, `wp-content/` in source, `X-Powered-By: WordPress`, or `<meta name="generator" content="WordPress">`.
+       Check for `/wp-login.php`, `wp-content/` in page source, `X-Powered-By: WordPress`, or `<meta name="generator" content="WordPress">`.
      - Running WPScan against non-WordPress targets wastes steps and produces zero findings.
 
   2. WPSCAN TARGETED VULNERABILITY & USER ENUMERATION:
@@ -43,7 +43,7 @@ knowledge: |
        • Configuration backups: `/wp-config.php.bak`, `/wp-config.php.save`, `/wp-config.old`, `/wp-config.txt`
        • Debug logs: `/wp-content/debug.log` (frequently contains PHP fatal errors, database connection strings, and plaintext credentials).
 references:
-  - persona:wordpress-assessment-v2
+  - persona:wordpress-assessment-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/wordpress-assessment.yaml

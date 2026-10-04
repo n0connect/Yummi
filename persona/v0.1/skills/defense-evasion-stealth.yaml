@@ -1,0 +1,63 @@
+schema_version: 1
+version: 3.0.0
+name: defense-evasion-stealth
+description: Senior red-team operational security (OPSEC) and defense evasion — traffic shaping, jittered request pacing, User-Agent normalization, WAF payload fragmentation, and client IP header rotation.
+triggers:
+  - defense evasion
+  - stealth
+  - opsec
+  - waf bypass
+  - rate limit bypass
+  - user agent
+  - traffic shaping
+  - evasion
+  - jitter
+tools:
+  - curl
+knowledge: |
+  Conduct offensive operations with senior operational security (OPSEC), behavioral stealth, and defense evasion discipline.
+
+  1. HTTP TRAFFIC SHAPING & REQUEST PACING (JITTER):
+     - High-speed automated bursts instantly alert SOC telemetry and trigger cloud rate limiters (Cloudflare 1015, Akamai Bot Manager, AWS WAF rate-based rules).
+     - Introduce non-deterministic timing jitter between consecutive requests:
+       Instead of a fixed sleep interval, calculate a randomized delay between 1.5s and 4.0s:
+       `sleep $(python3 -c "import random; print(round(random.uniform(1.5, 3.8), 2))")`
+     - Distribute requests across business hours when baseline target network traffic is highest.
+
+  2. CLIENT FINGERPRINT & HEADER NORMALIZATION:
+     - Remove tool-default signature headers:
+       Never allow default scanner User-Agents (`curl/*`, `sqlmap/*`, `python-requests/*`, `Wget/*`).
+     - Emulate authentic modern browser headers:
+       `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36`
+       `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8`
+       `Accept-Language: en-US,en;q=0.9`
+       `Sec-Fetch-Dest: document`
+       `Sec-Fetch-Mode: navigate`
+       `Sec-Fetch-Site: same-origin`
+       `Sec-Fetch-User: ?1`
+
+  3. WAF PAYLOAD FRAGMENTATION & NORMALIZATION EVASION:
+     - Web Application Firewalls (WAFs) inspect incoming traffic using regular expressions and tokenizers. Evasive payload shaping bypasses inspection while executing cleanly on the backend:
+       • Case Permutations: `sElEcT`, `uNiOn`, `<sCrIpT>`, `cAt`
+       • SQL Comment Splitting: `SEL/**/ECT` instead of `SELECT`
+       • Chunked Transfer Encoding: Split HTTP POST payloads across multiple chunk boundaries to defeat stream reassembly:
+         `Transfer-Encoding: chunked`
+       • Double URL Encoding: `%252e%252e%252f` for `../`
+       • Null Byte Truncation / Unicode Normalization: Test NFKC / NFKD unicode representations (e.g. `＜script＞` mapping to `<script>` post-normalization).
+
+  4. CLIENT IP SPOOFING & RATE-LIMIT EVASION HEADERS:
+     - In reverse-proxy setups, backends trust upstream proxy headers for client IP tracking and rate limiting:
+       Inject alternative forwarding headers to defeat per-IP thresholds:
+       `X-Forwarded-For: 198.51.100.$((RANDOM % 250 + 1))`
+       `X-Real-IP: 203.0.113.$((RANDOM % 250 + 1))`
+       `True-Client-IP: 192.0.2.$((RANDOM % 250 + 1))`
+       `X-Client-IP: 10.0.0.$((RANDOM % 250 + 1))`
+
+  5. OPERATIONAL MONITORING & DEFENSIVE REACTION HANDLING:
+     - If the target server responds with HTTP 429 (Too Many Requests), HTTP 403 (Forbidden WAF block), or connection resets:
+       Immediately back off for a cooling period (minimum 60 seconds) rather than aggressively retrying and triggering automated IP bans or SOC incident response escalations.
+references:
+  - persona:defense-evasion-stealth-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/defense-evasion-stealth.yaml

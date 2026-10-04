@@ -1,7 +1,7 @@
 schema_version: 1
-version: 2.0.0
+version: 3.0.0
 name: system-inspection
-description: Senior local host triage, privilege escalation vectors, SUID/capability discovery, and system architecture inspection.
+description: Senior local host situational awareness, privilege escalation vector analysis, SUID/capability discovery, and system architecture inspection.
 triggers:
   - system
   - sistem
@@ -31,24 +31,24 @@ tools:
 knowledge: |
   Perform local host inspection and privilege escalation analysis with senior systems engineering discipline and zero guesswork.
 
-  1. IDENTITY & PRIVILEGE ENUMERATION:
-     - Check user context and assigned groups: `id` and `whoami`.
-     - Non-Interactive Sudo Check:
+  1. IDENTITY & PRIVILEGE TRIAGE:
+     - Check current user context and assigned groups: `id` and `whoami`.
+     - Non-Interactive Sudo Verification:
        `sudo -l -n 2>/dev/null`
-       Using `-n` (non-interactive) is essential: it reports executable sudo commands without blocking or hanging on password prompts.
-     - Dangerous Group Membership:
-       Inspect membership in groups that confer root access: `docker`, `lxd`, `disk`, `sudo`, `wheel`.
-       (e.g., membership in `docker` allows mounting host root `/` inside a container).
+       (Using `-n` is mandatory: it prevents blocking the execution engine on interactive password prompts).
+     - High-Privilege Group Membership:
+       Audit groups conferring immediate root/system access: `docker`, `lxd`, `disk`, `sudo`, `wheel`.
+       (e.g., membership in `docker` enables mounting host root `/` into an unconfined container).
 
   2. SUID/SGID BINARIES & LINUX CAPABILITIES:
-     - Locate all SUID binaries on the filesystem:
+     - Locate all SUID binaries on local filesystems:
        `find / -perm -4000 -type f -exec ls -la {} + 2>/dev/null`
-       Cross-reference unusual binaries against GTFOBins primitives (e.g. pkexec, find, bash, cp, vim, python, gdb).
+       Cross-reference unusual binaries against GTFOBins primitives (pkexec, find, bash, cp, vim, python, gdb, nmap).
      - Inspect POSIX File Capabilities:
        `getcap -r / 2>/dev/null`
-       Look for capabilities like `cap_setuid+ep` on scripting runtimes (python, perl, ruby) which permit instant UID switching.
+       Look for capabilities such as `cap_setuid+ep` on interpreters (python, perl, ruby) which allow direct UID switching to root.
 
-  3. INTERNAL NETWORK SERVICES & PROCESS ARCHITECTURE:
+  3. INTERNAL NETWORK SERVICES & PROCESS AUDIT:
      - Inspect local loopback services that were invisible during external network scans:
        `ss -tulpn` or `netstat -tulpn`
        Identify internal admin panels, redis, memcached, or local databases bound to 127.0.0.1.
@@ -60,13 +60,13 @@ knowledge: |
        `cat /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* 2>/dev/null`
      - Check write permissions on scripts executed by root cron jobs:
        `ls -la <script_path>`
-     - Locate world-writable scripts or configuration files in sensitive trees:
+     - Locate world-writable scripts or configuration files in sensitive paths:
        `find /etc /opt /var/www /usr/local -maxdepth 3 -writable -type f 2>/dev/null`
 
   5. STRUCTURED EVIDENCE REPORTING:
      - Record exact paths, ownership, permission bits, and command outputs as verifiable findings.
 references:
-  - persona:system-inspection-v2
+  - persona:system-inspection-v3
 provenance:
   origin: builtin
   source: persona/v0.1/skills/system-inspection.yaml

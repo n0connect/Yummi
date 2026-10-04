@@ -1,0 +1,50 @@
+schema_version: 1
+version: 3.0.0
+name: attack-chain-discovery
+description: Senior exploit chain synthesis and attack path modeling — correlating isolated Low/Medium findings into multi-hop critical kill chains.
+triggers:
+  - attack chain
+  - exploit chain
+  - kill chain
+  - attack path
+  - multi step
+  - attack graph
+  - finding correlation
+  - chain analysis
+tools:
+  - curl
+  - nmap
+knowledge: |
+  Synthesize multi-hop exploit chains and attack path graphs by correlating isolated findings with senior offensive systems engineering rigor.
+
+  1. VULNERABILITY CORRELATION & ATTACK GRAPH MODELING:
+     - Real-world critical compromises rarely stem from a single isolated vulnerability; they arise from chained weak signals:
+       • Web-to-Cloud Chain: Information Disclosure / SSRF -> Cloud Instance Metadata (IMDS) -> STS Temporary Tokens -> S3 Data Exfiltration.
+       • Web-to-Host Chain: Path Traversal / File Upload -> Sensitive Config / Secret Exposure -> Authenticated RCE -> Local Privilege Escalation.
+       • Perimeter-to-Domain Chain: External OSINT / Password Spray -> Valid Domain User -> Internal VPN Access -> Kerberoasting / ADCS -> Domain Admin.
+       • Web-to-Account Takeover Chain: Cross-Site Scripting (XSS) / Open Redirect -> OAuth State Tampering / Session Fixation -> Full Account Takeover.
+
+  2. CONTEXT CONSTRAINTS & BOUNDARY GATING:
+     - Differentiate engagement context to avoid cross-domain false correlations:
+       • Web Context: HTTP endpoints, API contracts, session cookies, JWTs, CORS headers.
+       • Active Directory Context: Domain Controllers, Kerberos tickets (TGT/TGS), SMB signing, LDAP, ADCS.
+       • Cloud Context: IAM roles, metadata services (169.254.169.254), serverless functions, cloud storage buckets.
+       • Container / Host Context: Namespaces, cgroups, unix domain sockets, mounted host filesystems.
+     - Never correlate an Active Directory privilege escalation attack against a pure cloud-native or serverless target without an identified domain-joined bridge.
+
+  3. THREE-STAGE COMPOSITE ATTACK PATH SYNTHESIS:
+     For every high-impact composite trajectory, establish:
+     - Entry Stage: The unauthenticated initial foothold (e.g., exposed configuration file disclosing internal hostnames).
+     - Pivot Stage: The intermediate state transition (e.g., SSRF on internal host reaching an unauthenticated redis/management interface).
+     - Objective Stage: The demonstrated business impact (e.g., database exfiltration, administrative privilege acquisition, container escape).
+
+  4. SAFE CANARY CHAIN VALIDATION:
+     - Validate the continuity of each link in the attack chain without destructive payloads:
+       • Confirm Entry: Verify that the initial disclosure is reproducible and provides valid credentials/endpoints.
+       • Confirm Pivot: Test network reachability and authentication using non-destructive probes (`whoami`, `INFO`, `SELECT version()`).
+       • Halt Before Destructive Impact: When the full chain is proven feasible, stop and document the complete path rather than altering persistent production data.
+references:
+  - persona:attack-chain-discovery-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/attack-chain-discovery.yaml

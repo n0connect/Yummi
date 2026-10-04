@@ -1,0 +1,65 @@
+schema_version: 1
+version: 3.0.0
+name: mobile-security-assessment
+description: Senior mobile application security assessment — Android APK / iOS IPA static reverse engineering, AndroidManifest component auditing, hardcoded secret mining, deep link hijacking, and network security config analysis.
+triggers:
+  - mobile
+  - apk
+  - android
+  - ipa
+  - ios
+  - jadx
+  - apktool
+  - androidmanifest
+  - deeplink
+  - mobile security
+tools:
+  - jadx
+  - apktool
+  - curl
+  - rg
+knowledge: |
+  Audit mobile application packages (Android APK and iOS IPA) with senior reverse engineering and mobile application security verification standards (OWASP MASVS).
+
+  1. STATIC DECOMPILATION & RESOURCE UNPACKING:
+     - Unpack Android application resources, smali bytecode, and assets:
+       `apktool d <app.apk> -o /home/pentester/work/apk_unpacked/`
+     - Decompile APK bytecode to readable Java source code using JADX:
+       `jadx -d /home/pentester/work/jadx_out/ --no-res <app.apk>`
+     - Unpack iOS IPA bundles:
+       `unzip <app.ipa> -d /home/pentester/work/ipa_unpacked/`
+       Extract `Info.plist` and the main Mach-O executable under `Payload/<AppName>.app/`.
+
+  2. ANDROIDMANIFEST & COMPONENT SECURITY AUDIT:
+     - Inspect `AndroidManifest.xml` for exported components lacking explicit permissions:
+       Look for `<activity>`, `<service>`, `<receiver>`, or `<provider>` tags with `android:exported="true"`.
+       Exported components can be invoked directly by any untrusted third-party app installed on the same device.
+     - Dangerous Application Configuration Flags:
+       • `android:debuggable="true"`: Allows attaching arbitrary debuggers (jdb) to inspect memory and execute code.
+       • `android:allowBackup="true"`: Allows extracting app private data via `adb backup`.
+       • `android:usesCleartextTraffic="true"`: Permits cleartext HTTP communications, vulnerable to Link-Layer sniffing.
+
+  3. NETWORK SECURITY CONFIGURATION & CERTIFICATE PINNING:
+     - Check `res/xml/network_security_config.xml`:
+       Verify if `<trust-anchors>` includes `<certificates src="user" />` or if domain pins are missing.
+     - For iOS, check `Info.plist` for `NSAppTransportSecurity` and `NSAllowsArbitraryLoads = true`.
+
+  4. HARDCODED SECRETS & CLIENT-SIDE SENSITIVE DATA:
+     - Scan decompiled Java/Smali source trees and property files for sensitive secrets:
+       `rg -i -e '(api_key|secret_key|aws_key|firebase|stripe_key|private_key|token|auth_header)' -C 2 /home/pentester/work/jadx_out/`
+     - Check for hardcoded cryptographic keys:
+       Search for static AES/DES keys used in `SecretKeySpec` or hardcoded IVs in `IvParameterSpec`.
+
+  5. DEEP LINKS, SCHEME HIJACKING & WEBVIEW SECURITY:
+     - Enumerate Custom URL Schemes and Android App Links:
+       Extract `<intent-filter>` declarations matching `android.intent.action.VIEW` with `scheme="myapp"`.
+       Verify whether deep link handlers pass user-controlled query parameters directly into WebViews or internal database queries without sanitization.
+     - WebView Hardening Audit:
+       Search for dangerous WebView configurations in decompiled code:
+       `rg -n -i -e 'setJavaScriptEnabled\(true\)' -e 'addJavascriptInterface' -e 'setAllowFileAccess\(true\)' /home/pentester/work/jadx_out/`
+       (Using `addJavascriptInterface` on Android < 4.2 leads to direct RCE; on modern Android, improperly validated URLs loaded in WebViews expose exported JavaScript bridges).
+references:
+  - persona:mobile-security-assessment-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/mobile-security-assessment.yaml
