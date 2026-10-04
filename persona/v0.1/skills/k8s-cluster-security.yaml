@@ -1,0 +1,72 @@
+schema_version: 1
+version: 3.0.0
+name: k8s-cluster-security
+description: Senior Kubernetes cluster security assessment — RBAC privilege escalation, ServiceAccount token pivoting, Kubelet/etcd exposure, and container breakout vectors.
+triggers:
+  - kubernetes
+  - k8s
+  - kubelet
+  - etcd
+  - rbac
+  - clusterrole
+  - serviceaccount
+  - container breakout
+  - pod escape
+tools:
+  - curl
+knowledge: |
+  Audit Kubernetes control plane components, workload security contexts, and RBAC configurations with senior cloud-native offensive rigor.
+
+  1. CLUSTER ATTACK SURFACE & ENTRY POINTS:
+     Kubernetes exposes multiple control and data plane boundaries:
+     - Kube-APIServer (Ports 6443, 443): Core API. Check if anonymous requests (`system:anonymous`) possess unauthorized read or write verbs.
+     - Kubelet API (Port 10250): Node agent API. If unauthenticated or weakly authenticated, permits direct command execution inside node pods.
+     - etcd Store (Port 2379): Cluster state database. If unauthenticated, holds all secrets and token configurations in plaintext base64.
+     - Pod ServiceAccount: Mounted by default at `/var/run/secrets/kubernetes.io/serviceaccount/token`.
+
+  2. SERVICEACCOUNT ENUMERATION & RBAC AUDITING:
+     When executing inside a pod or armed with a cluster credential:
+     - Extract ServiceAccount Token & CA:
+       `TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)`
+       `NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null)`
+     - Evaluate Permissions:
+       `kubectl auth can-i --list`
+     - High-Risk RBAC Verbs:
+       • `create pods` / `create deployments`: Allows deploying a privileged container with host filesystem mounts.
+       • `pods/exec`: Allows executing commands inside any pod within the target namespace.
+       • `get / list secrets`: Allows harvesting credentials and tokens across namespaces (especially `kube-system`).
+       • `impersonate`: Allows executing API calls as `system:masters` or administrative service accounts.
+       • `bind` or `escalate`: Allows granting oneself higher cluster permissions without admin intervention.
+
+  3. CONTAINER ESCAPES & WORKLOAD PRIVILEGE VECTORS:
+     Audit pod specifications for dangerous security context configurations:
+     - `privileged: true`:
+       Grants all host device access and Linux capabilities. Escalate to host by mounting the host disk:
+       `mount /dev/sda1 /mnt` (inspect host root filesystem).
+     - `hostPID: true`:
+       Exposes the host process tree in `/proc`. Allows executing `nsenter -t 1 -m -u -i -n sh` to transition into the host root namespace.
+     - `hostNetwork: true`:
+       Places the pod on the host network stack, allowing sniffing of node traffic and binding to host loopback interfaces.
+     - Mounted Container Socket:
+       Check for `/var/run/docker.sock` or `/run/containerd/containerd.sock`. Allows communicating directly with the runtime daemon to start arbitrary containers mounting `/`.
+     - Mounted Writable `hostPath`:
+       Pods mounting `/`, `/etc`, or `/var/run` allow modifying node configuration files (e.g. cron jobs or systemd units).
+
+  4. NETWORK POLICIES & LATERAL REACH:
+     - Absence of Default-Deny NetworkPolicy:
+       In clusters lacking NetworkPolicies, any pod can communicate with any other pod across all namespaces.
+     - Cloud Metadata Reachability:
+       Probe cloud metadata services from within pods:
+       `curl -s http://169.254.169.254/latest/meta-data/`
+       Test if pod identity can harvest node IAM roles or cloud provider credentials.
+     - Internal DNS Discovery:
+       Probe cluster services via CoreDNS: `dig +short SRV *.*.svc.cluster.local`.
+
+  5. VERIFICATION STANDARDS & SAFETY:
+     - Always verify access read-only: demonstrate authorization to read secrets or query API endpoints without deleting cluster workloads.
+     - Document the complete attack chain: pod compromise -> SA token -> RBAC evaluation -> node access.
+references:
+  - persona:k8s-cluster-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/k8s-cluster-security.yaml

@@ -39,6 +39,10 @@ func TestLoadSubAgentDefs_AllBuiltinSubAgents(t *testing.T) {
 		"token-specialist": false,
 		"ci-cd-auditor": false,
 		"evasion-specialist": false,
+		"cache-specialist": false,
+		"sso-saml-specialist": false,
+		"k8s-operator": false,
+		"modern-api-specialist": false,
 	}
 
 	for _, d := range defs {

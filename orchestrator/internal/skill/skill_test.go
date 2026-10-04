@@ -306,6 +306,13 @@ func TestLoadDir_AllBuiltinSkills(t *testing.T) {
 		"command-injection",
 		"subdomain-takeover",
 		"ci-cd-security",
+		"web-cache-deception",
+		"saml-sso-attacks",
+		"ldap-injection",
+		"k8s-cluster-security",
+		"websocket-security",
+		"grpc-security",
+		"host-header-injection",
 	}
 
 	names := make(map[string]bool)

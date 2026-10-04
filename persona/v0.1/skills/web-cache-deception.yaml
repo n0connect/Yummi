@@ -1,0 +1,66 @@
+schema_version: 1
+version: 3.0.0
+name: web-cache-deception
+description: Senior Web Cache Deception (WCD) and HTTP cache poisoning assessment — delimiter discrepancies, path-suffix rules, cache key confusion, and unkeyed header poisoning.
+triggers:
+  - web cache deception
+  - cache deception
+  - cache poisoning
+  - wcd
+  - delimiter discrepancy
+  - unkeyed header
+  - x-forwarded-host
+  - cache-control
+tools:
+  - curl
+knowledge: |
+  Audit reverse proxies, CDNs, and application caches for Web Cache Deception (WCD) and cache poisoning with senior red-team rigor.
+
+  1. WEB CACHE DECEPTION (WCD) MECHANICS:
+     WCD arises from an architectural mismatch between an edge cache (CDN / reverse proxy) and the origin server:
+     - Edge Cache Rule: Evaluates requests by path suffix (e.g., `.css`, `.js`, `.png`) to identify static cacheable assets.
+     - Origin Server Rule: Ignores trailing path extensions or normalizes delimiters, routing the request to an authenticated endpoint.
+     - Exploitation Flow:
+       1. Attacker sends a request to an authenticated endpoint with a static extension: `/api/me/.css` or `/api/profile;.js`.
+       2. Origin returns the victim's authenticated private response (`HTTP 200` with profile JSON or PII).
+       3. Edge cache observes the `.css` extension, assumes the response is public static content, and caches it under `/api/me/.css`.
+       4. Anonymous clients or attackers request `/api/me/.css` without credentials and receive the cached private user body.
+
+  2. DELIMITER DISCREPANCY VARIANTS:
+     Test candidate authenticated endpoints (`/api/me`, `/api/profile`, `/api/account`, `/dashboard`, `/api/v1/user`) with delimiter variants:
+     - Slash Suffix: `{endpoint}/.css`, `{endpoint}/.js`, `{endpoint}/static.css`
+     - Semicolon Delimiter: `{endpoint};.css`, `{endpoint};test.js` (common in Java Spring and matrix parameter parsers)
+     - URL-Encoded Slashes / Semicolons: `{endpoint}%2F.css`, `{endpoint}%3B.css`
+     - Dot-Segment Confusion: `{endpoint}/nonexistent/../test.css`
+     - Question Mark / Hash Tricks: `{endpoint}%3F.css`, `{endpoint}%23.css`
+
+  3. VERIFICATION METHODOLOGY (TWO-STEP PROBE):
+     - Step 1 (Authenticated Prime):
+       `curl -s -w "\nHTTP: %{http_code} Size: %{size_download}\n" -H "Authorization: Bearer <valid_token>" "https://target.local/api/me/.css"`
+     - Step 2 (Anonymous Fetch):
+       Request the exact same URL without authentication headers:
+       `curl -s -w "\nHTTP: %{http_code} Size: %{size_download}\n" "https://target.local/api/me/.css"`
+     - Verification Criterion:
+       If the anonymous response returns `HTTP 200` with response length and content byte-equivalent to the authenticated response, WCD is confirmed.
+     - Inspect Cache Headers:
+       Look for cache status headers confirming edge storage:
+       `X-Cache: HIT`, `CF-Cache-Status: HIT`, `Age: >0`, `X-Proxy-Cache: HIT`.
+
+  4. HTTP CACHE POISONING (UNKEYED INPUTS):
+     Identify headers that influence dynamic response content but are excluded from the CDN cache key:
+     - Unkeyed Host / Forwarding Headers:
+       `X-Forwarded-Host: attacker.internal`
+       `X-Host: attacker.internal`
+       `X-Forwarded-Scheme: nothttps` (triggers HTTP-to-HTTPS redirect loop caching)
+       `X-Original-URL: /admin` or `X-Rewrite-URL: /admin`
+     - Fat GET Requests:
+       Send body payloads in `GET` requests where the cache keys on URL only, but the origin evaluates the body parameter.
+
+  5. REMEDIATION & SAFETY STANDARDS:
+     - Edge caches must include authentication state (`Authorization`, session cookies) in cache keys or set `Cache-Control: no-store, private` on sensitive endpoints.
+     - Never poison widely-shared static assets (e.g. `main.js`) in live multi-user environments. Test on unique canary paths.
+references:
+  - persona:web-cache-deception-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/web-cache-deception.yaml

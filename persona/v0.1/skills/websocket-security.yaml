@@ -1,0 +1,69 @@
+schema_version: 1
+version: 3.0.0
+name: websocket-security
+description: Senior WebSocket and real-time protocol security assessment — Cross-Site WebSocket Hijacking (CSWSH), handshake origin validation, per-message authorization, and frame payload injection.
+triggers:
+  - websocket
+  - ws
+  - wss
+  - cswsh
+  - websocket hijacking
+  - socket.io
+  - upgrade header
+  - real-time api
+tools:
+  - curl
+knowledge: |
+  Audit WebSocket connections, real-time message streams, and handshake origin validation with senior offensive rigor.
+
+  1. WEBSOCKET HANDSHAKE ARCHITECTURE:
+     WebSocket begins as an HTTP request upgraded to a persistent, bidirectional full-duplex TCP stream:
+     - Client Handshake:
+       `GET /socket.io/?EIO=4&transport=websocket HTTP/1.1`
+       `Host: target.local`
+       `Upgrade: websocket`
+       `Connection: Upgrade`
+       `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==`
+       `Sec-WebSocket-Version: 13`
+       `Origin: https://target.local`
+       `Cookie: session=<user_session>`
+     - Server Handshake: Returns `HTTP 101 Switching Protocols`.
+
+  2. CROSS-SITE WEBSOCKET HIJACKING (CSWSH):
+     Browsers automatically attach ambient session cookies to cross-origin WebSocket handshake requests:
+     - Vulnerability Mechanism:
+       If the WebSocket server fails to validate the `Origin` header during the handshake, a malicious third-party website visited by an authenticated victim can initiate a connection to `wss://target.local/ws`.
+     - Exploitation Impact:
+       The connection is authenticated with the victim's session cookies. The attacker's script gains full two-way communication to eavesdrop on private real-time data or dispatch unauthorized state-modifying actions on behalf of the victim.
+     - Handshake Origin Testing:
+       Send handshake requests with modified `Origin` headers:
+       • Third-Party Origin: `Origin: https://attacker.internal`
+       • Null Origin: `Origin: null`
+       • Spoofed Subdomain: `Origin: https://target.local.attacker.internal`
+       If the server responds with `HTTP 101 Switching Protocols` to untrusted origins, CSWSH is confirmed.
+
+  3. PER-MESSAGE AUTHORIZATION & MESSAGE TAMPERING:
+     Web applications often validate permissions once during the initial HTTP handshake and omit authorization checks on individual messages:
+     - Identifier Spoofing in Frames:
+       Inspect WebSocket JSON payloads for client-asserted identity or roles:
+       `{"action": "get_messages", "account_id": 105}` -> Mutate to `{"account_id": 101}`.
+       `{"type": "subscribe", "channel": "admin_audit"}`.
+     - Multi-Tenant Channel Subscriptions:
+       Audit whether a low-privileged tenant can subscribe to other tenants' event queues or telemetry streams simply by sending subscription frames with foreign tenant UUIDs.
+
+  4. WAF EVASION & FRAME INJECTION:
+     Traditional Web Application Firewalls (WAF) inspect initial HTTP headers but frequently fail to parse, inspect, or reconstruct fragmented WebSocket data frames:
+     - Injection Attacks via Frames:
+       Test SQL injection, command injection, and template injection within WebSocket message text:
+       `{"command": "search", "query": "test'; id; --"}`
+       `{"action": "lookup", "filter": "{{7*7}}"}`
+
+  5. VERIFICATION STANDARDS:
+     - Probe handshake endpoints using curl to verify origin tolerance:
+       `curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Origin: https://evil.internal" "https://target.local/ws"`
+     - Document status code (101 vs 403), origin handling policy, and proof of cross-origin connection establishment.
+references:
+  - persona:websocket-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/websocket-security.yaml

