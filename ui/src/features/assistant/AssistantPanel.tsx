@@ -64,6 +64,20 @@ type ChatResponse = {
   }
 }
 
+export interface AttachedFile {
+  id: string
+  name: string
+  size: number
+  type: string
+  content?: string
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 type AssistantPanelProps = {
@@ -190,7 +204,11 @@ export function AssistantPanel({
   const [historyLoading, setHistoryLoading] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
+  const dragCounterRef = useRef(0)
 
   // ── Persistence / hydration ──────────────────────────────────────────────────
 
@@ -206,6 +224,7 @@ export function AssistantPanel({
     // fire on that stale proposal after `sessionID` has already switched,
     // running an old command under the new session's id.
     setProposals([])
+    setAttachedFiles([])
     setActiveTask(null)
     setSubTasks({})
     setTaskSnapshots({})
@@ -1260,7 +1279,123 @@ export function AssistantPanel({
     setSelectedIdx(0)
   }, [proposals])
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const adjustHeight = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const scrollH = el.scrollHeight
+    const nextHeight = Math.min(Math.max(scrollH, 48), 180)
+    el.style.height = `${nextHeight}px`
+    el.style.overflowY = scrollH > 180 ? 'auto' : 'hidden'
+  }, [])
+
+  useEffect(() => {
+    adjustHeight()
+  }, [input, adjustHeight])
+
+  const MAX_FILE_SIZE = 2 * 1024 * 1024 // 2MB
+
+  const processFiles = async (files: File[]) => {
+    const newAttachments: AttachedFile[] = []
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        alert(`${file.name}: ${t('assistant.fileTooLarge')}`)
+        continue
+      }
+      let content: string | undefined
+      try {
+        content = await file.text()
+      } catch {
+        content = undefined
+      }
+      newAttachments.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        content
+      })
+    }
+    if (newAttachments.length > 0) {
+      setAttachedFiles((prev) => [...prev, ...newAttachments])
+      inputRef.current?.focus()
+    }
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.id !== id))
+  }
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dragCounterRef.current += 1
+      setIsDraggingOver(true)
+    }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setIsDraggingOver(false)
+    }
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current = 0
+    setIsDraggingOver(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await processFiles(Array.from(e.dataTransfer.files))
+    }
+  }
+
+  const handleSend = async () => {
+    if (isLoading) return
+    if (proposals.length > 0) {
+      await approveProposal(proposals[selectedIdx])
+      return
+    }
+
+    const trimmed = input.trim()
+    if (!trimmed && attachedFiles.length === 0) return
+
+    let fullPrompt = trimmed
+    if (attachedFiles.length > 0) {
+      const fileBlocks = attachedFiles.map((f) => {
+        if (f.content !== undefined) {
+          const snippet = f.content.length > 8000 ? f.content.slice(0, 8000) + '\n...[truncated]' : f.content
+          return `[File: ${f.name} (${formatBytes(f.size)})]\n\`\`\`\n${snippet}\n\`\`\``
+        }
+        return `[Attached File: ${f.name} (${formatBytes(f.size)})]`
+      }).join('\n\n')
+
+      fullPrompt = trimmed
+        ? `${trimmed}\n\n${fileBlocks}`
+        : `${t('assistant.attachedFilesPrompt')}\n\n${fileBlocks}`
+    }
+
+    setAttachedFiles([])
+    setInput('')
+    if (inputRef.current) {
+      inputRef.current.style.height = '48px'
+      inputRef.current.style.overflowY = 'hidden'
+    }
+    await sendChat(fullPrompt)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape' && proposals.length > 0) {
       e.preventDefault()
       setProposals([])
@@ -1290,7 +1425,7 @@ export function AssistantPanel({
       }
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      void sendChat()
+      void handleSend()
     }
   }
 
@@ -1345,7 +1480,13 @@ export function AssistantPanel({
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <section className="panel panel-left">
+    <section
+      className={`panel panel-left ${isDraggingOver ? 'dragging-file' : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <MiniSandboxPreview />
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
@@ -1380,6 +1521,21 @@ export function AssistantPanel({
       </div>
 
       <div className="chat-area">
+        {isDraggingOver && (
+          <div className="chat-drop-overlay" onDragLeave={handleDragLeave} onDrop={handleDrop}>
+            <div className="chat-drop-card">
+              <div className="chat-drop-icon" aria-hidden="true">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              </div>
+              <h3>{t('assistant.dropzoneTitle')}</h3>
+              <p>{t('assistant.dropzoneHint')}</p>
+            </div>
+          </div>
+        )}
         {historyError && (
           <div className="history-error-banner" role="alert">
             <span>{t('assistant.historyErrorMsg')}</span>
@@ -1636,51 +1792,106 @@ export function AssistantPanel({
           </div>
         )}
 
-        {/* Input + stop/send button */}
+        {/* Input + attachments + stop/send button */}
         <div className="chat-input-area">
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              taskRunning
-                ? t('assistant.inputPlaceholderTaskRunning')
-                : isLoading
-                  ? t('assistant.inputPlaceholderProcessing')
-                  : proposals.length > 0
-                    ? t('assistant.inputPlaceholderProposalReady')
-                    : t('assistant.inputPlaceholderDefault')
-            }
-            aria-label={t('assistant.chatInputAriaLabel')}
-            // While proposals are showing, this input drives selection over
-            // the listbox below via ArrowUp/ArrowDown/Enter (see
-            // handleKeyDown) — aria-controls + aria-activedescendant surface
-            // that same relationship to assistive tech.
-            aria-controls={proposals.length > 0 ? 'assistant-proposals-listbox' : undefined}
-            aria-activedescendant={proposals.length > 0 ? `proposal-option-${selectedIdx}` : undefined}
-            disabled={isLoading}
-          />
-          {taskRunning ? (
-            <button
-              className="btn-stop"
-              onClick={() => void stopActiveTask()}
-              title={t('assistant.stopTaskTitle')}
-            >
-              {t('taskTracker.stop')}
-            </button>
-          ) : (
-            <button
-              onClick={() =>
-                proposals.length > 0
-                  ? void approveProposal(proposals[selectedIdx])
-                  : void sendChat()
-              }
-              disabled={isLoading || (!input.trim() && proposals.length === 0)}
-            >
-              {proposals.length > 0 ? t('assistant.run') : t('assistant.send')}
-            </button>
+          {attachedFiles.length > 0 && (
+            <div className="chat-attachments-row" aria-label={t('assistant.attachFiles')}>
+              {attachedFiles.map((file) => (
+                <div key={file.id} className="attachment-chip">
+                  <span className="attachment-icon" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                  </span>
+                  <span className="attachment-name" title={file.name}>{file.name}</span>
+                  <span className="attachment-size">{formatBytes(file.size)}</span>
+                  <button
+                    type="button"
+                    className="attachment-remove-btn"
+                    onClick={() => removeAttachment(file.id)}
+                    title={t('assistant.removeAttachment')}
+                    aria-label={`${t('assistant.removeAttachment')} ${file.name}`}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
+
+          <div className="chat-input-row">
+            <button
+              type="button"
+              className="btn-attach"
+              onClick={() => fileInputRef.current?.click()}
+              title={t('assistant.attachFiles')}
+              aria-label={t('assistant.attachFiles')}
+              disabled={isLoading}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  void processFiles(Array.from(e.target.files))
+                }
+                e.target.value = ''
+              }}
+            />
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              placeholder={
+                taskRunning
+                  ? t('assistant.inputPlaceholderTaskRunning')
+                  : isLoading
+                    ? t('assistant.inputPlaceholderProcessing')
+                    : proposals.length > 0
+                      ? t('assistant.inputPlaceholderProposalReady')
+                      : t('assistant.inputPlaceholderDefault')
+              }
+              aria-label={t('assistant.chatInputAriaLabel')}
+              // While proposals are showing, this input drives selection over
+              // the listbox below via ArrowUp/ArrowDown/Enter (see
+              // handleKeyDown) — aria-controls + aria-activedescendant surface
+              // that same relationship to assistive tech.
+              aria-controls={proposals.length > 0 ? 'assistant-proposals-listbox' : undefined}
+              aria-activedescendant={proposals.length > 0 ? `proposal-option-${selectedIdx}` : undefined}
+              disabled={isLoading}
+            />
+            {taskRunning ? (
+              <button
+                type="button"
+                className="btn-stop"
+                onClick={() => void stopActiveTask()}
+                title={t('assistant.stopTaskTitle')}
+              >
+                {t('taskTracker.stop')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn-send"
+                onClick={() => void handleSend()}
+                disabled={isLoading || (!input.trim() && attachedFiles.length === 0 && proposals.length === 0)}
+              >
+                {proposals.length > 0 ? t('assistant.run') : t('assistant.send')}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Last-turn status — small and easy to miss on purpose, but ALWAYS

@@ -414,6 +414,12 @@ const en = {
   'assistant.stopTaskTitle': 'Stop the task',
   'assistant.send': 'Send',
   'assistant.operatorRejectedReason': 'operator rejected',
+  'assistant.dropzoneTitle': 'Drop files to attach',
+  'assistant.dropzoneHint': 'Target lists, scripts, logs, configs (.txt, .json, .csv, .log, etc.)',
+  'assistant.attachFiles': 'Attach files',
+  'assistant.removeAttachment': 'Remove file',
+  'assistant.fileTooLarge': 'File is too large (max 2MB)',
+  'assistant.attachedFilesPrompt': 'Please analyze the attached file(s) and proceed with the assessment:',
 
   // ── activityPresentation ────────────────────────────────────────────────
   'activity.label.plan': 'Plan',
@@ -923,6 +929,12 @@ const tr = {
   'assistant.stopTaskTitle': 'Görevi durdur',
   'assistant.send': 'Gönder',
   'assistant.operatorRejectedReason': 'operator reddetti',
+  'assistant.dropzoneTitle': 'Eklemek için dosyaları bırakın',
+  'assistant.dropzoneHint': 'Hedef listeleri, scriptler, loglar, yapılandırmalar (.txt, .json, .csv, .log vb.)',
+  'assistant.attachFiles': 'Dosya ekle',
+  'assistant.removeAttachment': 'Dosyayı kaldır',
+  'assistant.fileTooLarge': 'Dosya çok büyük (maks 2MB)',
+  'assistant.attachedFilesPrompt': 'Lütfen ekteki dosya(ları) analiz edin ve değerlendirmeye devam edin:',
 
   // ── activityPresentation ────────────────────────────────────────────────
   'activity.label.plan': 'Plan',

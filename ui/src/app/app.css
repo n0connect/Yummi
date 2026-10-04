@@ -447,8 +447,8 @@ body::before {
 .nav-seg {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 3px;
+  gap: 3px;
+  padding: 4px;
   background: var(--wash-soft);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -458,24 +458,25 @@ body::before {
   scrollbar-width: none;
 }
 .nav-seg::-webkit-scrollbar { display: none; }
-/* Thin divider between the agent group and the operator group in the top nav. */
+/* Refined divider between the core agent group and the infrastructure group in the top nav. */
 .nav-divider {
   flex: none;
   width: 1px;
-  height: 14px;
-  margin: 0 6px;
-  background: var(--border-subtle);
+  height: 16px;
+  margin: 0 10px;
+  background: var(--border-strong);
+  opacity: 0.65;
 }
 .status-nav-link {
   cursor: pointer;
   text-decoration: none;
-  color: rgba(244, 247, 246, 0.56);
+  color: rgba(244, 247, 246, 0.58);
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  padding: 6px 14px;
+  padding: 7px 15px;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
   flex-shrink: 0;
@@ -686,20 +687,198 @@ body::before {
 
 /* Composer — floating, generous (Claude-style) */
 .chat-column .chat-input-area {
+  position: relative;
   width: 100%;
   max-width: 880px;
   margin: 0 auto;
   border-top: none;
-  padding: var(--space-md) var(--space-md) var(--space-xl);
-  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-md) var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
   box-sizing: border-box;
 }
-.chat-column .chat-input-area input {
-  padding: 14px 20px;
+
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.chat-column .chat-input-area textarea {
+  flex: 1;
+  min-height: 48px;
+  max-height: 180px;
+  padding: 13px 20px;
+  font-family: var(--font-sans);
   font-size: var(--text-md);
+  line-height: 1.5;
   background: var(--bg-secondary);
-  border-color: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  outline: none;
+  resize: none;
   box-shadow: var(--shadow-md);
+  box-sizing: border-box;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  overflow-y: hidden;
+}
+.chat-column .chat-input-area textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.chat-column .chat-input-area textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chat-column .chat-input-area textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.btn-attach {
+  height: 48px;
+  width: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wash-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.btn-attach:hover:not(:disabled) {
+  background: var(--wash-medium);
+  border-color: var(--border-strong);
+  color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.btn-attach:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chat-input-row .btn-send,
+.chat-input-row .btn-stop,
+.chat-column .chat-input-area button:not(.btn-attach):not(.attachment-remove-btn) {
+  height: 48px;
+  padding: 0 var(--space-xl);
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Attached file chips */
+.chat-attachments-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  padding: 0 var(--space-xs);
+  margin-bottom: 2px;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  background: rgba(45, 212, 191, 0.08);
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  animation: panelRise 0.2s var(--ease);
+}
+.attachment-icon {
+  font-size: 12px;
+  color: var(--accent);
+}
+.attachment-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.attachment-size {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.attachment-remove-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-muted) !important;
+  padding: 0 !important;
+  height: auto !important;
+  width: auto !important;
+  font-size: 11px !important;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: color var(--transition-fast) !important;
+}
+.attachment-remove-btn:hover {
+  color: var(--red) !important;
+}
+
+/* Drag & drop overlay */
+.chat-area {
+  position: relative;
+}
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 12, 14, 0.90);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  pointer-events: all;
+  animation: fadeIn 0.16s ease;
+  margin: var(--space-md);
+}
+.chat-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xs);
+  text-align: center;
+  padding: var(--space-xl);
+  pointer-events: none;
+}
+.chat-drop-icon {
+  color: var(--accent);
+  margin-bottom: var(--space-xs);
+  animation: bounceSlow 1.4s infinite ease-in-out;
+}
+.chat-drop-card h3 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+.chat-drop-card p {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+@keyframes bounceSlow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
 }
 .chat-column .proposals-bar,
 .chat-column .tt-card,

@@ -60,7 +60,7 @@
   flex: none;
   width: 0;
   height: 100%;
-  background: var(--bg-secondary);
+  background: var(--bg-base);
   border-right: 1px solid transparent;
   transition: width 200ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 200ms ease;
   display: flex;
@@ -76,7 +76,7 @@
     left: 0;
     bottom: 0;
     z-index: 19;
-    background: linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));
+    background: var(--bg-base);
   }
   .session-rail.open { width: 280px; }
 }
@@ -88,6 +88,7 @@
   height: 52px;
   padding: 0 var(--space-md) 0 54px; /* 12px right, 54px left leaves a clean lane for 34px toggle at left: 12px */
   border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-base);
   flex-shrink: 0;
   box-sizing: border-box;
 }
@@ -113,7 +114,7 @@
 }
 .rail-title {
   display: block;
-  margin-top: 1px;
+  margin-top: 2px;
   font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -127,9 +128,9 @@
   align-items: center;
   gap: 4px;
   height: 28px;
-  padding: 0 9px;
+  padding: 0 10px;
   background: var(--accent-soft);
-  border: 1px solid rgba(45, 212, 191, 0.28);
+  border: 1px solid rgba(45, 212, 191, 0.25);
   border-radius: var(--radius-sm);
   color: var(--accent-hover);
   font-size: 11px;
@@ -138,8 +139,9 @@
   transition: all var(--transition-fast);
 }
 .rail-create:hover {
-  background: rgba(45, 212, 191, 0.2);
+  background: rgba(45, 212, 191, 0.22);
   border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
 }
 
 .rail-search-wrap {
@@ -147,17 +149,19 @@
   align-items: center;
   gap: 8px;
   margin: var(--space-md) var(--space-md) var(--space-sm);
-  padding: 0 10px;
-  height: 34px;
+  padding: 0 12px;
+  height: 36px;
   background: var(--wash-soft);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--text-muted);
   box-sizing: border-box;
+  transition: all var(--transition-fast);
 }
 .rail-search-wrap:focus-within {
-  border-color: var(--border-strong);
+  border-color: var(--border-focus);
   background: var(--wash-medium);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .rail-search-icon {
   font-size: 13px;
@@ -207,11 +211,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm);
-  padding: 9px 12px;
-  margin-bottom: 4px;
+  padding: 10px 14px;
+  margin-bottom: 5px;
   background: var(--wash-faint);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   text-align: left;
@@ -221,12 +225,13 @@
   background: var(--wash-medium);
   border-color: var(--border-subtle);
   color: var(--text-primary);
+  transform: translateX(1px);
 }
 .rail-item.active {
   background: rgba(45, 212, 191, 0.08);
   border-color: rgba(45, 212, 191, 0.28);
   color: var(--text-primary);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: 0 0 14px -3px var(--accent-soft);
 }
 .rail-item-main {
   flex: 1;

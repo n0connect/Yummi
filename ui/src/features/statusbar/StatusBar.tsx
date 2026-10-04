@@ -1,7 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { t } from '../../shared/i18n/strings'
 import { useTheme } from '../../shared/lib/useTheme'
-import { YummiLogo } from '../../shared/components/YummiLogo'
 
 /** Sun (light active) / moon (dark active) — mirrors SessionRail's inline
  * icon convention: 20x20 viewBox, stroke-only, currentColor. */
@@ -41,11 +40,8 @@ export function StatusBar(): JSX.Element {
 
   return (
     <div className="status-bar">
-      <div className="left">
-        <NavLink to="/" className="logo" aria-label="YUMMI">
-          <YummiLogo height={20} className="status-logo" />
-          <span className="sr-only">YUMMI</span>
-        </NavLink>
+      <div className="left" aria-hidden="true">
+        <span className="sr-only">YUMMI</span>
       </div>
       <div className="right">
         <nav className="nav-seg" aria-label={t('statusBar.navAriaLabel')}>
