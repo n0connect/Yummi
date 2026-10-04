@@ -8,11 +8,11 @@ description: >
   of overprivileged policies and lateral movement through cloud-native services.
 triggers:
   - cloud privilege escalation
-  - iam privesc
   - aws privesc
   - gcp privesc
   - azure privesc
   - role chaining
+  - cross-account role chaining
   - service account impersonation
   - confused deputy
   - iam enumeration

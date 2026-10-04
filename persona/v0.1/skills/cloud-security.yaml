@@ -5,13 +5,13 @@ description: Senior multi-cloud infrastructure assessment — AWS IAM role chain
 triggers:
   - cloud security
   - aws
-  - iam
   - s3
-  - sts
-  - assumerole
   - azure msi
   - gcp service account
   - cloud audit
+  - cloud posture
+  - s3 security
+  - cloud storage
 tools:
   - curl
 knowledge: |

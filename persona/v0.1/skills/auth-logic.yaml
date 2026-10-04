@@ -9,8 +9,8 @@ triggers:
   - 2fa bypass
   - mfa bypass
   - session fixation
-  - credential stuffing
-  - brute force
+  - authentication bypass
+  - session hijacking
   - account lockout
   - kimlik doğrulama
 tools:

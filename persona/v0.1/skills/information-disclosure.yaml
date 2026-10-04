@@ -4,7 +4,7 @@ name: information-disclosure
 description: Senior sensitive data disclosure and architectural leak assessment — version control (.git/.svn), backup files (.bak/.swp), Spring Boot actuators, and environment dumps.
 triggers:
   - information disclosure
-  - git leak
+  - exposed git
   - backup files
   - actuator
   - spring boot actuator

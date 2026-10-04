@@ -9,7 +9,8 @@ triggers:
   - authorization bypass
   - access control
   - multi-tenant
-  - privilege escalation
+  - horizontal privilege escalation
+  - vertical privilege escalation
   - verb tampering
   - method override
 tools:

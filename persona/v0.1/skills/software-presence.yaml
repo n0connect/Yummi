@@ -3,8 +3,8 @@ version: 3.0.0
 name: software-presence
 description: Senior binary presence and version auditing — verify command-line utilities and report version or explicit absence in one atomic step.
 triggers:
-  - mysql
-  - postgresql
+  - software presence
+  - check binary
   - kurulu mu
   - installed
   - version

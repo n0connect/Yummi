@@ -10,9 +10,9 @@ triggers:
   - hidden parameter
   - query string
   - reflection
-  - open redirect
+  - input reflection
   - ssrf parameter
-  - xss
+  - payload boundary
   - dalfox
   - parametre
 tools:

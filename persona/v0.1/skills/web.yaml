@@ -14,17 +14,14 @@ triggers:
   - port 80
   - port 443
   - url
-  - api
   - katana
   - ffuf
   - gobuster
   - whatweb
   - wafw00f
-  - lfi
-  - path traversal
-  - traversal
-  - directory traversal
-  - local file inclusion
+  - vhost
+  - virtual host
+  - content discovery
 tools:
   - whatweb
   - wafw00f

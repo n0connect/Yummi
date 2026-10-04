@@ -1,72 +1,65 @@
 schema_version: 1
 version: 3.0.0
 name: system-inspection
-description: Senior local host situational awareness, privilege escalation vector analysis, SUID/capability discovery, and system architecture inspection.
+description: >
+  Local host situational awareness and environment enumeration — OS distribution, kernel version,
+  hardware architecture, network interfaces, mount points, active processes, and user context.
 triggers:
-  - system
-  - sistem
-  - hostname
-  - shell
-  - uptime
-  - memory
-  - privilege escalation
-  - privesc
-  - suid
-  - sudo
-  - capabilities
-  - cron
-  - yetki yükseltme
-  - id
+  - system inspection
+  - host awareness
+  - sistem inceleme
+  - environment discovery
+  - os release
+  - uname
   - whoami
+  - local discovery
+  - hostname
+  - system info
 tools:
-  - find
-  - stat
-  - getent
   - id
-  - awk
-  - sort
-  - sudo
-  - getcap
-  - ss
+  - uname
+  - df
+  - ps
+  - ip
 knowledge: |
-  Perform local host inspection and privilege escalation analysis with senior systems engineering discipline and zero guesswork.
+  Perform local host situational awareness as an algorithmic, non-invasive discovery pass.
+  Establish complete baseline environmental context before planning active privilege escalation.
 
-  1. IDENTITY & PRIVILEGE TRIAGE:
-     - Check current user context and assigned groups: `id` and `whoami`.
-     - Non-Interactive Sudo Verification:
-       `sudo -l -n 2>/dev/null`
-       (Using `-n` is mandatory: it prevents blocking the execution engine on interactive password prompts).
-     - High-Privilege Group Membership:
-       Audit groups conferring immediate root/system access: `docker`, `lxd`, `disk`, `sudo`, `wheel`.
-       (e.g., membership in `docker` enables mounting host root `/` into an unconfined container).
+  1. OS & KERNEL BASELINE IDENTIFICATION:
+     Determine distribution, kernel release, and hardware architecture:
+       uname -a
+       cat /etc/os-release 2>/dev/null || cat /etc/issue
+     Identify containerization / virtualization flags:
+       systemd-detect-virt 2>/dev/null
+       grep -qa container= /proc/1/environ 2>/dev/null
 
-  2. SUID/SGID BINARIES & LINUX CAPABILITIES:
-     - Locate all SUID binaries on local filesystems:
-       `find / -perm -4000 -type f -exec ls -la {} + 2>/dev/null`
-       Cross-reference unusual binaries against GTFOBins primitives (pkexec, find, bash, cp, vim, python, gdb, nmap).
-     - Inspect POSIX File Capabilities:
-       `getcap -r / 2>/dev/null`
-       Look for capabilities such as `cap_setuid+ep` on interpreters (python, perl, ruby) which allow direct UID switching to root.
+  2. USER CONTEXT & PRIVILEGE BOUNDARIES:
+     Inspect current security principal and group memberships:
+       id
+     Check active login sessions and recent activity:
+       who; w; last -n 5
 
-  3. INTERNAL NETWORK SERVICES & PROCESS AUDIT:
-     - Inspect local loopback services that were invisible during external network scans:
-       `ss -tulpn` or `netstat -tulpn`
-       Identify internal admin panels, redis, memcached, or local databases bound to 127.0.0.1.
-     - Inspect active processes running under privileged accounts:
-       `ps aux | grep root`
+  3. NETWORK INTERFACES & ROUTING FABRIC:
+     Identify internal networks and neighboring systems:
+       ip -br addr
+       ip route
+       ip neigh (ARP neighbors)
+     Check local listening services (unexposed internal daemons):
+       ss -tulpn
 
-  4. SCHEDULED TASKS & WRITABLE PATHS:
-     - Inspect system-wide and user cron tables:
-       `cat /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* 2>/dev/null`
-     - Check write permissions on scripts executed by root cron jobs:
-       `ls -la <script_path>`
-     - Locate world-writable scripts or configuration files in sensitive paths:
-       `find /etc /opt /var/www /usr/local -maxdepth 3 -writable -type f 2>/dev/null`
+  4. STORAGE, MOUNTS & FILESYSTEM MAP:
+     Identify disk partitioning and sensitive mounts:
+       df -hT
+       mount | grep -E "(ext4|xfs|nfs|cifs|tmpfs)"
+     Check for noexec, nosuid mount flags on /tmp and /dev/shm.
 
-  5. STRUCTURED EVIDENCE REPORTING:
-     - Record exact paths, ownership, permission bits, and command outputs as verifiable findings.
+  5. SYSTEM HEALTH & EXECUTION CONTEXT:
+     Check uptime and resource constraints:
+       uptime
+       free -m
 references:
-  - persona:system-inspection-v3
+  - https://attack.mitre.org/techniques/T1082/
+  - https://attack.mitre.org/techniques/T1033/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/system-inspection.yaml

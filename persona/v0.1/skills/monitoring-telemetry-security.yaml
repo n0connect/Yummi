@@ -1,65 +1,66 @@
 schema_version: 1
 version: 3.0.0
 name: monitoring-telemetry-security
-description: Senior telemetry, observability, and metrics infrastructure assessment — unauthenticated Prometheus endpoints, Grafana data source proxy SSRF, and Elasticsearch/Kibana exposure.
+description: >
+  Enterprise observability and telemetry infrastructure security assessment — Elasticsearch/Kibana unauthenticated
+  indices, Jaeger/Zipkin distributed trace leakage, and OpenTelemetry collector endpoint security.
 triggers:
-  - prometheus
-  - grafana
-  - kibana
   - elasticsearch
-  - metrics
-  - jaeger
+  - kibana
   - opentelemetry
+  - jaeger
   - telemetry
+  - splunk
+  - distributed tracing
+  - logging infrastructure
 tools:
   - curl
+  - python3
 knowledge: |
-  Audit enterprise observability platforms, monitoring daemons, and distributed trace collectors with senior offensive engineering precision.
+  Enterprise observability stacks (Elasticsearch, Kibana, OpenTelemetry, Jaeger, Splunk) aggregate
+  production application logs, distributed traces, and audit events. Unauthenticated access exposes
+  credentials, internal microservice call graphs, and customer PII.
 
-  1. TELEMETRY ATTACK SURFACE & RECONNAISSANCE:
-     Monitoring stacks aggregate deep architectural intelligence and runtime data from across the enterprise:
-     - Prometheus Metrics Scrape Endpoints (Default Port 9090 or app `/metrics`): Expose internal paths, query counts, and host topology.
-     - Grafana Dashboards & Proxies (Default Port 3000): Provide centralized visualization and backend database proxy routing.
-     - Elasticsearch & Kibana (Ports 9200, 5601): Store application logs, audit events, and user telemetry.
-     - Jaeger / OpenTelemetry (Ports 16686, 4317/4318): Expose distributed traces detailing microservice inter-call arguments and request headers.
+  1. ELASTICSEARCH REST API AUDIT (PORT 9200):
+     - Cluster Health & Info:
+       curl -s "http://target:9200/"
+       curl -s "http://target:9200/_cat/health?v"
+     - Index Enumeration:
+       curl -s "http://target:9200/_cat/indices?v"
+       Search for sensitive index naming: `*log*`, `*audit*`, `*user*`, `*auth*`, `*payment*`.
+     - Document Search & Credential Extraction:
+       `curl -s "http://target:9200/*log*/_search?q=(password+OR+token+OR+secret+OR+authorization)&size=10"`
+       Query logs for reflected bearer tokens, database connection errors, and stack traces.
 
-  2. PROMETHEUS METRICS DISCLOSURE:
-     - Unauthenticated Metrics Scraping:
-       Query standard endpoints: `curl -s "http://<target>:<port>/metrics"`
-       Audit discovered metrics for architectural disclosure:
-       • `http_requests_total{path="..."}`: Discloses all registered internal routes, administrative paths, and hidden API endpoints.
-       • `process_open_fds`, `node_filesystem_avail_bytes`: Reveals system capacity and process ownership.
-       • Sensitive Metric Labels: Search for tokens, secret keys, or database hostnames mistakenly attached as metric labels:
-         `curl -s "http://<target>:<port>/metrics" | grep -iE 'key|token|auth|secret|internal'`
-     - Prometheus Query API:
-       `curl -s "http://<target>:9090/api/v1/targets"` (reveals all internal cluster scrape targets, node IPs, and namespaces).
+  2. KIBANA CONSOLE & DASHBOARD EXPOSURE (PORT 5601):
+     - Status & Version:
+       curl -s "http://target:5601/api/status"
+     - Unauthenticated Dev Tools:
+       If authentication is disabled, navigate to `app/dev_tools#/console` to execute arbitrary Elasticsearch queries.
+     - Saved Objects Export:
+       `curl -s "http://target:5601/api/saved_objects/_find?type=index-pattern"`
 
-  3. GRAFANA SECURITY & DATA SOURCE PROXY SSRF:
-     - Authentication Posture & Snapshot Leaks:
-       • Test default credentials: `admin` / `admin`.
-       • Check for enabled anonymous access (`[auth.anonymous] enabled = true`).
-       • Enumerate public snapshot links: `/dashboard/snapshot/*`.
-     - Data Source Proxy SSRF:
-       Grafana includes a backend proxy feature that relays queries to configured data sources:
-       `POST /api/datasources/proxy/<id>/*`
-       If the data source URL is misconfigured or points to an internal network segment, use the proxy endpoint to pivot into internal cloud metadata (`http://169.254.169.254/`) or internal databases.
+  3. JAEGER & DISTRIBUTED TRACE COLLECTION (PORTS 16686 / 4317 / 4318):
+     Jaeger / OpenTelemetry collectors capture request spans across microservices:
+     - Trace API Query:
+       `curl -s "http://target:16686/api/traces?service=auth-service&limit=10"`
+     - Extracted Intelligence:
+       Spans include HTTP query parameters, headers, internal RPC endpoints, database queries (db.statement),
+       and upstream service identities.
 
-  4. ELASTICSEARCH & KIBANA CLUSTER EXPOSURE:
-     - Elasticsearch REST API (Port 9200):
-       Check cluster health and index catalog without authentication:
-       `curl -s "http://<target>:9200/_cluster/health"`
-       `curl -s "http://<target>:9200/_cat/indices?v"`
-     - Index Inspection:
-       Retrieve documents from sensitive indices (e.g. `audit-logs-*`, `app-events-*`):
-       `curl -s "http://<target>:9200/<index_name>/_search?q=*&size=5"`
-     - Kibana Dashboard Exposure (Port 5601):
-       Verify if the Kibana web interface permits unauthenticated dashboard access, saved object export, or dev tools console execution (`POST /api/console/proxy`).
+  4. OPENTELEMETRY COLLECTOR UNPROTECTED RECEIVERS:
+     - OTLP HTTP receiver (Port 4318):
+       Test sending trace telemetry without authentication to verify if unauthorized injection of fake spans is accepted.
+     - OTLP gRPC receiver (Port 4317):
+       Inspect reflection or RPC service definitions.
 
-  5. SAFE VERIFICATION STANDARDS:
-     - Execute read-only requests (`/metrics`, `_cat/indices`, `health`) to demonstrate exposure.
-     - Never alter alerting rules, delete Elasticsearch indices, or modify Grafana dashboard configurations.
+  5. EVIDENCE & REMEDIATION DISCIPLINE:
+     - Capture index count, cluster name, and a redacted sample document proving unauthenticated exposure.
+     - Never delete, reindex, or modify existing indices or traces during security testing.
 references:
-  - persona:monitoring-telemetry-security-v3
+  - https://www.elastic.co/guide/en/elasticsearch/reference/current/secure-cluster.html
+  - https://opentelemetry.io/docs/collector/
+  - https://attack.mitre.org/techniques/T1552/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/monitoring-telemetry-security.yaml

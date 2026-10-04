@@ -1,57 +1,61 @@
 schema_version: 1
 version: 3.0.0
 name: source-analysis
-description: Senior static application security testing (SAST) — source code auditing, AST-based pattern matching, input-to-sink taint analysis, and dependency CVE mapping.
+description: >
+  Manual source code security review and architectural taint analysis — tracing user-controlled
+  inputs to dangerous sinks, inspecting authorization check logic, and analyzing framework configurations.
 triggers:
-  - source
-  - source code
   - code review
-  - codebase
-  - repo
-  - repository
-  - static analysis
-  - sast
-  - semgrep
-  - vulnerability
-  - audit
-  - code audit
-  - secrets scan
+  - manual code review
+  - taint analysis
+  - source audit
+  - codebase review
+  - sink analysis
+  - source-to-sink
 tools:
-  - semgrep
   - rg
   - git
+  - python3
 knowledge: |
-  Perform static application security testing (SAST) systematically across the target repository using pattern matching and taint tracking.
+  Manual code review uncovers deep logic flaws, authorization gaps, and complex taint flows that
+  automated scanners routinely miss. Trace data from entry points (sources) to dangerous functions (sinks).
 
-  1. MANIFEST & DEPENDENCY TRIAGE:
-     - Identify project ecosystem, framework, language version, and package manager:
-       `find . -maxdepth 2 \( -name "package.json" -o -name "go.mod" -o -name "pom.xml" -o -name "requirements.txt" -o -name "Cargo.toml" -o -name "Gemfile" \)`
-     - Audit third-party dependencies for known critical CVEs and outdated libraries.
+  1. SOURCE IDENTIFICATION (ENTRY POINTS):
+     Locate where external user input enters the application:
+     - HTTP Request Handlers:
+       Express/Fastify: `req.body`, `req.query`, `req.params`, `req.headers`
+       Django/Flask: `request.POST`, `request.GET`, `request.json`, `request.form`
+       Spring/Java: `@RequestParam`, `@RequestBody`, `@PathVariable`, `HttpServletRequest`
+       Go: `r.URL.Query()`, `r.FormValue()`, `json.NewDecoder(r.Body).Decode()`
+     - Asynchronous & Background Sources:
+       Message queues (RabbitMQ, Kafka, SQS consumers), Redis pub/sub, WebSocket message handlers.
 
-  2. SEMGREP AUTOMATED SAST AUDIT:
-     - Run targeted Semgrep rulesets against source trees:
-       `semgrep scan --config auto --json -o /home/pentester/work/semgrep_findings.json .`
-     - Run security-focused community audit packs:
-       `semgrep scan --config "p/security-audit" --config "p/secrets" .`
+  2. TAINT TRACKING (SOURCE-TO-SINK DATAFLOW):
+     Trace input variables through transformations, sanitizers, and validation gates:
+     - Sanitization Gaps:
+       Look for custom regex replaces (e.g. `str.replace("../", "")` which bypasses with `....//`).
+       Look for type coercion quirks (e.g. `typeof id === 'string'` bypassed with arrays/objects).
+     - Missing Validation in Internal Services:
+       When developers validate input at the edge controller but omit validation in internal service functions.
 
-  3. TAINT-FLOW TRACING (SOURCES TO SINKS):
-     - Command Execution / RCE:
-       `rg -n -i -e '(child_process\.exec|execFile|os\.system|subprocess\.(Popen|run)|Runtime\.getRuntime|ProcessBuilder)'`
-     - SQL Query Concatenation (Raw SQLi):
-       `rg -n -i -e '(SELECT|INSERT|UPDATE|DELETE).*\+.*' -e '(rawQuery|db\.raw|execute\(f["'\''])'`
-     - Path Traversal & File System Sinks:
-       `rg -n -i -e '(fs\.readFile|open\(|FileInputStream|os\.Open).*\+'`
-     - Insecure Deserialization & Template Injection:
-       `rg -n -i -e '(pickle\.loads|yaml\.load\(.*Loader=|unserialize\(|render_template_string)'`
+  3. DANGEROUS SINKS BY VULNERABILITY CLASS:
+     - Command Execution: `exec()`, `spawn()`, `os.system()`, `Runtime.getRuntime().exec()`, `ProcessBuilder`
+     - SQL Injection: String concatenation in queries: `WHERE id = " + id`, raw SQL builders without parameterization.
+     - Deserialization: `pickle.loads()`, `unserialize()`, `yaml.load(without SafeLoader)`, `readObject()`
+     - Path Traversal: `fs.readFile()`, `open()`, `File()`, `Path.resolve()` concatenated with input.
+     - Server-Side Template Injection: `render_template_string()`, `mark_safe()`, `Template.compile()`
 
-  4. HARDCODED SECRETS & CLOUD TOKEN MINING:
-     - Scan for exposed credentials, private keys, API tokens, and JWT secrets:
-       `rg -n -i -e '(api_key|jwt_secret|private_key|aws_access_key_id|client_secret|password)\s*[:=]\s*["'\''][A-Za-z0-9_\-\.]{8,}["'\'']'`
+  4. AUTHORIZATION LOGIC AUDIT:
+     - Horizontal Authorization (IDOR): Verify if the database query binds to `auth.userId` or if it only filters by `req.params.id`.
+     - Vertical Authorization (Privilege Escalation): Check if role checks are performed on every mutation or only at the router level.
+     - State Machine & Workflow Skips: Check if multi-step checkouts or onboarding can jump directly to the final confirmation endpoint.
 
-  5. STRUCTURED EVIDENCE REPORTING:
-     - Document findings with exact `file_path:line_number`, surrounding code context, tainted parameter name, and remediation recommendation.
+  5. REPORTING & EVIDENCE:
+     - Provide the exact file path, line numbers, and call stack trace from source to sink.
+     - Provide a minimal reproducible test case (e.g. HTTP curl command) triggering the identified code path.
 references:
-  - persona:source-analysis-v3
+  - https://owasp.org/www-project-code-review-guide/
+  - https://cwe.mitre.org/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/source-analysis.yaml

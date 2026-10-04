@@ -8,10 +8,9 @@ triggers:
   - windows enum
   - netbios
   - enum4linux
-  - netexec
-  - nxc
   - smbmap
-  - kerbrute
+  - smb shares
+  - smbclient
   - shares
   - null session
   - paylaşım

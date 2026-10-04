@@ -8,18 +8,16 @@ description: >
   and gRPC/WebSocket transport parity gaps. Complements api-pentest with deep authorization logic.
 triggers:
   - api security
-  - bfla
   - broken function level authorization
-  - verb tampering
   - api versioning
   - api gateway
   - api mass assignment
-  - http verb
+  - api gateway bypass
   - api rate limit
   - rest api authorization
   - api swagger
   - openapi security
-  - api idor
+  - transport parity
 tools:
   - httpx
   - ffuf

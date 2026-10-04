@@ -9,7 +9,7 @@ triggers:
   - wcd
   - delimiter discrepancy
   - unkeyed header
-  - x-forwarded-host
+  - cache key poisoning
   - cache-control
 tools:
   - curl

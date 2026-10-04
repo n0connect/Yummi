@@ -9,13 +9,13 @@ triggers:
   - apt emulation
   - adversary emulation
   - mitre attack
-  - living off the land
+  - apt campaign
   - lolbas
-  - gtfobins
+  - lolbas execution
   - low and slow
   - stealth campaign
   - threat actor emulation
-  - purple team
+  - ttp modeling
 tools:
   - python3
 knowledge: |

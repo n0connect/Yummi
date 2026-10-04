@@ -9,7 +9,7 @@ triggers:
   - dtd
   - entity expansion
   - soap
-  - saml
+  - xml parser
   - xml-rpc
   - svg xxe
 tools:

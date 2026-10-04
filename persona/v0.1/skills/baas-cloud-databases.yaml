@@ -1,68 +1,75 @@
 schema_version: 1
 version: 3.0.0
 name: baas-cloud-databases
-description: Senior Backend-as-a-Service (BaaS) and serverless database security assessment — Firebase Firestore rules, Supabase PostgREST Row Level Security (RLS) bypasses, and client key permissions.
+description: >
+  Backend-as-a-Service (BaaS) and embedded cloud datastore security assessment covering PocketBase,
+  Appwrite, Parse Server, and Directus. Focuses on collection-level API rule bypasses, unauthenticated
+  schema enumeration, admin token leaks, and client-side database boundary testing.
 triggers:
-  - firebase
-  - firestore
-  - supabase
   - baas
-  - rls
-  - row level security
-  - postgrest
-  - anon key
-  - appwrite
   - pocketbase
+  - appwrite
+  - parse server
+  - directus
+  - serverless database
+  - client database
 tools:
   - curl
+  - python3
 knowledge: |
-  Audit modern Backend-as-a-Service (BaaS) platforms, serverless data stores, and client-side database APIs with senior offensive engineering precision.
+  Backend-as-a-Service (BaaS) architectures (PocketBase, Appwrite, Parse Server, Directus) expose
+  database tables and file storage directly to client-side applications through auto-generated REST APIs.
+  Vulnerabilities arise when collection API rules, schema definitions, or admin interfaces are left default.
 
-  1. BAAS ARCHITECTURE & CLIENT TRUST BOUNDARIES:
-     Modern single-page applications (SPA) and mobile apps connect directly to managed cloud databases (Firebase, Supabase, Appwrite) using client-side SDKs and public API keys:
-     - Public Client Keys: `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `FIREBASE_API_KEY`. These keys are public identifiers and must NOT be treated as security boundaries.
-     - Security Enforcement: Security depends entirely on database-level access rules (Firestore Security Rules, PostgreSQL Row Level Security policies).
-     - Common Failure: Developers publish public client keys assuming client-side code will filter data, leaving database tables unprotected against direct REST queries.
+  1. POCKETBASE API & COLLECTION RULE TESTING:
+     PocketBase exposes SQLite collections at `/api/collections/<name>/records`:
+     - Schema & Health Discovery:
+       curl -s "https://target/api/health"
+       curl -s "https://target/api/collections?page=1&perPage=50"
+     - Unauthenticated Collection Access:
+       Test common collection names without authorization headers:
+       `curl -s "https://target/api/collections/users/records"`
+       `curl -s "https://target/api/collections/settings/records"`
+       If rows return, the collection List/View rule is set to `@request.auth.id != ""` (or left empty for public access).
+     - Admin UI Exposure:
+       Check `/api/admins` and `/_/` (default admin panel path).
 
-  2. FIREBASE REALTIME DATABASE & FIRESTORE AUDITING:
-     - Realtime Database Open Rules (.json):
-       Query the project root with the shallow parameter to test for open read permissions:
-       `curl -s "https://<project-id>.firebaseio.com/.json?shallow=true"`
-       If the response returns a JSON map of collection keys, read permissions are globally unrestricted (`.read: true`).
-     - Cloud Firestore REST API:
-       Query public Firestore collections via the official REST endpoint:
-       `curl -s "https://firestore.googleapis.com/v1/projects/<project-id>/databases/(default)/documents/<collection_name>"`
-       Test common collection names: `users`, `accounts`, `profiles`, `orders`, `transactions`, `configs`.
-     - Write Permission Verification:
-       Probe non-destructive test paths with temporary documents before declaring write exposure:
-       `curl -s -X POST -d '{"fields": {"audit": {"stringValue": "canary"}}}' "https://firestore.googleapis.com/v1/projects/<project-id>/databases/(default)/documents/canary_audit"`
+  2. APPWRITE PROJECT & DATABASE SECURITY:
+     Appwrite endpoints operate under `/v1/database/collections`:
+     - Client Header Configuration:
+       Appwrite requires `X-Appwrite-Project: <PROJECT_ID>`. Extract project ID from client JavaScript.
+     - Document Read Permissions:
+       `curl -s -H "X-Appwrite-Project: PROJECT_ID" "https://target/v1/databases/<databaseId>/collections/<collectionId>/documents"`
+       Check if Document Security is disabled, allowing any user with the project ID to query all documents.
+     - Storage Bucket File Permissions:
+       `curl -s -H "X-Appwrite-Project: PROJECT_ID" "https://target/v1/storage/buckets/<bucketId>/files"`
 
-  3. SUPABASE POSTGREST ROW LEVEL SECURITY (RLS) AUDITING:
-     Supabase exposes PostgreSQL tables directly via PostgREST:
-     - Schema Discovery (OpenAPI Spec):
-       Retrieve the full database schema and endpoint listing using the public anon key:
-       `curl -s -H "apikey: <anon_key>" "https://<project-ref>.supabase.co/rest/v1/"`
-       Exposes all table names, columns, foreign keys, and stored procedures (`/rpc/<func>`).
-     - Unprotected Tables (Missing RLS):
-       If a table was created without `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, or policies permit global reads (`for select using (true)`):
-       `curl -s -H "apikey: <anon_key>" -H "Authorization: Bearer <anon_key>" "https://<project-ref>.supabase.co/rest/v1/<table_name>?select=*&limit=5"`
-       A 200 response with rows confirms complete RLS policy omission.
-     - Dangerous Stored Procedures (RPC):
-       Audit exposed database functions: `POST /rest/v1/rpc/<function_name>`. Check for functions running with `SECURITY DEFINER` that bypass user authorization.
+  3. PARSE SERVER OBJECT & ROLE AUDITING:
+     Parse Server endpoints operate under `/parse/classes/<ClassName>`:
+     - Client Key & App ID extraction:
+       Inspect client headers: `X-Parse-Application-Id`, `X-Parse-REST-API-Key`, `X-Parse-Master-Key`.
+     - Master Key Leakage:
+       If `X-Parse-Master-Key` is exposed in client bundles, all ACLs and Class-Level Permissions (CLPs) are bypassed!
+     - Class-Level Permissions (CLP) Probe:
+       `curl -s -H "X-Parse-Application-Id: APP_ID" "https://target/parse/classes/_User"`
+       If user profiles and password hashes/tokens return, the CLP public read rule is enabled.
 
-  4. SERVICE ROLE KEY LEAKAGE & PRIVILEGE ESCALATION:
-     - Service Role Key Exposure:
-       Inspect client-side JavaScript bundles and environment manifests for leaked `service_role` secrets.
-       A `service_role` key grants root PostgreSQL access, completely overriding all Row Level Security policies.
-     - Storage Bucket Misconfigurations:
-       Audit Supabase and Firebase cloud storage endpoints:
-       `https://<project-ref>.supabase.co/storage/v1/bucket` or `/object/public/<bucket>/`.
+  4. DIRECTUS DATA ENGINE AUDIT:
+     Directus REST endpoints: `/items/<collection_name>`
+     - Public Role Permissions:
+       `curl -s "https://target/items/users"`
+       `curl -s "https://target/items/system_settings"`
+     - Server Information Leakage:
+       `curl -s "https://target/server/info"`
+       (Discloses Directus version, underlying database type, and active storage adapters).
 
-  5. VERIFICATION STANDARDS & SAFETY:
-     - Always use `limit=1` or `shallow=true` to demonstrate read access without downloading entire databases.
-     - Document the project ID, exposed collection or table name, missing policy rule, and verified sample record.
+  5. VERIFICATION & REMEDIATION DISCIPLINE:
+     - Document exact collection names, exposed document attributes, and missing access rules.
+     - Never modify, delete, or create rogue records in production collections during testing.
 references:
-  - persona:baas-cloud-databases-v3
+  - https://pocketbase.io/docs/
+  - https://appwrite.io/docs/
+  - https://parseplatform.org/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/baas-cloud-databases.yaml

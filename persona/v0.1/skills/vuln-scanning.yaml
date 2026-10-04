@@ -6,15 +6,13 @@ triggers:
   - nuclei
   - vulnerability scan
   - vuln scan
-  - cve scan
+  - cve lookup
   - template scan
   - misconfig scan
   - exposure scan
-  - subdomain takeover
-  - takeover
-  - dangling cname
   - searchsploit
   - zafiyet
+  - cve verification
 tools:
   - nuclei
   - searchsploit

@@ -2,90 +2,60 @@ schema_version: 1
 version: 3.0.0
 name: subdomain-takeover-advanced
 description: >
-  Advanced subdomain takeover identification and verification across 50+ cloud, CDN, and SaaS
-  providers. Covers dangling DNS records (CNAME, NS, MX, A/AAAA), cloud bucket de-registration,
-  fingerprint-based verification, and safe proof-of-concept creation without hostile hijacking.
+  Advanced DNS zone delegation, lame delegation, MX mail exchange takeover, and CDN alternate domain
+  routing collisions. Covers Route53 hosted zone namespace collisions, dangling NS delegation, and
+  cross-tenant cloud edge distribution claims.
 triggers:
-  - subdomain takeover
-  - dangling dns
-  - cname takeover
-  - s3 takeover
+  - ns delegation takeover
+  - zone hijacking
+  - mx takeover
+  - dangling ns
+  - second-order takeover
+  - lame delegation
   - cloudfront takeover
-  - github pages takeover
-  - heroku takeover
-  - fastly takeover
-  - azure traffic manager
-  - ns delegation
 tools:
   - subfinder
   - httpx
   - curl
   - python3
 knowledge: |
-  Subdomain takeover occurs when a DNS record points to a decommissioned external cloud service
-  or third-party SaaS resource that an attacker can re-register. This grants the attacker full control
-  over HTTP traffic, cookies, and CORS trust associated with the vulnerable domain.
+  Advanced DNS takeovers exploit authoritative delegation boundaries, mail exchange routing, and CDN
+  multi-tenant distribution bindings rather than simple dangling CNAME pointers.
 
-  1. DANGLING RECORD DISCOVERY:
-     Step 1: Enumerate all subdomains:
-       subfinder -d target.com -silent | httpx -silent -probe -status-code -cname
-     Step 2: Inspect CNAME and NS pointers for orphaned cloud targets:
-       dig CNAME sub.target.com +short
-       dig NS sub.target.com +short
-     Look for NXDOMAIN responses where a CNAME still exists:
-       dig sub.target.com | grep "NXDOMAIN"
+  1. LAME DELEGATION & NAMESERVER (NS) ZONE HIJACKING:
+     When an enterprise delegates a subdomain zone (e.g. dev.target.com) to external nameservers:
+     - Query NS records for the subdomain:
+       dig NS dev.target.com +short
+     - Vulnerability Check (AWS Route53 / Azure DNS):
+       If the delegated nameservers (e.g. ns-123.awsdns-15.com) point to a deleted Route53 hosted zone:
+       Route53 assigns nameservers randomly from a pool of ~2000 nameservers.
+       An adversary can script creating and deleting Route53 zones until AWS assigns the exact matching
+       4 nameservers, seizing 100% authoritative control over the ENTIRE dev.target.com zone!
+     - Detection:
+       dig dev.target.com SOA returns REFUSED or SERVFAIL from delegated nameservers.
 
-  2. CLOUD & SAAS PROVIDER FINGERPRINTS:
-     Amazon S3:
-       CNAME: *.s3.amazonaws.com, *.s3-website-*.amazonaws.com
-       Error Fingerprint: "The specified bucket does not exist", "NoSuchBucket"
-     Amazon CloudFront:
-       CNAME: *.cloudfront.net
-       Error Fingerprint: "Bad request: The request could not be satisfied", "ERROR: The request could not be satisfied"
-     GitHub Pages:
-       CNAME: *.github.io
-       Error Fingerprint: "There isn't a GitHub Pages site here", "404 Not Found"
-     Heroku:
-       CNAME: *.herokuapp.com
-       Error Fingerprint: "No such app", "Heroku | No such app"
-     Microsoft Azure:
-       CNAME: *.azurewebsites.net, *.cloudapp.net, *.trafficmanager.net
-       Error Fingerprint: "404 Web Site not found", "This trafficmanager.net domain is available"
-     Fastly:
-       CNAME: *.fastly.net
-       Error Fingerprint: "Fastly error: unknown domain"
-     Zendesk:
-       CNAME: *.zendesk.com
-       Error Fingerprint: "Help Center Closed"
-     Shopify:
-       CNAME: shops.myshopify.com
-       Error Fingerprint: "Sorry, this shop is currently unavailable"
+  2. MX RECORD TAKEOVER & EMAIL ROUTING HIJACK:
+     When MX records point to decommissioned email services:
+     - Query MX records:
+       dig MX target.com +short
+     - If the MX points to a third-party service (e.g. mail.old-marketing-vendor.com) that was deleted:
+       An adversary can re-register the domain or tenant on that marketing platform, creating valid
+       mailboxes that intercept all incoming corporate emails, password resets, and internal communications.
 
-  3. SECOND-ORDER & NS DELEGATION TAKEOVERS:
-     Dangling NS Records (Subdomain Zone Hijacking):
-       If NS delegation for 'sub.target.com' points to AWS Route53 nameservers that were deleted,
-       an attacker can repeatedly create Route53 zones until AWS assigns the matching nameservers,
-       taking over the ENTIRE DNS zone for sub.target.com!
-     MX Record Takeover:
-       If MX record points to a decommissioned mail service, an attacker can re-claim the domain
-       on that service and intercept incoming corporate emails.
+  3. CLOUDFRONT / AZURE FRONT DOOR ALTERNATE DOMAIN COLLISIONS:
+     When a domain points to a CDN distribution (e.g. d12345.cloudfront.net) but the distribution
+     is deleted while the CNAME remains in DNS:
+     - CloudFront requires adding an "Alternate Domain Name (CNAME)" with TLS certificate validation.
+     - However, in multi-tenant CDNs without certificate verification, an adversary can attach the
+       unclaimed domain to their own CDN distribution, serving arbitrary content.
 
-  4. NON-DESTRUCTIVE VERIFICATION DISCIPLINE:
-     - DO NOT hijack or claim resources that cannot be safely handed back to the organization.
-     - For S3: attempt to create the bucket in test account, host a benign proof text file
-       (e.g., 'subdomain-takeover-verified-<timestamp>.txt'), and immediately document findings.
-     - For services where claiming is irreversible or costs money: provide verifiable DNS query
-       showing CNAME pointer + HTTP 404/NoSuchBucket response as complete proof.
-
-  5. IMPACT & ESCALATION PATHS:
-     - Cookie Theft: Stored cookies with domain=.target.com are automatically transmitted to hijacked subdomain!
-     - CORS Exploitation: Target APIs that allow *.target.com origins can be read from the hijacked host.
-     - OAuth Account Takeover: If OAuth callback allows wildcard subdomains (https://*.target.com/callback),
-       attacker intercepts authorization codes.
+  4. NON-DESTRUCTIVE PROOF DISCIPLINE:
+     - For NS delegation: capture authoritative SOA SERVFAIL queries proving nameserver abandonment.
+     - For MX: record MX host resolution failure or service registration availability without intercepting traffic.
+     - Document exact DNS RR sets (Record Type, TTL, Canonical target) and registrar configuration.
 references:
   - https://github.com/EdOverflow/can-i-take-over-xyz
   - https://attack.mitre.org/techniques/T1584/001/
-  - https://portswigger.net/web-security/cors
 provenance:
   origin: builtin
   source: persona/v0.1/skills/subdomain-takeover-advanced.yaml

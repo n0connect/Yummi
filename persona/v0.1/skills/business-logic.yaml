@@ -9,9 +9,9 @@ triggers:
   - price tampering
   - negative quantity
   - coupon stacking
-  - mass assignment
   - step skipping
-  - 2fa bypass
+  - business workflow
+  - order tampering
 tools:
   - curl
 knowledge: |
