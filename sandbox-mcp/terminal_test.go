@@ -265,4 +265,3 @@ func TestTerminal_IsTmuxKeyAndSegments(t *testing.T) {
 		t.Errorf("unexpected parseKeySegments on command: %+v", segs2)
 	}
 }
-

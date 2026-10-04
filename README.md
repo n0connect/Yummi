@@ -32,23 +32,23 @@ Yummi translates natural language into verified security workflows while enforci
 
 ## Key Capabilities
 
-### 🛡️ Security Boundary & Traffic Governance
+### Security Boundary & Traffic Governance
 - **Fail-Closed Rust Gateway** — Packet filtering is enforced by an independent Rust daemon (`yummi-gateway`) via Linux kernel `nftables` rules. Default-deny policies install at startup and persist even if the daemon terminates. The AI agent never manages firewall rules.
 - **Runtime 3-Way Egress Mode** — Operator controls egress on the fly: `block` (fail-closed, zero outbound traffic), `allow` (blanket external connectivity), or `ask` (destination-by-destination interactive operator approval).
 - **Tamper-Evident Audit Chain** — Every routing decision, temporary rule, and egress evaluation is cryptographically chained using SHA-256 in a local SQLite WAL journal.
 
-### ⚔️ Offensive Arsenal & Pwnbox Environment
+### Offensive Arsenal & Pwnbox Environment
 - **Unified Kali Sandbox (`yummi-pwnbox`)** — Single hardened container running as an unprivileged user (`UID 1000`). Shares operator Bash (`tmux`), graphical desktop (`noVNC`/XFCE), and agent execution.
 - **54 Native MCP Tools** — Four-tier tool strategy: 6 typed core tools (Nmap, WhatWeb, cURL, Gobuster, ffuf, Nikto), 39 cataloged offensive utilities, 2 Go recon pipelines, and 7 persistent tmux terminal tools.
 - **Persistent Tmux Terminal Verbs** — Full session lifecycle (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`) for long-running listeners, background tunnels, reverse shells, and interactive prompts.
 - **Active Directory & Network Pivoting** — Pre-staged Kerberos (`krb5-user`, `kerbrute`), Impacket, NetExec, Nishang, Metasploit Framework, OpenVPN lab profiles (`/dev/net/tun`), and an automatic reverse shell generator (`revshell`).
 
-### 🧠 Autonomous Reasoning & Specialized Agents
+### Autonomous Reasoning & Specialized Agents
 - **Dual Agent Backends** — Choose between a deterministic 11-node Graph State Machine (optimized for local 8B models with closed tag protocol) or CloudWeGo's Eino ADK (native tool-calling for 14B+ models).
 - **99 Offensive Skills & 52 Specialist Sub-Agents** — Declarative offensive methodologies and bounded depth-1 specialist roles spanning Active Directory, Web/APIs, Cloud/K8s, Binary RE, Hardware/RF, and Adversary Emulation.
 - **Active Exploit Verification Oracles** — Findings require deterministic proof (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) before acceptance, eliminating hallucinated vulnerabilities.
 
-### 📊 Operator Surface & Attack Surface Management
+### Operator Surface & Attack Surface Management
 - **Single Web-Managed Workspace** — Clean React 18 dashboard on port 3000 featuring AI Chat with live rationale, tmux Web Terminal, full XFCE Desktop, Trace timeline, Gateway manager, and Health telemetry.
 - **Attack Surface Management (ASM)** — Hierarchical asset graph tracking domains, subdomains, IPs, ports, endpoints, query parameters, secrets, and cloud storage buckets.
 - **Proxy Ingestion & Multi-Format Reporting** — Live HTTP stream ingestion from Burp Suite, Caido, or Mitmproxy, with one-click report generation in HackerOne Markdown, Bugcrowd VRT, Executive Summary, or structured JSON.
@@ -143,7 +143,7 @@ Running `make conf` writes your settings to `.yummi.conf` so subsequent commands
 | `YUMMI_LANG` | `en`, `tr` | UI display language (compiled into the Vite bundle at build time). |
 | `YUMMI_AGENT_BACKEND` | `graph`, `eino` | `graph` for deterministic local models; `eino` for native tool-calling on larger models. |
 | `YUMMI_OLLAMA_MODEL` | `gpt-oss:20b`, `gpt-oss:120b`, `qwen3` | Local intent classification and chat model. |
-| `YUMMI_EINO_MODEL_API_KEY` | *(Secret input)* | Optional OpenRouter/OpenAI API key for frontier cloud reasoning models (Claude 3.5, GPT-4o). |
+| `YUMMI_EINO_MODEL_API_KEY` | *(Secret input)* | Optional OpenRouter/OpenAI API key for frontier cloud reasoning models. |
 
 ---
 
