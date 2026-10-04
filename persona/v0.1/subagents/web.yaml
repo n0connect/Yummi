@@ -34,3 +34,6 @@ skills:
   - ssrf
   - ssti
   - file-upload
+  - xxe
+  - nosql-injection
+  - cors-csrf

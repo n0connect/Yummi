@@ -288,6 +288,12 @@ func TestLoadDir_AllBuiltinSkills(t *testing.T) {
 		"file-upload",
 		"active-directory",
 		"privesc-linux",
+		"xxe",
+		"nosql-injection",
+		"network-pivoting",
+		"windows-privesc",
+		"container-security",
+		"cors-csrf",
 	}
 
 	names := make(map[string]bool)

