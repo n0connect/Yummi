@@ -90,6 +90,14 @@ func TestRenderCommand(t *testing.T) {
 	if got != want {
 		t.Errorf("RenderCommand = %q, want %q", got, want)
 	}
+
+	gotTop := RenderCommand("nmap_scan", map[string]any{
+		"target": "10.0.0.5", "ports": "top-25",
+	})
+	wantTop := "nmap --top-ports 25 10.0.0.5"
+	if gotTop != wantTop {
+		t.Errorf("RenderCommand (top-ports) = %q, want %q", gotTop, wantTop)
+	}
 }
 
 func TestPrimarySixCatalog_NewFieldsRender(t *testing.T) {

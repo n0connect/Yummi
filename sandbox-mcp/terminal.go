@@ -211,9 +211,9 @@ type termWaitArgs struct {
 
 type termKeysArgs struct {
 	ID      string `json:"id" jsonschema:"session id"`
-	Keys    string `json:"keys" jsonschema:"keys to send. In key mode (default): space-separated tmux key names, e.g. 'C-c', 'Enter', 'Up Up Enter', 'y Enter'. In literal mode: sent as raw characters."`
-	Literal bool   `json:"literal,omitempty" jsonschema:"send Keys as literal characters instead of interpreting tmux key names (does NOT append Enter)"`
-	Enter   bool   `json:"enter,omitempty" jsonschema:"append a Return keypress after sending (useful with literal=true)"`
+	Keys    string `json:"keys" jsonschema:"keys or command to send. Supports tmux key names (e.g. 'C-c', 'Enter', 'Up Up Enter') as well as text and commands. Spaces, quotes, and punctuation are fully preserved."`
+	Literal bool   `json:"literal,omitempty" jsonschema:"force sending keys strictly as literal characters without interpreting any tmux key names"`
+	Enter   bool   `json:"enter,omitempty" jsonschema:"append a Return keypress after sending (useful when typing commands or answering prompts)"`
 }
 
 type termIDArg struct {
@@ -439,6 +439,115 @@ func termWaitHandler(ctx context.Context, _ *mcp.CallToolRequest, args termWaitA
 	}
 }
 
+var tmuxNamedKeys = map[string]bool{
+	"enter": true, "return": true, "space": true, "tab": true, "btab": true,
+	"bspace": true, "backspace": true, "escape": true, "esc": true,
+	"up": true, "down": true, "left": true, "right": true,
+	"home": true, "end": true, "pageup": true, "pagedown": true,
+	"pgup": true, "pgdn": true, "npage": true, "ppage": true,
+	"insert": true, "delete": true, "ic": true, "dc": true,
+	"f1": true, "f2": true, "f3": true, "f4": true, "f5": true, "f6": true,
+	"f7": true, "f8": true, "f9": true, "f10": true, "f11": true, "f12": true,
+	"f13": true, "f14": true, "f15": true, "f16": true, "f17": true, "f18": true,
+	"f19": true, "f20": true, "f21": true, "f22": true, "f23": true, "f24": true,
+	"kpenter": true, "kp/": true, "kp*": true, "kp-": true, "kp+": true, "kp.": true,
+	"kp0": true, "kp1": true, "kp2": true, "kp3": true, "kp4": true, "kp5": true,
+	"kp6": true, "kp7": true, "kp8": true, "kp9": true,
+}
+
+// isTmuxKey reports whether a token is a recognized tmux key name or key chord.
+func isTmuxKey(token string) bool {
+	if token == "" {
+		return false
+	}
+	lower := strings.ToLower(token)
+	if tmuxNamedKeys[lower] {
+		return true
+	}
+	for _, prefix := range []string{"c-", "ctrl-", "m-", "alt-", "s-", "shift-"} {
+		if strings.HasPrefix(lower, prefix) {
+			suffix := lower[len(prefix):]
+			if suffix == "" {
+				return false
+			}
+			if len(suffix) == 1 {
+				return true
+			}
+			if tmuxNamedKeys[suffix] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isAllTmuxKeys reports whether every whitespace-separated token in s is a recognized tmux key.
+func isAllTmuxKeys(s string) bool {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		if !isTmuxKey(f) {
+			return false
+		}
+	}
+	return true
+}
+
+type keySegment struct {
+	text  string
+	isKey bool
+}
+
+func parseKeySegments(s string) []keySegment {
+	fields := strings.Fields(s)
+	hasAnyKey := false
+	for _, f := range fields {
+		if isTmuxKey(f) {
+			hasAnyKey = true
+			break
+		}
+	}
+	if !hasAnyKey {
+		return []keySegment{{text: s, isKey: false}}
+	}
+
+	var segments []keySegment
+	var currentText strings.Builder
+
+	i := 0
+	for i < len(s) {
+		if s[i] == ' ' || s[i] == '	' {
+			currentText.WriteByte(s[i])
+			i++
+			continue
+		}
+		start := i
+		for i < len(s) && s[i] != ' ' && s[i] != '	' {
+			i++
+		}
+		token := s[start:i]
+
+		if isTmuxKey(token) {
+			if currentText.Len() > 0 {
+				trimmed := strings.TrimRight(currentText.String(), " 	")
+				if trimmed != "" {
+					segments = append(segments, keySegment{text: trimmed, isKey: false})
+				}
+				currentText.Reset()
+			}
+			segments = append(segments, keySegment{text: token, isKey: true})
+		} else {
+			currentText.WriteString(token)
+		}
+	}
+	if currentText.Len() > 0 {
+		segments = append(segments, keySegment{text: currentText.String(), isKey: false})
+	}
+	return segments
+}
+
 func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysArgs) (*mcp.CallToolResult, any, error) {
 	id := strings.TrimSpace(args.ID)
 	if err := requireSession(ctx, id); err != nil {
@@ -455,18 +564,52 @@ func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysA
 	lockSession(id)
 	defer unlockSession(id)
 	base := []string{"send-keys", "-t", tmuxName(id)}
+
 	if args.Literal {
 		if args.Keys != "" {
 			if _, err := runTmux(ctx, append(append([]string{}, base...), "-l", "--", args.Keys)...); err != nil {
 				return errResult(err.Error())
 			}
 		}
-	} else if args.Keys != "" {
-		// Interpret as space-separated tmux key names (C-c, Enter, Up, ...).
-		if _, err := runTmux(ctx, append(append(append([]string{}, base...), "--"), strings.Fields(args.Keys)...)...); err != nil {
-			return errResult(err.Error())
+		if args.Enter {
+			if _, err := runTmux(ctx, append(append([]string{}, base...), "--", "Enter")...); err != nil {
+				return errResult(err.Error())
+			}
+		}
+		return textResult(fmt.Sprintf("[%s] keys sent.", id))
+	}
+
+	if args.Keys != "" {
+		if isAllTmuxKeys(args.Keys) {
+			// Pure space-separated tmux key names (e.g. "C-c", "Up Up Enter", "C-c C-c").
+			if _, err := runTmux(ctx, append(append(append([]string{}, base...), "--"), strings.Fields(args.Keys)...)...); err != nil {
+				return errResult(err.Error())
+			}
+		} else if args.Enter {
+			// When Enter is requested alongside non-key text, the caller is typing a command or line
+			// of input (e.g. "find / -name user.txt 2>/dev/null", "ls -la /home", "python3 -c '...'").
+			// Sending literally (-l --) preserves all spaces, quotes, and punctuation without tmux
+			// command parsing errors on ';'.
+			if _, err := runTmux(ctx, append(append([]string{}, base...), "-l", "--", args.Keys)...); err != nil {
+				return errResult(err.Error())
+			}
+		} else {
+			// Enter is false: parse into segments of literal text and special tmux keys (e.g. "y Enter", "admin Tab pass Enter").
+			segments := parseKeySegments(args.Keys)
+			for _, seg := range segments {
+				if seg.isKey {
+					if _, err := runTmux(ctx, append(append([]string{}, base...), "--", seg.text)...); err != nil {
+						return errResult(err.Error())
+					}
+				} else {
+					if _, err := runTmux(ctx, append(append([]string{}, base...), "-l", "--", seg.text)...); err != nil {
+						return errResult(err.Error())
+					}
+				}
+			}
 		}
 	}
+
 	if args.Enter {
 		if _, err := runTmux(ctx, append(append([]string{}, base...), "--", "Enter")...); err != nil {
 			return errResult(err.Error())

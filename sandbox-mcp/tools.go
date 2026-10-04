@@ -77,7 +77,15 @@ func nmapHandler(ctx context.Context, _ *mcp.CallToolRequest, args nmapArgs) (*m
 		argv = append(argv, "-sC")
 	}
 	if args.Ports != "" {
-		argv = append(argv, "-p", args.Ports)
+		p := strings.TrimSpace(args.Ports)
+		lowerP := strings.ToLower(p)
+		if strings.HasPrefix(lowerP, "top-") {
+			argv = append(argv, "--top-ports", strings.TrimPrefix(lowerP, "top-"))
+		} else if strings.HasPrefix(lowerP, "top") && len(lowerP) > 3 && lowerP[3] >= '0' && lowerP[3] <= '9' {
+			argv = append(argv, "--top-ports", strings.TrimPrefix(lowerP, "top"))
+		} else {
+			argv = append(argv, "-p", p)
+		}
 	}
 	argv = append(argv, target)
 	return runCapturedToFile(ctx, args.OutputFile, "nmap", argv...)

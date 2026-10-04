@@ -117,7 +117,15 @@ func renderNmap(a map[string]any) string {
 		parts = append(parts, "-sC")
 	}
 	if p, _ := a["ports"].(string); p != "" {
-		parts = append(parts, "-p", p)
+		p = strings.TrimSpace(p)
+		lowerP := strings.ToLower(p)
+		if strings.HasPrefix(lowerP, "top-") {
+			parts = append(parts, "--top-ports", strings.TrimPrefix(lowerP, "top-"))
+		} else if strings.HasPrefix(lowerP, "top") && len(lowerP) > 3 && lowerP[3] >= '0' && lowerP[3] <= '9' {
+			parts = append(parts, "--top-ports", strings.TrimPrefix(lowerP, "top"))
+		} else {
+			parts = append(parts, "-p", p)
+		}
 	}
 	target, _ := a["target"].(string)
 	parts = append(parts, target)

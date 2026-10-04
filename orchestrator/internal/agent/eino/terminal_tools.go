@@ -73,12 +73,12 @@ var termWaitSpec = pentestToolSpec{
 
 var termKeysSpec = pentestToolSpec{
 	Name: "term_keys",
-	Desc: "Send raw keys to a session to interact with a running program — answer a prompt, interrupt with Ctrl-C, navigate a menu. Use term_run for whole command lines; use this for keystrokes.",
+	Desc: "Send raw keys, input, or commands to a session to interact with a running program — answer a prompt, interrupt with Ctrl-C, navigate a menu, or type into an interactive shell. Spaces and special characters are preserved.",
 	Params: map[string]*schema.ParameterInfo{
 		"id":      idParam,
-		"keys":    {Type: "string", Desc: "Keys to send. Default (key) mode: space-separated tmux key names, e.g. 'C-c', 'Enter', 'y Enter', 'Up Up Enter'. Literal mode: raw characters.", Required: true},
-		"literal": {Type: "boolean", Desc: "Send keys as literal characters instead of interpreting tmux key names (does not append Enter)", Required: false},
-		"enter":   {Type: "boolean", Desc: "Append a Return keypress after sending (useful with literal=true)", Required: false},
+		"keys":    {Type: "string", Desc: "Keys or command to send. Supports tmux key names (e.g. 'C-c', 'Enter', 'Up Up Enter') as well as text and commands. Spaces, quotes, and punctuation are fully preserved.", Required: true},
+		"literal": {Type: "boolean", Desc: "Force sending keys strictly as literal characters without interpreting any tmux key names", Required: false},
+		"enter":   {Type: "boolean", Desc: "Append a Return keypress after sending (useful when typing a command or answering a prompt)", Required: false},
 	},
 }
 

@@ -200,3 +200,69 @@ func TestTerminal_DuplicateOpenIsIdempotent(t *testing.T) {
 		t.Errorf("session should still be usable after a duplicate term_open, got: %q", out)
 	}
 }
+
+func TestTerminal_KeysPreserveSpacesAndPunctuation(t *testing.T) {
+	skipIfNoTmux(t)
+	ctx := context.Background()
+	id := openTempSession(t, ctx)
+
+	// Test 1: sending command with spaces and flags via term_keys + enter:true
+	cmd := "echo HELLO WORLD FROM TERM KEYS"
+	res, _, err := termKeysHandler(ctx, nil, termKeysArgs{ID: id, Keys: cmd, Enter: true})
+	resultText(t, res, err)
+
+	time.Sleep(300 * time.Millisecond)
+
+	readRes, _, err := termReadHandler(ctx, nil, termReadArgs{ID: id, Lines: 10})
+	out := resultText(t, readRes, err)
+	if !strings.Contains(out, "HELLO WORLD FROM TERM KEYS") {
+		t.Errorf("term_keys stripped spaces or mangled command, got pane output:\n%s", out)
+	}
+
+	// Test 2: sending command with quotes, semicolons, and spaces
+	cmd2 := `python3 -c "import sys; sys.stdout.write('FLAG_ABC_123\n')"`
+	res2, _, err := termKeysHandler(ctx, nil, termKeysArgs{ID: id, Keys: cmd2, Enter: true})
+	resultText(t, res2, err)
+
+	time.Sleep(500 * time.Millisecond)
+
+	readRes2, _, err := termReadHandler(ctx, nil, termReadArgs{ID: id, Lines: 10})
+	out2 := resultText(t, readRes2, err)
+	if !strings.Contains(out2, "FLAG_ABC_123") {
+		t.Errorf("term_keys failed on command with quotes/semicolons, got pane output:\n%s", out2)
+	}
+}
+
+func TestTerminal_IsTmuxKeyAndSegments(t *testing.T) {
+	// Key recognition
+	for _, key := range []string{"C-c", "ctrl-c", "Enter", "enter", "Up", "down", "Space", "Tab", "M-x", "S-Up"} {
+		if !isTmuxKey(key) {
+			t.Errorf("expected isTmuxKey(%q) = true", key)
+		}
+	}
+	for _, notKey := range []string{"find", "/home", "user.txt", "ls", "-la", "python3", "cat", "echo"} {
+		if isTmuxKey(notKey) {
+			t.Errorf("expected isTmuxKey(%q) = false", notKey)
+		}
+	}
+
+	// All keys
+	if !isAllTmuxKeys("Up Up Enter") {
+		t.Error("expected isAllTmuxKeys('Up Up Enter') = true")
+	}
+	if isAllTmuxKeys("find / -name user.txt") {
+		t.Error("expected isAllTmuxKeys('find / -name user.txt') = false")
+	}
+
+	// Segmentation
+	segs := parseKeySegments("y Enter")
+	if len(segs) != 2 || segs[0].text != "y" || segs[0].isKey || segs[1].text != "Enter" || !segs[1].isKey {
+		t.Errorf("unexpected parseKeySegments('y Enter'): %+v", segs)
+	}
+
+	segs2 := parseKeySegments("find / -name user.txt 2>/dev/null")
+	if len(segs2) != 1 || segs2[0].text != "find / -name user.txt 2>/dev/null" || segs2[0].isKey {
+		t.Errorf("unexpected parseKeySegments on command: %+v", segs2)
+	}
+}
+
