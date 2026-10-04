@@ -127,9 +127,9 @@ Yummi includes a dedicated offensive security and bug bounty substrate:
 ```
 
 ### Key Subsystems:
-- **47 Sandbox-Resident MCP Tools (`sandbox-mcp`)**:
+- **54 Sandbox-Resident MCP Tools (`sandbox-mcp`)**:
   - **6 Typed Tools**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
-  - **32 Cataloged Pentest Tools**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`.
+  - **39 Cataloged Pentest Tools**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `dnsrecon_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `gitleaks_scan`, `masscan_scan`, `sslscan_probe`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`, `whois_query`.
   - **2 Concurrency Utilities**: `consolidate_hosts`, `passive_recon_batch`.
   - **7 Persistent Terminal Session Tools**: `term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close` (persistent tmux sessions for background listeners, VPNs, and interactive CLI programs).
 - **Active Verification Exploit Oracles**:

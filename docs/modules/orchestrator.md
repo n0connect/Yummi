@@ -33,7 +33,7 @@ This page maps `orchestrator/` packages by **architectural boundary** — what e
 | **`internal/conductor`** | AI conductor engine (`engine.go`), risk classification floor (`validator.go`), TTL proposal store (`approval.go`), model tiers (`tier.go`), and persona fixtures (`golden.go`). | Network firewall rules and command execution. |
 | **`internal/knowledge`** | World model: targets, security findings, procedural tactics, persistent context, Attack Surface Management (`assets.go`), and program scope rules (`program_scope.go`). | Firewall manipulation and execution dispatch. |
 | **`internal/report`** | Multi-Format Reporting Engine: compiles session data into HackerOne Markdown, Bugcrowd VRT Markdown, Executive Management summaries, and JSON with out-of-scope filtering. | Session persistence and network execution. |
-| **`internal/skill`** | Declarative YAML offensive playbooks (22 skills); content threat-scanned on load. | Direct binary execution. |
+| **`internal/skill`** | Declarative YAML offensive playbooks (99 skills); content threat-scanned on load. | Direct binary execution. |
 | **`internal/skillcurator`** | Autonomous skill creation: sanitizes successful trajectories (`sanitize.go`) and quarantines drafts for operator review. | Live activation without operator consent. |
 | **`internal/security/threatscan`** | Content-layer prompt-injection, exfiltration, C2, and unicode scanner. | Network rules and process spawning. |
 | **`internal/security/invariants`** | AST-walking fitness function tests locking execution invariants in CI. | Production runtime operations. |

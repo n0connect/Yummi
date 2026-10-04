@@ -40,7 +40,7 @@ internal/
     activity.go            Typed TRACE ActivityEvents
     oracle.go, verdict.go  Active exploit proof verification (ActivePoC, DOM, OOB, Diff)
     evaluation.go          Objective quality metrics and assertion gates
-    eino/                  Cloud / Eino-driven ReAct agent backend (47 tools + 7 persistent terminal session verbs)
+    eino/                  Cloud / Eino-driven ReAct agent backend (54 tools across 4 tiers including 7 persistent terminal verbs)
   knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
     store.go               targets, findings, procedural_memory, persistent_context, assets, scope_rules
     assets.go              Hierarchical Attack Surface Management (ASM) tree matrix
@@ -49,7 +49,7 @@ internal/
     retrieval.go           RetrievalStrategy — structured SQL recall (excludes current-task cmds)
     semantic_retrieval.go  Local Ollama embeddings with structured fallback
   report/                Multi-format Pentest & Bug Bounty Report Generator (H1, VRT, Exec, JSON, out-of-scope filter)
-  skill/                 Declarative skill registry (22 YAML playbooks, threat-scanned on load)
+  skill/                 Declarative skill registry (99 YAML playbooks, threat-scanned on load)
   skillcurator/          Autonomous skill creation from successful trajectories (quarantine store)
   security/              Content-layer fail-closed
     threatscan/            injection/exfil/C2/invisible-unicode scan + ANSI stripping
@@ -64,7 +64,7 @@ internal/
   execution/ executor/   Execution lifecycle store (rationale-aware) and processor (scope check -> sandbox)
   llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
   sandbox/ gateway/      Docker exec bridge, IPC client to the gateway daemon
-  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (47 tools & persistent terminal sessions)
+  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (54 tools & persistent terminal sessions)
   retention/             Background retention cleaner for aged session data
   session/ health/       SQLite session CRUD, ring-buffer health metrics
   api/                   REST routes, domain handlers (assets, scope rules, report, proxy), WS events/terminal

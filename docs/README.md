@@ -20,7 +20,7 @@ docs/
     graph-and-nodes.md      11-node state machine, routing table, active verification oracles
     tag-protocol.md         Closed tag vocabulary for deterministic agent-LLM protocol
     memory-and-knowledge.md Targets, findings, procedural tactics, ASM hierarchical asset graph
-    skills-and-subagents.md 22 red team playbooks, 10 specialist subagents, depth-1 delegation
+    skills-and-subagents.md 99 red team playbooks, 52 specialist subagents, depth-1 delegation
     quality-and-evaluation.md Objective quality metrics and assertion-bearing benchmarks
     sandbox-execution.md    Single scoped execution path and 54 MCP & terminal tools catalog
 
