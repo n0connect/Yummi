@@ -12,6 +12,14 @@ GATEWAY_DIR        := gateway
 UI_DIR           := ui
 UI_DIST_DIR      := $(UI_DIR)/dist
 
+# ── Source file collections for incremental builds ───────────────────────────
+CLI_SRCS          := $(shell find cmd/yummi internal -type f -name '*.go' 2>/dev/null) go.mod go.sum
+ORCHESTRATOR_SRCS := $(shell find orchestrator -type f -name '*.go' 2>/dev/null) orchestrator/go.mod orchestrator/go.sum
+SANDBOX_MCP_SRCS  := $(shell find sandbox-mcp -type f -name '*.go' 2>/dev/null) sandbox-mcp/go.mod sandbox-mcp/go.sum
+GATEWAY_SRCS      := $(shell find $(GATEWAY_DIR)/src $(GATEWAY_DIR)/config -type f 2>/dev/null) $(GATEWAY_DIR)/Cargo.toml $(GATEWAY_DIR)/Cargo.lock
+UI_SRCS           := $(shell find $(UI_DIR)/src $(UI_DIR)/public -type f 2>/dev/null) $(UI_DIR)/index.html $(UI_DIR)/vite.config.ts $(wildcard $(UI_DIR)/tsconfig*.json) $(wildcard .yummi.conf)
+
+
 # ── Local configuration (written by `make conf`; gitignored, per-machine) ────
 # Run `make conf` once to pick your container engine setup interactively; it
 # persists CONTAINER_ENGINE / YUMMI_NETWORK_MODE / YUMMI_OLLAMA_MODEL / etc.
@@ -358,7 +366,7 @@ conf:
 	printf "$(DIM)Every 'make build'/'make start'/'make brain-run'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
 
 ## build   Build native binaries and UI (CLI + orchestrator + gateway + UI).
-build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp
+build: _check-deps $(BIN_DIR)/$(BINARY) $(UI_DIST_DIR)/index.html $(BIN_DIR)/$(ORCHESTRATOR_BINARY) $(GATEWAY_DIR)/target/release/yummi-gateway $(BIN_DIR)/yummi-sandbox-mcp
 	@$(call log_section,Build Complete)
 	@$(call log_pass,yummi,$(BIN_DIR)/$(BINARY))
 	@$(call log_pass,yummi-orchestrator,$(BIN_DIR)/$(ORCHESTRATOR_BINARY))
@@ -367,8 +375,8 @@ build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _buil
 	@printf "\n$(DIM)  version $(VERSION)  git $(GIT_SHA)  $(BUILD_DATE)$(RESET)\n"
 	@printf "\n"
 
-## start   Start Ollama + runtime services via compose (always rebuilds
-##         images first so source changes are never silently skipped).
+## start   Start Ollama + runtime services via compose (images built if
+##         missing; pass BUILD=1 to force rebuild, or 'make rebase' after source edits).
 ##         UI is served at http://localhost:3000 — Yummi is web-managed only.
 ##         The sandbox is a single unified environment: the agent's exec
 ##         path and the browser Desktop tab (http://localhost:3000/desktop)
@@ -377,9 +385,23 @@ build: _check-deps _build-cli _build-ui _build-orchestrator _build-gateway _buil
 ##         Network trade-off: YUMMI_NETWORK_MODE=secure|insecure-bridge (default secure).
 start: _check-deps _ollama-ensure
 	@$(call log_section,Starting Services)
-	@$(call log_info,$(CONTAINER_ENGINE) compose,Building images...)
-	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
-	@$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.)
+	@need_build=0; \
+	if [ "$$(echo $(BUILD))" = "1" ]; then \
+		need_build=1; \
+	else \
+		for img in yummi/gateway:local yummi/sandbox:local yummi/orchestrator:local yummi/ui:local; do \
+			if ! $(CONTAINER_ENGINE) image inspect "$$img" >/dev/null 2>&1; then \
+				need_build=1; break; \
+			fi; \
+		done; \
+	fi; \
+	if [ "$$need_build" = "1" ]; then \
+		$(call log_info,$(CONTAINER_ENGINE) compose,Building images (BUILD=1 or missing images)...); \
+		set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }; \
+		$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.); \
+	else \
+		$(call log_pass,$(CONTAINER_ENGINE) compose,Images already present — skipping build (use BUILD=1 or 'make rebase' to rebuild).); \
+	fi
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
 	@$(call log_pass,services,Running — UI on http://localhost:3000 — Desktop tab at http://localhost:3000/desktop)
@@ -426,6 +448,8 @@ clean:
 	@rm -rf $(BIN_DIR)
 	@$(call log_info,clean,Removing $(UI_DIST_DIR)...)
 	@rm -rf $(UI_DIST_DIR)
+	@$(call log_info,clean,Removing gateway release binary...)
+	@rm -f $(GATEWAY_DIR)/target/release/yummi-gateway
 	@$(call log_info,clean,Removing databases...)
 	@find . -name "*.db" -type f -delete 2>/dev/null || true
 	@$(call log_info,clean,Removing brain/ virtualenv and checkpoint databases...)
@@ -602,34 +626,44 @@ dev: _check-deps
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
-_build-cli: | $(BIN_DIR)
+$(BIN_DIR)/$(BINARY): $(CLI_SRCS) | $(BIN_DIR)
 	@$(call log_info,yummi CLI,Building version $(GIT_SHA)...)
 	@go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CLI_PKG) || { $(call log_error,yummi CLI,Build failed.); exit 1; }
 	@$(call log_pass,yummi CLI,Built successfully.)
 
-_build-ui:
-	@$(call log_info,UI,Installing dependencies...)
-	@if [ -f "$(UI_DIR)/package-lock.json" ]; then cd $(UI_DIR) && npm ci --silent || { $(call log_error,UI,npm ci failed.); exit 1; }; \
-	 else cd $(UI_DIR) && npm install --silent || { $(call log_error,UI,npm install failed.); exit 1; }; fi
-	@$(call log_pass,UI,Dependencies installed.)
-	@$(call log_info,UI,Running vite build...)
-	@set -o pipefail; cd $(UI_DIR) && npm run build 2>&1 | sed 's/^/  /' || { $(call log_error,UI,Vite build failed.); exit 1; }
-	@$(call log_pass,UI,Dist ready.)
-
-_build-orchestrator: | $(BIN_DIR)
+$(BIN_DIR)/$(ORCHESTRATOR_BINARY): $(ORCHESTRATOR_SRCS) | $(BIN_DIR)
 	@$(call log_info,yummi-orchestrator,Building version $(GIT_SHA)...)
 	@cd orchestrator && go build -trimpath -o ../$(BIN_DIR)/$(ORCHESTRATOR_BINARY) $(ORCHESTRATOR_PKG) || { $(call log_error,yummi-orchestrator,Build failed.); exit 1; }
 	@$(call log_pass,yummi-orchestrator,Built successfully.)
 
-_build-gateway:
+$(BIN_DIR)/yummi-sandbox-mcp: $(SANDBOX_MCP_SRCS) | $(BIN_DIR)
+	@$(call log_info,sandbox-mcp,Building yummi-sandbox-mcp...)
+	@cd sandbox-mcp && go build -trimpath -o ../$(BIN_DIR)/yummi-sandbox-mcp . || { $(call log_error,sandbox-mcp,Build failed.); exit 1; }
+	@$(call log_pass,sandbox-mcp,Built successfully.)
+
+$(GATEWAY_DIR)/target/release/yummi-gateway: $(GATEWAY_SRCS)
 	@$(call log_info,gateway,Running cargo release build...)
 	@set -o pipefail; cd $(GATEWAY_DIR) && cargo build --release 2>&1 | sed 's/^/  /' || { $(call log_error,gateway,Cargo build failed.); exit 1; }
 	@$(call log_pass,gateway,Built successfully.)
 
-_build-sandbox-mcp: | $(BIN_DIR)
-	@$(call log_info,sandbox-mcp,Building yummi-sandbox-mcp...)
-	@cd sandbox-mcp && go build -trimpath -o ../$(BIN_DIR)/yummi-sandbox-mcp . || { $(call log_error,sandbox-mcp,Build failed.); exit 1; }
-	@$(call log_pass,sandbox-mcp,Built successfully.)
+$(UI_DIR)/node_modules: $(UI_DIR)/package.json $(UI_DIR)/package-lock.json
+	@$(call log_info,UI,Installing dependencies...)
+	@if [ -f "$(UI_DIR)/package-lock.json" ]; then cd $(UI_DIR) && npm ci --silent || { $(call log_error,UI,npm ci failed.); exit 1; }; \
+	 else cd $(UI_DIR) && npm install --silent || { $(call log_error,UI,npm install failed.); exit 1; }; fi
+	@touch -m $(UI_DIR)/node_modules
+	@$(call log_pass,UI,Dependencies installed.)
+
+$(UI_DIST_DIR)/index.html: $(UI_DIR)/node_modules $(UI_SRCS)
+	@$(call log_info,UI,Running vite build...)
+	@set -o pipefail; cd $(UI_DIR) && npm run build 2>&1 | sed 's/^/  /' || { $(call log_error,UI,Vite build failed.); exit 1; }
+	@touch -m $(UI_DIST_DIR)/index.html
+	@$(call log_pass,UI,Dist ready.)
+
+_build-cli: $(BIN_DIR)/$(BINARY)
+_build-orchestrator: $(BIN_DIR)/$(ORCHESTRATOR_BINARY)
+_build-gateway: $(GATEWAY_DIR)/target/release/yummi-gateway
+_build-sandbox-mcp: $(BIN_DIR)/yummi-sandbox-mcp
+_build-ui: $(UI_DIST_DIR)/index.html
 
 _test-cli:
 	@$(call log_info,test,Running CLI and internal packages tests...)
@@ -651,10 +685,7 @@ _test-sandbox-mcp:
 	@set -o pipefail; cd sandbox-mcp && go test ./... 2>&1 | sed 's/^/  /' || { $(call log_error,test,sandbox-mcp tests failed.); exit 1; }
 	@$(call log_pass,test,sandbox-mcp tests passed.)
 
-_test-ui:
-	@$(call log_info,UI,Installing dependencies for tests...)
-	@if [ -f "$(UI_DIR)/package-lock.json" ]; then cd $(UI_DIR) && npm ci --silent || { $(call log_error,UI,npm ci failed.); exit 1; }; \
-	 else cd $(UI_DIR) && npm install --silent || { $(call log_error,UI,npm install failed.); exit 1; }; fi
+_test-ui: $(UI_DIR)/node_modules
 	@$(call log_info,test,Running UI vitest...)
 	@set -o pipefail; cd $(UI_DIR) && unset VITE_YUMMI_LANG && npm test 2>&1 | sed 's/^/  /' || { $(call log_error,test,UI tests failed.); exit 1; }
 	@$(call log_pass,test,UI tests passed.)
