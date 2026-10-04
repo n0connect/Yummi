@@ -294,6 +294,18 @@ func TestLoadDir_AllBuiltinSkills(t *testing.T) {
 		"windows-privesc",
 		"container-security",
 		"cors-csrf",
+		"http-request-smuggling",
+		"insecure-deserialization",
+		"race-conditions",
+		"prototype-pollution",
+		"cloud-security",
+		"jwt-auth-attacks",
+		"idor-bfla",
+		"business-logic",
+		"oauth-oidc",
+		"command-injection",
+		"subdomain-takeover",
+		"ci-cd-security",
 	}
 
 	names := make(map[string]bool)

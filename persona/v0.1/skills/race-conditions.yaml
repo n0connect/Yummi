@@ -1,0 +1,52 @@
+schema_version: 1
+version: 3.0.0
+name: race-conditions
+description: Senior concurrency assessment and race condition testing — Time-of-Check to Time-of-Use (TOCTOU), HTTP/2 single-packet synchronization, limit overruns, and multi-step transaction abuse.
+triggers:
+  - race condition
+  - race
+  - concurrency
+  - toctou
+  - double spend
+  - limit overrun
+  - single-packet
+  - multiplexing
+tools:
+  - curl
+knowledge: |
+  Assess concurrency flaws, race windows, and transactional atomicity gaps with senior red-team precision.
+
+  1. CONCURRENCY ATTACK SURFACE & TRANSACTIONAL GAPS:
+     Race conditions occur in non-atomic Read-Modify-Write sequences where a gap exists between validation and execution:
+     • Financial Transactions: "Check available balance -> deduct balance"
+     • Single-Use Promotional Codes: "Verify coupon unredeemed -> apply discount -> mark coupon redeemed"
+     • Inventory Reservation: "Verify stock available -> decrement stock"
+     • Authentication & OTP: "Check failure count -> verify OTP -> increment failure count"
+
+  2. REQUEST SYNCHRONIZATION (HTTP/2 Single-Packet Attack):
+     Traditional multi-threaded requests suffer from TCP handshake jitter, masking race windows.
+     - HTTP/2 Multiplexing:
+       Send 20-50 simultaneous requests within a single TCP connection.
+     - Single-Packet Synchronization:
+       Bundle the final bytes of multiple HTTP/2 frames into a single TCP packet so they arrive at the server socket simultaneously, collapsing the execution delta to sub-millisecond intervals.
+     - Connection Pre-Warming:
+       Pre-establish TLS sessions, exchange cookies, and warm keep-alive sockets before firing synchronized bursts.
+
+  3. COMMON CONCURRENCY TARGET FAMILIES:
+     - Limit Overrun (Double-Spending):
+       Redeeming a fixed gift card or balance simultaneously to exceed the total credit value.
+     - Single-Use Coupon Duplication:
+       Applying a 100% discount promo code across 10 concurrent requests, resulting in stacked discounts.
+     - Multi-Factor / Password Reset Race:
+       Submitting concurrent attempts against an OTP endpoint before the distributed rate-limiter or failure-counter lock is written.
+
+  4. EVIDENCE COLLECTION & IMPACT VERIFICATION:
+     - Observable Evidence:
+       • Multiple HTTP 200 OK responses where only 1 was legally permitted.
+       • Resulting database state reflecting duplicate balances, negative quantities, or multiple redeemed records.
+     - Record the request timing delta, concurrency mechanism, and observable state mutation as definitive findings.
+references:
+  - persona:race-conditions-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/race-conditions.yaml

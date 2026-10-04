@@ -1,0 +1,62 @@
+schema_version: 1
+version: 3.0.0
+name: cloud-security
+description: Senior multi-cloud infrastructure assessment — AWS IAM role chaining, STS AssumeRole, S3 bucket policy analysis, Azure Managed Identities (MSI), and GCP service account impersonation.
+triggers:
+  - cloud security
+  - aws
+  - iam
+  - s3
+  - sts
+  - assumerole
+  - azure msi
+  - gcp service account
+  - cloud audit
+tools:
+  - curl
+knowledge: |
+  Assess multi-cloud infrastructure posture (AWS, Azure, GCP) with senior red-team precision, targeting IAM privilege escalation, token extraction, and storage boundaries.
+
+  1. AWS IAM & STS ROLE ASSUMPTION:
+     - Identity & Caller Verification:
+       Verify active credentials and account context:
+       `aws sts get-caller-identity`
+     - IAM Policy Enumeration:
+       Inspect permissions attached to current user or instance profile:
+       `aws iam list-attached-user-policies --user-name <username>`
+       `aws iam get-policy-version --policy-arn <policy_arn> --version-id <version>`
+     - STS AssumeRole Escalation Chains:
+       If `sts:AssumeRole` permissions exist on target roles:
+       `aws sts assume-role --role-arn <target_role_arn> --role-session-name yummi-session`
+     - S3 Storage Bucket Auditing:
+       Test unauthenticated access:
+       `aws s3 ls s3://<bucket_name>/ --no-sign-request`
+       Test authenticated read/write permissions:
+       `aws s3 cp test.txt s3://<bucket_name>/test.txt`
+
+  2. MICROSOFT AZURE MANAGED IDENTITIES (MSI):
+     - Metadata Endpoint Token Acquisition:
+       Inside an Azure VM, App Service, or Function:
+       `curl -s -H "Metadata: true" "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"`
+     - Azure Resource Manager (ARM) Interaction:
+       Extract the access token from JSON response and query subscriptions:
+       `curl -s -H "Authorization: Bearer $(jq -r .access_token response.json)" https://management.azure.com/subscriptions?api-version=2020-01-01`
+     - Key Vault Secret Inspection:
+       Inspect accessible Key Vaults for connection strings, private keys, and application secrets.
+
+  3. GOOGLE CLOUD PLATFORM (GCP) IDENTITY & TOKENS:
+     - Instance Service Account Token Acquisition:
+       Inside a Google Compute Engine (GCE) or Cloud Run container:
+       `curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"`
+     - Service Account Impersonation:
+       If granted `roles/iam.serviceAccountTokenCreator`:
+       Generate short-lived credentials for higher-privileged service accounts via the Cloud IAM API.
+
+  4. EVIDENCE COLLECTION & LEAST PRIVILEGE AUDITING:
+     - Document the cloud provider, principal identity (ARN/email), attached policy JSON, and proof of accessible resources.
+     - Never delete cloud infrastructure or exfiltrate production customer datasets.
+references:
+  - persona:cloud-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/cloud-security.yaml

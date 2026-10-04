@@ -1,0 +1,74 @@
+schema_version: 1
+version: 3.0.0
+name: subdomain-takeover
+description: Senior DNS and cloud asset dangling pointer assessment — CNAME takeover verification, cloud service fingerprinting (S3, GitHub, Heroku, Azure), and NS delegation auditing.
+triggers:
+  - subdomain takeover
+  - cname
+  - dangling dns
+  - dns takeover
+  - s3 bucket takeover
+  - github pages takeover
+  - heroku takeover
+  - azure takeover
+tools:
+  - curl
+knowledge: |
+  Audit DNS architecture and cloud provider pointer discrepancies for dangling asset takeover risks with senior offensive precision.
+
+  1. DANGLING POINTER ARCHITECTURE:
+     Subdomain takeover occurs when a DNS record (typically CNAME or NS) points to an external cloud or SaaS service that has been decommissioned or was never claimed:
+     - Victim DNS maintains: `assets.example.com CNAME client-bucket.s3.amazonaws.com`
+     - Cloud Provider state: `client-bucket` in AWS S3 does not exist or has been deleted.
+     - Exploitation impact: An adversary registers the unclaimed bucket/app name on the third-party service, gaining total control over traffic to `assets.example.com`.
+
+  2. DNS RESOLUTION & CNAME CHAIN DISCOVERY:
+     - Trace CNAME pointers through full canonical recursion:
+       `dig +short CNAME <subdomain>`
+       `dig <subdomain> ANY +noall +answer`
+     - Verify if the terminal canonical name resolves to known cloud service domains:
+       • AWS S3: `*.s3.amazonaws.com`, `*.s3-website-*.amazonaws.com`
+       • GitHub Pages: `*.github.io`
+       • Heroku: `*.herokuapp.com`, `*.herokussl.com`
+       • Azure: `*.azurewebsites.net`, `*.cloudapp.net`, `*.trafficmanager.net`
+       • Shopify: `*.myshopify.com`
+       • Fastly: `*.fastly.net`
+       • Zendesk: `*.zendesk.com`
+       • Pantheon: `*.pantheonsite.io`
+
+  3. SERVICE FINGERPRINT & ERROR BODY VERIFICATION:
+     Probe the HTTP and HTTPS endpoints for distinct service error signatures confirming the asset is unclaimed:
+     - AWS S3:
+       `HTTP 404 Not Found` with XML body containing `<Code>NoSuchBucket</Code>`.
+     - GitHub Pages:
+       `HTTP 404 Not Found` with body `There isn't a GitHub Pages site here`.
+     - Heroku:
+       `HTTP 404 Not Found` with body `There's nothing here, yet` or `No such app`.
+     - Microsoft Azure:
+       `HTTP 404 Web Site not found` on App Services or Traffic Manager errors.
+     - Shopify:
+       `Sorry, this shop is currently unavailable`.
+     - Zendesk:
+       `Help Center Closed`.
+
+  4. NS DELEGATION & LAME DELEGATION AUDITING:
+     - Check if subdomain NS records point to deleted or unclaimed nameservers:
+       `dig NS <subdomain>`
+     - If all authoritative nameservers for a sub-zone fail to respond or are unregistered domains, an adversary can register the domain or Route53 hosted zone to hijack the entire DNS zone.
+
+  5. COLLATERAL IMPACT & ESCALATION PATHS:
+     - Cookie Scoping Abuse:
+       If the root domain sets session cookies with `Domain=.example.com`, any hijacked subdomain can read sensitive session tokens.
+     - OAuth Redirect Hijacking:
+       If OAuth authorization servers permit wildcard redirects (`https://*.example.com/callback`), point OAuth redirects to the hijacked subdomain to intercept authorization codes.
+     - Cross-Origin Resource Sharing (CORS):
+       If CORS headers allow origins matching `*.example.com`, hijacked subdomains can perform cross-origin data extraction.
+
+  6. SAFE VERIFICATION RULES:
+     - Fingerprint detection only: Confirm the presence of the dangling pointer and distinctive cloud provider error page.
+     - Do not register third-party assets on behalf of production domains unless specifically authorized by engagement scope.
+references:
+  - persona:subdomain-takeover-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/subdomain-takeover.yaml

@@ -1,0 +1,80 @@
+schema_version: 1
+version: 3.0.0
+name: idor-bfla
+description: Senior authorization boundary assessment — Insecure Direct Object Reference (IDOR), Broken Function Level Authorization (BFLA), multi-tenant isolation bypass, and HTTP verb tampering.
+triggers:
+  - idor
+  - bfla
+  - object reference
+  - authorization bypass
+  - access control
+  - multi-tenant
+  - privilege escalation
+  - verb tampering
+  - method override
+tools:
+  - curl
+knowledge: |
+  Audit authorization boundaries, object-level access controls, and administrative function permissions with senior red-team rigor.
+
+  1. DUAL-TOKEN DIFFERENTIAL PRIVILEGE MATRIX:
+     Every authorization test requires comparative verification against three distinct privilege contexts:
+     - Context A: Low-privileged User A (legitimate owner of Resource A).
+     - Context B: Low-privileged User B (attacker attempting access to Resource A).
+     - Context C: Unauthenticated / Anonymous client.
+     Differential logic:
+     • If Context B receives HTTP 200 with Resource A data identical to Context A -> Confirmed Horizontal IDOR.
+     • If Context A accesses administrative endpoints reserved for admin roles -> Confirmed Vertical BFLA.
+     • If Context C accesses sensitive business resources without credentials -> Broken Access Control.
+
+  2. DIRECT OBJECT REFERENCE PATTERNS:
+     - Numeric Sequential Identifiers:
+       Probe boundary IDs: `id=1001` -> `id=1000`, `id=1002`, `id=1`, `id=0`, `id=-1`.
+     - UUID Guessing & Leakage:
+       When UUIDs are used as opaque identifiers:
+       • Check if UUIDs are UUIDv1 (predictable timestamp/node MAC address structure).
+       • Search public endpoints (user listings, search suggestions, public profiles, comments) for exposed target UUIDs.
+     - Hierarchical & Nested Object Tampering:
+       Audit multi-level API paths where child object permissions are not validated against parent ownership:
+       `/api/v1/companies/12/invoices/9482` -> change to `/api/v1/companies/15/invoices/9482` or omit parent `/api/v1/invoices/9482`.
+       In JSON payloads: `{"order_id": 55, "recipient_id": 88}` -> mutate target IDs while retaining valid session.
+
+  3. BROKEN FUNCTION LEVEL AUTHORIZATION (BFLA):
+     Administrative endpoints often rely on UI-level hiding rather than backend enforcement:
+     - Function URL Guessing:
+       `/api/user/profile` -> probe `/api/admin/profile`, `/api/v1/admin/users`, `/api/internal/config`.
+     - Administrative Parameter Insertion:
+       Inject administrative query parameters or headers:
+       `?admin=true`, `?is_admin=1`, `?role=administrator`, `?impersonate_user=admin`.
+     - Header-Based Tenant Tampering:
+       Inspect multi-tenant systems for client-supplied context headers:
+       `X-Tenant-ID: 10`, `X-Org-ID: 2`, `X-Workspace-ID: dev`. Change these headers to target organization IDs.
+
+  4. HTTP VERB TAMPERING & METHOD OVERRIDE:
+     Backends frequently enforce permissions only on standard methods or fail to validate alternate verbs:
+     - Verb Alternation:
+       If `POST /api/v1/users/5` is blocked, probe:
+       `GET`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`.
+     - HTTP Method Override Headers:
+       Send standard `POST` or `GET` with tunneling headers:
+       `X-HTTP-Method-Override: PUT`
+       `X-HTTP-Method: DELETE`
+       `X-Method-Override: PATCH`
+       `_method=DELETE` (in query string or form body)
+     - Content-Type Alternation:
+       Change request body from `application/json` to `application/x-www-form-urlencoded` or `application/xml` to test if the secondary parser bypasses authorization filters.
+
+  5. VERIFICATION STANDARD & PROBE COMMANDS:
+     - Automated Differential Curl:
+       `curl -s -w "\nHTTP: %{http_code} Size: %{size_download}\n" -H "Authorization: Bearer <token_b>" "https://target.local/api/v1/orders/1001"`
+     - Always compare against User A's baseline response:
+       Verify that the payload contains foreign user private data, not a generic error page or public stub.
+
+  6. SAFE VERIFICATION RULES:
+     - Read-only probing is primary: Verify horizontal read access before attempting unauthorized write (`PUT`/`POST`) or delete (`DELETE`) operations.
+     - Never alter or destroy live production user data during verification.
+references:
+  - persona:idor-bfla-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/idor-bfla.yaml

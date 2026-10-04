@@ -1,0 +1,63 @@
+schema_version: 1
+version: 3.0.0
+name: http-request-smuggling
+description: Senior HTTP Request Smuggling assessment — CL.TE, TE.CL, H2.CL, H2.TE desynchronization, header obfuscation, front-end security bypasses, and request queue poisoning.
+triggers:
+  - request smuggling
+  - http smuggling
+  - hrs
+  - cl.te
+  - te.cl
+  - h2.cl
+  - h2.te
+  - transfer-encoding
+  - desync
+  - request desync
+tools:
+  - curl
+knowledge: |
+  Assess HTTP Request Smuggling (HRS) and protocol desynchronization with senior red-team precision, targeting parser discrepancies across proxy chains.
+
+  1. ARCHITECTURAL PARSER DISCREPANCIES:
+     HRS exploits boundary disagreements between edge reverse proxies (CDNs, Cloudflare, AWS ALB, Nginx) and backend origin servers sharing pooled TCP connections.
+     - Ambiguity Vectors:
+       • Duplicate `Content-Length` headers with differing values.
+       • Simultaneous presence of `Content-Length` and `Transfer-Encoding: chunked` headers (RFC 7230 specifies TE takes precedence, but faulty parsers prioritize CL).
+       • Chunk extension and header obfuscation (`Transfer-Encoding: \x0bchunked`, `Transfer-Encoding : chunked`).
+
+  2. CORE DESYNCHRONIZATION MODELS:
+     - CL.TE (Edge uses Content-Length, Origin uses Transfer-Encoding):
+       The edge forwards X bytes based on Content-Length. The backend reads until the zero chunk (`0\r\n\r\n`), leaving subsequent bytes on the socket:
+       ```http
+       POST / HTTP/1.1
+       Host: target.com
+       Content-Length: 6
+       Transfer-Encoding: chunked
+
+       0
+
+       G
+       ```
+       The smuggled `G` prefixes the next pipelined HTTP request (e.g., turning `POST` into `GPOST`).
+     - TE.CL (Edge uses Transfer-Encoding, Origin uses Content-Length):
+       The edge processes the chunked stream. The backend reads only `Content-Length` bytes and treats unconsumed chunk bytes as the beginning of a second request.
+
+  3. HTTP/2 DOWNGRADE EXPLOITATION (H2.CL / H2.TE):
+     When front-end proxies terminate HTTP/2 and downgrade connections to HTTP/1.1 for origin communication:
+     - H2.CL: Inject a conflicting `content-length` header inside the HTTP/2 frame. The backend parses HTTP/1.1 with truncated body reading.
+     - H2.TE: Inject `transfer-encoding: chunked` into HTTP/2 headers to force backend chunk processing.
+
+  4. TIMING ORACLES FOR SAFE DETECTION:
+     Before risking request queue poisoning across real users, establish a timing oracle:
+     - Send a CL.TE differential probe where the stated chunk size is larger than the actual payload data.
+     - If vulnerable, the backend pauses waiting for remaining chunk bytes, causing an observable 5-10 second read timeout delay.
+
+  5. VERIFICATION & IMPACT DEMONSTRATION:
+     - Front-End Access Control Bypass:
+       Smuggle a request to an internal administrative route (e.g. `/admin`) that is blocked at the proxy edge but allowed on the internal backend connection.
+     - Capture differential response status codes (e.g. 404/403 turning into 200) as definitive proof.
+references:
+  - persona:http-request-smuggling-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/http-request-smuggling.yaml

@@ -1,0 +1,57 @@
+schema_version: 1
+version: 3.0.0
+name: prototype-pollution
+description: Senior prototype pollution assessment — JavaScript object merge bugs (__proto__, constructor.prototype), client-side DOM XSS, and Node.js server-side RCE gadget chains.
+triggers:
+  - prototype pollution
+  - prototype
+  - __proto__
+  - constructor.prototype
+  - lodash.merge
+  - deep merge
+  - node rce
+tools:
+  - curl
+knowledge: |
+  Assess JavaScript prototype pollution vulnerabilities with senior red-team precision across client-side DOM contexts and Node.js runtime gadget chains.
+
+  1. JAVASCRIPT OBJECT MODEL & POLLUTION CHANNELS:
+     Prototype pollution occurs when applications recursively merge untrusted input into existing JavaScript objects without blocking prototype-altering properties.
+     - Vulnerable Merge Sinks:
+       Recursive deep-merge libraries (`lodash.merge`, `defaultsDeep`, `deep-extend`, `jQuery.extend`, custom recursive copy functions).
+     - JSON Payload Notation:
+       `{"__proto__": {"admin": true}}`
+       `{"constructor": {"prototype": {"admin": true}}}`
+     - URL-Encoded Query & Form Notation:
+       Nested query parsers (`qs`, Express extended body parsers) expand bracket syntax:
+       `?__proto__[admin]=true`
+       `?constructor[prototype][admin]=true`
+
+  2. BENIGN PROBE & PERSISTENCE VERIFICATION:
+     To safely identify pollution without causing application instability:
+     - Step 1: Inject a non-conflicting canary property:
+       `{"__proto__": {"yummiCanary": "active"}}`
+     - Step 2: Query an endpoint that reads a plain object and observe if `yummiCanary` is reflected or alters execution behavior.
+
+  3. CLIENT-SIDE IMPACT (DOM XSS & AUTHENTICATION BYPASS):
+     - Authentication Logic Bypass:
+       Polluting `user.isAdmin` or `permissions.canAccessAdmin` on `Object.prototype` elevates frontend privileges when the client checks truthiness without `hasOwnProperty`.
+     - DOM XSS Gadgets:
+       Polluting template settings, script loader sources, or configuration defaults consumed by `innerHTML`, `document.write`, or `script.src`.
+
+  4. SERVER-SIDE NODE.JS EXECUTION GADGET CHAINS:
+     When server-side Node.js applications execute external commands or render templates:
+     - Child Process Spawning Gadgets:
+       When the application invokes `child_process.fork()` or `spawn()`, options objects inherit from `Object.prototype`:
+       `{"__proto__": {"shell": "/bin/sh", "NODE_OPTIONS": "--inspect=0.0.0.0"}}`
+     - EJS Template Engine Gadgets:
+       Polluting the `outputFunctionName` property enables code execution during template rendering:
+       `{"__proto__": {"outputFunctionName": "x;return process.mainModule.require('child_process').execSync('id');"}}`
+
+  5. EVIDENCE COLLECTION:
+     - Document the vulnerable parameter, the payload syntax (`__proto__` vs `constructor.prototype`), and observable cross-request property leakage.
+references:
+  - persona:prototype-pollution-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/prototype-pollution.yaml

@@ -33,6 +33,12 @@ func TestLoadSubAgentDefs_AllBuiltinSubAgents(t *testing.T) {
 		"pivot-operator":  false,
 		"windows-operator": false,
 		"container-operator": false,
+		"cloud-operator": false,
+		"protocol-auditor": false,
+		"logic-hunter": false,
+		"token-specialist": false,
+		"ci-cd-auditor": false,
+		"evasion-specialist": false,
 	}
 
 	for _, d := range defs {

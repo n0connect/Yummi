@@ -1,0 +1,78 @@
+schema_version: 1
+version: 3.0.0
+name: business-logic
+description: Senior business logic and workflow flaw assessment — state-machine transition skips, numerical and price tampering, mass assignment auto-binding, and rate-limit evasion.
+triggers:
+  - business logic
+  - workflow
+  - state machine
+  - price tampering
+  - negative quantity
+  - coupon stacking
+  - mass assignment
+  - step skipping
+  - 2fa bypass
+tools:
+  - curl
+knowledge: |
+  Analyze business workflows, transaction validation sequences, and multi-step state machines with principal offensive rigor.
+
+  1. STATE-MACHINE TRANSITION BYPASS:
+     Web applications frequently assume users traverse multi-step wizards sequentially:
+     - Multi-Step Checkout Flaws:
+       Typical flow: Step 1 (Cart) -> Step 2 (Shipping) -> Step 3 (Payment) -> Step 4 (Order Complete).
+       Audit direct requests:
+       Skip payment processing by issuing a request directly to the confirmation endpoint (`POST /checkout/confirm` or `/checkout/complete`) immediately after Step 1 or Step 2.
+     - Authentication / Registration Wizard Skips:
+       • Email/Phone verification bypass: Request post-verification endpoints (`/account/welcome`, `/dashboard`, `/setup-complete`) without completing verification.
+       • Two-Factor Authentication (2FA) Workflow Bypass:
+         Attempt direct access to authenticated routes (`/dashboard`) immediately after primary password submission, bypassing the 2FA prompt.
+         Test client-side response manipulation: Replace failure response (`{"status": "fail"}`) with success (`{"status": "success", "authenticated": true}`).
+
+  2. NUMERICAL, QUANTITY & CURRENCY MANIPULATION:
+     Backend systems frequently perform calculations without asserting strict invariants:
+     - Negative & Zero Quantities:
+       Submit negative numbers in purchase or refund requests (`{"product_id": 5, "quantity": -2}`).
+       In shopping carts, adding a negative quantity of one item can offset the price of an expensive item to near zero.
+     - Price & Currency Tampering:
+       Inspect client-side requests for explicit monetary values:
+       `{"item_id": 102, "unit_price": 500.00}` -> Tamper to `{"item_id": 102, "unit_price": 0.01}`.
+       Verify if the server trusts client-supplied prices instead of retrieving authoritative database prices.
+     - Currency Switching & Conversion Gaps:
+       Test modifying currency codes (`USD` to `JPY`) while maintaining numeric values, or testing rounding discrepancies in fractional values (`0.00001`).
+
+  3. PROMOTIONAL CODE, COUPON & DISCOUNT LOGIC:
+     - Coupon Stacking & Multi-Application:
+       Submit the same single-use discount coupon multiple times in rapid succession or across different browser tabs.
+     - Discount Inversion:
+       Apply fixed-amount discount coupons (e.g., $50 off) to orders whose total value is less than the discount (e.g., $10 order), testing if the order balance becomes negative or generates store credit.
+
+  4. MASS ASSIGNMENT (OBJECT AUTO-BINDING):
+     Modern MVC and ORM frameworks (Spring, Rails, Laravel, Express, Django) automatically map request parameters directly to backend data models:
+     - Profile / Registration Tampering:
+       Add unexpected administrative or state attributes to user updates:
+       `{"username": "tester", "email": "test@domain.com", "role": "admin", "is_admin": true, "verified": true, "tier": "enterprise", "balance": 99999}`
+     - Password Reset Mass Assignment:
+       Inject `reset_token`, `token_expiry`, or `email` fields into password update payloads.
+
+  5. RATE LIMIT EVASION & CLIENT HEADER SPOOFING:
+     Application-level rate limiters often key on client IP headers provided by reverse proxies:
+     - Header Rotation Probing:
+       Rotate forwarding headers across successive requests to bypass rate-limiting counters:
+       `X-Forwarded-For: 127.0.0.1` (or pseudorandom IP)
+       `X-Real-IP: 10.0.0.1`
+       `X-Originating-IP: 192.168.1.1`
+       `True-Client-IP: 172.16.0.1`
+       `Client-IP: 127.0.0.1`
+     - Path Normalization Evasion:
+       Vary the target URI path to trigger cache misses or bypass strict regex rate limits:
+       `/api/v1/login` -> `/api/v1/login/`, `/api/v1/login;.`, `/api/v1/./login`, `/api/v1/%6cogin`.
+
+  6. VERIFICATION STANDARDS & SAFETY:
+     - Document exact parameter tampering, observed state transition anomalies, and financial/access delta.
+     - Maintain non-destructive testing: never cause unrecoverable state loss or real-money deficits during testing.
+references:
+  - persona:business-logic-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/business-logic.yaml

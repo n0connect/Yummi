@@ -1,0 +1,71 @@
+schema_version: 1
+version: 3.0.0
+name: ci-cd-security
+description: Senior CI/CD pipeline and supply chain security assessment — workflow injection, pull_request_target misuse, runner container escapes, and dependency confusion.
+triggers:
+  - ci-cd
+  - cicd
+  - github actions
+  - gitlab ci
+  - pipeline
+  - runner escape
+  - workflow injection
+  - supply chain
+  - pull_request_target
+tools:
+  - curl
+knowledge: |
+  Audit automated CI/CD pipelines, build runners, and software supply chains with principal DevSecOps offensive rigor.
+
+  1. GITHUB ACTIONS WORKFLOW INJECTION:
+     Workflow definitions located in `.github/workflows/*.yml` often incorporate untrusted event context directly into inline bash scripts:
+     - Script Injection via Context Expressions:
+       Vulnerable construct:
+       `run: echo "PR title is ${{ github.event.pull_request.title }}"`
+       An attacker submits a pull request with title: `Fix issue"; id; echo "`
+       The runner evaluates the concatenated string as arbitrary shell commands within the runner's execution context.
+     - Safe Remediation Standard:
+       Pass context values via intermediate environment variables rather than direct inline string interpolation:
+       `env: TITLE: ${{ github.event.pull_request.title }}`
+       `run: echo "PR title is $TITLE"`
+
+  2. PULL_REQUEST_TARGET TRIGGER EXPLOITATION:
+     The `pull_request_target` trigger runs in the context of the base repository and has access to repository secrets and write tokens:
+     - Dangerous Pattern:
+       Combining `pull_request_target` with an explicit checkout of the untrusted fork's HEAD commit:
+       `- uses: actions/checkout@v4`
+       `  with:`
+       `    ref: ${{ github.event.pull_request.head.sha }}`
+       This executes untrusted build scripts (npm install, make, tests) with full access to repository secrets.
+
+  3. RUNNER PRIVILEGE & DOCKER-IN-DOCKER (DIND) ESCAPES:
+     Self-hosted runners and containerized CI environments often grant excessive privileges:
+     - Mounted Docker Socket (`/var/run/docker.sock`):
+       Verify if the runner mounts the host Docker socket:
+       `ls -la /var/run/docker.sock`
+       Access to the Docker socket allows launching a privileged container that mounts the host filesystem (`/`), resulting in immediate host node compromise.
+     - Privileged Container Capabilities:
+       Inspect runner container capabilities: `capsh --print`. Presence of `CAP_SYS_ADMIN` or privileged mode allows container breakout via cgroups or device mounting.
+
+  4. BUILD ARTIFACTS & LOGGING INSPECTION:
+     - Exposed Artifacts:
+       Examine generated build zip files, test reports, and distribution bundles:
+       Look for embedded `.git` directories, configuration templates, or staging configuration files.
+     - Build Log Exposure:
+       Inspect verbose build output for unmasked tokens, connection strings, or debug environment dumps.
+
+  5. DEPENDENCY CONFUSION & SUPPLY CHAIN RISKS:
+     - Private Namespace Squatting:
+       Check package manifests (`package.json`, `requirements.txt`, `pom.xml`, `go.mod`) for proprietary internal package names.
+       If an internal package name is not registered on public registries (npm, PyPI) and the package manager is misconfigured to prioritize public sources, an external package with a higher version number will be pulled automatically.
+     - Unpinned Action Dependencies:
+       Verify whether third-party GitHub Actions use mutable tags (`@v1`, `@main`) instead of immutable full commit SHAs, exposing pipelines to upstream repository compromise.
+
+  6. SAFE AUDITING RULES:
+     - Audit pipeline configuration files statically whenever repository source access is available.
+     - In live assessments, use benign proof-of-concept markers (`echo "YUMMI_PIPELINE_VERIFY"`) rather than attempting persistent runner modification.
+references:
+  - persona:ci-cd-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/ci-cd-security.yaml

