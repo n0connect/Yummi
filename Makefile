@@ -158,7 +158,7 @@ endef
 	app \
 	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain \
 	docker-build docker-orchestrator docker-ui \
-	_ollama-ensure \
+	_container-ensure _ollama-ensure \
 	_check-brain-deps brain-install brain-run brain-mcp
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -167,19 +167,56 @@ endef
 _check-deps:
 	@$(call log_section,Dependency Validation)
 	@$(call log_info,System,Checking required cross-platform tools...)
-	@command -v go >/dev/null 2>&1 || { $(call log_error,Dependencies,Go is not installed. Install from https://golang.org/dl/); exit 1; }
-	@$(call log_pass,Dependencies,Go is installed.)
-	@command -v cargo >/dev/null 2>&1 || { $(call log_error,Dependencies,Rust/Cargo is not installed. Install from https://rustup.rs/); exit 1; }
-	@$(call log_pass,Dependencies,Rust/Cargo is installed.)
-	@command -v npm >/dev/null 2>&1 || { $(call log_error,Dependencies,Node.js/npm is not installed. Install from https://nodejs.org/); exit 1; }
-	@$(call log_pass,Dependencies,Node.js/npm is installed.)
-	@command -v $(CONTAINER_ENGINE) >/dev/null 2>&1 || { $(call log_error,Dependencies,$(CONTAINER_ENGINE) is not installed. Install Docker from https://docker.com/ or Podman from https://podman.io/); exit 1; }
-	@$(call log_pass,Dependencies,$(CONTAINER_ENGINE) is installed.)
-	@$(CONTAINER_ENGINE) compose version >/dev/null 2>&1 || { $(call log_error,Dependencies,$(CONTAINER_ENGINE) compose is not available. Docker needs the Compose v2 plugin; Podman needs docker-compose on PATH — see docs/installation.md); exit 1; }
-	@$(call log_pass,Dependencies,$(CONTAINER_ENGINE) compose is available.)
-	@command -v curl >/dev/null 2>&1 || { $(call log_error,Dependencies,curl is not installed. Please install it.); exit 1; }
-	@$(call log_pass,Dependencies,curl is installed.)
-	@$(call log_pass,System,All required cross-platform tools are present.)
+	@missing_count=0; \
+	missing_tools=""; \
+	if command -v go >/dev/null 2>&1; then \
+		$(call log_pass,Dependencies,Go is installed.); \
+	else \
+		$(call log_error,Dependencies,Go is not installed.); \
+		missing_count=$$((missing_count + 1)); \
+		missing_tools="$$missing_tools\n    - Go: https://golang.org/dl/ (or 'brew install go' / 'apt install golang')"; \
+	fi; \
+	if command -v cargo >/dev/null 2>&1; then \
+		$(call log_pass,Dependencies,Rust/Cargo is installed.); \
+	else \
+		$(call log_error,Dependencies,Rust/Cargo is not installed.); \
+		missing_count=$$((missing_count + 1)); \
+		missing_tools="$$missing_tools\n    - Rust: https://rustup.rs/ (or 'brew install rust' / 'apt install cargo')"; \
+	fi; \
+	if command -v npm >/dev/null 2>&1; then \
+		$(call log_pass,Dependencies,Node.js/npm is installed.); \
+	else \
+		$(call log_error,Dependencies,Node.js/npm is not installed.); \
+		missing_count=$$((missing_count + 1)); \
+		missing_tools="$$missing_tools\n    - Node.js & npm: https://nodejs.org/ (or 'brew install node' / 'apt install nodejs npm')"; \
+	fi; \
+	if command -v $(CONTAINER_ENGINE) >/dev/null 2>&1; then \
+		$(call log_pass,Dependencies,$(CONTAINER_ENGINE) is installed.); \
+	else \
+		$(call log_error,Dependencies,$(CONTAINER_ENGINE) is not installed.); \
+		missing_count=$$((missing_count + 1)); \
+		missing_tools="$$missing_tools\n    - $(CONTAINER_ENGINE): Docker (https://docker.com/ or 'brew install --cask orbstack') / Podman (https://podman.io/)"; \
+	fi; \
+	if $(CONTAINER_ENGINE) compose version >/dev/null 2>&1; then \
+		$(call log_pass,Dependencies,$(CONTAINER_ENGINE) compose is available.); \
+	else \
+		$(call log_error,Dependencies,$(CONTAINER_ENGINE) compose is not available.); \
+		missing_count=$$((missing_count + 1)); \
+		missing_tools="$$missing_tools\n    - $(CONTAINER_ENGINE) compose: Docker Compose v2 plugin required (see docs/installation.md)"; \
+	fi; \
+	if command -v curl >/dev/null 2>&1; then \
+		$(call log_pass,Dependencies,curl is installed.); \
+	else \
+		$(call log_error,Dependencies,curl is not installed.); \
+		missing_count=$$((missing_count + 1)); \
+		missing_tools="$$missing_tools\n    - curl: required for HTTP health checks and Ollama verification"; \
+	fi; \
+	if [ "$$missing_count" -gt 0 ]; then \
+		printf "\n$(RED)[ERROR]$(RESET) $(BOLD)Dependencies$(RESET) $(DIM)%d required tool(s) missing:$(RESET)\n" "$$missing_count"; \
+		printf "$$missing_tools\n\n"; \
+		exit 1; \
+	fi; \
+	$(call log_pass,System,All required cross-platform tools are present.)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  NETWORK-MODE GUARD  (opt-in security trade-off, never silent)
@@ -209,6 +246,64 @@ else
 endif
 	@$(call log_pass,network-mode,Proceeding with insecure-bridge network mode.)
 endif
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  CONTAINER-ENGINE RUNTIME GUARD  (daemon connectivity & auto-bootstrap)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_container-ensure:
+	@$(call log_section,Container Engine Verification)
+	@$(call log_info,$(CONTAINER_ENGINE),Checking daemon connectivity...)
+	@if $(CONTAINER_ENGINE) info >/dev/null 2>&1; then \
+		$(call log_pass,$(CONTAINER_ENGINE),Daemon is running and responsive); \
+	else \
+		$(call log_info,$(CONTAINER_ENGINE),Daemon not responding — attempting auto-start...); \
+		started=0; \
+		if [ "$$(uname -s)" = "Darwin" ]; then \
+			ctx="$$($(CONTAINER_ENGINE) context show 2>/dev/null || true)"; \
+			if [ "$$ctx" = "orbstack" ] && [ -d "/Applications/OrbStack.app" ]; then \
+				$(call log_info,$(CONTAINER_ENGINE),Launching OrbStack (matching active context '$$ctx')...); \
+				open -g -a OrbStack >/dev/null 2>&1 || open -a OrbStack >/dev/null 2>&1 || true; \
+				started=1; \
+			elif [ "$$ctx" = "desktop-linux" ] && [ -d "/Applications/Docker.app" ]; then \
+				$(call log_info,$(CONTAINER_ENGINE),Launching Docker Desktop (matching active context '$$ctx')...); \
+				open -g -a Docker >/dev/null 2>&1 || open -a Docker >/dev/null 2>&1 || true; \
+				started=1; \
+			elif [ -d "/Applications/OrbStack.app" ]; then \
+				$(call log_info,$(CONTAINER_ENGINE),Launching OrbStack...); \
+				open -g -a OrbStack >/dev/null 2>&1 || open -a OrbStack >/dev/null 2>&1 || true; \
+				started=1; \
+			elif [ -d "/Applications/Docker.app" ]; then \
+				$(call log_info,$(CONTAINER_ENGINE),Launching Docker Desktop...); \
+				open -g -a Docker >/dev/null 2>&1 || open -a Docker >/dev/null 2>&1 || true; \
+				started=1; \
+			elif [ "$(CONTAINER_ENGINE)" = "podman" ] && command -v podman >/dev/null 2>&1; then \
+				$(call log_info,$(CONTAINER_ENGINE),Starting podman machine...); \
+				podman machine start >/dev/null 2>&1 || true; \
+				started=1; \
+			fi; \
+		elif command -v systemctl >/dev/null 2>&1; then \
+			systemctl --user start $(CONTAINER_ENGINE) >/dev/null 2>&1 || sudo systemctl start $(CONTAINER_ENGINE) >/dev/null 2>&1 || true; \
+			started=1; \
+		fi; \
+		if [ "$$started" = "1" ]; then \
+			$(call log_info,$(CONTAINER_ENGINE),Waiting for $(CONTAINER_ENGINE) API socket (up to 30s)...); \
+			for i in $$(seq 1 30); do \
+				if $(CONTAINER_ENGINE) info >/dev/null 2>&1; then \
+					$(call log_pass,$(CONTAINER_ENGINE),Daemon is ready); \
+					exit 0; \
+				fi; \
+				sleep 1; \
+			done; \
+		fi; \
+		$(call log_error,$(CONTAINER_ENGINE),Cannot connect to $(CONTAINER_ENGINE) daemon.); \
+		sock="$$($(CONTAINER_ENGINE) context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || echo unknown)"; \
+		printf "  $(YELLOW)Active endpoint: %s$(RESET)\n" "$$sock"; \
+		printf "  $(YELLOW)Please ensure OrbStack, Docker Desktop, or the $(CONTAINER_ENGINE) daemon is running.$(RESET)\n"; \
+		if [ "$$(uname -s)" = "Darwin" ]; then \
+			printf "  $(YELLOW)Tip: On macOS run 'open -a OrbStack' or 'open -a Docker' or check 'docker context ls'.$(RESET)\n"; \
+		fi; \
+		exit 1; \
+	fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  USER COMMANDS  (the ones you run every day)
@@ -383,8 +478,18 @@ build: _check-deps $(BIN_DIR)/$(BINARY) $(UI_DIST_DIR)/index.html $(BIN_DIR)/$(O
 ##         both run against it, no separate opt-in image/container.
 ##         Engine: CONTAINER_ENGINE=docker|podman (default docker).
 ##         Network trade-off: YUMMI_NETWORK_MODE=secure|insecure-bridge (default secure).
-start: _check-deps _ollama-ensure
+start: _check-deps _container-ensure _ollama-ensure
 	@$(call log_section,Starting Services)
+	@if ! $(CONTAINER_ENGINE) ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-ui$$'; then \
+		if nc -z -w 1 127.0.0.1 3000 >/dev/null 2>&1; then \
+			$(call log_warn,ports,Port 3000 is already in use by a host process outside Docker. Container port mapping may collide.); \
+		fi; \
+	fi
+	@if ! $(CONTAINER_ENGINE) ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-orchestrator$$'; then \
+		if nc -z -w 1 127.0.0.1 9080 >/dev/null 2>&1; then \
+			$(call log_warn,ports,Port 9080 is already in use by a host process outside Docker. Container port mapping may collide.); \
+		fi; \
+	fi
 	@need_build=0; \
 	if [ "$$(echo $(BUILD))" = "1" ]; then \
 		need_build=1; \
@@ -423,7 +528,7 @@ start: _check-deps _ollama-ensure
 ##         processes (unlike `close`) — reach for `make clean` or
 ##         `docker system prune` yourself if you actually need a
 ##         from-scratch rebuild.
-rebase: _check-deps _ollama-ensure
+rebase: _check-deps _container-ensure _ollama-ensure
 	@$(call log_section,Rebase — fast clean restart)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping containers (image cache untouched)...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
@@ -451,14 +556,14 @@ clean:
 	@$(call log_info,clean,Removing gateway release binary...)
 	@rm -f $(GATEWAY_DIR)/target/release/yummi-gateway
 	@$(call log_info,clean,Removing databases...)
-	@find . -name "*.db" -type f -delete 2>/dev/null || true
+	@find . -name "*.db" -not -path "*/.*" -not -path "./thirdy-party/*" -not -path "./node_modules/*" -type f -delete 2>/dev/null || true
 	@$(call log_info,clean,Removing brain/ virtualenv and checkpoint databases...)
 	@rm -rf brain/.venv
 	@find brain -name "*.sqlite" -type f -delete 2>/dev/null || true
 	@$(call log_pass,clean,Workspace is tidy.)
 
 ## force-restart  Stop services, kill memory hogs (ollama), and restart
-force-restart: _check-deps
+force-restart: _check-deps _container-ensure
 	@$(call log_section,Force Restart)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping all services and removing orphans...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
@@ -500,10 +605,10 @@ test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sand
 	@$(call log_pass,test,All suites completed successfully.)
 
 ## test-agent-live  End-to-end agentic loop against the REAL model + sandbox container
-test-agent-live: _check-deps
+test-agent-live: _check-deps _container-ensure
 	@$(call log_section,Agent Live E2E)
 	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
-	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
+	@if ! $(CONTAINER_ENGINE) ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
 		$(call log_warn,agent live,yummi-sandbox container is NOT running — this run will SILENTLY SKIP the real test); \
 		$(call log_warn,agent live,rather than actually exercising the model + sandbox path. Run 'make start' first.); \
 	fi
@@ -522,10 +627,10 @@ test-agent-live: _check-deps
 	@rm -f /tmp/yummi-test-agent-live.out
 
 ## test-agent-eval  Assertion-bearing multi-scenario quality gate against the REAL model + sandbox
-test-agent-eval: _check-deps
+test-agent-eval: _check-deps _container-ensure
 	@$(call log_section,Agent Quality Evaluation)
 	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
-	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
+	@if ! $(CONTAINER_ENGINE) ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
 		$(call log_warn,agent eval,yummi-sandbox container is NOT running — this run will SILENTLY SKIP the real test); \
 		$(call log_warn,agent eval,rather than actually exercising the model + sandbox path. Run 'make start' first.); \
 	fi
@@ -540,36 +645,36 @@ test-agent-eval: _check-deps
 	@rm -f /tmp/yummi-test-agent-eval.out
 
 ## bench-target-up    Start the intentionally-vulnerable local benchmark target (outdated WordPress)
-bench-target-up: _check-deps
+bench-target-up: _check-deps _container-ensure
 	@$(call log_section,Benchmark Target)
-	@docker compose -f docker-compose.yml -f docker-compose.override.eval-target.yml \
+	@$(COMPOSE) -f docker-compose.yml -f docker-compose.override.eval-target.yml \
 		up -d gateway sandbox orchestrator docker-proxy eval-target-db eval-target || { $(call log_error,bench target,Failed to start.); exit 1; }
 	@$(call log_pass,bench target,eval-target is up at 203.0.113.10 (see docker-compose.override.eval-target.yml).)
 
 ## bench-target-down  Stop and remove the benchmark target
 bench-target-down:
-	@docker compose -f docker-compose.yml -f docker-compose.override.eval-target.yml \
+	@$(COMPOSE) -f docker-compose.yml -f docker-compose.override.eval-target.yml \
 		rm -sf eval-target eval-target-db || true
 	@$(call log_pass,bench target,eval-target stopped.)
 
 ## lab-target-up       Start the two-stage exploitation lab (RCE + SUID privesc, see lab-target/)
-lab-target-up: _check-deps
+lab-target-up: _check-deps _container-ensure
 	@$(call log_section,Exploitation Lab)
-	@docker compose -f docker-compose.yml -f docker-compose.override.lab-target.yml \
+	@$(COMPOSE) -f docker-compose.yml -f docker-compose.override.lab-target.yml \
 		up -d --build gateway sandbox orchestrator yummi-ui docker-proxy lab-target || { $(call log_error,lab target,Failed to start.); exit 1; }
 	@$(call log_pass,lab target,lab-target is up at 198.51.100.10 (see docker-compose.override.lab-target.yml).)
 
 ## lab-target-down     Stop and remove the exploitation lab
 lab-target-down:
-	@docker compose -f docker-compose.yml -f docker-compose.override.lab-target.yml \
+	@$(COMPOSE) -f docker-compose.yml -f docker-compose.override.lab-target.yml \
 		rm -sf lab-target || true
 	@$(call log_pass,lab target,lab-target stopped.)
 
 ## test-agent-benchmark  Prove the agent finds a REAL, known vulnerability on the local benchmark target
-test-agent-benchmark: _check-deps
+test-agent-benchmark: _check-deps _container-ensure
 	@$(call log_section,Agent Vulnerability-Finding Benchmark)
 	@$(MAKE) _ollama-ensure OLLAMA_MODEL=$(LIVE_TEST_MODEL)
-	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
+	@if ! $(CONTAINER_ENGINE) ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-sandbox$$'; then \
 		$(call log_warn,agent benchmark,yummi-sandbox container is NOT running — this run will SILENTLY SKIP the real test); \
 		$(call log_warn,agent benchmark,Run 'make bench-target-up' first.); \
 	fi
@@ -633,12 +738,12 @@ $(BIN_DIR)/$(BINARY): $(CLI_SRCS) | $(BIN_DIR)
 
 $(BIN_DIR)/$(ORCHESTRATOR_BINARY): $(ORCHESTRATOR_SRCS) | $(BIN_DIR)
 	@$(call log_info,yummi-orchestrator,Building version $(GIT_SHA)...)
-	@cd orchestrator && go build -trimpath -o ../$(BIN_DIR)/$(ORCHESTRATOR_BINARY) $(ORCHESTRATOR_PKG) || { $(call log_error,yummi-orchestrator,Build failed.); exit 1; }
+	@cd orchestrator && go build -trimpath -o $(abspath $(BIN_DIR))/$(ORCHESTRATOR_BINARY) $(ORCHESTRATOR_PKG) || { $(call log_error,yummi-orchestrator,Build failed.); exit 1; }
 	@$(call log_pass,yummi-orchestrator,Built successfully.)
 
 $(BIN_DIR)/yummi-sandbox-mcp: $(SANDBOX_MCP_SRCS) | $(BIN_DIR)
 	@$(call log_info,sandbox-mcp,Building yummi-sandbox-mcp...)
-	@cd sandbox-mcp && go build -trimpath -o ../$(BIN_DIR)/yummi-sandbox-mcp . || { $(call log_error,sandbox-mcp,Build failed.); exit 1; }
+	@cd sandbox-mcp && go build -trimpath -o $(abspath $(BIN_DIR))/yummi-sandbox-mcp . || { $(call log_error,sandbox-mcp,Build failed.); exit 1; }
 	@$(call log_pass,sandbox-mcp,Built successfully.)
 
 $(GATEWAY_DIR)/target/release/yummi-gateway: $(GATEWAY_SRCS)
@@ -687,7 +792,7 @@ _test-sandbox-mcp:
 
 _test-ui: $(UI_DIR)/node_modules
 	@$(call log_info,test,Running UI vitest...)
-	@set -o pipefail; cd $(UI_DIR) && unset VITE_YUMMI_LANG && npm test 2>&1 | sed 's/^/  /' || { $(call log_error,test,UI tests failed.); exit 1; }
+	@set -o pipefail; cd $(UI_DIR) && unset VITE_YUMMI_LANG; npm test 2>&1 | sed 's/^/  /' || { $(call log_error,test,UI tests failed.); exit 1; }
 	@$(call log_pass,test,UI tests passed.)
 
 _test-brain:
@@ -711,6 +816,7 @@ _ollama-ensure:
 		if command -v brew >/dev/null 2>&1 && brew list --formula ollama >/dev/null 2>&1; then \
 			brew services start ollama >/dev/null 2>&1 || true; \
 		elif command -v ollama >/dev/null 2>&1; then \
+			mkdir -p $(HOME)/.yummi 2>/dev/null || true; \
 			nohup ollama serve >$(HOME)/.yummi/ollama.log 2>&1 & \
 		else \
 			$(call log_error,ollama,Not found — install from https://ollama.com); \
@@ -738,19 +844,19 @@ _ollama-ensure:
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
 
-docker-build: ## Build all container images (gateway + sandbox + orchestrator + ui). CONTAINER_ENGINE=docker|podman
+docker-build: _check-deps _container-ensure ## Build all container images (gateway + sandbox + orchestrator + ui). CONTAINER_ENGINE=docker|podman
 	@$(call log_section,Docker Build)
 	@$(call log_info,$(CONTAINER_ENGINE),Building gateway sandbox orchestrator yummi-ui...)
 	@$(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui || { $(call log_error,$(CONTAINER_ENGINE),Build failed.); exit 1; }
 	@$(call log_pass,$(CONTAINER_ENGINE),Images built successfully.)
 
-docker-orchestrator: ## Build orchestrator image. CONTAINER_ENGINE=docker|podman
+docker-orchestrator: _check-deps _container-ensure ## Build orchestrator image. CONTAINER_ENGINE=docker|podman
 	@$(call log_section,Docker Build — orchestrator)
 	@$(call log_info,$(CONTAINER_ENGINE),Building orchestrator...)
 	@$(COMPOSE) $(COMPOSE_FILES) build orchestrator || { $(call log_error,$(CONTAINER_ENGINE),Build failed.); exit 1; }
 	@$(call log_pass,$(CONTAINER_ENGINE),Orchestrator built.)
 
-docker-ui: ## Build yummi-ui image. CONTAINER_ENGINE=docker|podman
+docker-ui: _check-deps _container-ensure ## Build yummi-ui image. CONTAINER_ENGINE=docker|podman
 	@$(call log_section,Docker Build — yummi-ui)
 	@$(call log_info,$(CONTAINER_ENGINE),Building yummi-ui...)
 	@$(COMPOSE) $(COMPOSE_FILES) build yummi-ui || { $(call log_error,$(CONTAINER_ENGINE),Build failed.); exit 1; }
@@ -761,7 +867,7 @@ dev-ui: ## Start UI dev server (Vite HMR on :3000)
 	@$(call log_info,dev,Starting npm run dev...)
 	@cd $(UI_DIR) && npm run dev
 
-dev-orchestrator: ## Run orchestrator orchestrator locally (port 9080)
+dev-orchestrator: ## Run orchestrator locally (port 9080)
 	@$(call log_section,Dev — orchestrator)
 	@$(call log_info,dev,Starting orchestrator...)
 	@cd orchestrator && go run ./cmd/orchestrator
