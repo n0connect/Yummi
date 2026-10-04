@@ -1,0 +1,66 @@
+schema_version: 1
+version: 3.0.0
+name: edge-vpn-gateways
+description: Senior perimeter, SSL VPN, and edge appliance security assessment — Citrix NetScaler, Fortinet FortiOS, Ivanti/Pulse Secure, and out-of-band IPMI interface auditing.
+triggers:
+  - vpn
+  - ssl vpn
+  - perimeter
+  - citrix
+  - netscaler
+  - fortinet
+  - fortios
+  - pulse secure
+  - ivanti
+  - ipmi
+  - globalprotect
+tools:
+  - curl
+knowledge: |
+  Audit enterprise edge appliances, SSL VPN gateways, and remote management controllers with senior perimeter offensive rigor.
+
+  1. PERIMETER GATEWAY THREAT SURFACE:
+     Edge devices reside directly on the untrusted boundary between the public internet and internal enterprise networks:
+     - SSL VPN Gateways: Ivanti Connect Secure (Pulse Secure), Fortinet FortiOS, Citrix ADC (NetScaler), Palo Alto GlobalProtect.
+     - Application Delivery Controllers: F5 BIG-IP Traffic Management User Interface (TMUI).
+     - Out-of-Band Remote Management: Intelligent Platform Management Interface (IPMI), Dell iDRAC, HPE iLO.
+     - Architectural High-Risk: A single pre-authentication memory disclosure or logic flaw grants adversaries immediate initial access behind the firewall.
+
+  2. APPLIANCE FINGERPRINTING & VERSION RECONNAISSANCE:
+     Identify exact vendor, firmware version, and build numbers through non-destructive fingerprinting:
+     - Citrix ADC / NetScaler:
+       Inspect `/vpn/index.html`, `/epa/scripts/win/CitrixEndPointAnalysis.cab`, and HTTP response headers (`Set-Cookie: NSC_...`).
+     - Fortinet FortiOS:
+       Inspect `/remote/login`, `/login`, and JavaScript bundle timestamps.
+     - Ivanti Connect Secure / Pulse Secure:
+       Inspect `/dana-na/auth/url_default/welcome.cgi` and `/api/v1/configuration/users/user-roles`.
+     - Palo Alto GlobalProtect:
+       Inspect `/global-protect/login.esp` and `/ssl-vpn/prelogin.esp`.
+
+  3. COMMON PRE-AUTH MEMORY DISCLOSURE & LOGIC FLAWS:
+     - Buffer Overruns & Memory Leaks (Citrix Bleed Class):
+       Flaws in OpenID Connect / HTTP header parsing can trigger memory overruns returning raw process memory containing active session cookies and tokens.
+     - Management API Path Traversal & Exposure:
+       Verify whether internal management REST APIs are exposed on external WAN interfaces:
+       • F5 BIG-IP TMUI: `/mgmt/tm/sys/bash` or `/mgmt/shared/authn/login` exposed on public VIPs.
+       • Ivanti API Routing: Check if internal endpoints (`/api/v1/cav/client/status/`) bypass authentication via URI normalization tricks.
+     - Default & Administrative Credentials:
+       Audit exposed management portals for vendor default passwords or unauthenticated maintenance scripts.
+
+  4. OUT-OF-BAND MANAGEMENT (IPMI / BMC AUDITING):
+     Baseboard Management Controllers (BMC) provide hardware-level lights-out control:
+     - IPMI 2.0 Cipher Zero Vulnerability:
+       Audit whether IPMI services (UDP port 623) support Cipher Suite 0 (encryption and authentication disabled), permitting unauthenticated administrative session initiation.
+     - RAKP Authentication Hash Dumping:
+       IPMI 2.0 RAKP protocol sends the salted HMAC-SHA1 hash of the user's password to the client during authentication negotiation, allowing offline dictionary recovery.
+     - Vendor Defaults:
+       Test default BMC credentials (`ADMIN`/`ADMIN`, `root`/`calvin`, `admin`/`admin`).
+
+  5. VERIFICATION STANDARDS & SAFETY:
+     - Use read-only HTTP probes and passive banner queries to confirm device family and version posture.
+     - Never send malformed payloads that could trigger kernel panics or cause Denial of Service (DoS) on critical edge appliances.
+references:
+  - persona:edge-vpn-gateways-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/edge-vpn-gateways.yaml

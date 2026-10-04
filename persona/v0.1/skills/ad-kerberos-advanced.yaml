@@ -1,0 +1,67 @@
+schema_version: 1
+version: 3.0.0
+name: ad-kerberos-advanced
+description: Senior Active Directory Kerberos delegation and credential assessment — AS-REP roasting, Kerberoasting SPNs, unconstrained/constrained delegation, and RBCD attack paths.
+triggers:
+  - kerberos
+  - kerberoast
+  - asrep
+  - as-rep
+  - delegation
+  - rbcd
+  - bloodhound
+  - spn
+  - active directory kerberos
+tools:
+  - curl
+knowledge: |
+  Audit Active Directory Kerberos authentication mechanics, delegation trust models, and domain object ACL paths with senior red-team precision.
+
+  1. KERBEROS AUTHENTICATION ARCHITECTURE:
+     Kerberos relies on a Key Distribution Center (KDC) operating on Domain Controllers:
+     - AS-REQ / AS-REP: User authenticates to KDC, providing pre-authentication data encrypted with their password hash. KDC responds with a Ticket Granting Ticket (TGT).
+     - TGS-REQ / TGS-REP: User presents TGT to request a service ticket (TGS) for a specific Service Principal Name (SPN). KDC encrypts the service ticket with the service account's password hash.
+
+  2. AS-REP ROASTING (PRE-AUTHENTICATION EXCLUSION):
+     - Vulnerability Mechanism:
+       User accounts with the `DONT_REQ_PREAUTH` flag enabled do not require pre-authentication.
+       Any authenticated domain user (or unauthenticated attacker in certain configurations) can request an AS-REP packet for these accounts without knowledge of their password.
+     - Offline Cryptographic Attack:
+       The AS-REP message contains encrypted material keyed on the user's password hash.
+       Extract the ticket hash for offline dictionary recovery without locking accounts or generating logon failure events.
+
+  3. KERBEROASTING (SERVICE PRINCIPAL NAME HARVESTING):
+     - Vulnerability Mechanism:
+       Any valid domain user can request a TGS service ticket for any account with a registered `ServicePrincipalName` (SPN).
+     - Exploitation Flow:
+       1. Enumerate domain user accounts configured with SPNs (e.g. `MSSQLSvc/...`, `HTTP/...`).
+       2. Request TGS tickets for target SPNs using the user's valid TGT.
+       3. Extract the encrypted ticket structure from memory or ticket response.
+       4. Perform offline password recovery against the service ticket hash. Service accounts often maintain complex passwords that were rarely rotated or weak administrative passphrases.
+
+  4. KERBEROS DELEGATION ATTACKS:
+     Delegation permits an intermediate service to impersonate a client when querying downstream backend services:
+     - Unconstrained Delegation:
+       Computers with `TRUSTED_FOR_DELEGATION` cache the TGT of any user who authenticates to them in LSASS memory.
+       If an adversary compromises a machine with unconstrained delegation and coerces authentication from a privileged identity (e.g. Domain Controller via PrinterBug / PetitPotam), the captured TGT enables immediate domain compromise.
+     - Constrained Delegation (S4U2self & S4U2proxy):
+       Accounts with `TRUSTED_TO_AUTH_FOR_DELEGATION` can obtain a service ticket to themselves on behalf of any domain user (S4U2self), and forward that ticket to authorized downstream services (S4U2proxy).
+     - Resource-Based Constrained Delegation (RBCD):
+       Configured on the target computer object via `msDS-AllowedToActOnBehalfOfOtherIdentity`.
+       An attacker who can write to this attribute (e.g. via `GenericWrite` or by adding a computer account via `MachineAccountQuota`) can configure RBCD to impersonate domain administrators to that computer.
+
+  5. BLOODHOUND ACL GRAPH PATH AUDITING:
+     Inspect Active Directory access control lists (ACL) for misconfigured security principals:
+     - High-Risk Permissions:
+       `GenericAll`, `GenericWrite`, `WriteDacl`, `WriteOwner`, `ForceChangePassword`.
+     - Group Nesting & Tier Separation:
+       Trace shortest paths from low-privileged domain accounts to Tier-0 assets (Domain Controllers, Enterprise Admins).
+
+  6. SAFE VERIFICATION STANDARDS:
+     - Perform all Kerberos and LDAP queries read-only.
+     - Verify Kerberoastable SPN counts and AS-REP roasting exposure without launching destructive authentication storms.
+references:
+  - persona:ad-kerberos-advanced-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/ad-kerberos-advanced.yaml

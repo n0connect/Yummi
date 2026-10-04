@@ -1,0 +1,65 @@
+schema_version: 1
+version: 3.0.0
+name: monitoring-telemetry-security
+description: Senior telemetry, observability, and metrics infrastructure assessment — unauthenticated Prometheus endpoints, Grafana data source proxy SSRF, and Elasticsearch/Kibana exposure.
+triggers:
+  - prometheus
+  - grafana
+  - kibana
+  - elasticsearch
+  - metrics
+  - jaeger
+  - opentelemetry
+  - telemetry
+tools:
+  - curl
+knowledge: |
+  Audit enterprise observability platforms, monitoring daemons, and distributed trace collectors with senior offensive engineering precision.
+
+  1. TELEMETRY ATTACK SURFACE & RECONNAISSANCE:
+     Monitoring stacks aggregate deep architectural intelligence and runtime data from across the enterprise:
+     - Prometheus Metrics Scrape Endpoints (Default Port 9090 or app `/metrics`): Expose internal paths, query counts, and host topology.
+     - Grafana Dashboards & Proxies (Default Port 3000): Provide centralized visualization and backend database proxy routing.
+     - Elasticsearch & Kibana (Ports 9200, 5601): Store application logs, audit events, and user telemetry.
+     - Jaeger / OpenTelemetry (Ports 16686, 4317/4318): Expose distributed traces detailing microservice inter-call arguments and request headers.
+
+  2. PROMETHEUS METRICS DISCLOSURE:
+     - Unauthenticated Metrics Scraping:
+       Query standard endpoints: `curl -s "http://<target>:<port>/metrics"`
+       Audit discovered metrics for architectural disclosure:
+       • `http_requests_total{path="..."}`: Discloses all registered internal routes, administrative paths, and hidden API endpoints.
+       • `process_open_fds`, `node_filesystem_avail_bytes`: Reveals system capacity and process ownership.
+       • Sensitive Metric Labels: Search for tokens, secret keys, or database hostnames mistakenly attached as metric labels:
+         `curl -s "http://<target>:<port>/metrics" | grep -iE 'key|token|auth|secret|internal'`
+     - Prometheus Query API:
+       `curl -s "http://<target>:9090/api/v1/targets"` (reveals all internal cluster scrape targets, node IPs, and namespaces).
+
+  3. GRAFANA SECURITY & DATA SOURCE PROXY SSRF:
+     - Authentication Posture & Snapshot Leaks:
+       • Test default credentials: `admin` / `admin`.
+       • Check for enabled anonymous access (`[auth.anonymous] enabled = true`).
+       • Enumerate public snapshot links: `/dashboard/snapshot/*`.
+     - Data Source Proxy SSRF:
+       Grafana includes a backend proxy feature that relays queries to configured data sources:
+       `POST /api/datasources/proxy/<id>/*`
+       If the data source URL is misconfigured or points to an internal network segment, use the proxy endpoint to pivot into internal cloud metadata (`http://169.254.169.254/`) or internal databases.
+
+  4. ELASTICSEARCH & KIBANA CLUSTER EXPOSURE:
+     - Elasticsearch REST API (Port 9200):
+       Check cluster health and index catalog without authentication:
+       `curl -s "http://<target>:9200/_cluster/health"`
+       `curl -s "http://<target>:9200/_cat/indices?v"`
+     - Index Inspection:
+       Retrieve documents from sensitive indices (e.g. `audit-logs-*`, `app-events-*`):
+       `curl -s "http://<target>:9200/<index_name>/_search?q=*&size=5"`
+     - Kibana Dashboard Exposure (Port 5601):
+       Verify if the Kibana web interface permits unauthenticated dashboard access, saved object export, or dev tools console execution (`POST /api/console/proxy`).
+
+  5. SAFE VERIFICATION STANDARDS:
+     - Execute read-only requests (`/metrics`, `_cat/indices`, `health`) to demonstrate exposure.
+     - Never alter alerting rules, delete Elasticsearch indices, or modify Grafana dashboard configurations.
+references:
+  - persona:monitoring-telemetry-security-v3
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/monitoring-telemetry-security.yaml

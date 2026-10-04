@@ -43,6 +43,10 @@ func TestLoadSubAgentDefs_AllBuiltinSubAgents(t *testing.T) {
 		"sso-saml-specialist": false,
 		"k8s-operator": false,
 		"modern-api-specialist": false,
+		"ai-redteam-operator": false,
+		"lfi-traversal-specialist": false,
+		"baas-cloud-auditor": false,
+		"kerberos-specialist": false,
 	}
 
 	for _, d := range defs {

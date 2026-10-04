@@ -313,6 +313,13 @@ func TestLoadDir_AllBuiltinSkills(t *testing.T) {
 		"websocket-security",
 		"grpc-security",
 		"host-header-injection",
+		"llm-security",
+		"path-traversal-lfi",
+		"baas-cloud-databases",
+		"modern-xss-csp",
+		"monitoring-telemetry-security",
+		"ad-kerberos-advanced",
+		"edge-vpn-gateways",
 	}
 
 	names := make(map[string]bool)
