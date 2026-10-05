@@ -181,11 +181,20 @@ The full HTTP REST and WebSocket interface exposed by the `orchestrator` service
 | `DELETE` | `/api/v1/gateway/rules/{id}` | Manually delete an active firewall rule. |
 | `GET` | `/api/v1/gateway/audit` | Query tamper-evident SHA-256 audit chain (`?limit=N`). |
 | `GET` | `/api/v1/gateway/fingerprint` | Retrieve TTL normalization and MAC randomization state. |
-| `GET` | `/api/v1/gateway/egress-mode` | Get current egress mode (`block`, `allow`, `ask`). |
-| `POST` | `/api/v1/gateway/egress-mode` | Set egress mode (resets to `block` on daemon restart). |
+| `GET` | `/api/v1/gateway/egress-mode` | Get current egress mode (`block_all`, `block_all_except_rules`, `allow_all`, `ask_every_time`; accepts legacy aliases). |
+| `POST` | `/api/v1/gateway/egress-mode` | Set egress mode (`{"mode": "allow_all"}`; resets to `block_all` on daemon restart). |
 | `GET` | `/api/v1/gateway/hostname-policy` | Retrieve hostname allow/block glob rules. |
 | `POST` | `/api/v1/gateway/hostname-policy` | Add pattern to hostname policy (`{"list": "block", "pattern": "*.internal"}`). |
 | `DELETE` | `/api/v1/gateway/hostname-policy` | Remove pattern from hostname policy. |
+
+---
+
+## Agent Terminals API <a id="agent-terminals"></a>
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/agent-terminals` | List active agent-managed persistent tmux terminal sessions. |
+| `GET` | `/api/v1/agent-terminals/{id}` | Read recent output buffer, execution status, and metadata for an agent terminal session. |
 
 ---
 

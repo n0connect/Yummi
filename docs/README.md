@@ -11,7 +11,7 @@ docs/
   architecture.md           Five runtime components, network topology, core data flows
   security-model.md         Fail-closed network layer, threat scanning, tamper-evident audit
   installation.md           Platform prerequisites, container engines, model tier setup
-  usage-guide.md            Web UI operation (7 tabs), approval workflows, CLI commands
+  usage-guide.md            Web UI operation (8 tabs), approval workflows, CLI commands
   development.md            Build targets, multi-module testing, development harnesses
   api-reference.md          REST API endpoints and WebSocket event specifications
 

@@ -34,7 +34,7 @@ Yummi translates natural language into verified security workflows while enforci
 
 ### Security Boundary & Traffic Governance
 - **Fail-Closed Rust Gateway** — Packet filtering is enforced by an independent Rust daemon (`yummi-gateway`) via Linux kernel `nftables` rules. Default-deny policies install at startup and persist even if the daemon terminates. The AI agent never manages firewall rules.
-- **Runtime 3-Way Egress Mode** — Operator controls egress on the fly: `block` (fail-closed, zero outbound traffic), `allow` (blanket external connectivity), or `ask` (destination-by-destination interactive operator approval).
+- **Runtime 4-Way Egress Mode** — Operator controls egress on the fly: `block_all` (complete airgap, drops all outbound egress unconditionally), `block_all_except_rules` (strict scope, permits only explicitly authorized targets and active temporary rules), `allow_all` (blanket external connectivity for public destinations), or `ask_every_time` (destination-by-destination interactive operator approval). Resets to `block_all` on daemon restart.
 - **Tamper-Evident Audit Chain** — Every routing decision, temporary rule, and egress evaluation is cryptographically chained using SHA-256 in a local SQLite WAL journal.
 
 ### Offensive Arsenal & Pwnbox Environment
@@ -49,7 +49,9 @@ Yummi translates natural language into verified security workflows while enforci
 - **Active Exploit Verification Oracles** — Findings require deterministic proof (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) before acceptance, eliminating hallucinated vulnerabilities.
 
 ### Operator Surface & Attack Surface Management
-- **Single Web-Managed Workspace** — Clean React 18 dashboard on port 3000 featuring AI Chat with live rationale, tmux Web Terminal, full XFCE Desktop, Trace timeline, Gateway manager, and Health telemetry.
+- **Single Web-Managed Workspace** — Clean React 18 dashboard on port 3000 featuring eight dedicated tabs: `[AGENT] [TERMINALS] [TRACE]` | `[BASH] [DESKTOP] [LOGS] [GATEWAY] [HEALTH]`.
+- **Persistent Task Summary Cards** — First-class terminal summary cards with status pills, step metrics, executive summary prose, and structured findings with automatic CTF/pentest flag extraction, copy interaction, and CVE tagging.
+- **On-Demand Desktop Activation** — Lazy-loaded XFCE desktop session with click-to-activate protection to preserve memory/VRAM and maintain container security.
 - **Attack Surface Management (ASM)** — Hierarchical asset graph tracking domains, subdomains, IPs, ports, endpoints, query parameters, secrets, and cloud storage buckets.
 - **Proxy Ingestion & Multi-Format Reporting** — Live HTTP stream ingestion from Burp Suite, Caido, or Mitmproxy, with one-click report generation in HackerOne Markdown, Bugcrowd VRT, Executive Summary, or structured JSON.
 

@@ -1,9 +1,16 @@
 # Changelog
 
-## [Unreleased] (2026-09 / 2026-10)
+## [1.1.0-beta] (2026-10-05)
 
 ### Features
 
+* **gateway/egress-modes:** expanded runtime egress policy to 4 discrete modes: `block_all` (fail-closed, drops all outbound traffic), `block_all_except_rules` (default-drop, permits traffic matching active rules or configured scope), `allow_all` (blanket external egress), and `ask_every_time` (interactive operator sign-off per destination IP/hostname), with fail-closed reset to `block_all` on restart
+* **ui/task-summary:** persistent `TaskSummaryMessage` completion cards in the chat timeline rendering status pills (`✓ COMPLETED`, `✕ FAILED`, `◼ STOPPED`), steps budget metrics, executive summary prose, structured findings with automatic CTF/pentest flag detection (`FlagChip` with 1-click copy interaction), CVE tagging, and direct `Trace ›` navigation
+* **ui/desktop:** on-demand click-to-activate placeholder with eye icon for the XFCE/noVNC graphical desktop (`/desktop`), reducing idle RAM/VRAM consumption and automatically resetting to dormant on tab switch
+* **ui/terminals:** introduced dedicated 8th tab (`/agent-terminals`) providing a live watch-only monitor and session inspector for background tmux sessions driven by the agent
+* **ui/workspace:** expanded operator workspace from 7 to 8 tabs (`[AGENT] [TERMINALS] [TRACE] | [BASH] [DESKTOP] [LOGS] [GATEWAY] [HEALTH]`) with statusbar grouping
+* **ui/chat-input:** bounded auto-expanding multiline chat input with Shift+Enter multiline support, Enter to send, and clean drag-and-drop file attachment
+* **agent/steering:** mid-task operator guidance allowing chat messages during active runs to queue directly onto `Task.PendingGuidance` and inject `[OPERATOR GUIDANCE]` into the subsequent turn
 * **sandbox/pwnbox:** transformed the unified Kali execution sandbox into **Yummi Pwnbox** (`yummi-pwnbox` hostname, tactical prompt, custom MOTD banner, and branded desktop wallpaper)
 * **arsenal/metasploit:** integrated full `metasploit-framework` (`msfconsole`, `msfvenom`, meterpreter stagers/handlers) with desktop GUI launcher and build-time verification
 * **arsenal/windows:** integrated `nishang` PowerShell framework with home and Desktop shortcuts, plus `kerbrute` in recontools for rapid Kerberos user enum and spraying
@@ -28,6 +35,8 @@
 
 ### Bug Fixes & Hardening
 
+* **ui/hydration:** fixed chat history hydration in `AssistantPanel.tsx` ensuring `task_summary` messages retain structured findings, step counts, and flags across page refreshes and session switching
+* **ui/accordion:** implemented controlled React state on execution details accordion (`ExecutionMessage`) to prevent collapse flickers and blank states during running and finished transitions
 * **sandbox/init:** enabled container `init: true` to eliminate zombie process accumulation from repeated `docker exec` sessions
 * **terminal/race:** resolved sentinel write races in `term_run` via unified multiline writes (`sendLines`)
 * **terminal/concurrency:** added per-session mutex locking (`sync.Map`) to serialize concurrent typing collisions on the same terminal

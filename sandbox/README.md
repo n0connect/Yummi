@@ -2,7 +2,7 @@
 
 > For the full, kept-current reference, see [docs/agent/sandbox-execution.md](../docs/agent/sandbox-execution.md).
 
-sandbox is the unified Dockerized Kali Linux environment where pentest commands run. The agent's `docker exec` tool runs, the operator's Bash (`tmux`) tab, and the graphical Desktop (`noVNC`/XFCE) tab all share this single container. Its default route crosses gateway policy: `block` denies external egress, `ask` opens approved destinations, and `allow` permits external destinations except unconditional/configured blocks.
+sandbox is the unified Dockerized Kali Linux environment where pentest commands run. The agent's `docker exec` tool runs, the operator's Bash (`tmux`) tab, and the graphical Desktop (`noVNC`/XFCE) tab all share this single container. Its default route crosses gateway policy: `block_all` denies external egress unconditionally, `block_all_except_rules` permits traffic matching active rules or configured scope, `allow_all` permits external destinations except unconditional/configured blocks, and `ask_every_time` prompts the operator for interactive authorization on each new destination.
 
 ---
 

@@ -81,9 +81,21 @@ The orchestrator communicates with gateway over a Unix domain socket (`/run/yumm
 | `add_manual_rule` | Add an operator-sourced TTL allow rule (`{network, ttl_secs, reason}`). |
 | `remove_rule` | Drop a rule by ID. |
 | `list_rules` | Active rules (tagged by `source: config|agent|manual`). |
-| `set_egress_mode` / `get_egress_mode` | Read/write the runtime egress master switch. |
+| `set_egress_mode` / `get_egress_mode` | Read/write the runtime 4-way egress switch (`block_all`, `block_all_except_rules`, `allow_all`, `ask_every_time`). |
 | `get_audit_log` | Recent tamper-evident audit entries. |
 | `get_fingerprint_config` | Current fingerprint-masking config. |
+
+---
+
+## Egress Modes
+
+The gateway enforces a 4-way master switch over the `nftables` FORWARD chain:
+- **`block_all`** (`block`): Default state. Complete airgap — unconditionally drops all outbound egress from the sandbox container, ignoring active allow rules.
+- **`block_all_except_rules`** (`block_except_rules`, `rules_only`): Default-drop, but permits destinations explicitly matched by active temporary allow rules or configured CIDRs.
+- **`allow_all`** (`allow`): Blanket allows outbound sandbox traffic to public destinations not explicitly blocked.
+- **`ask_every_time`** (`ask`): Prompts the operator for interactive authorization on each new destination IP/hostname.
+
+Egress mode resets to **`block_all`** on every gateway daemon restart (fail-closed by design).
 
 ---
 

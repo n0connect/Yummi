@@ -12,7 +12,7 @@ This document specifies the guarantees, implementation mechanisms, and operation
 - [Layer 1: Network Boundary (Rust Gateway)](#layer-network)
   - [Deterministic Initialization Order](#startup-ordering)
   - [Unconditional Address Floor](#always-blocked-floor)
-  - [Runtime Egress Modes (Block / Allow / Ask)](#egress-modes)
+  - [Runtime Egress Modes (4-Way Gateway Switch)](#egress-modes)
   - [Pre-Resolution Hostname Policy](#hostname-policy)
   - [Rule Provenance and Precedence](#rule-sources)
 - [Layer 2: Content Boundary (`threatscan`)](#layer-content)
@@ -65,19 +65,21 @@ Prior to consulting allow or block rules, `is_always_blocked()` unconditionally 
 
 Private RFC 1918 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) are populated in `scope.block` by default, but remain configurable for internal engagements.
 
-### Runtime Egress Modes (Block / Allow / Ask) <a id="egress-modes"></a>
+### Runtime Egress Modes (4-Way Gateway Switch) <a id="egress-modes"></a>
 
-Operators control external egress via a 3-way master switch (`EgressMode`):
+Operators control external egress via a 4-way master switch (`EgressMode`):
 
-| Mode | Behavior | Operational Use Case |
-|---|---|---|
-| **`block`** (Default) | Denies all outbound traffic from sandbox. | Safe default state; offline tool execution and local analysis. |
-| **`allow`** | Permits outbound traffic to all public destinations not explicitly blocked. | Broad assessment scopes where pre-approving every individual target is impractical. |
-| **`ask`** | Requires operator approval before opening access to each new destination IP. | Controlled testing requiring per-target visibility. |
+| Mode | Wire Values / Aliases | Behavior | Operational Use Case |
+|---|---|---|---|
+| **`block_all`** (Default) | `block_all`, `block` | Denies all outbound traffic unconditionally, ignoring active allow rules. Fail-closed. | Complete airgap; offline analysis and local tooling where zero egress is tolerated. |
+| **`block_all_except_rules`** | `block_all_except_rules`, `rules_only` | Denies outbound traffic by default, but permits destinations explicitly matched by configured scope or active temporary allow rules. | Strict assessment scopes with explicit CIDR and host authorizations. |
+| **`allow_all`** | `allow_all`, `allow` | Permits outbound traffic to all public destinations not explicitly blocked. | Broad reconnaissance and public targets without pre-resolving individual IPs. |
+| **`ask_every_time`** | `ask_every_time`, `ask` | Holds new destination requests in `awaiting_egress_approval` until interactive operator confirmation. | Controlled testing requiring per-target visibility and manual sign-off. |
 
 > [!IMPORTANT]
+> Egress mode resets to **`block_all`** on every gateway daemon restart (fail-closed by design).
 > Egress mode is independent of Agent Approval Mode:
-> - **Egress Mode (Gateway)** controls destination network reachability.
+> - **Egress Mode (Gateway)** controls packet-layer network reachability.
 > - **Approval Mode (Orchestrator)** controls command execution authorization (`auto` vs. `ask_permission`).
 
 ### Pre-Resolution Hostname Policy <a id="hostname-policy"></a>

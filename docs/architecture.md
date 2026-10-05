@@ -34,7 +34,7 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 |                                                                                   |
 |   +---------------------------------------------------------------------------+   |
 |   |                        ui (React 18 + TypeScript SPA)                     |   |
-|   |   Agent (Chat) | Bash (tmux) | Desktop (XFCE) | Trace | Logs | Gateway    |   |
+|   |   Agent | Terminals | Trace | Bash | Desktop | Logs | Gateway | Health    |   |
 |   +-------------------------------------+-------------------------------------+   |
 |                                         | HTTP / REST (:3000 -> :9080)            |
 |                                         | WebSocket (/ws/events, /ws/terminal)    |

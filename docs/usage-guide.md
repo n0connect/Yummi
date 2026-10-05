@@ -10,14 +10,15 @@ Yummi is managed through a single web UI served on port 3000 (`http://localhost:
 
 - [Starting an Engagement Session](#starting-a-session)
 - [Target-First Offensive Launcher](#target-launcher)
-- [The Seven UI Tabs](#seven-tabs)
+- [The Eight UI Tabs](#eight-tabs)
   - [1. Agent (Chat & Task Engine)](#tab-agent)
-  - [2. Bash (Interactive Terminal)](#tab-bash)
-  - [3. Desktop (Graphical XFCE/noVNC)](#tab-desktop)
-  - [4. Trace (ASM, Findings & Observability)](#tab-trace)
-  - [5. Logs (Real-time SSE Debug Stream)](#tab-logs)
-  - [6. Gateway (Firewall & Scope Control)](#tab-gateway)
-  - [7. Health (Vitals & Telemetry)](#tab-health)
+  - [2. Terminals (Agent Tmux Sessions)](#tab-terminals)
+  - [3. Trace (ASM, Findings & Observability)](#tab-trace)
+  - [4. Bash (Interactive Terminal)](#tab-bash)
+  - [5. Desktop (Graphical XFCE/noVNC)](#tab-desktop)
+  - [6. Logs (Real-time SSE Debug Stream)](#tab-logs)
+  - [7. Gateway (Firewall & Scope Control)](#tab-gateway)
+  - [8. Health (Vitals & Telemetry)](#tab-health)
 - [Attack Surface Management & Asset Matrix](#asm-usage)
 - [Program Scope Rules & Bug Bounty Bookkeeping](#scope-rules-usage)
 - [Generating Multi-Format Reports](#reports-usage)
@@ -64,32 +65,27 @@ The interface opens at `http://localhost:3000`. Every engagement is scoped to a 
 
 ---
 
-## The Seven UI Tabs <a id="seven-tabs"></a>
+## The Eight UI Tabs <a id="eight-tabs"></a>
 
 ### 1. Agent <a id="tab-agent"></a>
 Direct Yummi using natural language or initiate autonomous red-team tasks:
+- **Interactive Chat Input**: Bounded auto-expanding multiline input supporting copy-paste and clean file drag-and-drop.
 - **Single Command Proposals**: Narrow queries ("run nmap on 10.0.0.5") yield structured proposals with risk ratings.
 - **Autonomous Multi-Step Tasks**: Broad goals trigger the state machine graph, generating structured plans and executing steps.
 - **Command Rationale Surfacing**: Each command row in the execution timeline surfaces the model's explicit rationale explaining why this command was chosen right now.
+- **Persistent Task Summary Cards**: High-visibility terminal completion cards rendering status pills (`✓ COMPLETED`, `✕ FAILED`, `◼ STOPPED`), steps used/budget metrics, executive summary prose, and structured findings with automatic CTF/pentest flag highlighting, 1-click copy interaction, CVE tagging, and direct `Trace ›` navigation. Complete parity across live streaming, page refresh, and session reload.
 - **Approval Toggle**:
   - `auto`: Executes non-critical steps autonomously.
   - `ask_permission`: Pauses at every command for explicit operator confirmation.
   - Per-task override: Specific tasks can be granted auto-approval via the UI toggle without switching the global mode.
 
-### 2. Bash <a id="tab-bash"></a>
-Interactive PTY web terminal directly into the Kali container (`yummi-pwnbox`) over `/ws/terminal`:
-- Backed by `tmux` so session state persists across reconnections.
-- Operates in the exact same container environment as the AI agent (`UID 1000:1000`).
-- Features a tactical ASCII greeting banner, live network IP & VPN indicators (`myip`, `ports`), reverse shell generator (`revshell [PORT]`), and wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`).
+### 2. Terminals (Agent Tmux Sessions) <a id="tab-terminals"></a>
+Live viewer for persistent background tmux sessions opened and managed by the agent:
+- Lists all active agent terminals with session IDs, running commands, and process status.
+- Watch-only terminal monitor allowing operators to follow live terminal output, inspect interactive CLI sessions (`msfconsole`, `gdb`, `sqlmap`), review background reverse shells, or verify listener logs without interrupting the agent.
+- Output matched against suspicious patterns is flagged with security advisory notices.
 
-### 3. Desktop <a id="tab-desktop"></a>
-Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
-- Pre-installed with **Metasploit Console**, **Burp Suite**, **Wireshark**, and **Firefox**.
-- Desktop & home folder shortcuts for **PayloadsAllTheThings**, **SecLists**, **Nishang**, **Wordlists**, **ExploitDB**, and **Workspace**.
-- Shares the sandbox filesystem and network namespace with the agent.
-- Resizes cleanly with remote display resolution matching the browser viewport.
-
-### 4. Trace <a id="tab-trace"></a>
+### 3. Trace <a id="tab-trace"></a>
 Observability, intelligence, and asset management cockpit:
 - **Activity Timeline**: Sequential events (plans, commands with rationale, results, sub-agent handoffs, findings).
 - **Attack Surface Management (ASM) (`AssetTreePanel`)**: Interactive tree indexing domains, subdomains, IPs, ports, endpoints, query parameters, secrets, and cloud buckets.
@@ -100,17 +96,36 @@ Observability, intelligence, and asset management cockpit:
 - **Tactics**: Target-scrubbed procedural memories applied to the current session.
 - **Pending Skills**: Quarantine queue for curator-drafted skills awaiting operator sign-off.
 
-### 5. Logs <a id="tab-logs"></a>
+### 4. Bash <a id="tab-bash"></a>
+Interactive PTY web terminal directly into the Kali container (`yummi-pwnbox`) over `/ws/terminal`:
+- Backed by `tmux` so session state persists across reconnections.
+- Operates in the exact same container environment as the AI agent (`UID 1000:1000`).
+- Features a tactical ASCII greeting banner, live network IP & VPN indicators (`myip`, `ports`), reverse shell generator (`revshell [PORT]`), and wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`).
+
+### 5. Desktop <a id="tab-desktop"></a>
+Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
+- **On-Demand Activation**: Rendered with a click-to-activate eye icon placeholder. The desktop stream stays dormant until activated by the operator, saving significant memory/VRAM and automatically deactivating when switching tabs.
+- Pre-installed with **Metasploit Console**, **Burp Suite**, **Wireshark**, and **Firefox**.
+- Desktop & home folder shortcuts for **PayloadsAllTheThings**, **SecLists**, **Nishang**, **Wordlists**, **ExploitDB**, and **Workspace**.
+- Shares the sandbox filesystem and network namespace with the agent.
+- Resizes cleanly with remote display resolution matching the browser viewport.
+
+### 6. Logs <a id="tab-logs"></a>
 Live Server-Sent Events (SSE) stream of internal orchestrator debug logs.
 
-### 6. Gateway <a id="tab-gateway"></a>
+### 7. Gateway <a id="tab-gateway"></a>
 Operator control panel for the fail-closed network trust boundary:
-- **Active Rules**: Live `nftables` FORWARD rules with TTL expiration.
-- **Audit Chain**: Cryptographic SHA-256 tamper-evident log of all scope decisions.
-- **Egress Mode Switch**: 3-way toggle (`block`, `allow`, `ask`).
+- **Active Rules**: Live `nftables` FORWARD rules with TTL expiration and manual rule additions/deletions.
+- **Audit Chain**: Cryptographic SHA-256 tamper-evident log of all scope and routing decisions.
+- **4-Way Egress Mode Switch**: Runtime master switch:
+  - `block_all` (Drop All Egress): Complete airgap; drops all outbound traffic unconditionally.
+  - `block_all_except_rules` (Strict Scope): Default-drop, permits traffic matching active rules or configured scope.
+  - `allow_all` (Blanket Allow): Permits outbound traffic to all public destinations not blocked.
+  - `ask_every_time` (Interactive Authorization): Holds each new destination for operator sign-off.
+  - *Resets to `block_all` on gateway restart.*
 
-### 7. Health <a id="tab-health"></a>
-Real-time telemetry showing Go heap, goroutine count, and LLM round-trip latencies.
+### 8. Health <a id="tab-health"></a>
+Real-time telemetry showing Go heap, goroutine count, component health, and LLM round-trip latencies.
 
 ### Navigation & Theming
 - **Theme Toggle**: Switch between Dark and Light mode directly from the top status bar (persists locally and supports OS system preference).

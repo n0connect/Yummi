@@ -17,19 +17,21 @@ The web dashboard — the only piece of this repository built with Node/npm rath
 
 ```
 ui/src/
-|-- app/            App.tsx - top-level routing between the seven tabs (routes past the
+|-- app/            App.tsx - top-level routing between the eight tabs (routes past the
 |                   first are React.lazy-loaded behind a Suspense boundary), app.css design tokens
 |-- entities/       types.ts - shared TypeScript types mirroring orchestrator's JSON shapes
-|-- pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/
+|-- pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/, agent-terminals/
 |-- features/       One directory per data concern:
-|                   |-- assistant/    Chat panel, message rendering with command rationales, proposal bar
+|                   |-- assistant/    Chat panel, multiline auto-expanding input with file drag-and-drop,
+|                   |                 message rendering (TextMessage, ExecutionMessage, TaskSummaryMessage
+|                   |                 with CTF/pentest flag highlighting and copy button), proposal bar
 |                   |-- chat/         Chat/event stream hook (useChatStream — WS, jittered backoff)
-|                   |-- desktop/      Desktop panel — noVNC/websockify canvas & status
+|                   |-- desktop/      Desktop panel — on-demand click-to-activate noVNC/websockify canvas & status
 |                   |-- operator/     Operator Trust Rail & Briefing panel
-|                   |-- tasks/        Agent task tracker (live plan steps, approval gate)
+|                   |-- tasks/        Agent task tracker (live plan steps, approval gate, TaskSummary styling)
 |                   |-- trace/        TRACE tab panels: AssetTreePanel (ASM), ScopeRulesPanel
 |                   |                 (program scope), FindingsPanel, ProxyBridgePanel, ReportExportModal
-|                   |-- gateway/      GATEWAY tab — status, rules, egress mode, tamper-evident audit log
+|                   |-- gateway/      GATEWAY tab — status, rules, 4-way egress mode, tamper-evident audit log
 |                   |-- terminal/     xterm.js PTY panel
 |                   |-- debuglog/     SSE log stream panel
 |                   |-- health/       Health page vitals & telemetry
@@ -53,7 +55,7 @@ A `pages/*` component (e.g. `GatewayPage.tsx`) is presentation — layout, the t
 
 ## State management: no global store, one hook per data source <a id="state-management"></a>
 
-There's no Redux/Zustand/Context-based global store here — each `features/*` hook independently owns its slice of server state (usually via a combination of polling and the shared `/ws/events` WebSocket for push updates), and a page composes exactly the hooks it needs. This is a deliberate simplicity choice matching the actual complexity of the app: seven largely-independent tabs, each backed by its own REST/WS concern, don't benefit much from a shared client-side store the way a deeply cross-linked single-page app would — and it avoids the specific class of bug where an unrelated tab's state update triggers a re-render somewhere it shouldn't.
+There's no Redux/Zustand/Context-based global store here — each `features/*` hook independently owns its slice of server state (usually via a combination of polling and the shared `/ws/events` WebSocket for push updates), and a page composes exactly the hooks it needs. This is a deliberate simplicity choice matching the actual complexity of the app: eight largely-independent tabs, each backed by its own REST/WS concern, don't benefit much from a shared client-side store the way a deeply cross-linked single-page app would — and it avoids the specific class of bug where an unrelated tab's state update triggers a re-render somewhere it shouldn't.
 
 ## The one "mock"-adjacent file — and what it deliberately doesn't cover <a id="legitimate-mocks"></a>
 

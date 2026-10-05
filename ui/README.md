@@ -19,27 +19,28 @@ src/
   app/            Global providers, router, App.tsx, app.css (design tokens)
   entities/       Shared TypeScript types (AgentTask, ExecutionRecord, etc.)
   features/       Self-contained feature modules
-    assistant/    Chat panel — message rendering with command rationales, proposal bar
+    assistant/    Chat panel — auto-expanding multiline input with file drag-and-drop, message rendering with command rationales, TaskSummaryMessage completion cards (flags, copy, CVE badges), proposal bar
     chat/         Chat/event stream hook (useChatStream — WS, jittered backoff)
-    desktop/      Desktop panel — noVNC/websockify canvas & status (remote resize)
+    desktop/      Desktop panel — on-demand click-to-activate noVNC/websockify canvas & status (saves RAM/VRAM)
     operator/     Operator Trust Rail & Briefing panel
-    tasks/        Agent task tracker (live plan steps, approval gate)
+    tasks/        Agent task tracker (live plan steps, approval gate, TaskSummary styling)
+    terminals/    Agent Tmux Sessions — live monitor of background agent terminals
     trace/        TRACE tab panels:
                   - AssetTreePanel: Attack Surface Management (ASM) hierarchical tree
                   - ScopeRulesPanel: Program-scope rules (include/exclude) & live classifier
                   - FindingsPanel: Severity-aware, filterable findings matrix with PoCs
                   - ProxyBridgePanel: HTTP proxy traffic stream injection
                   - ReportExportModal: Multi-format report export (HackerOne, Bugcrowd, Exec, JSON)
-    gateway/      GATEWAY tab — status, rules, egress mode, tamper-evident audit log
+    gateway/      GATEWAY tab — status, rules, 4-way egress mode, tamper-evident audit log
     terminal/     xterm.js PTY panel
     debuglog/     SSE log stream panel
     health/       Health page widgets & telemetry
     sessions/     Session rail and session mutations
     skills/       Pending-skill review hooks
-    statusbar/    Top nav: Agent | Bash | Desktop | Trace | Logs | Gateway | Health + Light/Dark theme toggle
+    statusbar/    Top nav: [AGENT] [TERMINALS] [TRACE] | [BASH] [DESKTOP] [LOGS] [GATEWAY] [HEALTH] + Light/Dark theme toggle
     system/       System status cards
   pages/          Route-level page wrappers
-    chat/ terminal/ desktop/ trace/ logs/ gateway/ health/   route wrappers (/, /terminal, /desktop, …)
+    chat/ terminals/ trace/ terminal/ desktop/ logs/ gateway/ health/   route wrappers (/, /agent-terminals, /trace, /terminal, /desktop, …)
   shared/
     api/          fetchJSON wrapper, WebSocket helpers (runtime.ts, http.ts)
     components/   Generic UI primitives (YummiLogo, StatusBadge, MetricRow, LogLine)
@@ -98,6 +99,8 @@ The UI communicates with orchestrator via:
 | `/api/v1/tasks/{id}` | GET | Poll task state |
 | `/api/v1/tasks/{id}/approve` | POST | Approve agent gate |
 | `/api/v1/tasks/{id}/auto-approve` | POST | Set per-task auto-approval toggle |
+| `/api/v1/agent-terminals` | GET | List active persistent background tmux sessions |
+| `/api/v1/agent-terminals/{id}` | GET | Fetch terminal state and recent screen/scrollback lines |
 | `/api/v1/sessions/{sessionID}/assets` | GET | Retrieve ASM asset hierarchy (`format=tree` or `format=flat`) |
 | `/api/v1/sessions/{sessionID}/scope-rules` | GET/POST/DELETE | Manage bug-bounty in-scope/out-of-scope program rules |
 | `/api/v1/sessions/{sessionID}/scope-rules/classify` | POST | Live hostname classification against program scope |
