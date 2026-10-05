@@ -214,9 +214,9 @@ services:
       # until set. The host.docker.internal extra_hosts entry below already
       # covers reaching a host-run server on any port, so no new networking
       # is needed — just set the port your server actually listens on, e.g.
-      # YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1. The
-      # conductor (chat/intent classification) is unaffected either way; it
-      # always uses YUMMI_OLLAMA_URL/MODEL above regardless of this override.
+      # YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1. When
+      # set, the conductor (chat/intent classification) and the agent loop both
+      # point to this cloud/override model, eliminating local Ollama usage entirely.
       YUMMI_EINO_MODEL_BASE_URL: "${YUMMI_EINO_MODEL_BASE_URL:-}"
       YUMMI_EINO_MODEL_NAME: "${YUMMI_EINO_MODEL_NAME:-}"
       YUMMI_EINO_MODEL_API_KEY: "${YUMMI_EINO_MODEL_API_KEY:-}"

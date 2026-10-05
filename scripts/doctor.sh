@@ -63,42 +63,53 @@ for d in "${YUMMI_HOME}" "${YUMMI_HOME}/wordlists" "${YUMMI_HOME}/workspace" "${
 done
 
 
-# ── Ollama single-model checks ────────────────────────────────────────────────
-OLLAMA_URL="${YUMMI_OLLAMA_URL:-http://localhost:11434}"
-OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-gpt-oss:20b}"
-
-if curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
-  echo "[ok] ollama reachable at ${OLLAMA_URL}"
-
-  # Check if the configured model is available locally
-  if curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/tags" 2>/dev/null | grep -q "\"${OLLAMA_MODEL}\""; then
-    echo "[ok] model ${OLLAMA_MODEL} available"
-  else
-    echo "[warn] model ${OLLAMA_MODEL} not found — run: ollama pull ${OLLAMA_MODEL}"
-    status=1
-  fi
-
-  # Check how many models are currently loaded (requires jq)
-  if command -v jq >/dev/null 2>&1; then
-    loaded_count=$(curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/ps" 2>/dev/null \
-      | jq -r '.models | length' 2>/dev/null || echo "0")
-    if [[ "${loaded_count}" -gt 1 ]]; then
-      echo "[warn] ${loaded_count} models loaded simultaneously — set OLLAMA_MAX_LOADED_MODELS=1 to prevent VRAM contention"
-    elif [[ "${loaded_count}" -eq 1 ]]; then
-      loaded_name=$(curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/ps" 2>/dev/null \
-        | jq -r '.models[0].name' 2>/dev/null || echo "unknown")
-      echo "[ok] ${loaded_name} loaded in memory (single model)"
-    fi
-  fi
-else
-  echo "[warn] ollama not reachable at ${OLLAMA_URL} — start Ollama or set YUMMI_OLLAMA_URL"
+if [[ -f .yummi.conf ]]; then
+  # shellcheck source=/dev/null
+  set +u
+  source .yummi.conf
+  set -u
 fi
 
-# Recommend OLLAMA_MAX_LOADED_MODELS=1 if not already set
-if [[ "${OLLAMA_MAX_LOADED_MODELS:-}" != "1" ]]; then
-  echo "[warn] OLLAMA_MAX_LOADED_MODELS is not set to 1 — multiple models may load into VRAM"
-  echo "       macOS : launchctl setenv OLLAMA_MAX_LOADED_MODELS 1 && killall Ollama && open -a Ollama"
-  echo "       Linux : add 'Environment=OLLAMA_MAX_LOADED_MODELS=1' to the Ollama systemd service"
+# ── Model backend checks ──────────────────────────────────────────────────────
+if [[ -n "${YUMMI_EINO_MODEL_BASE_URL:-}" ]]; then
+  echo "[ok] cloud model configured (${YUMMI_EINO_MODEL_NAME:-custom} via ${YUMMI_EINO_PROVIDER:-cloud}) — local ollama not required"
+else
+  OLLAMA_URL="${YUMMI_OLLAMA_URL:-http://localhost:11434}"
+  OLLAMA_MODEL="${YUMMI_OLLAMA_MODEL:-gpt-oss:20b}"
+
+  if curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
+    echo "[ok] ollama reachable at ${OLLAMA_URL}"
+
+    # Check if the configured model is available locally
+    if curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/tags" 2>/dev/null | grep -q "\"${OLLAMA_MODEL}\""; then
+      echo "[ok] model ${OLLAMA_MODEL} available"
+    else
+      echo "[warn] model ${OLLAMA_MODEL} not found — run: ollama pull ${OLLAMA_MODEL}"
+      status=1
+    fi
+
+    # Check how many models are currently loaded (requires jq)
+    if command -v jq >/dev/null 2>&1; then
+      loaded_count=$(curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/ps" 2>/dev/null \
+        | jq -r '.models | length' 2>/dev/null || echo "0")
+      if [[ "${loaded_count}" -gt 1 ]]; then
+        echo "[warn] ${loaded_count} models loaded simultaneously — set OLLAMA_MAX_LOADED_MODELS=1 to prevent VRAM contention"
+      elif [[ "${loaded_count}" -eq 1 ]]; then
+        loaded_name=$(curl -fsS --connect-timeout 3 "${OLLAMA_URL}/api/ps" 2>/dev/null \
+          | jq -r '.models[0].name' 2>/dev/null || echo "unknown")
+        echo "[ok] ${loaded_name} loaded in memory (single model)"
+      fi
+    fi
+  else
+    echo "[warn] ollama not reachable at ${OLLAMA_URL} — start Ollama or set YUMMI_OLLAMA_URL"
+  fi
+
+  # Recommend OLLAMA_MAX_LOADED_MODELS=1 if not already set
+  if [[ "${OLLAMA_MAX_LOADED_MODELS:-}" != "1" ]]; then
+    echo "[warn] OLLAMA_MAX_LOADED_MODELS is not set to 1 — multiple models may load into VRAM"
+    echo "       macOS : launchctl setenv OLLAMA_MAX_LOADED_MODELS 1 && killall Ollama && open -a Ollama"
+    echo "       Linux : add 'Environment=OLLAMA_MAX_LOADED_MODELS=1' to the Ollama systemd service"
+  fi
 fi
 
 # ── Trust-boundary canary ─────────────────────────────────────────────────────

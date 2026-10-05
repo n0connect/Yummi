@@ -380,26 +380,42 @@ conf:
 		   if [ -z "$$einoapikey" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)API key cannot be empty.$(RESET)\n"; exit 1; fi ;; \
 		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
 	esac; \
-	printf "\n$(BOLD)Which local model?$(RESET) $(DIM)(the orchestrator's conductor — chat + intent classification — always\n"; \
-	printf "runs on a local Ollama model regardless of the choice above; this is that model. Also what Graph/Eino-local\n"; \
-	printf "actually run on. Change any time by re-running 'make conf', no rebuild needed.)$(RESET)\n\n"; \
-	printf "  $(CYAN)1)$(RESET) Standard  $(DIM)— gpt-oss:20b, recommended default, runs on 16GB+ RAM without a dedicated GPU$(RESET)\n"; \
-	printf "  $(CYAN)2)$(RESET) Expert    $(DIM)— gpt-oss:120b, same family at ~6x the parameters, workstation-grade hardware (80GB GPU or 64GB+ Mac)$(RESET)\n"; \
-	printf "  $(CYAN)3)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
-	printf "$(BOLD)Choice [1-3]: $(RESET)"; \
-	read modelchoice; \
-	numctx=""; \
-	case "$$modelchoice" in \
-		1) model=gpt-oss:20b ;; \
-		2) model=gpt-oss:120b ;; \
-		3) printf "\n$(BOLD)Exact Ollama model tag$(RESET) $(DIM)(e.g. kimi-k2:latest, deepseek-r1:671b — must already be pulled, or 'make start' will pull it)$(RESET): "; \
-		   read model; \
-		   if [ -z "$$model" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model tag cannot be empty.$(RESET)\n"; exit 1; fi; \
-		   printf "\n$(BOLD)Context window override in tokens?$(RESET) $(DIM)(optional — a custom model otherwise gets a fixed 32K context; a larger model with more headroom may want more, e.g. 131072. Press Enter to skip.)$(RESET)\n"; \
-		   printf "Context tokens [blank = 32K default]: "; \
-		   read numctx ;; \
-		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
-	esac; \
+	if [ "$$backendchoice" = "3" ]; then \
+		model=""; numctx=""; \
+		printf "\n$(BOLD)Local Ollama fallback model?$(RESET) $(DIM)(optional — cloud model ($$einomodel) will drive both\n"; \
+		printf "the conductor and the agent loop; local Ollama is NOT required. Press Enter to skip.)$(RESET)\n\n"; \
+		printf "  $(CYAN)1)$(RESET) Skip / None        $(DIM)— run cloud-only, no local Ollama daemon or model needed (default)$(RESET)\n"; \
+		printf "  $(CYAN)2)$(RESET) Standard          $(DIM)— gpt-oss:20b fallback$(RESET)\n"; \
+		printf "  $(CYAN)3)$(RESET) Expert            $(DIM)— gpt-oss:120b fallback$(RESET)\n\n"; \
+		printf "$(BOLD)Choice [1-3, blank=1]: $(RESET)"; \
+		read localchoice; \
+		case "$$localchoice" in \
+			""|1) model="" ;; \
+			2) model=gpt-oss:20b ;; \
+			3) model=gpt-oss:120b ;; \
+			*) model="" ;; \
+		esac; \
+	else \
+		printf "\n$(BOLD)Which local model?$(RESET) $(DIM)(the orchestrator's conductor + agent loop run on this Ollama model.\n"; \
+		printf "Change any time by re-running 'make conf', no rebuild needed.)$(RESET)\n\n"; \
+		printf "  $(CYAN)1)$(RESET) Standard  $(DIM)— gpt-oss:20b, recommended default, runs on 16GB+ RAM without a dedicated GPU$(RESET)\n"; \
+		printf "  $(CYAN)2)$(RESET) Expert    $(DIM)— gpt-oss:120b, same family at ~6x the parameters, workstation-grade hardware (80GB GPU or 64GB+ Mac)$(RESET)\n"; \
+		printf "  $(CYAN)3)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
+		printf "$(BOLD)Choice [1-3]: $(RESET)"; \
+		read modelchoice; \
+		numctx=""; \
+		case "$$modelchoice" in \
+			1) model=gpt-oss:20b ;; \
+			2) model=gpt-oss:120b ;; \
+			3) printf "\n$(BOLD)Exact Ollama model tag$(RESET) $(DIM)(e.g. kimi-k2:latest, deepseek-r1:671b — must already be pulled, or 'make start' will pull it)$(RESET): "; \
+			   read model; \
+			   if [ -z "$$model" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model tag cannot be empty.$(RESET)\n"; exit 1; fi; \
+			   printf "\n$(BOLD)Context window override in tokens?$(RESET) $(DIM)(optional — a custom model otherwise gets a fixed 32K context; a larger model with more headroom may want more, e.g. 131072. Press Enter to skip.)$(RESET)\n"; \
+			   printf "Context tokens [blank = 32K default]: "; \
+			   read numctx ;; \
+			*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
+		esac; \
+	fi; \
 	printf "\n$(BOLD)Set up the LangGraph brain?$(RESET) $(DIM)(optional — brain/, a separate Python agent that drives Yummi's\n"; \
 	printf "sandbox/gateway over MCP using a frontier model, independent of the agent backend above. See brain/README.md.\n"; \
 	printf "Skip if you only want the Go orchestrator's own agent backend.)$(RESET)\n\n"; \
@@ -807,39 +823,44 @@ _test-brain:
 # ── Ollama lifecycle (internal) ───────────────────────────────────────────────
 
 _ollama-ensure:
-	@$(call log_section,Ollama Verification)
-	@$(call log_info,ollama,Checking daemon at $(OLLAMA_URL)...)
-	@if curl -sf $(OLLAMA_URL)/ >/dev/null 2>&1; then \
-		$(call log_pass,ollama,Daemon already running); \
+	@if [ -n "$(YUMMI_EINO_MODEL_BASE_URL)" ] && [ "$(OLLAMA_MODEL)" != "$(LIVE_TEST_MODEL)" ]; then \
+		$(call log_section,Model Backend Verification); \
+		$(call log_pass,model,Cloud backend configured ($(if $(YUMMI_EINO_MODEL_NAME),$(YUMMI_EINO_MODEL_NAME),custom) via $(if $(YUMMI_EINO_PROVIDER),$(YUMMI_EINO_PROVIDER),cloud)) — local Ollama daemon not required.); \
 	else \
-		$(call log_info,ollama,Starting daemon...); \
-		if command -v brew >/dev/null 2>&1 && brew list --formula ollama >/dev/null 2>&1; then \
-			brew services start ollama >/dev/null 2>&1 || true; \
-		elif command -v ollama >/dev/null 2>&1; then \
-			mkdir -p $(HOME)/.yummi 2>/dev/null || true; \
-			nohup ollama serve >$(HOME)/.yummi/ollama.log 2>&1 & \
+		$(call log_section,Ollama Verification); \
+		$(call log_info,ollama,Checking daemon at $(OLLAMA_URL)...); \
+		if curl -sf $(OLLAMA_URL)/ >/dev/null 2>&1; then \
+			$(call log_pass,ollama,Daemon already running); \
 		else \
-			$(call log_error,ollama,Not found — install from https://ollama.com); \
-			exit 1; \
+			$(call log_info,ollama,Starting daemon...); \
+			if command -v brew >/dev/null 2>&1 && brew list --formula ollama >/dev/null 2>&1; then \
+				brew services start ollama >/dev/null 2>&1 || true; \
+			elif command -v ollama >/dev/null 2>&1; then \
+				mkdir -p $(HOME)/.yummi 2>/dev/null || true; \
+				nohup ollama serve >$(HOME)/.yummi/ollama.log 2>&1 & \
+			else \
+				$(call log_error,ollama,Not found — install from https://ollama.com); \
+				exit 1; \
+			fi; \
+			$(call log_info,ollama,Waiting for API (up to 30s)...); \
+			for i in $$(seq 1 30); do \
+				curl -sf $(OLLAMA_URL)/ >/dev/null 2>&1 && break; \
+				sleep 1; \
+			done; \
+			if ! curl -sf $(OLLAMA_URL)/ >/dev/null 2>&1; then \
+				$(call log_error,ollama,API did not respond in 30s. Check logs: $$HOME/.yummi/ollama.log); \
+				exit 1; \
+			fi; \
+			$(call log_pass,ollama,Daemon ready); \
 		fi; \
-		$(call log_info,ollama,Waiting for API (up to 30s)...); \
-		for i in $$(seq 1 30); do \
-			curl -sf $(OLLAMA_URL)/ >/dev/null 2>&1 && break; \
-			sleep 1; \
-		done; \
-		if ! curl -sf $(OLLAMA_URL)/ >/dev/null 2>&1; then \
-			$(call log_error,ollama,API did not respond in 30s. Check logs: $$HOME/.yummi/ollama.log); \
-			exit 1; \
+		$(call log_info,ollama,Checking for model $(OLLAMA_MODEL)...); \
+		if ollama list 2>/dev/null | grep -q "^$(OLLAMA_MODEL)"; then \
+			$(call log_pass,ollama,Model $(OLLAMA_MODEL) already present); \
+		else \
+			$(call log_info,ollama,Pulling $(OLLAMA_MODEL) — first run may take several minutes...); \
+			ollama pull $(OLLAMA_MODEL) 2>&1 | sed 's/^/  /' || { $(call log_error,ollama,Failed to pull model.); exit 1; }; \
+			$(call log_pass,ollama,Model $(OLLAMA_MODEL) ready); \
 		fi; \
-		$(call log_pass,ollama,Daemon ready); \
-	fi
-	@$(call log_info,ollama,Checking for model $(OLLAMA_MODEL)...)
-	@if ollama list 2>/dev/null | grep -q "^$(OLLAMA_MODEL)"; then \
-		$(call log_pass,ollama,Model $(OLLAMA_MODEL) already present); \
-	else \
-		$(call log_info,ollama,Pulling $(OLLAMA_MODEL) — first run may take several minutes...); \
-		ollama pull $(OLLAMA_MODEL) 2>&1 | sed 's/^/  /' || { $(call log_error,ollama,Failed to pull model.); exit 1; }; \
-		$(call log_pass,ollama,Model $(OLLAMA_MODEL) ready); \
 	fi
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
