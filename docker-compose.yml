@@ -336,7 +336,7 @@ services:
       context: ./ui
       dockerfile: Dockerfile
       args:
-        VITE_YUMMI_LANG: ${VITE_YUMMI_LANG:-en}
+        VITE_YUMMI_LANG: ${YUMMI_LANG:-${VITE_YUMMI_LANG:-en}}
     image: yummi/ui:local
     ports:
       - "127.0.0.1:3000:80"

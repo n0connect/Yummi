@@ -1045,11 +1045,10 @@ export type StringKey = keyof typeof en
 // itself reads a dictionary directly; every call site goes through t().
 export const dictionaries: Record<Lang, Record<StringKey, string>> = { en, tr }
 
-// Resolved once at module load from the build-time env var. Anything other
-// than exactly "en" defaults to "tr" — matches the Makefile's own default
-// (YUMMI_LANG ?= en propagates here, but a dev running `npm run dev` with no
-// env at all gets the app's historical default language, not a blank one).
-export const LANG: Lang = import.meta.env.VITE_YUMMI_LANG === 'en' ? 'en' : 'tr'
+// Resolved once at module load from the build-time env var. Defaults to
+// 'en' (matching the project default in .yummi.conf, Makefile, and Dockerfile);
+// resolves to 'tr' only when explicitly configured.
+export const LANG: Lang = import.meta.env.VITE_YUMMI_LANG === 'tr' ? 'tr' : 'en'
 
 /** Looks up a UI string in the active build-time language. */
 export function t(key: StringKey): string {

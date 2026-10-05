@@ -1,6 +1,26 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+import fs from 'node:fs'
+import path from 'node:path'
+
+function resolveLang(): 'en' | 'tr' {
+  if (process.env.VITE_YUMMI_LANG === 'tr' || process.env.VITE_YUMMI_LANG === 'en') {
+    return process.env.VITE_YUMMI_LANG
+  }
+  for (const confPath of [path.resolve(__dirname, '../.yummi.conf'), path.resolve(__dirname, '.yummi.conf')]) {
+    if (fs.existsSync(confPath)) {
+      const match = fs.readFileSync(confPath, 'utf8').match(/^YUMMI_LANG=(en|tr)/m)
+      if (match) {
+        return match[1] as 'en' | 'tr'
+      }
+    }
+  }
+  return 'en'
+}
+
+const activeLang = resolveLang()
+
 // `make dev-ui` runs this standalone against an already-running orchestrator
 // (docker-compose or `make dev-orchestrator`, both on :9080). Without this
 // proxy, relative /api and /ws calls hit the Vite dev server itself instead
@@ -8,6 +28,9 @@ import react from '@vitejs/plugin-react'
 // there instead), but the bare dev server has nothing else providing it.
 export default defineConfig({
   plugins: [react()],
+  define: {
+    'import.meta.env.VITE_YUMMI_LANG': JSON.stringify(activeLang),
+  },
   build: {
     // Vite's own default target (chrome87/es2020/safari14/...) predates
     // top-level await, which @novnc/novnc's own source uses (a WebCodecs
