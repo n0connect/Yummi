@@ -677,7 +677,9 @@ bench-target-down:
 lab-target-up: _check-deps _container-ensure
 	@$(call log_section,Exploitation Lab)
 	@$(COMPOSE) -f docker-compose.yml -f docker-compose.override.lab-target.yml \
-		up -d --build gateway sandbox orchestrator yummi-ui docker-proxy lab-target || { $(call log_error,lab target,Failed to start.); exit 1; }
+		build lab-target || { $(call log_error,lab target,Failed to build.); exit 1; }
+	@$(COMPOSE) -f docker-compose.yml -f docker-compose.override.lab-target.yml \
+		up -d lab-target gateway || { $(call log_error,lab target,Failed to start.); exit 1; }
 	@$(call log_pass,lab target,lab-target is up at 198.51.100.10 (see docker-compose.override.lab-target.yml).)
 
 ## lab-target-down     Stop and remove the exploitation lab
