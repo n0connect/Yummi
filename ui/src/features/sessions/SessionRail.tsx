@@ -129,15 +129,21 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
             {t('sessionRail.newButtonLabel')}
           </button>
         </div>
-        <div className="rail-search-wrap">
-          <span className="rail-search-icon" aria-hidden="true">⌕</span>
-          <input
-            className="rail-search"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder={t('sessionRail.searchPlaceholder')}
-            aria-label={t('sessionRail.searchPlaceholder')}
-          />
+        <div className="rail-search-section">
+          <div className="rail-search-wrap">
+            <svg className="rail-search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="6.5" cy="6.5" r="4.75" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M10 10l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              type="text"
+              className="rail-search"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder={t('sessionRail.searchPlaceholder')}
+              aria-label={t('sessionRail.searchPlaceholder')}
+            />
+          </div>
         </div>
         <div className="rail-list">
           {loading && sessions.length === 0 && !error && (
