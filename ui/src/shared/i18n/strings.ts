@@ -61,6 +61,12 @@ const en = {
   'sessionRail.archive': 'Archive conversation',
   'sessionRail.delete': 'Delete conversation',
   'sessionRail.confirmDelete': 'Click again to confirm deletion',
+  'sessionRail.archiveButton': 'Archived conversations',
+  'sessionRail.activeButton': 'Active conversations',
+  'sessionRail.unarchive': 'Restore to active',
+  'sessionRail.emptyArchived': 'No archived conversations.',
+  'sessionRail.searchArchived': 'Search archives…',
+  'sessionRail.activeBadge': 'Active',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
   'debugLog.title': 'Debug Log',
@@ -364,6 +370,7 @@ const en = {
   'assistant.targetLauncher.start': 'Start',
   'assistant.targetLauncher.goal.bugBounty': 'Run a complete bug-bounty attack-surface recon on {target}: enumerate every subdomain (passive sources, permutation, resolution, live-probing), check for subdomain takeover, and give me a professional triage of everything you found — not raw tool output.',
   'assistant.targetLauncher.goal.webPentest': 'Run a complete web pentest on {target}: fingerprint the stack and check for a WAF, crawl for endpoints and mine the JavaScript for secrets, fuzz for hidden parameters and confirm any XSS, test the API surface for BOLA/IDOR, and run a template-based vulnerability scan.',
+  'assistant.targetLauncher.goal.general': 'Assess target {target}: discover the attack surface, identify running services and potential security weaknesses, and suggest the best next steps.',
   'assistant.messagesLogAriaLabel': 'Conversation transcript',
   'assistant.proposalsListAriaLabel': 'Suggested commands',
   'assistant.secondsShort': 's',
@@ -608,6 +615,12 @@ const tr = {
   'sessionRail.archive': 'Sohbeti arşivle',
   'sessionRail.delete': 'Sohbeti sil',
   'sessionRail.confirmDelete': 'Silmek için tekrar tıklayın',
+  'sessionRail.archiveButton': 'Arşivlenmiş sohbetler',
+  'sessionRail.activeButton': 'Aktif sohbetler',
+  'sessionRail.unarchive': 'Arşivden çıkar',
+  'sessionRail.emptyArchived': 'Arşivlenmiş sohbet bulunmuyor.',
+  'sessionRail.searchArchived': 'Arşivde ara…',
+  'sessionRail.activeBadge': 'Aktif',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
   'debugLog.title': 'Debug Günlüğü',
@@ -912,6 +925,7 @@ const tr = {
   'assistant.targetLauncher.start': 'Başlat',
   'assistant.targetLauncher.goal.bugBounty': "{target} için tam bir bug bounty attack surface recon çalıştır: bütün subdomain'leri bul (pasif kaynaklar, permütasyon, resolve, canlı-probe), subdomain takeover kontrolü yap, ve bulduğun her şeyi ham araç çıktısı değil profesyonel bir triyaj olarak sun.",
   'assistant.targetLauncher.goal.webPentest': "{target} için tam bir web pentest çalıştır: teknoloji yığınını tespit et ve WAF kontrolü yap, endpoint'leri tara ve JavaScript içinde secrets ara, gizli parametreleri fuzzla ve varsa XSS'i doğrula, API yüzeyini BOLA/IDOR için test et, ve template-tabanlı bir vulnerability scan çalıştır.",
+  'assistant.targetLauncher.goal.general': '{target} hedefini analiz et: saldırı yüzeyini keşfet, çalışan servisleri ve potansiyel güvenlik açıklarını tespit et ve sonraki en iyi adımları öner.',
   'assistant.messagesLogAriaLabel': 'Sohbet dökümü',
   'assistant.proposalsListAriaLabel': 'Önerilen komutlar',
   'assistant.secondsShort': 'sn',

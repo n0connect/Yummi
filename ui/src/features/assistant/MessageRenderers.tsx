@@ -94,13 +94,17 @@ export function TargetFirstLauncher({
   onLaunch: (goal: string) => void
 }): JSX.Element {
   const [target, setTarget] = useState('')
-  const [modeID, setModeID] = useState<(typeof TARGET_LAUNCHER_MODES)[number]['id']>('bugBounty')
+  const [modeID, setModeID] = useState<(typeof TARGET_LAUNCHER_MODES)[number]['id'] | null>(null)
 
   const launch = () => {
     const trimmed = target.trim()
     if (!trimmed) return
-    const mode = TARGET_LAUNCHER_MODES.find((m) => m.id === modeID) ?? TARGET_LAUNCHER_MODES[0]
-    onLaunch(mode.goal.replace('{target}', trimmed))
+    const mode = TARGET_LAUNCHER_MODES.find((m) => m.id === modeID)
+    if (mode) {
+      onLaunch(mode.goal.replace('{target}', trimmed))
+    } else {
+      onLaunch(t('assistant.targetLauncher.goal.general').replace('{target}', trimmed))
+    }
   }
 
   return (
@@ -114,7 +118,7 @@ export function TargetFirstLauncher({
             role="radio"
             aria-checked={modeID === mode.id}
             className={`target-launcher-mode${modeID === mode.id ? ' is-active' : ''}`}
-            onClick={() => setModeID(mode.id)}
+            onClick={() => setModeID((prev) => (prev === mode.id ? null : mode.id))}
           >
             <span className="target-launcher-mode-label">{mode.label}</span>
             <span className="target-launcher-mode-hint">{mode.hint}</span>

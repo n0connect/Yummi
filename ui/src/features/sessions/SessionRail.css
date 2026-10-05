@@ -148,7 +148,81 @@
   flex-shrink: 0;
   width: 100%;
   padding: var(--space-md) var(--space-md) var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   box-sizing: border-box;
+}
+
+.rail-archive-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px !important;
+  margin: 0 !important;
+  background: var(--wash-soft) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--text-secondary) !important;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  cursor: pointer;
+  box-sizing: border-box;
+  box-shadow: none !important;
+  transition: all var(--transition-fast);
+}
+.rail-archive-btn:hover {
+  background: var(--wash-medium) !important;
+  border-color: var(--border) !important;
+  color: var(--text-primary) !important;
+}
+.rail-archive-btn.active {
+  background: rgba(45, 212, 191, 0.08) !important;
+  border-color: rgba(45, 212, 191, 0.35) !important;
+  color: var(--accent) !important;
+  box-shadow: 0 0 8px -2px var(--accent-glow) !important;
+}
+.rail-archive-btn-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rail-archive-btn-left svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.rail-archive-btn.active .rail-archive-btn-left svg {
+  color: var(--accent);
+  opacity: 1;
+}
+.rail-archive-btn-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+}
+.rail-archive-count {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: var(--wash-medium);
+  color: var(--text-muted);
+  line-height: 1;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+}
+.rail-archive-btn.active .rail-archive-count {
+  background: rgba(45, 212, 191, 0.15);
+  color: var(--accent);
+  border-color: rgba(45, 212, 191, 0.3);
 }
 
 .rail-search-wrap {

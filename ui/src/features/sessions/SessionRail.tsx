@@ -49,6 +49,15 @@ function ArchiveIcon(): JSX.Element {
   )
 }
 
+function UnarchiveIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="3" rx="0.5" />
+      <path d="M3.5 5.5v7.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5.5M8 11.5V7M5.5 9l2.5-2.5 2.5 2.5" />
+    </svg>
+  )
+}
+
 function TrashIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -97,6 +106,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [query, setQuery] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -120,9 +130,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
     setLoading(true)
     fetchJSON<SessionSummary[]>('/api/v1/sessions', { signal: controller.signal })
       .then(rows => {
-        // Active sessions only, newest first (the server already sorts by
-        // updated_at desc, but guard against nulls).
-        setSessions((rows ?? []).filter(s => s.status !== 'closed'))
+        setSessions(rows ?? [])
         setError(false)
       })
       .catch(err => { if (err?.name !== 'AbortError') setError(true) })
@@ -200,19 +208,22 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
     }
   }, [])
 
-  const handleArchive = useCallback(async (id: string, e: React.MouseEvent) => {
+  const archivedCount = useMemo(() => sessions.filter(s => s.status === 'closed').length, [sessions])
+
+  const handleArchive = useCallback(async (id: string, currentStatus: string | undefined, e: React.MouseEvent) => {
     e.stopPropagation()
+    const nextStatus = currentStatus === 'closed' ? 'active' : 'closed'
     try {
       await fetchJSON(`/api/v1/sessions/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'closed' })
+        body: JSON.stringify({ status: nextStatus })
       })
-      setSessions(prev => prev.filter(s => s.id !== id))
-      if (id === activeSessionID) {
+      setSessions(prev => prev.map(s => s.id === id ? { ...s, status: nextStatus } : s))
+      if (nextStatus === 'closed' && id === activeSessionID) {
         onNewChat?.()
       }
     } catch (err) {
-      console.error('Failed to archive session', err)
+      console.error('Failed to update session archive status', err)
     }
   }, [activeSessionID, onNewChat])
 
@@ -250,9 +261,10 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
 
   const filteredSessions = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('tr-TR')
+    const pool = sessions.filter(s => showArchived ? s.status === 'closed' : s.status !== 'closed')
     const list = needle
-      ? sessions.filter(session => session.name.toLocaleLowerCase('tr-TR').includes(needle))
-      : sessions
+      ? pool.filter(session => session.name.toLocaleLowerCase('tr-TR').includes(needle))
+      : pool
     return [...list].sort((a, b) => {
       const aPinned = pinnedSessionIds.includes(a.id)
       const bPinned = pinnedSessionIds.includes(b.id)
@@ -260,7 +272,7 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
       if (!aPinned && bPinned) return 1
       return (b.updated_at ?? 0) - (a.updated_at ?? 0)
     })
-  }, [query, sessions, pinnedSessionIds])
+  }, [query, sessions, showArchived, pinnedSessionIds])
 
   return (
     <>
@@ -298,6 +310,23 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
           </button>
         </div>
         <div className="rail-search-section">
+          <button
+            type="button"
+            className={`rail-archive-btn ${showArchived ? 'active' : ''}`}
+            onClick={() => setShowArchived(prev => !prev)}
+            title={showArchived ? t('sessionRail.activeButton') : t('sessionRail.archiveButton')}
+            aria-pressed={showArchived}
+          >
+            <span className="rail-archive-btn-left">
+              <ArchiveIcon />
+              <span className="rail-archive-btn-text">
+                {showArchived ? t('sessionRail.activeButton') : t('sessionRail.archiveButton')}
+              </span>
+            </span>
+            <span className="rail-archive-count">
+              {showArchived ? t('sessionRail.activeBadge') : archivedCount}
+            </span>
+          </button>
           <div className="rail-search-wrap">
             <svg className="rail-search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <circle cx="6.5" cy="6.5" r="4.75" stroke="currentColor" strokeWidth="1.5" />
@@ -308,8 +337,8 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
               className="rail-search"
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder={t('sessionRail.searchPlaceholder')}
-              aria-label={t('sessionRail.searchPlaceholder')}
+              placeholder={showArchived ? t('sessionRail.searchArchived') : t('sessionRail.searchPlaceholder')}
+              aria-label={showArchived ? t('sessionRail.searchArchived') : t('sessionRail.searchPlaceholder')}
             />
           </div>
         </div>
@@ -330,7 +359,13 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
               <span>{t('sessionRail.emptyHint')}</span>
             </div>
           )}
-          {!error && !loading && sessions.length > 0 && filteredSessions.length === 0 && (
+          {!error && !loading && sessions.length > 0 && showArchived && filteredSessions.length === 0 && !query && (
+            <div className="rail-empty rail-empty-intro">
+              <span className="rail-empty-icon">◌</span>
+              <strong>{t('sessionRail.emptyArchived')}</strong>
+            </div>
+          )}
+          {!error && !loading && sessions.length > 0 && filteredSessions.length === 0 && (query || !showArchived) && (
             <div className="rail-empty">{t('sessionRail.noSearchResults')}</div>
           )}
           {filteredSessions.map(s => {
@@ -385,11 +420,11 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
                     <button
                       type="button"
                       className="rail-action-btn"
-                      onClick={(e) => void handleArchive(s.id, e)}
-                      title={t('sessionRail.archive')}
-                      aria-label={t('sessionRail.archive')}
+                      onClick={(e) => void handleArchive(s.id, s.status, e)}
+                      title={s.status === 'closed' ? t('sessionRail.unarchive') : t('sessionRail.archive')}
+                      aria-label={s.status === 'closed' ? t('sessionRail.unarchive') : t('sessionRail.archive')}
                     >
-                      <ArchiveIcon />
+                      {s.status === 'closed' ? <UnarchiveIcon /> : <ArchiveIcon />}
                     </button>
                     <button
                       type="button"

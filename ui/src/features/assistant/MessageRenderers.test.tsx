@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { AgentTask, ExecutionRecord } from '../../entities/types'
-import { ExecutionMessage, TaskSummaryMessage } from './MessageRenderers'
+import { ExecutionMessage, TargetFirstLauncher, TaskSummaryMessage } from './MessageRenderers'
 
 describe('ExecutionMessage', () => {
   const baseExecution: ExecutionRecord = {
@@ -142,3 +142,46 @@ describe('TaskSummaryMessage', () => {
     expect(screen.getByText(/Connection timed out/)).toBeTruthy()
   })
 })
+
+describe('TargetFirstLauncher', () => {
+  it('renders with no mode selected by default and allows toggling', () => {
+    let launchedGoal = ''
+    render(<TargetFirstLauncher onLaunch={(g) => { launchedGoal = g }} />)
+
+    const buttons = screen.getAllByRole('radio')
+    expect(buttons.length).toBe(2)
+
+    // Neither button should be active/selected by default
+    expect(buttons[0].getAttribute('aria-checked')).toBe('false')
+    expect(buttons[0].classList.contains('is-active')).toBe(false)
+    expect(buttons[1].getAttribute('aria-checked')).toBe('false')
+    expect(buttons[1].classList.contains('is-active')).toBe(false)
+
+    // Clicking Bug Bounty selects it
+    fireEvent.click(buttons[0])
+    expect(buttons[0].getAttribute('aria-checked')).toBe('true')
+    expect(buttons[0].classList.contains('is-active')).toBe(true)
+    expect(buttons[1].getAttribute('aria-checked')).toBe('false')
+
+    // Clicking Bug Bounty again deselects it
+    fireEvent.click(buttons[0])
+    expect(buttons[0].getAttribute('aria-checked')).toBe('false')
+    expect(buttons[0].classList.contains('is-active')).toBe(false)
+
+    // Launching with no mode selected uses general goal
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: 'target.local' } })
+    const startBtn = screen.getByRole('button', { name: /Başlat|Start/ })
+    fireEvent.click(startBtn)
+    expect(launchedGoal).toContain('target.local')
+
+    // Selecting Web Pentest and launching uses specialized goal
+    fireEvent.click(buttons[1])
+    expect(buttons[1].getAttribute('aria-checked')).toBe('true')
+    expect(buttons[1].classList.contains('is-active')).toBe(true)
+    fireEvent.click(startBtn)
+    expect(launchedGoal).toContain('target.local')
+    expect(launchedGoal).toContain('web pentest')
+  })
+})
+

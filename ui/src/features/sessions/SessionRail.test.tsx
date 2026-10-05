@@ -87,4 +87,55 @@ describe('SessionRail', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('toggles archive view and displays archived sessions', async () => {
+    const mockSessions = [
+      { id: 's1', name: 'Active Scan', status: 'active', created_at: 1700000000, updated_at: 1700000000 },
+      { id: 's2', name: 'Archived Pentest', status: 'closed', created_at: 1700000000, updated_at: 1700000000 },
+    ]
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString()
+      if (urlStr.includes('/api/v1/sessions/s2') && init?.method === 'PATCH') {
+        return new Response(JSON.stringify({ id: 's2', status: 'active' }), { status: 200 })
+      }
+      if (urlStr.includes('/api/v1/sessions') && (!init || !init.method || init.method === 'GET')) {
+        return new Response(JSON.stringify(mockSessions), { status: 200 })
+      }
+      return new Response(JSON.stringify([]), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      render(
+        <SessionRail open onToggle={() => {}} activeSessionID="s1" refreshKey={0} onSelect={() => {}} />,
+      )
+
+      await screen.findByText('Active Scan')
+      expect(screen.queryByText('Archived Pentest')).toBeNull()
+
+      const archiveToggleBtn = screen.getByTitle('Arşivlenmiş sohbetler')
+      expect(archiveToggleBtn).toBeTruthy()
+      expect(screen.getByText('1')).toBeTruthy() // archive count
+
+      // Switch to archive view
+      fireEvent.click(archiveToggleBtn)
+      await screen.findByText('Archived Pentest')
+      expect(screen.queryByText('Active Scan')).toBeNull()
+
+      // Unarchive button is present on the archived session
+      const unarchiveBtn = screen.getByLabelText('Arşivden çıkar')
+      expect(unarchiveBtn).toBeTruthy()
+      fireEvent.click(unarchiveBtn)
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/sessions/s2',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'active' }),
+        }),
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
