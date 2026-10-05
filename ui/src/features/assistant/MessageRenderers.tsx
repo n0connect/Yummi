@@ -481,3 +481,207 @@ export function StreamingMessage({ text }: { text: string }): JSX.Element {
     </div>
   )
 }
+
+function FlagChip({ flag }: { flag: string }): JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(flag)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <span
+      className="task-summary-flag-chip"
+      onClick={handleCopy}
+      title={t('taskSummary.copyFlag')}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          handleCopy(e as unknown as React.MouseEvent)
+        }
+      }}
+    >
+      <span className="task-summary-flag-tag">{t('taskSummary.flagTag')}</span>
+      <code className="task-summary-flag-code">{flag}</code>
+      <span className="task-summary-copy-btn">
+        {copied ? t('taskSummary.copied') : t('taskSummary.copy')}
+      </span>
+    </span>
+  )
+}
+
+function renderFindingContent(text: string): JSX.Element {
+  const clean = sanitizeOperatorText(text)
+  const regex = /((?:[a-zA-Z0-9_]*flag\{[^}]+\})|(?:CVE-\d{4}-\d{4,7}))/gi
+  const parts = clean.split(regex)
+  if (parts.length === 1) {
+    return <span className="task-summary-finding-text">{clean}</span>
+  }
+  return (
+    <span className="task-summary-finding-text">
+      {parts.map((part, i) => {
+        if (/^[a-zA-Z0-9_]*flag\{[^}]+\}$/i.test(part)) {
+          return <FlagChip key={i} flag={part} />
+        }
+        if (/^CVE-\d{4}-\d{4,7}$/i.test(part)) {
+          return (
+            <span key={i} className="task-summary-cve-chip">
+              {part}
+            </span>
+          )
+        }
+        return <span key={i}>{part}</span>
+      })}
+    </span>
+  )
+}
+
+export function TaskSummaryMessage({
+  task,
+  content,
+  timestamp
+}: {
+  task?: AgentTask
+  content: string
+  timestamp: string
+}): JSX.Element {
+  const status = task?.status ?? 'completed'
+  const isCompleted = status === 'completed'
+  const isFailed = status === 'failed'
+  const isStopped = status === 'stopped' || status === 'interrupted'
+
+  let pillCls = 'tt-pill-completed'
+  let pillText = `✓ ${t('taskSummary.completed')}`
+  let cardStatusCls = 'status-completed'
+
+  if (isFailed) {
+    pillCls = 'tt-pill-failed'
+    pillText = `✕ ${t('taskSummary.failed')}`
+    cardStatusCls = 'status-failed'
+  } else if (isStopped) {
+    pillCls = 'tt-pill-stopped'
+    pillText = `◼ ${t('taskSummary.stopped')}`
+    cardStatusCls = 'status-stopped'
+  }
+
+  const summaryText = sanitizeOperatorText(task?.summary || content || '')
+  const findings = task?.findings ?? []
+  const findingRecords = task?.finding_records ?? []
+  const hasRecords = findingRecords.length > 0
+  const hasFindings = findings.length > 0 || hasRecords
+
+  const timeFormatted = useMemo(() => {
+    try {
+      const d = new Date(timestamp)
+      if (isNaN(d.getTime())) return ''
+      return d.toLocaleTimeString(NUMBER_LOCALE, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      })
+    } catch {
+      return ''
+    }
+  }, [timestamp])
+
+  return (
+    <div
+      className={`msg-task-summary ${cardStatusCls}`}
+      role="region"
+      aria-label={t('taskSummary.title')}
+    >
+      <div className="task-summary-header">
+        <div className="task-summary-title-group">
+          <span className={`tt-pill ${pillCls}`}>{pillText}</span>
+          <span className="task-summary-title">{t('taskSummary.title')}</span>
+        </div>
+        <div className="task-summary-meta">
+          {task && typeof task.steps_used === 'number' && (
+            <span className="task-summary-step-chip">
+              {task.steps_used}/{task.step_budget || 15} {t('taskSummary.stepsUsedSuffix')}
+            </span>
+          )}
+          {timeFormatted && <time className="task-summary-time">{timeFormatted}</time>}
+          <a
+            href="/trace"
+            className="task-summary-trace-btn"
+            title={t('taskSummary.viewInTrace')}
+          >
+            {t('taskSummary.traceBtn')}
+          </a>
+        </div>
+      </div>
+
+      <div className="task-summary-body">
+        {summaryText && (
+          <p className="task-summary-prose">{summaryText}</p>
+        )}
+
+        {hasFindings && (
+          <div className="task-summary-findings">
+            <div className="task-summary-findings-header">
+              <span className="task-summary-findings-label">
+                {t('taskSummary.findingsTitle')}
+              </span>
+              <span className="task-summary-findings-count">
+                {hasRecords ? findingRecords.length : findings.length}
+              </span>
+            </div>
+            <div className="task-summary-findings-list">
+              {hasRecords
+                ? findingRecords.map((r, i) => {
+                    const isFlag = /flag\{/i.test(r.title)
+                    return (
+                      <div
+                        key={r.step_id ? `${r.step_id}-${i}` : `rec-${i}`}
+                        className={`task-summary-finding-row ${isFlag ? 'is-flag' : ''}`}
+                      >
+                        <span className={`task-summary-finding-badge tt-finding-badge-${r.verdict}`}>
+                          {r.verdict.toUpperCase()}
+                        </span>
+                        <div className="task-summary-finding-copy">
+                          {renderFindingContent(r.title)}
+                          {r.reason && (
+                            <span className="task-summary-finding-reason">
+                              {sanitizeOperatorText(r.reason)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })
+                : findings.map((f, i) => {
+                    const isFlag = /flag\{/i.test(f)
+                    return (
+                      <div
+                        key={`find-${i}`}
+                        className={`task-summary-finding-row ${isFlag ? 'is-flag' : ''}`}
+                      >
+                        <span className="task-summary-finding-badge">#{i + 1}</span>
+                        <div className="task-summary-finding-copy">
+                          {renderFindingContent(f)}
+                        </div>
+                      </div>
+                    )
+                  })}
+            </div>
+          </div>
+        )}
+
+        {task?.last_error && !isCompleted && (
+          <div className="task-summary-error">
+            <span className="task-summary-error-badge">ERROR</span>
+            <span className="task-summary-error-text">
+              {sanitizeOperatorText(task.last_error)}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

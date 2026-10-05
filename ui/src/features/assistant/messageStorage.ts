@@ -103,6 +103,7 @@ export function sortHydratedMessages(messages: Message[]): Message[] {
     if (m.role === 'user') return 0
     if (m.role === 'task') return 2
     if (m.role === 'execution') return 3
+    if (m.role === 'task_summary') return 4
     return 1
   }
   return messages.slice().sort((a, b) => {

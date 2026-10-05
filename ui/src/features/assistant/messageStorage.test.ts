@@ -69,4 +69,14 @@ describe('sortHydratedMessages', () => {
     const sorted = sortHydratedMessages([execMsg, taskMsg, userMsg, assistMsg])
     expect(sorted.map(m => m.id)).toEqual(['user', 'assist', 'task', 'exec'])
   })
+
+  it('places task_summary after executions on same-second tie', () => {
+    const timestamp = new Date(1700000000000).toISOString()
+    const execMsg: Message = { id: 'exec', role: 'execution', content: 'output', timestamp }
+    const summaryMsg: Message = { id: 'sum', role: 'task_summary', content: 'done', timestamp }
+    const userMsg: Message = { id: 'user', role: 'user', content: 'hello', timestamp }
+
+    const sorted = sortHydratedMessages([summaryMsg, execMsg, userMsg])
+    expect(sorted.map(m => m.id)).toEqual(['user', 'exec', 'sum'])
+  })
 })

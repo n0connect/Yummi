@@ -31,6 +31,7 @@ import {
 } from './messageStorage'
 import {
   TaskCardMessage,
+  TaskSummaryMessage,
   EmptyWorkspace,
   ExecutionMessage,
   TextMessage,
@@ -309,7 +310,14 @@ export function AssistantPanel({
         // Chronological merge. Timestamps are aligned to whole seconds so that
         // execution records (seconds) and activity events (milliseconds) align,
         // resolving ties by rank: user prompt (0), agent words (1), task card (2), command cards (3).
-        const known = new Set((rows ?? []).map(r => r.content))
+        const terminalSummaries = new Set(
+          (tasks ?? [])
+            .map((t) => t.summary?.trim())
+            .filter((s): s is string => Boolean(s))
+        )
+        const filteredRows = (rows ?? []).filter(
+          (r) => !(r.role === 'assistant' && terminalSummaries.has(r.content?.trim()))
+        )
         const hydratedTasks: Message[] = (tasks ?? [])
           .filter((task) => !task.parent_task_id)
           .flatMap((task) => {
@@ -319,15 +327,25 @@ export function AssistantPanel({
                 role: 'task' as const,
                 content: task.goal,
                 taskID: task.id,
+                task,
                 timestamp: new Date((task.created_at ?? 0) * 1000).toISOString()
               }
             ]
-            const terminal = task.status === 'completed' || task.status === 'stopped' || task.status === 'failed'
-            if (terminal && task.summary && !known.has(task.summary)) {
+            const terminal =
+              task.status === 'completed' ||
+              task.status === 'stopped' ||
+              task.status === 'failed' ||
+              task.status === 'interrupted'
+            if (
+              terminal &&
+              (task.summary || (task.findings && task.findings.length > 0) || task.last_error)
+            ) {
               out.push({
-                id: nextId(),
-                role: 'assistant' as const,
-                content: task.summary,
+                id: `task-summary-${task.id}`,
+                role: 'task_summary' as const,
+                content: task.summary || '',
+                taskID: task.id,
+                task,
                 timestamp: new Date((task.updated_at ?? task.created_at ?? 0) * 1000).toISOString()
               })
             }
@@ -335,7 +353,7 @@ export function AssistantPanel({
           })
         setMessages(
           sortHydratedMessages([
-            ...rebuildMessages(rows ?? []),
+            ...rebuildMessages(filteredRows),
             ...hydratedTasks,
             ...hydratedExecutions,
             ...hydratedNarration
@@ -862,23 +880,26 @@ export function AssistantPanel({
 
       setActiveTask(task)
 
-      // When task completes or fails, inject a summary message and clear active.
+      // When task completes or fails, inject/update the dedicated summary message.
       if (TERMINAL.has(task.status)) {
-        const lines: string[] = []
-        if (task.summary) lines.push(sanitizeOperatorText(task.summary))
-        if (task.findings && task.findings.length > 0) {
-          lines.push('')
-          task.findings.forEach((f) =>
-            lines.push(`• ${sanitizeOperatorText(f, t('taskTracker.defaultFindingRecorded'))}`)
+        const summaryMsgId = `task-summary-${task.id}`
+        setMessages((prev) => {
+          const existingIdx = prev.findIndex(
+            (m) => m.id === summaryMsgId || (m.role === 'task_summary' && m.taskID === task.id)
           )
-        }
-        if (task.last_error && task.status !== 'completed') {
-          lines.push(t('assistant.taskFailedNote'))
-          lines.push(sanitizeOperatorText(task.last_error))
-        }
-        if (lines.length > 0) {
-          appendMessage({ role: 'assistant', content: lines.join('\n') })
-        }
+          const newMsg: Message = {
+            id: summaryMsgId,
+            role: 'task_summary',
+            content: task.summary || '',
+            taskID: task.id,
+            task,
+            timestamp: new Date((task.updated_at ?? task.created_at ?? 0) * 1000).toISOString()
+          }
+          if (existingIdx >= 0) {
+            return prev.map((m, idx) => (idx === existingIdx ? newMsg : m))
+          }
+          return [...prev, newMsg]
+        })
       }
 
       // When paused and there's a question, surface it.
@@ -1569,7 +1590,7 @@ export function AssistantPanel({
           ) : (
             messages.map((msg) => {
               if (msg.role === 'task' && msg.taskID) {
-                const displayTask = taskSnapshots[msg.taskID]
+                const displayTask = taskSnapshots[msg.taskID] || msg.task
                 if (!displayTask) return null
                 return (
                   <TaskCardMessage
@@ -1597,6 +1618,18 @@ export function AssistantPanel({
                       approveTaskGate(subTaskID, pid, approved)
                     }
                     onToggleAutoApprove={(enable) => toggleTaskAutoApprove(msg.taskID!, enable)}
+                  />
+                )
+              }
+              if (msg.role === 'task_summary') {
+                const displayTask =
+                  (msg.taskID ? taskSnapshots[msg.taskID] : undefined) || msg.task
+                return (
+                  <TaskSummaryMessage
+                    key={msg.id}
+                    task={displayTask}
+                    content={msg.content}
+                    timestamp={msg.timestamp}
                   />
                 )
               }

@@ -315,6 +315,22 @@ const en = {
   'taskTracker.resume': 'Resume',
   'taskTracker.abandon': 'Abandon task',
 
+  // ── taskSummary ──────────────────────────────────────────────────────────
+  'taskSummary.title': 'Task Summary',
+  'taskSummary.completed': 'Completed',
+  'taskSummary.failed': 'Failed',
+  'taskSummary.stopped': 'Stopped',
+  'taskSummary.interrupted': 'Interrupted',
+  'taskSummary.stepsUsedSuffix': 'steps',
+  'taskSummary.findingsTitle': 'Key Findings & Artifacts',
+  'taskSummary.noFindings': 'No structured findings recorded.',
+  'taskSummary.viewInTrace': 'View details in Trace',
+  'taskSummary.traceBtn': 'Trace ›',
+  'taskSummary.flagTag': 'FLAG',
+  'taskSummary.copyFlag': 'Copy flag',
+  'taskSummary.copied': '✓ COPIED',
+  'taskSummary.copy': 'COPY',
+
   // ── AssistantPanel ──────────────────────────────────────────────────────
   'assistant.welcome': 'Ready. Write your goal or task in one sentence.',
   'assistant.autoLimitExceeded': 'Automatic retry limit exceeded. Type to try a different command.',
@@ -840,6 +856,22 @@ const tr = {
   'taskTracker.resumeReplyPlaceholder': 'Soruyu yanıtlayın, ya da boş bırakıp sadece devam ettirin…',
   'taskTracker.resume': 'Devam ettir',
   'taskTracker.abandon': 'Görevi bırak',
+
+  // ── taskSummary ──────────────────────────────────────────────────────────
+  'taskSummary.title': 'Görev Özeti',
+  'taskSummary.completed': 'Tamamlandı',
+  'taskSummary.failed': 'Başarısız',
+  'taskSummary.stopped': 'Durduruldu',
+  'taskSummary.interrupted': 'Kesildi',
+  'taskSummary.stepsUsedSuffix': 'adım',
+  'taskSummary.findingsTitle': 'Bulgular ve Çıktılar',
+  'taskSummary.noFindings': 'Yapılandırılmış bulgu kaydedilmedi.',
+  'taskSummary.viewInTrace': 'Ayrıntıları Trace sekmesinde gör',
+  'taskSummary.traceBtn': 'Trace ›',
+  'taskSummary.flagTag': 'BAYRAK',
+  'taskSummary.copyFlag': 'Bayrağı kopyala',
+  'taskSummary.copied': '✓ KOPYALANDI',
+  'taskSummary.copy': 'KOPYALA',
 
   // ── AssistantPanel ──────────────────────────────────────────────────────
   'assistant.welcome': 'Hazırım. Hedefini ya da görevini bir cümleyle yaz.',

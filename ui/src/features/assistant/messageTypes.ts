@@ -1,4 +1,4 @@
-import type { ActivityEvent, ExecutionRecord } from '../../entities/types'
+import type { ActivityEvent, AgentTask, ExecutionRecord } from '../../entities/types'
 
 export type MessageRole =
   | 'user'
@@ -6,6 +6,7 @@ export type MessageRole =
   | 'system'
   | 'execution'
   | 'task'
+  | 'task_summary'
   | 'activity'
 
 export type Message = {
@@ -15,5 +16,6 @@ export type Message = {
   timestamp: string
   execution?: ExecutionRecord
   taskID?: string
+  task?: AgentTask
   activity?: ActivityEvent
 }

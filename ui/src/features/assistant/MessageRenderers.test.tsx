@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import type { ExecutionRecord } from '../../entities/types'
-import { ExecutionMessage } from './MessageRenderers'
+import type { AgentTask, ExecutionRecord } from '../../entities/types'
+import { ExecutionMessage, TaskSummaryMessage } from './MessageRenderers'
 
 describe('ExecutionMessage', () => {
   const baseExecution: ExecutionRecord = {
@@ -71,5 +71,74 @@ describe('ExecutionMessage', () => {
 
     // Live output should be rendered without needing a click
     expect(screen.getByText(/Connecting to target.../)).toBeTruthy()
+  })
+})
+
+describe('TaskSummaryMessage', () => {
+  const completedTask: AgentTask = {
+    id: 'task-test-1',
+    session_id: 'session-123',
+    goal: 'Compromise target 198.51.100.10',
+    status: 'completed',
+    steps_used: 72,
+    step_budget: 15,
+    summary: 'Successfully compromised target and retrieved user and root flags.',
+    findings: [
+      'Port 80/tcp: Apache 2.4.49 vulnerable to CVE-2021-41773',
+      'user.txt content: user_flag{apache_rce_test}',
+      'root.txt content: root_flag{suid_privesc_test}'
+    ],
+    created_at: 1700000000,
+    updated_at: 1700001000
+  }
+
+  it('renders completed task summary card with steps, summary, and findings', () => {
+    render(
+      <TaskSummaryMessage
+        task={completedTask}
+        content=""
+        timestamp={new Date(1700001000 * 1000).toISOString()}
+      />
+    )
+
+    expect(screen.getByText(/Successfully compromised target/)).toBeTruthy()
+    expect(screen.getByText(/72\/15/)).toBeTruthy()
+    expect(screen.getByText(/Port 80\/tcp/)).toBeTruthy()
+    expect(screen.getByText('user_flag{apache_rce_test}')).toBeTruthy()
+    expect(screen.getByText('root_flag{suid_privesc_test}')).toBeTruthy()
+    expect(screen.getByText('CVE-2021-41773')).toBeTruthy()
+  })
+
+  it('handles flag copy interaction on click', () => {
+    render(
+      <TaskSummaryMessage
+        task={completedTask}
+        content=""
+        timestamp={new Date(1700001000 * 1000).toISOString()}
+      />
+    )
+
+    const flagButtons = screen.getAllByRole('button')
+    expect(flagButtons.length).toBeGreaterThan(0)
+    fireEvent.click(flagButtons[0])
+  })
+
+  it('renders failed task summary with error note', () => {
+    const failedTask: AgentTask = {
+      ...completedTask,
+      id: 'task-failed-1',
+      status: 'failed',
+      last_error: 'Connection timed out while reaching target 198.51.100.10'
+    }
+
+    render(
+      <TaskSummaryMessage
+        task={failedTask}
+        content=""
+        timestamp={new Date(1700001000 * 1000).toISOString()}
+      />
+    )
+
+    expect(screen.getByText(/Connection timed out/)).toBeTruthy()
   })
 })
