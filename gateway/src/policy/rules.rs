@@ -36,9 +36,10 @@ pub enum RuleAction {
 ///
 /// **Does NOT persist across gateway restarts.** A fresh gateway always resets to
 /// `BlockAll`, which preserves the fail-closed invariant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EgressMode {
+    #[default]
     #[serde(alias = "block")]
     BlockAll,
     #[serde(alias = "rules_only")]
@@ -47,12 +48,6 @@ pub enum EgressMode {
     AllowAll,
     #[serde(alias = "ask_every_time")]
     Ask,
-}
-
-impl Default for EgressMode {
-    fn default() -> Self {
-        EgressMode::BlockAll
-    }
 }
 
 impl EgressMode {
