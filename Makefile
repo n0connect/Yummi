@@ -103,7 +103,7 @@ export VITE_YUMMI_LANG := $(YUMMI_LANG)
 YUMMI_AGENT_BACKEND ?= graph
 export YUMMI_AGENT_BACKEND
 
-VERSION    ?= v0.1.0
+VERSION    ?= v1.0.1b
 GIT_SHA    := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS    := -s -w \

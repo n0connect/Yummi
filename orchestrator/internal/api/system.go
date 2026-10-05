@@ -228,7 +228,7 @@ func HandleSystemStatus(bridge *sandbox.Bridge, pc *gateway.Client, dockerSocket
 			Status:     "healthy",
 			Details:    "orchestrator running",
 			UptimeSecs: &orchestratorUptime,
-			Meta:       map[string]any{"host": hostname, "version": "v0.1.0"},
+			Meta:       map[string]any{"host": hostname, "version": "v1.0.1b"},
 		}
 		modules = append(modules, orchestratorMod)
 
