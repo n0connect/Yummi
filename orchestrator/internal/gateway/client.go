@@ -60,11 +60,12 @@ func (c *Client) GetEgressMode() (string, error) {
 }
 
 // SetEgressMode sets the gateway's egress mode. mode must be one of
-// "block"/"allow"/"ask"; an invalid value is rejected client-side before the
-// socket round-trip. Returns the mode the gateway reports it is now in.
+// "block_all"/"block_except_rules"/"allow_all"/"ask" (or legacy "block"/"allow");
+// an invalid value is rejected client-side before the socket round-trip.
+// Returns the mode the gateway reports it is now in.
 func (c *Client) SetEgressMode(mode string) (string, error) {
 	if !validEgressMode(mode) {
-		return "", fmt.Errorf("invalid egress mode %q: must be one of block, allow, ask", mode)
+		return "", fmt.Errorf("invalid egress mode %q: must be one of block_all, block_except_rules, allow_all, ask", mode)
 	}
 	resp, err := c.send(Request{Type: "set_egress_mode", Mode: mode})
 	if err != nil {
@@ -157,7 +158,7 @@ func (c *Client) RemoveHostnameRule(list, pattern string) (*HostnamePolicy, erro
 
 func validEgressMode(mode string) bool {
 	switch mode {
-	case "block", "allow", "ask":
+	case "block_all", "block_except_rules", "allow_all", "ask", "block", "allow":
 		return true
 	default:
 		return false

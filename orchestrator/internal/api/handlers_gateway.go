@@ -268,9 +268,9 @@ func HandleGatewaySetEgressMode(c *gateway.Client) http.HandlerFunc {
 			return
 		}
 		switch req.Mode {
-		case "block", "allow", "ask":
+		case "block_all", "block_except_rules", "allow_all", "ask", "block", "rules_only", "allow", "ask_every_time":
 		default:
-			writeError(w, http.StatusBadRequest, "mode must be one of block, allow, ask", nil)
+			writeError(w, http.StatusBadRequest, "mode must be one of block_all, block_except_rules, allow_all, ask", nil)
 			return
 		}
 		if c == nil {

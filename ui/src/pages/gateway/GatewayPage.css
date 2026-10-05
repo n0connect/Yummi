@@ -113,12 +113,14 @@
 
 .gateway-egress-selector {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-sm);
   margin-top: var(--space-sm);
 }
 
 .gateway-egress-btn {
   flex: 1;
+  min-width: 140px;
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-primary, var(--bg-secondary));
   border: 1px solid var(--border);

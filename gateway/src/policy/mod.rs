@@ -145,8 +145,8 @@ impl PolicyEngine {
                 allow_rules,
                 block_rules,
                 // Fail-closed default — no external egress until an operator
-                // explicitly switches the mode. Resets to Block on restart.
-                egress_mode: EgressMode::Block,
+                // explicitly switches the mode. Resets to BlockAll on restart.
+                egress_mode: EgressMode::BlockAll,
                 default_allow,
             })),
             hostname: Arc::new(RwLock::new(HostnamePolicy::new(
@@ -254,11 +254,12 @@ impl PolicyEngine {
         // (which takes its own read-lock) — avoids re-entrant double-locking.
         let mode = self.egress_mode();
         match mode {
-            EgressMode::Block => match self.evaluate(dst).0 {
+            EgressMode::BlockAll => EgressVerdict::Block,
+            EgressMode::BlockExceptRules => match self.evaluate(dst).0 {
                 Decision::Allow => EgressVerdict::Allow,
                 Decision::Block => EgressVerdict::Block,
             },
-            EgressMode::Allow => EgressVerdict::Allow,
+            EgressMode::AllowAll => EgressVerdict::Allow,
             EgressMode::Ask => match self.evaluate(dst).0 {
                 Decision::Allow => EgressVerdict::Allow,
                 Decision::Block => EgressVerdict::NeedsApproval,
@@ -269,16 +270,17 @@ impl PolicyEngine {
     /// Egress verdict for a target the gateway cannot parse as an IP (a bare
     /// hostname like "google.com"). The gateway has no resolver, so the
     /// per-IP allow/block list and the always-blocked floor cannot be applied
-    /// here — the answer is purely the operator-set mode: Allow → Allow (the
+    /// here — the answer is purely the operator-set mode: AllowAll → Allow (the
     /// FORWARD chain blanket-accepts sandbox egress, so the hostname is
-    /// reachable and the sandbox does its own DNS), Block → Block, Ask →
-    /// NeedsApproval (the orchestrator resolves the hostname to IP(s) at
+    /// reachable and the sandbox does its own DNS), BlockAll / BlockExceptRules → Block,
+    /// Ask → NeedsApproval (the orchestrator resolves the hostname to IP(s) at
     /// approval time and opens those). This is what lets `ping google.com`
-    /// work in Allow mode instead of failing with "invalid IP address".
+    /// work in AllowAll mode instead of failing with "invalid IP address".
     pub fn check_egress_unresolved(&self) -> EgressVerdict {
         match self.egress_mode() {
-            EgressMode::Block => EgressVerdict::Block,
-            EgressMode::Allow => EgressVerdict::Allow,
+            EgressMode::BlockAll => EgressVerdict::Block,
+            EgressMode::BlockExceptRules => EgressVerdict::Block,
+            EgressMode::AllowAll => EgressVerdict::Allow,
             EgressMode::Ask => EgressVerdict::NeedsApproval,
         }
     }
@@ -493,9 +495,9 @@ mod tests {
     fn test_failed_enforcement_candidate_does_not_publish_mode() {
         let engine = PolicyEngine::new(&test_scope());
         let result: Result<(), &'static str> =
-            engine.set_egress_mode_after(EgressMode::Allow, || Err("kernel rejected"));
+            engine.set_egress_mode_after(EgressMode::AllowAll, || Err("kernel rejected"));
         assert_eq!(result, Err("kernel rejected"));
-        assert_eq!(engine.egress_mode(), EgressMode::Block);
+        assert_eq!(engine.egress_mode(), EgressMode::BlockAll);
     }
 
     #[test]
@@ -858,17 +860,23 @@ mod tests {
     #[test]
     fn test_egress_mode_defaults_to_block() {
         let engine = PolicyEngine::new(&test_scope());
-        assert_eq!(engine.egress_mode(), EgressMode::Block);
+        assert_eq!(engine.egress_mode(), EgressMode::BlockAll);
     }
 
     #[test]
-    fn test_check_egress_block_mode_blocks_external() {
-        let engine = PolicyEngine::new(&ScopeConfig {
-            allow: vec![],
+    fn test_check_egress_block_all_mode_blocks_external_and_ignores_rules() {
+        let scope = ScopeConfig {
+            allow: vec!["198.51.100.0/24".parse().unwrap()],
             block: vec![],
             ..Default::default()
-        });
-        // default mode is Block
+        };
+        let engine = PolicyEngine::new(&scope);
+        assert_eq!(engine.egress_mode(), EgressMode::BlockAll);
+        // In BlockAll mode, even explicit allow rules are blocked (complete lockdown)
+        assert_eq!(
+            engine.check_egress("198.51.100.10".parse().unwrap()),
+            EgressVerdict::Block
+        );
         assert_eq!(
             engine.check_egress("8.8.8.8".parse().unwrap()),
             EgressVerdict::Block
@@ -876,23 +884,14 @@ mod tests {
     }
 
     #[test]
-    fn test_check_egress_block_mode_honors_explicit_allow_rule() {
-        // Regression: a live engagement found that Block mode (the default)
-        // ignored the per-IP allow list entirely — an operator-added
-        // temporary rule (GATEWAY tab) was accepted, genuinely installed at
-        // the nftables layer, yet check_egress still returned Block
-        // unconditionally for that exact target. Block mode must stay
-        // consistent with the rest of the codebase's fail-closed philosophy:
-        // deny by default, but an explicit Allow rule still opens exactly
-        // what it names — without the operator also having to flip the
-        // separate egress-mode switch to Allow or Ask.
+    fn test_check_egress_block_except_rules_honors_explicit_allow_rule() {
         let scope = ScopeConfig {
             allow: vec!["198.51.100.0/24".parse().unwrap()],
             block: vec![],
             ..Default::default()
         };
         let engine = PolicyEngine::new(&scope);
-        assert_eq!(engine.egress_mode(), EgressMode::Block); // default, unchanged
+        engine.set_egress_mode(EgressMode::BlockExceptRules);
         assert_eq!(
             engine.check_egress("198.51.100.10".parse().unwrap()),
             EgressVerdict::Allow
@@ -911,7 +910,7 @@ mod tests {
             block: vec![],
             ..Default::default()
         });
-        engine.set_egress_mode(EgressMode::Allow);
+        engine.set_egress_mode(EgressMode::AllowAll);
         assert_eq!(
             engine.check_egress("8.8.8.8".parse().unwrap()),
             EgressVerdict::Allow
@@ -920,16 +919,15 @@ mod tests {
 
     #[test]
     fn test_check_egress_unresolved_follows_mode() {
-        // A bare hostname (non-IP) is decided purely by the egress mode, never
-        // an "invalid IP" error — this is what makes `ping google.com` work in
-        // Allow mode and queue for approval in Ask mode.
         let engine = PolicyEngine::new(&ScopeConfig {
             allow: vec![],
             block: vec![],
             ..Default::default()
         });
-        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Block); // default
-        engine.set_egress_mode(EgressMode::Allow);
+        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Block); // default BlockAll
+        engine.set_egress_mode(EgressMode::BlockExceptRules);
+        assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Block);
+        engine.set_egress_mode(EgressMode::AllowAll);
         assert_eq!(engine.check_egress_unresolved(), EgressVerdict::Allow);
         engine.set_egress_mode(EgressMode::Ask);
         assert_eq!(
@@ -976,7 +974,12 @@ mod tests {
             block: vec![],
             ..Default::default()
         });
-        for mode in [EgressMode::Block, EgressMode::Allow, EgressMode::Ask] {
+        for mode in [
+            EgressMode::BlockAll,
+            EgressMode::BlockExceptRules,
+            EgressMode::AllowAll,
+            EgressMode::Ask,
+        ] {
             engine.set_egress_mode(mode);
             assert_eq!(
                 engine.check_egress("127.0.0.1".parse().unwrap()),

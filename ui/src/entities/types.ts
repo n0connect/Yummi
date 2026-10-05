@@ -405,7 +405,13 @@ export type GatewayStatus = {
   status: 'connected' | 'disconnected' | 'not_configured'
 }
 
-export type GatewayEgressMode = 'block' | 'allow' | 'ask'
+export type GatewayEgressMode =
+  | 'block_all'
+  | 'block_except_rules'
+  | 'allow_all'
+  | 'ask'
+  | 'block'
+  | 'allow'
 
 export type GatewayEgressModeResponse = {
   mode: GatewayEgressMode

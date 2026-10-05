@@ -26,30 +26,45 @@ pub enum RuleAction {
 /// Operator-controlled, gateway-enforced master egress switch that sits *above*
 /// the per-IP scope allow/block list:
 ///
-/// - `Block` (default): no external sandbox egress at all (fail-closed).
-/// - `Allow`: all external egress permitted (blanket accept above the drop).
+/// - `BlockAll` (default): complete fail-closed lockdown, no external sandbox egress
+///   at all (drops all traffic regardless of active allow rules).
+/// - `BlockExceptRules`: deny by default, but permits explicit active allow rules
+///   (static allow list + dynamic temporary rules).
+/// - `AllowAll`: all external egress permitted (blanket accept above the drop).
 /// - `Ask`: each new external destination needs operator approval; already-opened
 ///   destinations (static allow / temporary rules) are permitted.
 ///
 /// **Does NOT persist across gateway restarts.** A fresh gateway always resets to
-/// `Block`, which preserves the fail-closed invariant: a restarted gateway with no
-/// operator action permits no external egress.
+/// `BlockAll`, which preserves the fail-closed invariant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum EgressMode {
-    Block,
-    Allow,
+    #[serde(alias = "block")]
+    BlockAll,
+    #[serde(alias = "rules_only")]
+    BlockExceptRules,
+    #[serde(alias = "allow")]
+    AllowAll,
+    #[serde(alias = "ask_every_time")]
     Ask,
 }
 
+impl Default for EgressMode {
+    fn default() -> Self {
+        EgressMode::BlockAll
+    }
+}
+
 impl EgressMode {
-    /// Parse the operator-supplied mode string ("block"/"allow"/"ask").
-    /// Returns `None` for any other value so the caller can reject it.
+    /// Parse the operator-supplied mode string.
+    /// Canonical modes: "block_all", "block_except_rules", "allow_all", "ask".
+    /// Aliases: "block", "rules_only", "allow", "ask_every_time".
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "block" => Some(EgressMode::Block),
-            "allow" => Some(EgressMode::Allow),
-            "ask" => Some(EgressMode::Ask),
+            "block_all" | "block" => Some(EgressMode::BlockAll),
+            "block_except_rules" | "rules_only" => Some(EgressMode::BlockExceptRules),
+            "allow_all" | "allow" => Some(EgressMode::AllowAll),
+            "ask" | "ask_every_time" => Some(EgressMode::Ask),
             _ => None,
         }
     }
@@ -57,8 +72,9 @@ impl EgressMode {
     /// Lowercase wire string, matching the serde representation.
     pub fn as_str(&self) -> &'static str {
         match self {
-            EgressMode::Block => "block",
-            EgressMode::Allow => "allow",
+            EgressMode::BlockAll => "block_all",
+            EgressMode::BlockExceptRules => "block_except_rules",
+            EgressMode::AllowAll => "allow_all",
             EgressMode::Ask => "ask",
         }
     }

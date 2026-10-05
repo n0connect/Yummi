@@ -74,7 +74,7 @@ export function useGatewayAudit(limit = 50) {
 }
 
 export function useEgressMode() {
-  const [mode, setModeState] = useState<GatewayEgressMode>('block')
+  const [mode, setModeState] = useState<GatewayEgressMode>('block_all')
   const [status, setStatus] = useState<GatewayEgressModeResponse['status']>('not_configured')
 
   const refresh = useCallback(async () => {

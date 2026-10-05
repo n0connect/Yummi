@@ -120,7 +120,7 @@ async fn run_linux() -> Result<()> {
                 .apply_current_egress_mode(|mode| reconcile_controller.reconcile(mode))
             {
                 error!(error = %e, "nftables reconciliation failed — entering fail-closed policy mode");
-                let block = yummi_gateway::policy::rules::EgressMode::Block;
+                let block = yummi_gateway::policy::rules::EgressMode::BlockAll;
                 if let Err(lockdown_err) = reconcile_policy
                     .set_egress_mode_after(block, || reconcile_controller.set_egress_mode(block))
                 {

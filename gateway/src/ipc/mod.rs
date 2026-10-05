@@ -566,7 +566,7 @@ fn process_request(
         // ── Write op — requires allowlisted UID ───────────────────────────
         IpcRequest::SetEgressMode { mode } => {
             require_write_auth!(peer_uid, allowed_uids, "SetEgressMode");
-            if mode.len() > 10 {
+            if mode.len() > 32 {
                 return IpcResponse::Error {
                     message: "egress mode too long".to_string(),
                 };
@@ -575,7 +575,9 @@ fn process_request(
                 Some(m) => m,
                 None => {
                     return IpcResponse::Error {
-                        message: format!("invalid egress mode: {mode} (expected block|allow|ask)"),
+                        message: format!(
+                            "invalid egress mode: {mode} (expected block_all|block_except_rules|allow_all|ask)"
+                        ),
                     };
                 }
             };
@@ -1325,8 +1327,8 @@ mod tests {
             IpcResponse::Error { message } => assert!(message.contains("permission denied")),
             other => panic!("expected permission denied, got {other:?}"),
         }
-        // mode must be unchanged (still default Block)
-        assert_eq!(policy.egress_mode(), EgressMode::Block);
+        // mode must be unchanged (still default BlockAll)
+        assert_eq!(policy.egress_mode(), EgressMode::BlockAll);
     }
 
     #[test]
@@ -1335,7 +1337,7 @@ mod tests {
         let audit = AuditLog::open(":memory:").expect("audit log");
         let resp = process_request(
             IpcRequest::SetEgressMode {
-                mode: "allow".to_string(),
+                mode: "allow_all".to_string(),
             },
             &policy,
             Some(0),
@@ -1345,10 +1347,10 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::EgressMode { mode } => assert_eq!(mode, "allow"),
+            IpcResponse::EgressMode { mode } => assert_eq!(mode, "allow_all"),
             other => panic!("expected EgressMode, got {other:?}"),
         }
-        assert_eq!(policy.egress_mode(), EgressMode::Allow);
+        assert_eq!(policy.egress_mode(), EgressMode::AllowAll);
     }
 
     #[test]
@@ -1370,7 +1372,7 @@ mod tests {
             IpcResponse::Error { message } => assert!(message.contains("invalid egress mode")),
             other => panic!("expected error, got {other:?}"),
         }
-        assert_eq!(policy.egress_mode(), EgressMode::Block);
+        assert_eq!(policy.egress_mode(), EgressMode::BlockAll);
     }
 
     #[test]
@@ -1387,7 +1389,7 @@ mod tests {
             std::time::Instant::now(),
         );
         match resp {
-            IpcResponse::EgressMode { mode } => assert_eq!(mode, "block"),
+            IpcResponse::EgressMode { mode } => assert_eq!(mode, "block_all"),
             other => panic!("expected EgressMode, got {other:?}"),
         }
         policy.set_egress_mode(EgressMode::Ask);

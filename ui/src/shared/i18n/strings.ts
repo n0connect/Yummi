@@ -99,11 +99,17 @@ const en = {
   'gateway.egressModeTitle': 'Egress Mode',
   'gateway.egressModeGroupAriaLabel': 'Egress mode',
   'gateway.egress.block.label': 'Block All',
-  'gateway.egress.block.hint': 'The sandbox cannot reach the outside network (fail-closed).',
+  'gateway.egress.block.hint': 'Complete lockdown: all outbound traffic is dropped, ignoring active allow rules.',
+  'gateway.egress.blockAll.label': 'Block All',
+  'gateway.egress.blockAll.hint': 'Complete lockdown: all outbound traffic is dropped, ignoring active allow rules.',
+  'gateway.egress.blockExceptRules.label': 'Block Except Active Rules',
+  'gateway.egress.blockExceptRules.hint': 'Outbound traffic is blocked by default; only explicit active allow rules are permitted.',
   'gateway.egress.allow.label': 'Allow All',
   'gateway.egress.allow.hint': 'The sandbox can freely reach the outside network.',
+  'gateway.egress.allowAll.label': 'Allow All',
+  'gateway.egress.allowAll.hint': 'The sandbox can freely reach the outside network.',
   'gateway.egress.ask.label': 'Ask Every Time',
-  'gateway.egress.ask.hint': 'Operator approval is required for every external access.',
+  'gateway.egress.ask.hint': 'Operator approval is required for every new destination.',
   'gateway.notConfigured': 'Gateway is not configured.',
   'gateway.unreachableShort': 'Gateway is unreachable.',
   'gateway.hostnamePolicyTitle': 'Hostname Policy',
@@ -617,12 +623,18 @@ const tr = {
   'gateway.unreachableBody': 'Yummi runtime çalıştığında ağ politikaları ve denetim kayıtları burada otomatik görünecek.',
   'gateway.egressModeTitle': 'Çıkış Modu',
   'gateway.egressModeGroupAriaLabel': 'Çıkış modu',
-  'gateway.egress.block.label': 'Tümü Engellensin',
-  'gateway.egress.block.hint': 'Sandbox dış ağa erişemez (fail-closed).',
+  'gateway.egress.block.label': 'Tümünü Engelle',
+  'gateway.egress.block.hint': 'Tam karantina: aktif kurallar dahil tüm giden ağ trafiği engellenir.',
+  'gateway.egress.blockAll.label': 'Tümünü Engelle',
+  'gateway.egress.blockAll.hint': 'Tam karantina: aktif kurallar dahil tüm giden ağ trafiği engellenir.',
+  'gateway.egress.blockExceptRules.label': 'Aktif Kurallar Hariç Engelle',
+  'gateway.egress.blockExceptRules.hint': 'Giden ağ trafiği varsayılan olarak engellenir; yalnızca aktif izin kurallarına izin verilir.',
   'gateway.egress.allow.label': 'Tümüne İzin Ver',
   'gateway.egress.allow.hint': 'Sandbox dış ağa serbestçe erişebilir.',
+  'gateway.egress.allowAll.label': 'Tümüne İzin Ver',
+  'gateway.egress.allowAll.hint': 'Sandbox dış ağa serbestçe erişebilir.',
   'gateway.egress.ask.label': 'Her Erişimde Sor',
-  'gateway.egress.ask.hint': 'Her dış erişim için operatör onayı istenir.',
+  'gateway.egress.ask.hint': 'Her yeni dış hedef için operatör onayı istenir.',
   'gateway.notConfigured': 'Gateway yapılandırılmamış.',
   'gateway.unreachableShort': 'Gateway erişilemez.',
   'gateway.hostnamePolicyTitle': 'Hostname Politikası',
@@ -1045,10 +1057,11 @@ export type StringKey = keyof typeof en
 // itself reads a dictionary directly; every call site goes through t().
 export const dictionaries: Record<Lang, Record<StringKey, string>> = { en, tr }
 
-// Resolved once at module load from the build-time env var. Defaults to
-// 'en' (matching the project default in .yummi.conf, Makefile, and Dockerfile);
-// resolves to 'tr' only when explicitly configured.
-export const LANG: Lang = import.meta.env.VITE_YUMMI_LANG === 'tr' ? 'tr' : 'en'
+// Resolved once at module load from the build-time env var. Anything other
+// than exactly "en" defaults to "tr" — matches the Makefile's own default
+// (YUMMI_LANG ?= en propagates here, but a dev running `npm run dev` with no
+// env at all gets the app's historical default language, not a blank one).
+export const LANG: Lang = import.meta.env.VITE_YUMMI_LANG === 'en' ? 'en' : 'tr'
 
 /** Looks up a UI string in the active build-time language. */
 export function t(key: StringKey): string {

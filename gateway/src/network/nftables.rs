@@ -112,7 +112,7 @@ impl NftablesController {
             last_error: RwLock::new(None),
             dynamic_targets: RwLock::new(HashMap::new()),
             mutation: Mutex::new(()),
-            egress_mode: RwLock::new(EgressMode::Block),
+            egress_mode: RwLock::new(EgressMode::BlockAll),
         }
     }
 
@@ -515,7 +515,13 @@ impl NftablesController {
         // in Ask mode. An operator who wants a true no-exceptions lockdown
         // removes or lets expire the specific rules first (GATEWAY tab), or
         // the config's static allow list.
-        if mode != EgressMode::Allow {
+        // BlockExceptRules and Ask modes honor explicit allow rules: the static
+        // config allow list and the dynamic @allowed_targets set (populated by
+        // AddTemporaryRule/AddManualRule).
+        // BlockAll mode is a hard kill-switch / lockdown: it omits all allow
+        // rules, dropping all sandbox outbound traffic.
+        // AllowAll mode uses a blanket-accept rule below.
+        if mode == EgressMode::BlockExceptRules || mode == EgressMode::Ask {
             for cidr in &self.allow_cidrs {
                 if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
                     let safe = net.to_string();
@@ -537,12 +543,11 @@ impl NftablesController {
         // DNS is always permitted so sandbox can resolve target hostnames.
         s.push_str("    udp dport 53 accept\n");
 
-        // Egress mode = Allow: blanket-accept all remaining sandbox-originated
+        // Egress mode = AllowAll: blanket-accept all remaining sandbox-originated
         // egress. Sits AFTER the block rules (so explicit denies + the
         // always-blocked floor still win) and BEFORE the final fail-closed drop,
-        // which is preserved. Block/Ask modes add no blanket accept — Ask relies
-        // on per-target @allowed_targets and Block drops everything.
-        if mode == EgressMode::Allow && !self.sandbox_ip.is_empty() {
+        // which is preserved.
+        if mode == EgressMode::AllowAll && !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
                 s.push_str(&format!("    ip saddr {ip} accept\n"));
             }
@@ -681,7 +686,7 @@ mod tests {
     #[test]
     fn test_replacement_ruleset_deletes_and_recreates_in_one_transaction() {
         let ctrl = NftablesController::new(&test_config());
-        let script = ctrl.build_replacement_ruleset(true, EgressMode::Block);
+        let script = ctrl.build_replacement_ruleset(true, EgressMode::BlockAll);
         assert!(script.starts_with("delete table inet yummi_gateway\n"));
         assert!(script.contains("\ntable inet yummi_gateway {"));
     }
@@ -689,9 +694,9 @@ mod tests {
     #[test]
     fn test_candidate_mode_render_does_not_publish_unapplied_policy() {
         let ctrl = NftablesController::new(&test_config());
-        let candidate = ctrl.build_ruleset_for(EgressMode::Allow);
+        let candidate = ctrl.build_ruleset_for(EgressMode::AllowAll);
         assert!(candidate.contains("ip saddr 172.20.0.10 accept"));
-        assert_eq!(*ctrl.egress_mode.read().unwrap(), EgressMode::Block);
+        assert_eq!(*ctrl.egress_mode.read().unwrap(), EgressMode::BlockAll);
         assert!(!ctrl.build_ruleset().contains("ip saddr 172.20.0.10 accept"));
     }
 
@@ -855,12 +860,19 @@ mod tests {
 
     #[test]
     fn test_blanket_accept_only_in_allow_mode() {
-        // Block (default): no blanket sandbox-saddr accept.
+        // BlockAll (default): no blanket sandbox-saddr accept.
         let ctrl = NftablesController::new(&test_config());
         let blanket = "ip saddr 172.20.0.10 accept";
         assert!(
             !ctrl.build_ruleset().contains(blanket),
-            "Block mode must NOT emit a blanket sandbox accept"
+            "BlockAll mode must NOT emit a blanket sandbox accept"
+        );
+
+        // BlockExceptRules: no blanket accept.
+        *ctrl.egress_mode.write().unwrap() = EgressMode::BlockExceptRules;
+        assert!(
+            !ctrl.build_ruleset().contains(blanket),
+            "BlockExceptRules mode must NOT emit a blanket sandbox accept"
         );
 
         // Ask: still no blanket accept.
@@ -870,12 +882,12 @@ mod tests {
             "Ask mode must NOT emit a blanket sandbox accept"
         );
 
-        // Allow: blanket accept present, and it precedes the final drop.
-        *ctrl.egress_mode.write().unwrap() = EgressMode::Allow;
+        // AllowAll: blanket accept present, and it precedes the final drop.
+        *ctrl.egress_mode.write().unwrap() = EgressMode::AllowAll;
         let ruleset = ctrl.build_ruleset();
         assert!(
             ruleset.contains(blanket),
-            "Allow mode must emit a blanket sandbox accept"
+            "AllowAll mode must emit a blanket sandbox accept"
         );
         let accept_pos = ruleset.find(blanket).unwrap();
         let drop_pos = ruleset.find("yummi_gateway_drop").unwrap();
@@ -895,43 +907,52 @@ mod tests {
         assert!(!ruleset.contains("ip saddr !="));
     }
 
-    // Block mode is the default and means "deny unless explicitly allowed" —
-    // it still honors the static config allow list and the dynamic
-    // @allowed_targets set (an operator-opened GATEWAY-tab rule), same as
-    // Ask mode, so a scoped target is reachable without the operator also
-    // having to flip the separate egress-mode switch (see build_ruleset_for's
-    // own doc comment for the live bug this fixes and what stayed the same:
-    // there is still no blanket accept in Block mode, so anything NOT
-    // explicitly listed is still dropped).
     #[test]
-    fn test_block_mode_honors_explicit_allow_rules() {
-        let ctrl = NftablesController::new(&test_config()); // default mode: Block
+    fn test_block_all_mode_excludes_all_allow_rules() {
+        let ctrl = NftablesController::new(&test_config()); // default mode: BlockAll
         let ruleset = ctrl.build_ruleset();
 
-        // Static config allow list (10.0.0.0/24, 192.168.1.0/24 in test_config) IS honored.
+        // In BlockAll mode, allow list is NOT emitted (complete lockdown)
         assert!(
-            ruleset.contains("10.0.0.0/24 accept") && ruleset.contains("192.168.1.0/24 accept"),
-            "Block mode must still honor the static config allow list:\n{ruleset}"
+            !ruleset.contains("10.0.0.0/24 accept") && !ruleset.contains("192.168.1.0/24 accept"),
+            "BlockAll mode must NOT emit the static config allow list:\n{ruleset}"
         );
-        // Dynamic set (IPC-opened temporary/manual rules) is referenced too.
         assert!(
-            ruleset.contains("@allowed_targets accept")
-                && ruleset.contains("@allowed_targets_v6 accept"),
-            "Block mode must still honor the dynamic allowed_targets set:\n{ruleset}"
+            !ruleset.contains("@allowed_targets accept")
+                && !ruleset.contains("@allowed_targets_v6 accept"),
+            "BlockAll mode must NOT emit the dynamic allowed_targets set:\n{ruleset}"
         );
-        // No blanket accept-everything line — only the explicit lists above.
         assert!(
             !ruleset.contains(&format!("ip saddr {} accept", ctrl.sandbox_ip)),
-            "Block mode must not emit a blanket accept-all line:\n{ruleset}"
+            "BlockAll mode must not emit a blanket accept-all line:\n{ruleset}"
         );
-        // The block (drop) list and the always-on DNS allowance are unaffected.
         assert!(ruleset.contains("ip daddr 127.0.0.0/8 drop"));
         assert!(ruleset.contains("udp dport 53 accept"));
     }
 
-    // Ask mode is documented as relying on the static allow list and
-    // per-target @allowed_targets set (only new/unresolved destinations need
-    // approval) — confirm the allow rules are still emitted there.
+    #[test]
+    fn test_block_except_rules_mode_honors_explicit_allow_rules() {
+        let ctrl = NftablesController::new(&test_config());
+        *ctrl.egress_mode.write().unwrap() = EgressMode::BlockExceptRules;
+        let ruleset = ctrl.build_ruleset();
+
+        assert!(
+            ruleset.contains("10.0.0.0/24 accept") && ruleset.contains("192.168.1.0/24 accept"),
+            "BlockExceptRules mode must honor the static config allow list:\n{ruleset}"
+        );
+        assert!(
+            ruleset.contains("@allowed_targets accept")
+                && ruleset.contains("@allowed_targets_v6 accept"),
+            "BlockExceptRules mode must honor the dynamic allowed_targets set:\n{ruleset}"
+        );
+        assert!(
+            !ruleset.contains(&format!("ip saddr {} accept", ctrl.sandbox_ip)),
+            "BlockExceptRules mode must not emit a blanket accept-all line:\n{ruleset}"
+        );
+        assert!(ruleset.contains("ip daddr 127.0.0.0/8 drop"));
+        assert!(ruleset.contains("udp dport 53 accept"));
+    }
+
     #[test]
     fn test_ask_mode_still_emits_allow_rules() {
         let ctrl = NftablesController::new(&test_config());

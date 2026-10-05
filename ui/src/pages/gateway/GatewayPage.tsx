@@ -5,9 +5,19 @@ import { apiURL } from '../../shared/api/runtime'
 import { t } from '../../shared/i18n/strings'
 import './GatewayPage.css'
 
+function normalizeEgressMode(mode: GatewayEgressMode | string | null | undefined): GatewayEgressMode {
+  if (mode === 'block') return 'block_all'
+  if (mode === 'allow') return 'allow_all'
+  if (mode === 'block_all' || mode === 'block_except_rules' || mode === 'allow_all' || mode === 'ask') {
+    return mode
+  }
+  return 'block_all'
+}
+
 const EGRESS_MODES: { mode: GatewayEgressMode; label: string; hint: string }[] = [
-  { mode: 'block', label: t('gateway.egress.block.label'), hint: t('gateway.egress.block.hint') },
-  { mode: 'allow', label: t('gateway.egress.allow.label'), hint: t('gateway.egress.allow.hint') },
+  { mode: 'block_all', label: t('gateway.egress.blockAll.label'), hint: t('gateway.egress.blockAll.hint') },
+  { mode: 'block_except_rules', label: t('gateway.egress.blockExceptRules.label'), hint: t('gateway.egress.blockExceptRules.hint') },
+  { mode: 'allow_all', label: t('gateway.egress.allowAll.label'), hint: t('gateway.egress.allowAll.hint') },
   { mode: 'ask', label: t('gateway.egress.ask.label'), hint: t('gateway.egress.ask.hint') }
 ]
 
@@ -72,8 +82,10 @@ export function GatewayPage(): JSX.Element {
   const [egressError, setEgressError] = useState<string | null>(null)
   const egressReachable = egressStatus === 'connected'
 
+  const normalizedEgressMode = normalizeEgressMode(egressMode)
+
   async function handleEgressChange(m: GatewayEgressMode) {
-    if (m === egressMode || egressBusy) return
+    if (m === normalizedEgressMode || egressBusy) return
     setEgressBusy(true)
     setEgressError(null)
     try {
@@ -171,9 +183,9 @@ export function GatewayPage(): JSX.Element {
             <button
               key={mode}
               type="button"
-              className={`gateway-egress-btn ${egressMode === mode ? 'active' : ''}`}
+              className={`gateway-egress-btn ${normalizedEgressMode === mode ? 'active' : ''}`}
               disabled={!egressReachable || egressBusy}
-              aria-pressed={egressMode === mode}
+              aria-pressed={normalizedEgressMode === mode}
               onClick={() => handleEgressChange(mode)}
             >
               {label}
@@ -182,7 +194,7 @@ export function GatewayPage(): JSX.Element {
         </div>
         {egressReachable ? (
           <p className="gateway-egress-hint">
-            {EGRESS_MODES.find(m => m.mode === egressMode)?.hint}
+            {EGRESS_MODES.find(m => m.mode === normalizedEgressMode)?.hint}
           </p>
         ) : (
           <p className="gateway-egress-status">

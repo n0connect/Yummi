@@ -4,9 +4,13 @@ import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
 
-function resolveLang(): 'en' | 'tr' {
+function resolveLang(): 'en' | 'tr' | undefined {
   if (process.env.VITE_YUMMI_LANG === 'tr' || process.env.VITE_YUMMI_LANG === 'en') {
     return process.env.VITE_YUMMI_LANG
+  }
+  // During tests (vitest), don't inject .yummi.conf so the test suite runs with default expectations
+  if (process.env.VITEST || process.env.NODE_ENV === 'test') {
+    return undefined
   }
   for (const confPath of [path.resolve(__dirname, '../.yummi.conf'), path.resolve(__dirname, '.yummi.conf')]) {
     if (fs.existsSync(confPath)) {
@@ -16,7 +20,7 @@ function resolveLang(): 'en' | 'tr' {
       }
     }
   }
-  return 'en'
+  return undefined
 }
 
 const activeLang = resolveLang()
@@ -28,9 +32,9 @@ const activeLang = resolveLang()
 // there instead), but the bare dev server has nothing else providing it.
 export default defineConfig({
   plugins: [react()],
-  define: {
+  define: activeLang ? {
     'import.meta.env.VITE_YUMMI_LANG': JSON.stringify(activeLang),
-  },
+  } : {},
   build: {
     // Vite's own default target (chrome87/es2020/safari14/...) predates
     // top-level await, which @novnc/novnc's own source uses (a WebCodecs
