@@ -24,7 +24,8 @@ describe('DesktopPanel', () => {
     render(<DesktopPanel />)
 
     expect(screen.getByText(t('desktopPanel.lockedTitle'))).toBeTruthy()
-    expect(screen.getByText(t('desktopPanel.clickToActivate'))).toBeTruthy()
+    expect(screen.getByText(t('desktopPanel.lockedHint'))).toBeTruthy()
+    expect(screen.getByRole('button', { name: t('desktopPanel.clickToActivate') })).toBeTruthy()
     expect(screen.getByText(t('desktopPanel.standby'))).toBeTruthy()
   })
 
