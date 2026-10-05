@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import type { SessionSummary } from '../../entities/types'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import type { SessionSummary, ServerChatMessage } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { t } from '../../shared/i18n/strings'
 import './SessionRail.css'
@@ -20,6 +20,47 @@ function ConversationIcon({ open }: { open: boolean }): JSX.Element {
           <path d="M7 7.25h6M7 10.25h4M6.25 16.75l-2.5 1v-3.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </>
       )}
+    </svg>
+  )
+}
+
+function PinIcon({ pinned }: { pinned: boolean }): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 11.5h9M8 11.5v3.5M5 11.5V7.5L4 6V4h8v2l-1 1.5v4" />
+    </svg>
+  )
+}
+
+function ExportIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 10.5v2.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2.5M5 6.5l3 3 3-3M8 2v7.5" />
+    </svg>
+  )
+}
+
+function ArchiveIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="3" rx="0.5" />
+      <path d="M3.5 5.5v7.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5.5M6.5 8.5h3" />
+    </svg>
+  )
+}
+
+function TrashIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 4h11M5.5 4V2.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V4M12.5 4v9a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1V4M6.5 7v4M9.5 7v4" />
+    </svg>
+  )
+}
+
+function ConfirmCheckIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 8.5l3 3 6-6" />
     </svg>
   )
 }
@@ -56,6 +97,23 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [query, setQuery] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('yummi_pinned_sessions')
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+    }
+  }, [])
 
   const load = useCallback(() => {
     const controller = new AbortController()
@@ -88,11 +146,121 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onToggle])
 
+  const handleTogglePin = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setPinnedSessionIds(prev => {
+      const isPinned = prev.includes(id)
+      const next = isPinned ? prev.filter(pId => pId !== id) : [id, ...prev]
+      try {
+        localStorage.setItem('yummi_pinned_sessions', JSON.stringify(next))
+      } catch {
+        // ignore storage errors
+      }
+      return next
+    })
+  }, [])
+
+  const handleExport = useCallback(async (s: SessionSummary, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      const msgs = await fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${s.id}/messages?limit=1000`)
+      const lines = [
+        `# Yummi Pentest Session: ${s.name}`,
+        `Session ID: ${s.id}`,
+        `Exported at: ${new Date().toISOString()}`,
+        '',
+        '---',
+        ''
+      ]
+      if (msgs && msgs.length > 0) {
+        for (const m of msgs) {
+          const time = m.created_at ? new Date(m.created_at * 1000).toLocaleString() : ''
+          lines.push(`### [${m.role.toUpperCase()}] ${time}`)
+          lines.push('')
+          lines.push(m.content)
+          lines.push('')
+          lines.push('---')
+          lines.push('')
+        }
+      } else {
+        lines.push('*(No messages recorded in this session)*')
+      }
+      const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const safeName = s.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 30) || 'session'
+      a.download = `yummi-${safeName}-${s.id.slice(0, 8)}.md`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Failed to export session', err)
+    }
+  }, [])
+
+  const handleArchive = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await fetchJSON(`/api/v1/sessions/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'closed' })
+      })
+      setSessions(prev => prev.filter(s => s.id !== id))
+      if (id === activeSessionID) {
+        onNewChat?.()
+      }
+    } catch (err) {
+      console.error('Failed to archive session', err)
+    }
+  }, [activeSessionID, onNewChat])
+
+  const handleDelete = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id)
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = setTimeout(() => {
+        setConfirmDeleteId(null)
+      }, 3500)
+      return
+    }
+    if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+    setConfirmDeleteId(null)
+    try {
+      await fetchJSON(`/api/v1/sessions/${id}`, { method: 'DELETE' })
+      setSessions(prev => prev.filter(s => s.id !== id))
+      setPinnedSessionIds(prev => {
+        const next = prev.filter(pId => pId !== id)
+        try {
+          localStorage.setItem('yummi_pinned_sessions', JSON.stringify(next))
+        } catch {
+          // ignore storage errors
+        }
+        return next
+      })
+      if (id === activeSessionID) {
+        onNewChat?.()
+      }
+    } catch (err) {
+      console.error('Failed to delete session', err)
+    }
+  }, [confirmDeleteId, activeSessionID, onNewChat])
+
   const filteredSessions = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('tr-TR')
-    if (!needle) return sessions
-    return sessions.filter(session => session.name.toLocaleLowerCase('tr-TR').includes(needle))
-  }, [query, sessions])
+    const list = needle
+      ? sessions.filter(session => session.name.toLocaleLowerCase('tr-TR').includes(needle))
+      : sessions
+    return [...list].sort((a, b) => {
+      const aPinned = pinnedSessionIds.includes(a.id)
+      const bPinned = pinnedSessionIds.includes(b.id)
+      if (aPinned && !bPinned) return -1
+      if (!aPinned && bPinned) return 1
+      return (b.updated_at ?? 0) - (a.updated_at ?? 0)
+    })
+  }, [query, sessions, pinnedSessionIds])
 
   return (
     <>
@@ -165,24 +333,78 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
           {!error && !loading && sessions.length > 0 && filteredSessions.length === 0 && (
             <div className="rail-empty">{t('sessionRail.noSearchResults')}</div>
           )}
-          {filteredSessions.map(s => (
-            <button
-              key={s.id}
-              className={`rail-item ${s.id === activeSessionID ? 'active' : ''}`}
-              onClick={() => onSelect(s.id)}
-              title={s.name}
-              aria-current={s.id === activeSessionID ? 'true' : undefined}
-            >
-              <span className="rail-item-main">
-                <span className="rail-item-name">{s.name}</span>
-                <span className="rail-item-meta">
-                  <span className={`rail-item-dot ${s.id === activeSessionID ? 'active' : ''}`} />
-                  {s.id === activeSessionID ? t('sessionRail.activeSession') : t('sessionRail.recentActivity')}
+          {filteredSessions.map(s => {
+            const isPinned = pinnedSessionIds.includes(s.id)
+            const isConfirming = confirmDeleteId === s.id
+            return (
+              <div
+                key={s.id}
+                className={`rail-item ${s.id === activeSessionID ? 'active' : ''} ${isPinned ? 'pinned' : ''}`}
+                onClick={() => onSelect(s.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(s.id) } }}
+                title={s.name}
+                aria-current={s.id === activeSessionID ? 'true' : undefined}
+              >
+                <span className="rail-item-main">
+                  <span className="rail-item-name">{s.name}</span>
+                  <span className="rail-item-meta">
+                    <span className={`rail-item-dot ${s.id === activeSessionID ? 'active' : ''}`} />
+                    {s.id === activeSessionID ? t('sessionRail.activeSession') : t('sessionRail.recentActivity')}
+                  </span>
                 </span>
-              </span>
-              <span className="rail-item-when">{shortWhen(s.updated_at)}</span>
-            </button>
-          ))}
+                <div className="rail-item-side">
+                  <div className="rail-item-info">
+                    {isPinned && (
+                      <svg className="rail-pin-badge" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M3.5 11.5h9M8 11.5v3.5M5 11.5V7.5L4 6V4h8v2l-1 1.5v4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                      </svg>
+                    )}
+                    <span className="rail-item-when">{shortWhen(s.updated_at)}</span>
+                  </div>
+                  <div className="rail-item-actions" onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className={`rail-action-btn ${isPinned ? 'active' : ''}`}
+                      onClick={(e) => handleTogglePin(s.id, e)}
+                      title={isPinned ? t('sessionRail.unpin') : t('sessionRail.pin')}
+                      aria-label={isPinned ? t('sessionRail.unpin') : t('sessionRail.pin')}
+                    >
+                      <PinIcon pinned={isPinned} />
+                    </button>
+                    <button
+                      type="button"
+                      className="rail-action-btn"
+                      onClick={(e) => void handleExport(s, e)}
+                      title={t('sessionRail.export')}
+                      aria-label={t('sessionRail.export')}
+                    >
+                      <ExportIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="rail-action-btn"
+                      onClick={(e) => void handleArchive(s.id, e)}
+                      title={t('sessionRail.archive')}
+                      aria-label={t('sessionRail.archive')}
+                    >
+                      <ArchiveIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className={`rail-action-btn rail-action-delete ${isConfirming ? 'confirming' : ''}`}
+                      onClick={(e) => void handleDelete(s.id, e)}
+                      title={isConfirming ? t('sessionRail.confirmDelete') : t('sessionRail.delete')}
+                      aria-label={isConfirming ? t('sessionRail.confirmDelete') : t('sessionRail.delete')}
+                    >
+                      {isConfirming ? <ConfirmCheckIcon /> : <TrashIcon />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </aside>
     </>

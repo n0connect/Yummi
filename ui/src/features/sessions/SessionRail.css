@@ -242,8 +242,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
-  padding: 10px 14px;
+  gap: var(--space-xs);
+  padding: 8px 12px;
   margin-bottom: 5px;
   background: var(--wash-faint);
   border: 1px solid transparent;
@@ -252,18 +252,22 @@
   cursor: pointer;
   text-align: left;
   transition: all var(--transition-fast);
+  position: relative;
+  user-select: none;
 }
 .rail-item:hover {
   background: var(--wash-medium);
   border-color: var(--border-subtle);
   color: var(--text-primary);
-  transform: translateX(1px);
 }
 .rail-item.active {
   background: rgba(45, 212, 191, 0.08);
   border-color: rgba(45, 212, 191, 0.28);
   color: var(--text-primary);
   box-shadow: 0 0 14px -3px var(--accent-soft);
+}
+.rail-item.pinned {
+  border-left: 2px solid var(--accent);
 }
 .rail-item-main {
   flex: 1;
@@ -300,11 +304,96 @@
   background: var(--accent);
   box-shadow: 0 0 7px var(--accent-glow);
 }
-.rail-item-when {
+
+.rail-item-side {
   flex-shrink: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 24px;
+}
+.rail-item-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: opacity var(--transition-fast);
+}
+.rail-pin-badge {
+  width: 10px;
+  height: 10px;
+  color: var(--accent);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.rail-item-when {
   font-size: 10px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  align-self: flex-start;
   padding-top: 1px;
+}
+
+.rail-item-actions {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+  background: var(--bg-base);
+  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.rail-item:hover .rail-item-actions,
+.rail-item:focus-within .rail-item-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.rail-item:hover .rail-item-info,
+.rail-item:focus-within .rail-item-info {
+  opacity: 0;
+}
+
+.rail-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 3px !important;
+  color: var(--text-muted) !important;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: none !important;
+}
+.rail-action-btn:hover {
+  background: var(--wash-medium) !important;
+  color: var(--text-primary) !important;
+}
+.rail-action-btn.active {
+  color: var(--accent) !important;
+}
+.rail-action-delete:hover {
+  color: var(--red, #f87171) !important;
+  background: rgba(239, 68, 68, 0.15) !important;
+}
+.rail-action-delete.confirming {
+  color: #fff !important;
+  background: var(--red, #ef4444) !important;
+  animation: pulseConfirm 1.2s infinite;
+}
+@keyframes pulseConfirm {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
 }

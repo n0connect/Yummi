@@ -55,6 +55,12 @@ const en = {
   'sessionRail.noSearchResults': 'No conversations match this search.',
   'sessionRail.activeSession': 'Active session',
   'sessionRail.recentActivity': 'Recent activity',
+  'sessionRail.pin': 'Pin conversation',
+  'sessionRail.unpin': 'Unpin conversation',
+  'sessionRail.export': 'Export conversation',
+  'sessionRail.archive': 'Archive conversation',
+  'sessionRail.delete': 'Delete conversation',
+  'sessionRail.confirmDelete': 'Click again to confirm deletion',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
   'debugLog.title': 'Debug Log',
@@ -596,6 +602,12 @@ const tr = {
   'sessionRail.noSearchResults': 'Bu aramayla eşleşen sohbet bulunamadı.',
   'sessionRail.activeSession': 'Açık oturum',
   'sessionRail.recentActivity': 'Son etkinlik',
+  'sessionRail.pin': 'Sohbeti başa sabitle',
+  'sessionRail.unpin': 'Sabitlemeyi kaldır',
+  'sessionRail.export': 'Sohbeti dışa aktar',
+  'sessionRail.archive': 'Sohbeti arşivle',
+  'sessionRail.delete': 'Sohbeti sil',
+  'sessionRail.confirmDelete': 'Silmek için tekrar tıklayın',
 
   // ── DebugLogPanel ───────────────────────────────────────────────────────
   'debugLog.title': 'Debug Günlüğü',
