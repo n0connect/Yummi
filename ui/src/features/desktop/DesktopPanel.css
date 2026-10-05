@@ -7,6 +7,10 @@
   background: #0a0c0e;
 }
 
+.desktop-body-locked {
+  cursor: pointer;
+}
+
 /* RFB.js mounts its canvas here and manages the canvas's own size —
    scaleViewport (set in DesktopPanel.tsx) fits the remote 1600x900
    desktop into whatever space this container has. */
@@ -27,6 +31,29 @@
   height: 100vh;
 }
 
+.desktop-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.desktop-hide-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--wash-soft);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  transition: all var(--transition-fast);
+}
+
+.desktop-hide-btn:hover {
+  background: var(--wash-medium);
+  color: var(--text-primary);
+  border-color: var(--border-medium);
+}
+
 .desktop-fullscreen-btn { flex-shrink: 0; }
 
 .desktop-status-label {
@@ -34,6 +61,103 @@
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   font-weight: 400;
+}
+
+/* ─── Locked / Hidden Standby State ─────────────────────────────────────────── */
+.desktop-locked-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgba(16, 20, 24, 0.94) 0%, rgba(8, 10, 12, 0.98) 100%);
+  cursor: pointer;
+  z-index: 10;
+  padding: var(--space-xl);
+  backdrop-filter: blur(8px);
+  user-select: none;
+  animation: desktopFadeIn 150ms ease-out;
+}
+
+@keyframes desktopFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.desktop-locked-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-md);
+  padding: 36px 40px;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  max-width: 460px;
+  width: 100%;
+  transition: all var(--transition-fast);
+}
+
+.desktop-locked-overlay:hover .desktop-locked-card {
+  border-color: var(--accent);
+  border-style: solid;
+  box-shadow: 0 0 28px -4px var(--accent-soft), 0 16px 40px rgba(0, 0, 0, 0.6);
+  transform: translateY(-2px);
+}
+
+.desktop-locked-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--wash-soft);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  transition: all var(--transition-fast);
+}
+
+.desktop-locked-overlay:hover .desktop-locked-icon {
+  color: var(--accent);
+  border-color: rgba(45, 212, 191, 0.4);
+  background: var(--accent-soft);
+  transform: scale(1.06);
+}
+
+.desktop-locked-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.desktop-locked-hint {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.desktop-locked-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: var(--space-xs);
+  padding: 8px 20px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 12px var(--accent-glow);
+  pointer-events: none;
 }
 
 .desktop-unavailable {
@@ -47,6 +171,7 @@
   background: var(--bg-base);
   padding: var(--space-xl);
   text-align: center;
+  z-index: 11;
 }
 .desktop-unavailable-title {
   margin: 0;
