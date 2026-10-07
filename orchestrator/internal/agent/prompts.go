@@ -41,6 +41,13 @@ type Action struct {
 	// FindingsDetail is the optional rich form of findings. The brain MAY emit
 	// these; when absent, freetext Findings are wrapped as info notes instead.
 	FindingsDetail []FindingDetail `json:"findings_detail,omitempty"`
+
+	// Tool/Args carry an [MCP_TOOL]: dispatch the named sandbox-mcp tool
+	// (cataloged pentest tool or terminal-session verb) with these arguments,
+	// through the exact same execution/scope/threatscan pipeline RUN_COMMAND
+	// uses — see node_tool.go's toolNode. Mutually exclusive with Command.
+	Tool string         `json:"tool,omitempty"`
+	Args map[string]any `json:"args,omitempty"`
 }
 
 // HandoffSpec is one delegation target inside a fan-out [HANDOFF]'s
@@ -555,12 +562,31 @@ plan. Example:
 // persona prose comes entirely from the persona document; the code appends only
 // the protocol contract. Network scope is enforced transparently by gateway and
 // is no longer injected into the prompt.
-func StepSystemPrompt(persona AgentPersona) string {
+//
+// mcpCatalog, when non-empty, is one compact line of tool names (see
+// main.go's buildMCPCatalogLine) appended after the protocol reference — NOT
+// per-tool JSON schemas. Every step re-renders this whole prompt from
+// scratch (graph never relies on conversation history), so anything added
+// here is paid for on EVERY turn, not once: a verbose per-tool breakdown
+// would noticeably eat a local model's context window over a long task.
+// The model already knows common tool flags from pretraining (same
+// rationale as the persona's "no catalogue needed" stance on shell tools);
+// MCP_TOOL's own registry Payload tells it args is a best-guess JSON object
+// that a validation error will correct if wrong, so no schema dump is
+// needed here either.
+//
+// localModel gates ProtocolReference's extra MCP_TOOL worked example — see
+// that function's doc comment. false reproduces this function's exact
+// pre-existing output (cloud models, and local before this existed).
+func StepSystemPrompt(persona AgentPersona, mcpCatalog string, localModel bool) string {
 	var b strings.Builder
 	b.WriteString(persona.Identity)
 	if p := strings.TrimSpace(persona.Principles); p != "" {
 		b.WriteString("\n\nREASONING PRINCIPLES:\n" + p)
 	}
-	b.WriteString("\n\n" + ProtocolReference())
+	b.WriteString("\n\n" + ProtocolReference(localModel))
+	if mcpCatalog != "" {
+		b.WriteString("\n\nMCP TOOLS — dispatch any of these via [MCP_TOOL] (name, then args as a best-guess flat JSON object):\n" + mcpCatalog)
+	}
 	return b.String()
 }

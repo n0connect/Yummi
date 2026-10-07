@@ -88,7 +88,7 @@ func TestHandleEventsWSDeliversChatStreamDeltas(t *testing.T) {
 		}
 	}()
 
-	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil)
+	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil, 90*time.Second)
 	body := `{"message":"hello","session_id":"default"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

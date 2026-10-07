@@ -227,10 +227,49 @@ func parseOptionalBool(v string) *bool {
 	return &b
 }
 
-// RequestTimeout returns the default HTTP request timeout.
-// LLM inference (e.g. qwen3:8b) can exceed 30 s on CPU; 3 min gives headroom.
+// usesCloudModel reports whether an operator has opted the conductor/agent
+// loop into a cloud override (YUMMI_EINO_MODEL_BASE_URL) — the same
+// "full stop, not just for Eino" decision conductor.NewEngineWithOverrides'
+// CloudBaseURL plumbing already makes (see cmd/orchestrator/main.go). Local
+// and cloud HTTP timeouts in this file are derived from this single check
+// so they can never drift relative to each other, and so a local-model fix
+// never silently loosens the cloud path's own failure-detection latency.
+func (c *Config) usesCloudModel() bool {
+	return c.EinoModelBaseURL != ""
+}
+
+// UsesLocalModel is usesCloudModel's exported negation, for callers outside
+// this package (main.go's agent.Config.LocalModel wiring) that need the
+// same single source of truth rather than re-deriving it from the raw
+// EinoModelBaseURL field.
+func (c *Config) UsesLocalModel() bool {
+	return !c.usesCloudModel()
+}
+
+// RequestTimeout returns the router-wide non-WebSocket request timeout
+// (TimeoutUnlessWebSocket middleware, applied to every route).
+// 3 minutes is already generous for a cloud call. A local model needs more:
+// live-reproduced on a real 20B model under genuine load, a chat turn that
+// chains conductor's intent classification + CreateAndPlan's planning call
+// (+ its one parse-retry) blew well past the OLD flat 90s chat-handler
+// budget — this router-wide ceiling must be raised in lockstep with
+// ChatTimeout below, or it fires first and the inner fix is moot.
 func (c *Config) RequestTimeout() time.Duration {
-	return 3 * time.Minute
+	if c.usesCloudModel() {
+		return 3 * time.Minute
+	}
+	return 270 * time.Second
+}
+
+// ChatTimeout returns the /api/v1/chat handler's own context deadline —
+// see RequestTimeout's doc comment for why local needs far more budget than
+// cloud, and HandleChat's doc comment for why this must stay a few seconds
+// below RequestTimeout (the router-wide ceiling) rather than equal to it.
+func (c *Config) ChatTimeout() time.Duration {
+	if c.usesCloudModel() {
+		return 90 * time.Second
+	}
+	return 240 * time.Second
 }
 
 // ResolvedEinoProvider returns the effective provider for Eino ("ollama", "openrouter", "openai").

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
@@ -162,7 +163,7 @@ func TestHandleCreateFindingValidation(t *testing.T) {
 }
 
 func TestHandleChatValidation(t *testing.T) {
-	h := HandleChat(nil, nil, nil, nil, nil) // Assistant panel unavailable
+	h := HandleChat(nil, nil, nil, nil, nil, 90*time.Second) // Assistant panel unavailable
 
 	// Over-length message
 	longMsg := strings.Repeat("M", 10001)

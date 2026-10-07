@@ -4,7 +4,89 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
+
+// TestTargetReminder_LiveReproducedScenario is the regression test for a
+// live-reproduced failure: jinx-20b, given a goal naming 198.51.100.10,
+// targeted 127.0.0.1 four times in a row instead (gateway blocked every
+// attempt — never a security issue, just a wasted task). Proves the IP is
+// extracted correctly from the EXACT prose shape that failed, and that
+// buildPreamble only adds this reminder for a local model.
+func TestTargetReminder_LiveReproducedScenario(t *testing.T) {
+	goal := "Start a full autonomous pentest task against 198.51.100.10. The target is an authorized lab box: 1) Enumerate the web server and its version 2) Find and exploit a known vulnerability for initial code execution 3) Escalate privileges to root 4) Read /home/user.txt and /root/root.txt and report their exact contents as proof."
+	got := targetReminder(goal)
+	if !strings.Contains(got, "198.51.100.10") {
+		t.Fatalf("expected the reminder to carry the real target, got %q", got)
+	}
+	if strings.Contains(got, "198.51.100.10.") {
+		t.Fatalf("expected the trailing sentence period to be stripped from the IP, got %q", got)
+	}
+
+	store, _ := NewStore(openTestDB(t))
+	task, _ := store.Create("s", goal, 5)
+
+	cloud := &GraphState{store: store, cfg: Config{}}
+	if p := cloud.buildPreamble(context.Background(), task); strings.Contains(p, "TARGET:") {
+		t.Errorf("cloud (LocalModel=false) must not get the target reminder, got: %s", p)
+	}
+	local := &GraphState{store: store, cfg: Config{LocalModel: true}}
+	if p := local.buildPreamble(context.Background(), task); !strings.Contains(p, "TARGET: 198.51.100.10") {
+		t.Errorf("local model must get the target reminder, got: %s", p)
+	}
+}
+
+// TestTargetReminder_NoClearTargetIsEmpty proves this never guesses — a
+// goal with no IPv4 address (hostname, or no target at all) yields no
+// reminder rather than fabricating one.
+func TestTargetReminder_NoClearTargetIsEmpty(t *testing.T) {
+	for _, goal := range []string{
+		"enumerate the staging environment at example.internal",
+		"summarize the findings so far",
+	} {
+		if got := targetReminder(goal); got != "" {
+			t.Errorf("goal %q: expected no reminder, got %q", goal, got)
+		}
+	}
+}
+
+// TestBuildSkills_LocalModelBoundsEachSkillsRenderedLength is the
+// regression test for a live-reproduced context-bloat bug: real skill
+// playbooks run up to ~12KB of Knowledge text (persona/v0.1/skills/
+// osint-enum.yaml), and buildSkills re-renders up to 3 selected skills in
+// full on EVERY step for a task's whole duration — tokens_used was
+// observed in the 7-10K range before a single real tool had even run.
+// localSkillCharCap bounds this per skill, but ONLY when cfg.LocalModel —
+// a cloud model (and local before this existed) must still get each
+// skill's full, untruncated text.
+func TestBuildSkills_LocalModelBoundsEachSkillsRenderedLength(t *testing.T) {
+	bigKnowledge := strings.Repeat("x", 5000)
+	reg := skill.New([]skill.Skill{
+		{Name: "big-skill", Description: "test", Triggers: []string{"recon"}, Knowledge: bigKnowledge},
+	})
+
+	store, _ := NewStore(openTestDB(t))
+	task, _ := store.Create("s", "recon the target", 5)
+
+	cloud := &GraphState{store: store, cfg: Config{Skills: reg}}
+	cloudRendered := cloud.buildSkills(task)
+	if !strings.Contains(cloudRendered, bigKnowledge) {
+		t.Errorf("cloud (LocalModel=false) must render the skill's full, untruncated knowledge")
+	}
+
+	local := &GraphState{store: store, cfg: Config{Skills: reg, LocalModel: true}}
+	localRendered := local.buildSkills(task)
+	if strings.Contains(localRendered, bigKnowledge) {
+		t.Errorf("local model must NOT get the skill's full 5000-char knowledge verbatim")
+	}
+	if len(localRendered) > localSkillCharCap+200 { // +200: header line, truncation marker
+		t.Errorf("local model's rendered skill block is %d chars, want roughly <= %d", len(localRendered), localSkillCharCap)
+	}
+	if !strings.Contains(localRendered, "big-skill") {
+		t.Errorf("truncation must still keep the skill's name, got: %s", localRendered)
+	}
+}
 
 // TestStepNodePrematureFinishBouncedThenObeyed verifies the premature-FINISH
 // guard: a FINISH emitted while a plan step is still pending is bounced once

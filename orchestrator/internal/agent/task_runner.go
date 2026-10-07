@@ -65,5 +65,10 @@ type BackendCapabilities struct {
 	RetrievalModel         string       `json:"retrieval_model"`
 	SkillsEnabled          bool         `json:"skills_enabled"`
 	SkillCount             int          `json:"skill_count"`
-	SkillGovernance        string       `json:"skill_governance"`
+	// ContextWindow is the model's actual resolved num_ctx (tokens) for the
+	// currently running backend — graph derives it from TokenBudget*2 (see
+	// main.go's resolvedNumCtx/2 assignment), eino reports its ModelNumCtx
+	// directly. Lets the UI show a real budget instead of a hardcoded guess.
+	ContextWindow   int    `json:"context_window"`
+	SkillGovernance string `json:"skill_governance"`
 }

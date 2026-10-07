@@ -93,7 +93,7 @@ func applyStartTask(ctx context.Context, resp conductor.ChatResponse, sessionID 
 	return resp
 }
 
-func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore, sm *session.Manager, taskRunner agent.TaskRunner, taskStore *agent.Store) http.HandlerFunc {
+func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore, sm *session.Manager, taskRunner agent.TaskRunner, taskStore *agent.Store, chatTimeout time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Message   string `json:"message"`
@@ -236,10 +236,17 @@ func HandleChat(assistant *conductor.Engine, approvals *conductor.ApprovalStore,
 			appendLatestTerminalTaskOutcome(assistant, taskStore, sessionID)
 		}
 
-		// 90s budget covers the default gpt-oss:20b on CPU-constrained hosts;
-		// the server WriteTimeout (120s) leaves a 30s margin for response
-		// serialisation.
-		chatCtx, chatCancel := context.WithTimeout(r.Context(), 90*time.Second)
+		// chatTimeout is caller-supplied (main.go), not hardcoded here, because
+		// it must differ by a full order of magnitude between a cloud and a
+		// local model: a real OpenRouter call returns in seconds regardless of
+		// prompt size, while this handler's one request can chain THREE
+		// sequential local LLM calls worst case (conductor's own intent
+		// classification, CreateAndPlan's planning call, and its one
+		// parse-retry) — live-reproduced failing at the old flat 90s on a
+		// real local 20B model under genuine (non-pathological) load. The
+		// server's WriteTimeout is sized in lockstep with this value (see
+		// main.go) to keep the same ~30s serialization margin either way.
+		chatCtx, chatCancel := context.WithTimeout(r.Context(), chatTimeout)
 		defer chatCancel()
 
 		var resp conductor.ChatResponse
@@ -401,7 +408,12 @@ func persistChatTurn(sm *session.Manager, sessionID, userMessage string, resp co
 	}
 }
 
-func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution.Store, sm *session.Manager) http.HandlerFunc {
+// mcpToolHints maps a cataloged MCP tool name to its comma-joined argument
+// field names (main.go's mcpSchemaHints, the same map agent.Config.
+// MCPSchemaHints carries for the graph loop) — nil-safe, so a deployment
+// with no sandbox-mcp catalog available just keeps today's shell-only
+// behavior.
+func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution.Store, sm *session.Manager, mcpToolHints map[string]string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if approvals == nil {
 			writeError(w, http.StatusServiceUnavailable, "approval subsystem unavailable", nil)
@@ -451,7 +463,19 @@ func HandleChatApprove(approvals *conductor.ApprovalStore, executions *execution
 		assistantMessage := "Proposal approved. Run in terminal."
 		if executions != nil {
 			ctx := execution.ContextWithRationale(r.Context(), item.Proposal.Rationale)
-			rec, err := executions.Enqueue(ctx, sessionID, item.Proposal.ID, item.Proposal.Command, "assistant_loop")
+			// The conductor's single-command suggestion flow has no [MCP_TOOL]
+			// concept at all — if the model suggested a cataloged tool name
+			// (e.g. "term_open --label check1"), approving it would otherwise
+			// always shell-exec and 127-fail, exactly the failure the graph
+			// loop's own InferMCPToolFromShellGuess already corrects. Same
+			// detection, reused rather than re-implemented.
+			var rec execution.Record
+			var err error
+			if tool, args, ok := agent.InferMCPToolFromShellGuess(item.Proposal.Command, mcpToolHints); ok {
+				rec, err = executions.EnqueueMCP(ctx, sessionID, item.Proposal.ID, tool, args, item.Proposal.Command, "assistant_loop")
+			} else {
+				rec, err = executions.Enqueue(ctx, sessionID, item.Proposal.ID, item.Proposal.Command, "assistant_loop")
+			}
 			if err != nil {
 				slog.Warn("approve: enqueue failed; falling back to manual terminal",
 					"session", sessionID, "proposal", item.Proposal.ID, "error", err)

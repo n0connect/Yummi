@@ -667,16 +667,41 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		// to catch. Both cases mean the same thing operationally: this run
 		// produced its last action, decide now whether that was premature.
 		believesFinished := called || lastMessage != nil
-		if believesFinished && nudgeCount < maxNudges && len(enumParts) >= 2 && r.cfg.PlanLLM != nil {
-			if uncovered := auditFinishCoverage(ctx, r.cfg.PlanLLM, enumParts, summary, trace); len(uncovered) > 0 {
+		if believesFinished && nudgeCount < maxNudges && len(enumParts) >= 2 {
+			// Deterministic floor, checked BEFORE the LLM audit below: a
+			// multi-part goal finished with literally zero real tool calls
+			// is never legitimately complete, and this is exactly the
+			// failure mode the LLM audit can't be trusted to catch for a
+			// pure-local deployment — r.cfg.PlanLLM, absent a
+			// YUMMI_EINO_MODEL_* cloud override, resolves to the SAME local
+			// model that just hallucinated the finish, auditing its own
+			// fabrication. Live-reproduced: a 4-part goal against
+			// jinx-20b (an uncensored gpt-oss-20b fine-tune) called finish
+			// on turn 1 with a fully fabricated nmap/CVE/exploit/flag
+			// narrative and zero execution records. No LLM judgment needed
+			// to catch "zero tool calls" — skip the circular self-audit
+			// entirely in this case.
+			if len(trace.pairs()) == 0 {
 				nudgeCount++
-				openingMessage = buildIncompleteGoalsMessage(t.Goal, uncovered, trace)
+				openingMessage = buildIncompleteGoalsMessage(t.Goal, enumParts, trace)
 				r.store.RecordActivity(agent.ActivityEvent{
 					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
-					Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing (%d/%d nudges)",
-						len(uncovered), len(enumParts), nudgeCount, maxNudges),
+					Summary: fmt.Sprintf("finish reached with ZERO tool calls for a %d-part goal — forcing continuation (%d/%d nudges)",
+						len(enumParts), nudgeCount, maxNudges),
 				})
 				continue
+			}
+			if r.cfg.PlanLLM != nil {
+				if uncovered := auditFinishCoverage(ctx, r.cfg.PlanLLM, enumParts, summary, trace); len(uncovered) > 0 {
+					nudgeCount++
+					openingMessage = buildIncompleteGoalsMessage(t.Goal, uncovered, trace)
+					r.store.RecordActivity(agent.ActivityEvent{
+						SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+						Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing (%d/%d nudges)",
+							len(uncovered), len(enumParts), nudgeCount, maxNudges),
+					})
+					continue
+				}
 			}
 		}
 		// Same gap as ask_operator above, but worse here: finish is also
@@ -1222,5 +1247,6 @@ func (r *EinoRunner) Capabilities() agent.BackendCapabilities {
 		MemoryEnabled: cfg.Knowledge != nil && cfg.Retrieval != nil, RetrievalModel: retrieval,
 		SkillsEnabled: cfg.Skills != nil, SkillCount: skillCount,
 		SkillGovernance: "versioned_threat_scanned_operator_approved",
+		ContextWindow:   cfg.ModelNumCtx,
 	}
 }

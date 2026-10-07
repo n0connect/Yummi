@@ -39,6 +39,16 @@ type OpenAIChatClient struct {
 // or "https://openrouter.ai/api/v1").
 func NewOpenAIChatClient(baseURL, model, apiKey string, numCtx int, timeout time.Duration) *OpenAIChatClient {
 	if timeout <= 0 {
+		// 60s is the right unspecified-default: this client is shared by
+		// BOTH a local Ollama OpenAI-compat target and a real OpenRouter/
+		// cloud override (see main.go's einoModelBaseURL derivation), and a
+		// cloud call normally returns in a few seconds regardless of prompt
+		// size — 60s is already generous there. A LOCAL target needs far
+		// more slack (local inference genuinely takes minutes on a large
+		// prompt); main.go passes that explicitly per call site
+		// (einoTargetsSameOllama) rather than raising this shared default,
+		// so a local-model fix never silently loosens the cloud path's own
+		// failure-detection latency.
 		timeout = 60 * time.Second
 	}
 	return &OpenAIChatClient{

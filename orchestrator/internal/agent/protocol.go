@@ -53,6 +53,7 @@ var Registry = []Tag{
 
 	// ── LLM → Agent (control / action) ──
 	{"RUN_COMMAND", LLMToAgent, "Run a shell command.", `{"command","step_id","rationale","risk_level","findings"?,"findings_detail"?}`},
+	{"MCP_TOOL", LLMToAgent, "Call a cataloged sandbox tool or terminal-session verb by name — see MCP TOOLS below for the list. args is a flat JSON object of that tool's normal flags as key:value; if you get the shape wrong the error response tells you the exact fields expected, so a first guess is fine.", `{"tool","args","step_id","rationale","risk_level","findings"?,"findings_detail"?}`},
 	{"UPDATE_PLAN", LLMToAgent, "Revise the plan.", `{"steps":[...],"reason"}`},
 	{"FINISH", LLMToAgent, "Goal achieved. Before writing findings, re-scan every TOOL_RESPONSE above for concrete, specific facts (exact ports/versions/paths/cookies) rather than a generic summary — a specific fact like \"port 3306 open, MySQL 5.5.47\" is a real finding; \"open ports were found\" is not.", `{"summary","findings"?,"findings_detail"?}`},
 	{"HANDOFF", LLMToAgent, "Delegate a focused subtask to a named specialist sub-agent. To delegate to several specialists AT ONCE (they run concurrently), use \"handoffs\" instead.", `{"role","subgoal"} or {"handoffs":[{"role","subgoal"},...]}`},
@@ -90,7 +91,24 @@ func Wrap(tag, content string) string {
 
 // ProtocolReference renders the registry into the markdown block injected
 // once into the step system prompt. Editing Registry updates the prompt.
-func ProtocolReference() string {
+//
+// localModel adds a worked example for every non-trivial LLMToAgent tag
+// beyond the one ([RUN_COMMAND]) that already had one — ONLY when true.
+// Live-reproduced why this must be opt-in, not always-on: a local 20B
+// model, told explicitly to use MCP_TOOL, instead invented a nonexistent
+// CLI command ("term_close --name check3") — it had a copyable shape for
+// RUN_COMMAND right here but NONE for MCP_TOOL, so with a small/weaker
+// model it pattern-matched onto the only concrete template available
+// rather than reasoning a new one out from an abstract field description
+// ("args is a flat JSON object..."). This isn't the model refusing to use
+// a tag; it never had a concrete pattern to copy — and that gap is
+// structurally identical for HANDOFF/UPDATE_PLAN/REMEMBER/ASK_OPERATOR,
+// which never had worked examples either. A cloud model doesn't need this
+// crutch and must not pay even the few extra tokens for it — callers pass
+// true only for a local model (see agent.Config.LocalModel), keeping every
+// existing caller's behavior (cloud, or local before this existed)
+// byte-for-byte unchanged.
+func ProtocolReference(localModel bool) string {
 	var b strings.Builder
 	b.WriteString("PROTOCOL — every message between you and the agent carries one tag.\n\n")
 	b.WriteString("Messages the AGENT sends YOU (how to read its observations):\n")
@@ -106,6 +124,19 @@ func ProtocolReference() string {
 		}
 	}
 	b.WriteString("\nExample reply:\n[RUN_COMMAND]\n{\"command\":\"nmap -sV 127.0.0.1\",\"step_id\":\"s1\",\"rationale\":\"fingerprint\",\"risk_level\":\"medium\"}\n")
+	if localModel {
+		b.WriteString("\nTo use a tool from MCP TOOLS below instead of a shell command, copy this exact shape — change only \"tool\" and \"args\":\n" +
+			"[MCP_TOOL]\n{\"tool\":\"term_open\",\"args\":{\"label\":\"shell1\"},\"step_id\":\"s1\",\"rationale\":\"open a terminal\",\"risk_level\":\"low\"}\n" +
+			"MCP_TOOL names are NOT shell commands — never run them with RUN_COMMAND.\n")
+		b.WriteString("\nTo delegate a subtask to a specialist instead of running a command yourself, copy this exact shape — change only \"role\" and \"subgoal\":\n" +
+			"[HANDOFF]\n{\"role\":\"web\",\"subgoal\":\"enumerate admin panel endpoints on the target\"}\n")
+		b.WriteString("\nTo revise your plan instead of running a command, copy this exact shape — change only the steps and reason:\n" +
+			"[UPDATE_PLAN]\n{\"steps\":[{\"id\":\"s1\",\"description\":\"re-scan with a different port range\",\"status\":\"pending\"}],\"reason\":\"original scan missed the real service\"}\n")
+		b.WriteString("\nTo save a fact for later instead of running a command, copy this exact shape — change only \"key\" and \"value\":\n" +
+			"[REMEMBER]\n{\"key\":\"db_connection\",\"value\":\"mysql on 10.0.0.5:3306, user root\"}\n")
+		b.WriteString("\nTo ask the human operator a question instead of running a command, copy this exact shape — change only \"question\":\n" +
+			"[ASK_OPERATOR]\n{\"question\":\"Should I proceed with the destructive step?\"}\n")
+	}
 	b.WriteString("\nFINDING VERIFICATION — \"findings\" is an unverified claim; \"findings_detail\" lets a finding earn a VERIFIED badge instead:\n" +
 		`  [{"title":"...","evidence":"<exact substring copied from the tool output above>","step_id":"<id of the step whose output proves it>"}]` + "\n" +
 		"This is checked against the real recorded output of that step, not taken on your word — quote evidence verbatim, do not paraphrase it, " +
@@ -177,6 +208,8 @@ func inferControlTag(a Action) string {
 	switch {
 	case strings.TrimSpace(a.Command) != "":
 		return "RUN_COMMAND"
+	case strings.TrimSpace(a.Tool) != "":
+		return "MCP_TOOL"
 	case (strings.TrimSpace(a.Role) != "" && strings.TrimSpace(a.Subgoal) != "") || len(a.Handoffs) > 0:
 		return "HANDOFF"
 	case strings.TrimSpace(a.MemKey) != "" && strings.TrimSpace(a.MemValue) != "":

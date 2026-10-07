@@ -193,6 +193,7 @@ export type AgentCapabilities = {
   skills_enabled: boolean
   skill_count: number
   skill_governance: string
+  context_window: number
 }
 
 export type AgentDelegationRun = {

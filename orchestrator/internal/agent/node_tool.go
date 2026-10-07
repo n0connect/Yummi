@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,9 +11,10 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 )
 
-// toolNode validates, gates, and executes the buffered command. It detects
-// stuck patterns and prior failures, and supervises long-running commands via
-// the consult channel.
+// toolNode validates, gates, and executes the buffered command — or, for an
+// [MCP_TOOL] action, the buffered MCP tool call (see mcpDisplayCommand and
+// the branch below). It detects stuck patterns and prior failures, and
+// supervises long-running shell commands via the consult channel.
 func toolNode(ctx context.Context, s *GraphState) (string, error) {
 	action := s.pendingAct
 	task, ok := s.store.Get(s.taskID)
@@ -20,9 +22,38 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		return "", ErrTaskNotFound
 	}
 
+	// Deterministic safety net, local models only: a small/weaker model
+	// given the real tool name ("term_open") but asked to express a call as
+	// JSON will often fall back to its MUCH stronger prior for "identifier
+	// followed by flags" and invent a nonexistent CLI command instead
+	// (`term_open --label check5`) — live-reproduced repeatedly even with a
+	// worked [MCP_TOOL] example right next to it in the prompt (see
+	// ProtocolReference's own doc comment: that fix alone wasn't enough).
+	// Rather than keep trying to out-prompt a strong pattern-matching prior,
+	// meet the model where it naturally wants to express itself: detect a
+	// RUN_COMMAND whose verb is a real cataloged tool name and transparently
+	// rewrite it into the equivalent MCP_TOOL call before it ever reaches
+	// the validator. A wrong flag name still self-corrects via the EXISTING
+	// MCPSchemaHints-on-failure enrichment below — this only has to get the
+	// TOOL right, not the exact args.
+	if s.cfg.LocalModel {
+		if tool, args, ok := InferMCPToolFromShellGuess(action.Command, s.cfg.MCPSchemaHints); ok {
+			action.Tool, action.Args, action.Command = tool, args, ""
+		}
+	}
+
+	// An [MCP_TOOL] action carries a tool name, not a shell command — synthesize
+	// a human-readable display string so the validator, stuck/duplicate/thrash
+	// windows, and the approval UI all have something to show, exactly the role
+	// action.Command plays for RUN_COMMAND below.
+	command := action.Command
+	if action.Tool != "" {
+		command = mcpDisplayCommand(action.Tool, action.Args)
+	}
+
 	proposal := conductor.Proposal{
 		ID:        uuid.NewString(),
-		Command:   action.Command,
+		Command:   command,
 		Rationale: action.Rationale,
 		RiskLevel: action.RiskLevel,
 	}
@@ -105,6 +136,45 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		return edgeRequiresApproval, nil
 	}
 
+	// [MCP_TOOL] dispatch: no ExecHandle/long-running-consult support (yet) —
+	// StoreMCPExecer.RunMCPTool is a single bounded blocking call, matching
+	// exactly how the Eino backend's own runToolPipeline already handles
+	// every cataloged pentest tool and terminal verb (see its own comment on
+	// "wait timeout" as a recoverable TOOL_TIMEOUT rather than a live
+	// consult). Parity with that existing precedent, not a new gap.
+	if action.Tool != "" {
+		if s.cfg.MCPExec == nil {
+			return s.blockCommand(Wrap("COMMAND_BLOCKED",
+				"MCP_TOOL is not available on this deployment (no MCPExec configured). Use RUN_COMMAND instead."))
+		}
+		s.executedCmds = append(s.executedCmds, p.Command)
+		result, execErr := s.cfg.MCPExec.RunMCPTool(execution.ContextWithRationale(ctx, p.Rationale), task.SessionID, action.Tool, action.Args, p.Command)
+		if execErr != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if strings.Contains(execErr.Error(), "wait timeout") {
+				s.consecutiveFailures++
+				body := p.Command + "\n" + execErr.Error() + "\nNarrow the scope or switch approach — this tool ran too long and was not allowed to keep going."
+				return s.failStep("TOOL_FAILED", body, "tool timeout"), nil
+			}
+			return "", fmt.Errorf("mcp exec: %w", execErr)
+		}
+		// Enrich a failed call with the tool's real field names — a raw
+		// JSON-schema rejection ("unexpected additional properties [\"name\"]")
+		// names what was WRONG but never what's RIGHT, and the model has no
+		// catalog-wide schema dump (deliberately, see MCPCatalog) to fall back
+		// on. Live-observed need: jinx-20b guessed term_open took "name"; the
+		// real field is "label". Without this, that guess is a dead end
+		// instead of a one-step correction.
+		if result.IsError {
+			if hint := s.cfg.MCPSchemaHints[action.Tool]; hint != "" {
+				result.Content = strings.TrimRight(result.Content, "\n") + "\nValid fields for " + action.Tool + ": " + hint
+			}
+		}
+		return observeResult(s, result), nil
+	}
+
 	// Supervised execution: wait up to SoftTimeout, then consult on long-running.
 	// Carrying the model's own stated rationale onto the Record this creates
 	// (see execution.ContextWithRationale's doc comment) — purely additive,
@@ -138,6 +208,69 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		return edgeLongRunning, nil
 	}
 	return observeResult(s, result), nil
+}
+
+// mcpDisplayCommand renders an [MCP_TOOL] action as a human-readable
+// command-equivalent string — the same role action.Command plays for
+// RUN_COMMAND — so the validator, stuck/duplicate/thrash windows, and the
+// approval UI never need to know MCP calls exist as a distinct shape.
+func mcpDisplayCommand(tool string, args map[string]any) string {
+	if len(args) == 0 {
+		return tool + "()"
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return tool + "(?)"
+	}
+	return tool + "(" + string(b) + ")"
+}
+
+// InferMCPToolFromShellGuess detects a shell-shaped command whose verb is a
+// real cataloged MCP tool name and parses its "--flag value" /
+// "--flag=value" arguments into the equivalent MCP_TOOL args map. Exported
+// because two independent dispatch paths hit the identical failure mode: the
+// graph agent loop's toolNode (a local model told to use [MCP_TOOL] instead
+// invents a CLI-shaped RUN_COMMAND — see that call site) and the
+// conductor's single-command suggest/approve flow (internal/api's
+// HandleChatApprove, which has no [MCP_TOOL] concept at all and would
+// otherwise always try to shell-exec a cataloged tool name and 127-fail).
+// known is keyed by tool name (MCPSchemaHints' own keys, reused rather than
+// a second lookup table); ok is false for any command whose first word
+// isn't a known tool name, so an ordinary shell command is never touched.
+// Deliberately simple (whitespace-split, no shell-quote handling beyond
+// stripping a surrounding quote pair) — this only needs to catch the common
+// single-word-value guesses actually observed live; a wrong or unparsed
+// field still self-corrects via MCPSchemaHints' existing on-failure
+// enrichment (graph path) or the MCP server's own validation error
+// (conductor path, surfaced as an ordinary failed execution record).
+func InferMCPToolFromShellGuess(command string, known map[string]string) (tool string, args map[string]any, ok bool) {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return "", nil, false
+	}
+	verb := fields[0]
+	if _, isKnown := known[verb]; !isKnown {
+		return "", nil, false
+	}
+	args = map[string]any{}
+	for i := 1; i < len(fields); i++ {
+		tok := fields[i]
+		if !strings.HasPrefix(tok, "--") {
+			continue
+		}
+		tok = strings.TrimPrefix(tok, "--")
+		if eq := strings.IndexByte(tok, '='); eq >= 0 {
+			args[tok[:eq]] = strings.Trim(tok[eq+1:], `"'`)
+			continue
+		}
+		if i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "--") {
+			args[tok] = strings.Trim(fields[i+1], `"'`)
+			i++
+		} else {
+			args[tok] = true
+		}
+	}
+	return verb, args, true
 }
 
 // blockCommand records msg as both the rolling memory observation and the

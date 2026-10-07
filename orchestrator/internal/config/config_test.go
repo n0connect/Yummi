@@ -235,6 +235,34 @@ func TestConfigPortParseFallback(t *testing.T) {
 	}
 }
 
+// TestRequestAndChatTimeouts_SplitByCloudOverride locks the local/cloud
+// timeout split: a local deployment needs a far larger HTTP budget than a
+// cloud one (live-reproduced — a real local 20B model chat turn blew past
+// the old flat 90s/3min pair), but an operator who HAS opted into
+// YUMMI_EINO_MODEL_BASE_URL must get exactly the original cloud-sized
+// values, unchanged — a local-model fix must never silently loosen the
+// cloud path's own failure-detection latency.
+func TestRequestAndChatTimeouts_SplitByCloudOverride(t *testing.T) {
+	unset(t, "YUMMI_EINO_MODEL_BASE_URL")
+
+	local := Load()
+	if got, want := local.RequestTimeout(), 270*time.Second; got != want {
+		t.Errorf("local RequestTimeout = %v, want %v", got, want)
+	}
+	if got, want := local.ChatTimeout(), 240*time.Second; got != want {
+		t.Errorf("local ChatTimeout = %v, want %v", got, want)
+	}
+
+	t.Setenv("YUMMI_EINO_MODEL_BASE_URL", "https://openrouter.ai/api/v1")
+	cloud := Load()
+	if got, want := cloud.RequestTimeout(), 3*time.Minute; got != want {
+		t.Errorf("cloud RequestTimeout = %v, want %v (must stay exactly the pre-existing value)", got, want)
+	}
+	if got, want := cloud.ChatTimeout(), 90*time.Second; got != want {
+		t.Errorf("cloud ChatTimeout = %v, want %v (must stay exactly the pre-existing value)", got, want)
+	}
+}
+
 // unset clears the given env vars for the duration of the test. Uses t.Setenv
 // with empty string (Go's testing env helper doesn't expose Unsetenv).
 func unset(t *testing.T, keys ...string) {

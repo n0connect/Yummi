@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	osexec "os/exec"
 	"strings"
 	"testing"
@@ -115,6 +116,199 @@ func TestGraph_RepeatedFailures_EscalateThenHalt(t *testing.T) {
 	}
 	if !sawEscalation {
 		t.Fatal("expected a [REPEATED_FAILURE] escalation before the halt")
+	}
+}
+
+// echoMCPStore returns an execution.Store whose processor reports back the
+// dispatched tool name and JSON args verbatim — real execution.Store/
+// EnqueueMCP plumbing, not a mock of agent's own code, just a stand-in
+// processor for the sandbox-mcp docker-exec call (same relationship
+// realShellStore has to the real docker-exec shell processor above).
+func echoMCPStore(t *testing.T) *execution.Store {
+	t.Helper()
+	es := execution.NewStore()
+	es.SetProcessor(func(_ context.Context, rec execution.Record) (string, error) {
+		if rec.MCPTool == "" {
+			return "", osexec.ErrNotFound // distinguishes a misrouted shell dispatch from a real MCP one
+		}
+		return rec.MCPTool + ":" + rec.MCPArgs, nil
+	})
+	return es
+}
+
+// TestGraph_MCPTool_DispatchesThroughSameExecutionStorePipeline proves graph's
+// new [MCP_TOOL] action reaches execution.Store.EnqueueMCP (Record.MCPTool
+// set, not a plain shell Command) — the generic-tag architecture decided for
+// graph↔sandbox-mcp parity, reusing StoreMCPExecer unchanged rather than
+// building a second dispatch path.
+func TestGraph_MCPTool_DispatchesThroughSameExecutionStorePipeline(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "open a terminal session")
+	es := echoMCPStore(t)
+	ollama := newFakeOllama(t,
+		"[MCP_TOOL]\n{\"tool\":\"term_open\",\"args\":{\"id\":\"sess1\"},\"step_id\":\"s1\",\"risk_level\":\"low\"}",
+		"[FINISH]\n{\"summary\":\"done\"}")
+
+	cfg := fastRetryCfg()
+	cfg.MCPExec = NewStoreMCPExecer(es, 5*time.Second)
+	s := newToolState(t, store, task.ID, ollama, es, cfg)
+	if err := Execute(context.Background(), s, nodeStep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if got.Status != StatusCompleted {
+		t.Fatalf("status=%s err=%q", got.Status, got.LastError)
+	}
+	sawDispatch := false
+	for _, o := range s.memCtx.Observations {
+		if strings.Contains(o, "term_open") {
+			sawDispatch = true
+		}
+	}
+	if !sawDispatch {
+		t.Fatalf("expected an observation referencing the dispatched term_open tool; got %v", s.memCtx.Observations)
+	}
+}
+
+// TestGraph_LocalModel_RunCommandGuessOfKnownToolIsRewrittenToMCPTool is the
+// regression test for the actual live failure: a local 20B model, even with
+// a worked [MCP_TOOL] example in the prompt, kept emitting
+// [RUN_COMMAND] {"command":"term_open --label check5"} instead — a strong
+// CLI-shaped prior a single example didn't override. Proves the
+// deterministic rewrite (node_tool.go's InferMCPToolFromShellGuess) catches
+// this and dispatches through the REAL MCP pipeline anyway, turning a
+// guaranteed "command not found" into a working call — gated on
+// cfg.LocalModel so a cloud model's behavior is never touched.
+func TestGraph_LocalModel_RunCommandGuessOfKnownToolIsRewrittenToMCPTool(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "open a terminal session, local model guessing CLI syntax")
+	es := echoMCPStore(t)
+	ollama := newFakeOllama(t,
+		"[RUN_COMMAND]\n{\"command\":\"term_open --label check5\",\"step_id\":\"s1\",\"risk_level\":\"low\"}",
+		"[FINISH]\n{\"summary\":\"done\"}")
+
+	cfg := fastRetryCfg()
+	cfg.LocalModel = true
+	cfg.MCPExec = NewStoreMCPExecer(es, 5*time.Second)
+	cfg.MCPSchemaHints = map[string]string{"term_open": "label, cols, rows"}
+	s := newToolState(t, store, task.ID, ollama, es, cfg)
+	if err := Execute(context.Background(), s, nodeStep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if got.Status != StatusCompleted {
+		t.Fatalf("status=%s err=%q (expected the rewrite to make this a real, successful MCP dispatch)", got.Status, got.LastError)
+	}
+	sawRealDispatch := false
+	for _, o := range s.memCtx.Observations {
+		if strings.Contains(o, "term_open") && !strings.Contains(o, "not found") {
+			sawRealDispatch = true
+		}
+	}
+	if !sawRealDispatch {
+		t.Fatalf("expected a successful term_open dispatch observation, got %v", s.memCtx.Observations)
+	}
+}
+
+// TestGraph_LocalModel_UnknownVerbIsNeverRewritten proves the rewrite only
+// ever fires for a REAL cataloged tool name — an ordinary shell command
+// (even one that happens to look vaguely flag-shaped) must still run as a
+// plain shell command, never silently redirected to MCP dispatch.
+func TestGraph_LocalModel_UnknownVerbIsNeverRewritten(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "run an ordinary command")
+	es := realShellStore(t)
+	ollama := newFakeOllama(t,
+		"[RUN_COMMAND]\n{\"command\":\"echo --label check5\",\"step_id\":\"s1\",\"risk_level\":\"low\"}",
+		"[FINISH]\n{\"summary\":\"done\"}")
+
+	cfg := fastRetryCfg()
+	cfg.LocalModel = true
+	cfg.MCPSchemaHints = map[string]string{"term_open": "label, cols, rows"} // "echo" is NOT in this set
+	s := newToolState(t, store, task.ID, ollama, es, cfg)
+	if err := Execute(context.Background(), s, nodeStep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if got.Status != StatusCompleted {
+		t.Fatalf("status=%s err=%q", got.Status, got.LastError)
+	}
+	if st := planStep(got.Plan, "s1").Status; st != StepDone {
+		t.Fatalf("expected the ordinary shell command to run normally, got step status %s", st)
+	}
+}
+
+// rejectingMCPStore mimics a real sandbox-mcp JSON-schema validation
+// rejection: real processor/execution.Store plumbing, a canned failure in
+// place of the actual docker-exec'd validator (same relationship every
+// other fake processor in this file has to the real one).
+func rejectingMCPStore(t *testing.T) *execution.Store {
+	t.Helper()
+	es := execution.NewStore()
+	es.SetProcessor(func(_ context.Context, rec execution.Record) (string, error) {
+		return "", fmt.Errorf(`validating "arguments": validating root: unexpected additional properties ["name"]`)
+	})
+	return es
+}
+
+// TestGraph_MCPTool_FailureIsEnrichedWithRealFieldNames is the regression
+// test for a live-observed gap: jinx-20b guessed term_open's session field
+// was "name"; the real field is "label". The raw schema-rejection error
+// ("unexpected additional properties") never said so, and with no
+// catalog-wide schema dump in the prompt (deliberately — see
+// Config.MCPCatalog), the model had nothing to self-correct from. Proves
+// MCPSchemaHints gets folded into the TOOL_FAILED observation on failure.
+func TestGraph_MCPTool_FailureIsEnrichedWithRealFieldNames(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "open a terminal with a wrong field name")
+	es := rejectingMCPStore(t)
+	ollama := newFakeOllama(t,
+		`[MCP_TOOL]`+"\n"+`{"tool":"term_open","args":{"name":"check1"},"step_id":"s1","risk_level":"low"}`,
+		`[FINISH]`+"\n"+`{"summary":"done"}`)
+
+	cfg := fastRetryCfg()
+	cfg.MCPExec = NewStoreMCPExecer(es, 5*time.Second)
+	cfg.MCPSchemaHints = map[string]string{"term_open": "label, cols, rows"}
+	s := newToolState(t, store, task.ID, ollama, es, cfg)
+	if err := Execute(context.Background(), s, nodeStep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	sawHint := false
+	for _, o := range s.memCtx.Observations {
+		if strings.Contains(o, "Valid fields for term_open: label, cols, rows") {
+			sawHint = true
+		}
+	}
+	if !sawHint {
+		t.Fatalf("expected the schema-hint enrichment in an observation; got %v", s.memCtx.Observations)
+	}
+}
+
+// TestGraph_MCPTool_WithoutMCPExecConfigured_BlocksNotCrashes: a deployment
+// that never wired agent.Config.MCPExec (MCPCatalog should also be empty in
+// that case, so the model is never told the capability exists — but if it
+// still emits [MCP_TOOL] anyway) must get a recoverable COMMAND_BLOCKED, not
+// a nil-pointer panic or a hard task failure.
+func TestGraph_MCPTool_WithoutMCPExecConfigured_BlocksNotCrashes(t *testing.T) {
+	store, _ := NewStore(openTestDB(t))
+	task := newRunningTask(t, store, "try an mcp tool with nothing wired")
+	es := realShellStore(t)
+	ollama := newFakeOllama(t,
+		"[MCP_TOOL]\n{\"tool\":\"term_open\",\"args\":{},\"step_id\":\"s1\",\"risk_level\":\"low\"}",
+		"[FINISH]\n{\"summary\":\"done\"}")
+
+	s := newToolState(t, store, task.ID, ollama, es, fastRetryCfg()) // fastRetryCfg has no MCPExec
+	if err := Execute(context.Background(), s, nodeStep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := store.Get(task.ID)
+	if got.Status != StatusCompleted {
+		t.Fatalf("status=%s err=%q (expected the task to recover and finish, not crash)", got.Status, got.LastError)
 	}
 }
 

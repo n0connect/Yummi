@@ -9,20 +9,26 @@ const MODE_LABEL: Record<ApprovalMode, string> = {
   auto: t('contextBar.mode.auto'),
 }
 
-// A deliberately approximate visual budget. Model/backend identity belongs in
-// Health rather than the conversation chrome.
+// Fallback only — used before /api/v1/agent/capabilities' real
+// context_window has loaded (or if it's ever unreachable). The real value
+// comes from the backend's actually-resolved num_ctx (see
+// BackendCapabilities.ContextWindow), which varies per model/tier/override —
+// a custom local import or an OpenRouter model can be far from this number
+// in either direction, so this constant must never be the steady-state value.
 const DEFAULT_CTX = 32768
 
 type Props = {
   /** All message text concatenated (for rough token estimation). */
   charCount: number
+  /** Real resolved num_ctx from the active backend; null until loaded. */
+  contextWindow: number | null
   messageCount: number
   approvalMode: ApprovalMode
   onApprovalModeChange: (mode: ApprovalMode) => void
 }
 
 export function ContextBar({
-  charCount, messageCount, approvalMode, onApprovalModeChange,
+  charCount, contextWindow, messageCount, approvalMode, onApprovalModeChange,
 }: Props): JSX.Element {
   const [modeOpen, setModeOpen] = useState(false)
   const modeRef = useRef<HTMLSpanElement>(null)
@@ -52,7 +58,7 @@ export function ContextBar({
 
   // ≈4 chars per token (BPE average; good enough for a visual indicator)
   const estimatedTokens = Math.max(0, Math.round(charCount / 4))
-  const ctxWindow       = DEFAULT_CTX
+  const ctxWindow       = contextWindow ?? DEFAULT_CTX
   const fillPct         = Math.min(100, (estimatedTokens / ctxWindow) * 100)
 
   const fillColor =

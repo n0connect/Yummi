@@ -51,10 +51,32 @@ func TestWrapRegisteredOperationalTags(t *testing.T) {
 }
 
 func TestProtocolReferenceListsBothDirections(t *testing.T) {
-	ref := ProtocolReference()
+	ref := ProtocolReference(false)
 	for _, name := range []string{"TOOL_RESPONSE", "TOOL_FAILED", "UNKNOWN", "RUN_COMMAND", "STOP_TASK", "SEND_FULL"} {
 		if !strings.Contains(ref, name) {
 			t.Errorf("protocol reference missing tag %q", name)
+		}
+	}
+}
+
+// TestProtocolReference_LocalExamples_OnlyWhenRequested is the regression
+// test for a live-observed gap: a local 20B model told to use MCP_TOOL
+// instead invented a nonexistent CLI command, because RUN_COMMAND had a
+// copyable worked example here and nothing else did. localModel=true adds
+// one for every non-trivial tag (HANDOFF/UPDATE_PLAN/REMEMBER/ASK_OPERATOR
+// have the identical gap) — but only on request, so a cloud model's prompt
+// (and local's, before this existed) stays byte-for-byte unchanged.
+func TestProtocolReference_LocalExamples_OnlyWhenRequested(t *testing.T) {
+	without := ProtocolReference(false)
+	for _, marker := range []string{"term_open", "[HANDOFF]\n{", "[UPDATE_PLAN]\n{", "[REMEMBER]\n{", "[ASK_OPERATOR]\n{"} {
+		if strings.Contains(without, marker) {
+			t.Errorf("localModel=false must not add worked examples, found %q in:\n%s", marker, without)
+		}
+	}
+	with := ProtocolReference(true)
+	for _, marker := range []string{"[MCP_TOOL]\n{\"tool\":\"term_open\"", "[HANDOFF]\n{\"role\"", "[UPDATE_PLAN]\n{\"steps\"", "[REMEMBER]\n{\"key\"", "[ASK_OPERATOR]\n{\"question\""} {
+		if !strings.Contains(with, marker) {
+			t.Errorf("localModel=true must add a worked example containing %q, got:\n%s", marker, with)
 		}
 	}
 }

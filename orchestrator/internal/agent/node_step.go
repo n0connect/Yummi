@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/n0connect/yummi/orchestrator/internal/knowledge"
+	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
 
 // stepNode asks the LLM for the next control action and routes on its tag.
@@ -64,7 +66,7 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		}
 	}
 
-	system := StepSystemPrompt(s.cfg.Persona)
+	system := StepSystemPrompt(s.cfg.Persona, s.cfg.MCPCatalog, s.cfg.LocalModel)
 	prompt := BuildStepPrompt(task, stepObs, s.memCtx.Summary, s.buildPreamble(ctx, task))
 
 	// NeedsCompression's check above only tracks raw observation bytes added
@@ -139,6 +141,15 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 	switch msg.Tag {
 	case "RUN_COMMAND":
 		if strings.TrimSpace(msg.Action.Command) == "" {
+			return s.rejectStepAction()
+		}
+		return edgeRunCommand, nil
+	case "MCP_TOOL":
+		// Routes to the SAME tool node RUN_COMMAND uses — toolNode itself
+		// branches on action.Tool vs action.Command (see node_tool.go). No new
+		// edge needed; this is deliberately the smallest possible change to
+		// "the deliberately-designed graph flow" (see graph.go's own warning).
+		if strings.TrimSpace(msg.Action.Tool) == "" {
 			return s.rejectStepAction()
 		}
 		return edgeRunCommand, nil
@@ -297,6 +308,11 @@ func (s *GraphState) rejectStepAction() (string, error) {
 // is independent and may be empty; they are joined with blank lines.
 func (s *GraphState) buildPreamble(ctx context.Context, task Task) string {
 	var parts []string
+	if s.cfg.LocalModel {
+		if tr := targetReminder(task.Goal); tr != "" {
+			parts = append(parts, tr)
+		}
+	}
 	if sk := s.buildSkills(task); sk != "" {
 		parts = append(parts, sk)
 	}
@@ -309,8 +325,50 @@ func (s *GraphState) buildPreamble(ctx context.Context, task Task) string {
 	return strings.Join(parts, "\n")
 }
 
+// goalIPv4Re is a lenient free-text scan for an IPv4 address — unlike
+// internal/scope.ExtractTarget (built for a shell command's argv shape,
+// where token 0 is always skipped as the binary name), a goal is prose, and
+// the address can carry trailing sentence punctuation ExtractTarget was
+// never designed to strip ("...against 198.51.100.10. The target..."). Not
+// validated beyond the shape (no 0-255 octet range check) — this is a
+// prompt-prominence aid, not a security boundary; the gateway is the real
+// scope authority regardless of what this finds.
+var goalIPv4Re = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+
+// targetReminder restates the goal's target IP as its own short, unmissable
+// line — local models only. Live-reproduced why this exists: given the goal
+// "Start a full autonomous pentest task against 198.51.100.10. ... 1) ...
+// 2) ... 3) ... 4) ...", jinx-20b targeted 127.0.0.1 four turns in a row
+// instead (gateway correctly blocked every attempt — zero scope leakage,
+// this was never a security issue, only a wasted task). The IP was present
+// in GOAL: at the very top of the prompt the whole time; burying a single
+// numeric fact inside a long prose sentence, mixed with four enumerated
+// sub-goals, evidently wasn't enough for a small model to reliably carry
+// forward into its next tool call. Empty when the goal has no clear
+// single IPv4 address (hostnames, multi-target goals, or no target at all)
+// — never a guess, only a restatement of what's already unambiguously there.
+func targetReminder(goal string) string {
+	ip := goalIPv4Re.FindString(goal)
+	if ip == "" {
+		return ""
+	}
+	return fmt.Sprintf("TARGET: %s — every command in this task must target exactly this address. Do NOT use 127.0.0.1, localhost, or any other address.", ip)
+}
+
 // buildSkills selects and renders the playbooks relevant to the goal and the
 // tools actually used so far. Empty when no registry / no match.
+//
+// This runs on EVERY step (graph re-renders its whole prompt from scratch
+// each turn, no conversation history to amortize against), and some real
+// playbooks are large — persona/v0.1/skills/osint-enum.yaml's Knowledge
+// alone is ~12KB (~3000 tokens); several others run 6-7KB. Up to 3 selected
+// skills rendered in full, every single turn, for a task's entire
+// duration, is exactly the kind of context cost a local model can't
+// absorb for long before compression kicks in — live-reproduced tokens_used
+// in the 7-10K range on tasks that hadn't run a single real tool yet.
+// renderSkillsBounded caps each selected skill's rendered length for a
+// local model only; a cloud model (and local before this existed) still
+// gets each skill's full text, unchanged.
 func (s *GraphState) buildSkills(task Task) string {
 	if s.cfg.Skills == nil {
 		return ""
@@ -326,7 +384,31 @@ func (s *GraphState) buildSkills(task Task) string {
 			s.emit(ActSkill, sig, "")
 		}
 	}
+	if s.cfg.LocalModel {
+		return renderSkillsBounded(s.cfg.Skills, sel, localSkillCharCap)
+	}
 	return s.cfg.Skills.Render(sel)
+}
+
+// localSkillCharCap bounds each individual skill's rendered text for a
+// local model (see buildSkills' doc comment) — ~150 tokens worth, enough
+// for a playbook's name and opening guidance without paying for its full
+// knowledge block on every single turn.
+const localSkillCharCap = 600
+
+// renderSkillsBounded renders each selected skill through the registry's
+// own Render (one skill at a time, so the existing format is reused
+// verbatim) and truncates any chunk over maxChars — never mid-UTF8-rune.
+func renderSkillsBounded(reg *skill.Registry, selected []skill.Skill, maxChars int) string {
+	var b strings.Builder
+	for _, sk := range selected {
+		chunk := reg.Render([]skill.Skill{sk})
+		if len(chunk) > maxChars {
+			chunk = chunk[:utf8SafeCut(chunk, maxChars)] + "…(truncated — full playbook under this skill's name)\n"
+		}
+		b.WriteString(chunk)
+	}
+	return b.String()
 }
 
 // buildDelegation lists the sub-agent roles the orchestrator may hand off to.

@@ -996,6 +996,15 @@ func TestEinoRunner_Run_GuidanceQueuedBeforeFinish_ForcesAnotherTurn(t *testing.
 // bounce when finish is reached with no tool results at all. Without PlanLLM,
 // agent.SplitEnumeratedParts alone would see zero parts for this goal and the
 // guard would never fire — this is the regression test for that gap.
+//
+// The bounce itself is now the deterministic zero-tool-calls floor (checked
+// BEFORE auditFinishCoverage, see Run()'s own comment on why), not the LLM
+// audit — finish with trace.pairs() empty is never legitimately complete,
+// and that case doesn't need, or get, a judgment call from PlanLLM. The
+// second scripted PlanLLM reply ("1\n2") is dead for this exact scenario as a
+// result (kept anyway: it documents what the now-bypassed auditFinishCoverage
+// call would have said, and covers it if the deterministic floor's condition
+// ever narrows).
 func TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged(t *testing.T) {
 	reactSrv := toolCallServer("finish", `{"summary":"the OS is Linux","findings":["Linux kernel 5.x"]}`)
 	defer reactSrv.Close()
@@ -1006,11 +1015,10 @@ func TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged(t *testing
 	}
 	r := NewEinoRunner(store, nil, nil, Config{
 		ModelBaseURL: reactSrv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
-		// Two scripted PlanLLM replies in order: the first decomposes the
-		// unmarked goal into two parts (AuditGoalParts, at Run() start); the
-		// second is auditFinishCoverage's coverage judgment once the model
-		// immediately calls finish with zero tool calls made — both parts are
-		// genuinely uncovered, so "1\n2" is the honest answer here.
+		// First scripted PlanLLM reply decomposes the unmarked goal into two
+		// parts (AuditGoalParts, at Run() start). The second ("1\n2") would
+		// only be consumed if the deterministic zero-tool-calls floor below
+		// didn't fire first — see the doc comment above.
 		PlanLLM: scriptedOllama(t, "check what OS is running\nlist the open ports", "1\n2"),
 	})
 
@@ -1032,12 +1040,12 @@ func TestEinoRunner_Run_NaturalLanguageMultiPartGoal_AuditedAndNudged(t *testing
 
 	nudged := false
 	for _, ev := range store.ListActivity(task.SessionID, 50) {
-		if strings.Contains(ev.Summary, "goal parts uncovered") {
+		if strings.Contains(ev.Summary, "ZERO tool calls") {
 			nudged = true
 		}
 	}
 	if !nudged {
-		t.Fatalf("expected the incomplete-goals nudge activity — PlanLLM's audit fallback did not populate enumParts for an unmarked multi-part goal")
+		t.Fatalf("expected the zero-tool-calls nudge activity — PlanLLM's audit fallback did not populate enumParts for an unmarked multi-part goal")
 	}
 }
 

@@ -113,6 +113,34 @@ type Config struct {
 	// from both top-level and sub-agent task completions (finishNode is
 	// shared by both).
 	SkillCurator func(ctx context.Context, traj skillcurator.Trajectory)
+
+	// MCPExec dispatches an [MCP_TOOL] action through the sandbox-resident
+	// MCP server — the structured-argument sibling of the Execer the Runner
+	// constructor takes for plain shell commands (RUN_COMMAND). Nil disables
+	// MCP_TOOL entirely: toolNode falls back to treating any such action as
+	// unsupported, and MCPCatalog below should also be left empty so the
+	// model is never told about a capability that isn't wired up.
+	MCPExec MCPExecer
+	// LocalModel marks the model driving this Runner as local (no
+	// YUMMI_EINO_MODEL_BASE_URL cloud override) — gates local-only prompt
+	// simplifications, currently just ProtocolReference's extra MCP_TOOL
+	// worked example (see its doc comment). false (the default, and every
+	// cloud-overridden Runner) reproduces the exact pre-existing prompt.
+	LocalModel bool
+	// MCPCatalog is ONE compact, pre-rendered line of available tool names
+	// (built once in main.go via sandboxmcp.Client.ListTools — never a live
+	// per-step call), appended to the step system prompt when non-empty. See
+	// StepSystemPrompt's doc comment for why this must stay compact: graph
+	// re-renders its full system prompt every step with no conversation
+	// history to amortize the cost against.
+	MCPCatalog string
+	// MCPSchemaHints maps a tool name to its comma-joined argument field
+	// names (also built once in main.go, from the same ListTools call) — NOT
+	// injected into the prompt at all. Consulted only when an [MCP_TOOL] call
+	// actually fails (see node_tool.go), to turn a terse schema-validation
+	// rejection into something the model can self-correct from on its next
+	// attempt, without paying for a schema dump on every successful step.
+	MCPSchemaHints map[string]string
 }
 
 // Runner drives agentic task loops. One goroutine per running task.
@@ -293,6 +321,10 @@ func (r *Runner) Capabilities() BackendCapabilities {
 		MemoryEnabled: cfg.Knowledge != nil && cfg.Retrieval != nil, RetrievalModel: retrieval,
 		SkillsEnabled: cfg.Skills != nil, SkillCount: skillCount,
 		SkillGovernance: "versioned_threat_scanned_operator_approved",
+		// cfg.TokenBudget is resolvedNumCtx/2 (see main.go) — undo the halving
+		// to report the model's real context window, not the compression
+		// headroom threshold.
+		ContextWindow: cfg.TokenBudget * 2,
 	}
 }
 

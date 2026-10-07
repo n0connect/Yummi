@@ -25,7 +25,7 @@ func TestHandleChatAllowsDefaultSessionSentinel(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 
-	h := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil)
+	h := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil, 90*time.Second)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(`{"message":"hedefi listele","session_id":"default"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -50,7 +50,7 @@ func TestHandleChatEchoesClientTurnID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	h := HandleChat(engine, conductor.NewApprovalStore(0), nil, nil, nil)
+	h := HandleChat(engine, conductor.NewApprovalStore(0), nil, nil, nil, 90*time.Second)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(
 		`{"message":"status","session_id":"default","turn_id":"f47ac10b-58cc-4372-a567-0e02b2c3d479"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -89,7 +89,7 @@ func TestChatPersistsTurnsAndMessagesEndpointReplaysThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil)
+	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil, 90*time.Second)
 	body := `{"message":"enumerate the host","session_id":"feed-beef-cafe"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -133,7 +133,7 @@ func TestChatDoesNotPersistFeedbackTurns(t *testing.T) {
 	_ = sm.Create(&session.Session{ID: "dead-beef-feed", Name: "X", CreatedAt: now, UpdatedAt: now, Status: "active"})
 
 	engine, _ := conductor.NewEngine(t.TempDir(), "", "")
-	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil)
+	chat := HandleChat(engine, conductor.NewApprovalStore(0), sm, nil, nil, 90*time.Second)
 	body := `{"message":"[KOMUT TAMAMLANDI] output...","session_id":"dead-beef-feed","from_feedback":true}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -161,7 +161,7 @@ func TestChatRoutesFeedbackAroundOperatorTargetPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	chat := HandleChat(engine, conductor.NewApprovalStore(0), nil, nil, nil)
+	chat := HandleChat(engine, conductor.NewApprovalStore(0), nil, nil, nil, 90*time.Second)
 	body := `{"message":"[COMMAND DONE] cat output\nOutput:\nscan the host","session_id":"default","from_feedback":true}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

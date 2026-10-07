@@ -452,6 +452,22 @@ export function AssistantPanel({
 
   // ── Context metrics ────────────────────────────────────────────────────────
 
+  // The backend's real resolved num_ctx (graph: TokenBudget*2, eino:
+  // ModelNumCtx) — replaces ContextBar's old hardcoded 32768 guess, which
+  // stayed wrong for any custom model tag (e.g. a 128k-context local import
+  // running with a 32k resolved window, or an OpenRouter model with its own
+  // window entirely). Fetched once; capabilities don't change mid-session.
+  const [contextWindow, setContextWindow] = useState<number | null>(null)
+  useEffect(() => {
+    fetchJSON<{ context_window?: number }>('/api/v1/agent/capabilities')
+      .then((res) => {
+        if (res.context_window && res.context_window > 0) setContextWindow(res.context_window)
+      })
+      .catch(() => {
+        /* backend unreachable — ContextBar falls back to its own default */
+      })
+  }, [])
+
   const charCount = useMemo(
     () => messages.reduce((acc, m) => acc + m.content.length, 0),
     [messages]
@@ -1948,6 +1964,7 @@ export function AssistantPanel({
         {/* Context bar */}
         <ContextBar
           charCount={charCount}
+          contextWindow={contextWindow}
           messageCount={messages.length}
           approvalMode={approvalMode}
           onApprovalModeChange={(mode) => void setApprovalMode(mode)}

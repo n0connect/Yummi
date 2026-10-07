@@ -65,11 +65,46 @@ func TestBuildStepPromptWarnsAgainstUnexecutedFindings(t *testing.T) {
 }
 
 func TestStepSystemPromptIncludesProtocol(t *testing.T) {
-	p := StepSystemPrompt(testPersona)
+	p := StepSystemPrompt(testPersona, "", false)
 	for _, tag := range []string{"[RUN_COMMAND]", "[TOOL_FAILED]", "[STOP_TASK]", "[UNKNOWN]"} {
 		if !strings.Contains(p, tag) {
 			t.Errorf("system prompt missing %s", tag)
 		}
+	}
+}
+
+// TestStepSystemPromptMCPCatalog proves the catalog line is both optional
+// (omitted entirely when empty, not even a dangling "MCP TOOLS —" header)
+// and additive (present verbatim when supplied) — see MCPCatalog's own doc
+// comment in runner.go for why this must stay a single compact line rather
+// than a per-tool schema dump.
+func TestStepSystemPromptMCPCatalog(t *testing.T) {
+	// "MCP TOOLS" alone isn't a safe marker — the MCP_TOOL registry entry's
+	// own always-on description text mentions it ("see MCP TOOLS below").
+	// The catalog SECTION's header is the real signal.
+	const sectionHeader = "MCP TOOLS — dispatch any of these"
+	bare := StepSystemPrompt(testPersona, "", false)
+	if strings.Contains(bare, sectionHeader) {
+		t.Errorf("empty catalog should not render the MCP TOOLS section, got:\n%s", bare)
+	}
+	withCatalog := StepSystemPrompt(testPersona, "nmap_scan, term_open, term_run", false)
+	if !strings.Contains(withCatalog, sectionHeader) || !strings.Contains(withCatalog, "nmap_scan, term_open, term_run") {
+		t.Errorf("expected the MCP catalog line verbatim in the system prompt, got:\n%s", withCatalog)
+	}
+}
+
+// TestStepSystemPrompt_LocalModelFlag_AddsMCPWorkedExample confirms the
+// localModel param reaches ProtocolReference through this actual call site
+// (not just unit-tested on ProtocolReference directly) — see that
+// function's doc comment for the live-observed reason this exists.
+func TestStepSystemPrompt_LocalModelFlag_AddsMCPWorkedExample(t *testing.T) {
+	cloud := StepSystemPrompt(testPersona, "term_open, term_run", false)
+	if strings.Contains(cloud, "[MCP_TOOL]\n{\"tool\":\"term_open\"") {
+		t.Errorf("localModel=false must not add the worked example, got:\n%s", cloud)
+	}
+	local := StepSystemPrompt(testPersona, "term_open, term_run", true)
+	if !strings.Contains(local, "[MCP_TOOL]\n{\"tool\":\"term_open\"") {
+		t.Errorf("localModel=true must add the worked MCP_TOOL example, got:\n%s", local)
 	}
 }
 

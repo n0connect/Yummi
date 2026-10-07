@@ -69,6 +69,18 @@ type Client struct {
 	embedModel string // Ollama embedding model tag (e.g. "nomic-embed-text"); empty = Embed disabled
 }
 
+// defaultHTTPTimeout bounds one /api/chat call. 5 minutes, not the 180s this
+// used to be — live-reproduced: a real multi-part graph task against a local
+// 20B model (jinx-20b) hit this ceiling on an ordinary ~10K-token step
+// prompt (persona+protocol+plan+a discovered doc file's output, nothing
+// pathological), aborting a perfectly healthy turn mid-generation and
+// forcing a retry with the SAME oversized prompt. Matches the default this
+// codebase's OWN Eino ReAct loop already uses for the identical reason
+// (NewOllamaChatModel's timeout, internal/agent/eino/model.go) — local
+// inference legitimately needs more slack than a cloud call, and 180s
+// was simply too tight for anything beyond a short prompt on real hardware.
+const defaultHTTPTimeout = 5 * time.Minute
+
 // NewClient creates an Ollama client with Qwen3-optimised defaults.
 func NewClient(baseURL, model string) *Client {
 	if baseURL == "" {
@@ -82,8 +94,19 @@ func NewClient(baseURL, model string) *Client {
 		model:      model,
 		keepAlive:  -1, // integer -1: Ollama never unloads the model from VRAM
 		opts:       DefaultQwen3Options(),
-		httpClient: &http.Client{Timeout: 180 * time.Second},
+		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 	}
+}
+
+// WithHTTPTimeout returns a shallow copy of the client with a replaced
+// per-call timeout — mirrors WithKeepAlive/WithOptions' copy-on-write shape.
+func (c *Client) WithHTTPTimeout(d time.Duration) *Client {
+	if d <= 0 {
+		d = defaultHTTPTimeout
+	}
+	cp := *c
+	cp.httpClient = &http.Client{Timeout: d}
+	return &cp
 }
 
 // WithOptions returns a shallow copy of the client with replaced options.

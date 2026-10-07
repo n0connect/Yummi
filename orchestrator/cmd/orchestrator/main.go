@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -205,6 +206,15 @@ func main() {
 	preloadNumCtx := resolvedNumCtx
 	einoTargetsSameOllama := cfg.EinoModelBaseURL == "" ||
 		cfg.EinoModelBaseURL == strings.TrimSuffix(cfg.OllamaURL, "/")+"/v1"
+	// planLLMTimeout: explicit, path-aware — see PlanLLM's own construction
+	// comment below for why this must NOT be a shared default. Zero for the
+	// cloud path keeps eino.NewOpenAIChatClient's own tighter 60s default
+	// (a real OpenRouter call never needs more); only a genuinely local
+	// target gets the extra slack local inference requires.
+	planLLMTimeout := time.Duration(0)
+	if einoTargetsSameOllama {
+		planLLMTimeout = 5 * time.Minute
+	}
 	if einoTargetsSameOllama && cfg.EinoModelNumCtx > preloadNumCtx {
 		preloadNumCtx = cfg.EinoModelNumCtx
 	}
@@ -283,6 +293,13 @@ func main() {
 	// skillReg is also exposed read-only via the TRACE API, so it lives at this
 	// scope (nil-safe: skill.Registry methods tolerate a nil receiver).
 	var skillReg *skill.Registry
+	// mcpSchemaHints is also consulted by the conductor's single-command
+	// approve path (HandleChatApprove, see api.NewRouter's call site below)
+	// so it lives at this scope — nil when the agent loop is disabled or the
+	// sandbox-mcp catalog was unavailable at startup, which just means that
+	// path keeps its pre-existing shell-only behavior (InferMCPToolFromShellGuess
+	// is nil-map-safe: a nil/empty map never matches, same as "not found").
+	var mcpSchemaHints map[string]string
 	// resilientLLM is the agent loop's circuit-breaker wrapper. Kept at its
 	// concrete type (not just the agent.LLM interface it also satisfies) so the
 	// /api/v1/llm/status handler can read its breaker/latency snapshot; nil when
@@ -346,6 +363,26 @@ func main() {
 				curatorWorker.Submit(traj)
 			}
 
+			// MCP_TOOL parity for the graph backend (and, since every sub-agent
+			// below is always an agent.Runner regardless of top-level
+			// YUMMI_AGENT_BACKEND, for Eino's sub-agents too): a graph Runner
+			// previously had zero access to the 54 cataloged pentest tools or
+			// the 7 terminal-session verbs sandbox-mcp exposes — only raw shell
+			// via RUN_COMMAND. graphMCPExec reuses the exact same
+			// execution.Store/gateway/threatscan pipeline StoreExecer already
+			// goes through; mcpCatalogLine is ONE compact names-only line (no
+			// per-tool JSON schemas — see agent.Config.MCPCatalog's doc comment
+			// on why that would cost real context on every single step render).
+			// Best-effort: an unreachable sandbox at startup just leaves
+			// MCPCatalog empty, degrading to the pre-existing shell-only
+			// behavior rather than failing agent construction.
+			graphMCPExec := agent.NewStoreMCPExecer(executionStore, 10*time.Minute)
+			var mcpCatalogLine string
+			mcpCatalogLine, mcpSchemaHints = buildMCPCatalog(ctx, sandboxMCPClient)
+			if mcpCatalogLine != "" {
+				slog.Info("graph backend: MCP_TOOL catalog loaded", "tool_count", strings.Count(mcpCatalogLine, ",")+1)
+			}
+
 			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
 			// execution pipeline. Built with no SubAgents of their own, capping
 			// handoff depth at 1 (no recursion).
@@ -363,11 +400,15 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					agent.Config{
-						Persona:      d.Persona(),
-						Knowledge:    ks,
-						Retrieval:    retrieval,
-						Skills:       skillReg.Subset(d.Skills),
-						SkillCurator: skillCuratorFn,
+						Persona:        d.Persona(),
+						Knowledge:      ks,
+						Retrieval:      retrieval,
+						Skills:         skillReg.Subset(d.Skills),
+						SkillCurator:   skillCuratorFn,
+						MCPExec:        graphMCPExec,
+						MCPCatalog:     mcpCatalogLine,
+						MCPSchemaHints: mcpSchemaHints,
+						LocalModel:     cfg.UsesLocalModel(),
 						// Sub-agents get a higher step budget than the top-level
 						// agent's default (15): a HANDOFF delegates one focused,
 						// narrower subtask, so the specialist should be able to
@@ -431,7 +472,18 @@ func main() {
 						// audit call runs on whichever model is actually
 						// driving this task, self-consistent regardless of
 						// whether that's Ollama or an override.
-						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, 0),
+						//
+						// Timeout is explicit and path-aware, not left at
+						// NewOpenAIChatClient's shared 60s default: a LOCAL
+						// target (einoTargetsSameOllama) genuinely needs
+						// minutes on a large audit prompt — live-reproduced
+						// elsewhere in this file's history (see llm.Client's
+						// own defaultHTTPTimeout comment) — while a real
+						// OpenRouter/cloud override returns in seconds
+						// regardless of prompt size, so it keeps the
+						// constructor's own tighter default rather than
+						// inheriting local's extra slack it never needs.
+						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, planLLMTimeout),
 						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
@@ -456,13 +508,17 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					agent.Config{ // defaults: budget 15, ask_permission mode
-						Persona:       agentPersona,
-						Knowledge:     ks,
-						Retrieval:     retrieval,
-						Skills:        skillReg,
-						SubAgents:     subAgents,
-						SubAgentHints: subAgentHints,
-						SkillCurator:  skillCuratorFn,
+						Persona:        agentPersona,
+						Knowledge:      ks,
+						Retrieval:      retrieval,
+						Skills:         skillReg,
+						SubAgents:      subAgents,
+						SubAgentHints:  subAgentHints,
+						SkillCurator:   skillCuratorFn,
+						MCPExec:        graphMCPExec,
+						MCPCatalog:     mcpCatalogLine,
+						MCPSchemaHints: mcpSchemaHints,
+						LocalModel:     cfg.UsesLocalModel(),
 						// Room for the sub-agents' own StepBudget:40 above to actually
 						// run to completion — the default 10m ceiling was sized for
 						// StepBudget:15 (matches the top-level loop); a sub-agent with
@@ -503,7 +559,7 @@ func main() {
 	)
 	go agg.Start(ctx)
 
-	router := api.NewRouter(sm, ks, skillReg, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, resilientLLM, agg, taskStore, taskRunner, curatorStore, sandboxMCPClient)
+	router := api.NewRouter(sm, ks, skillReg, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, resilientLLM, agg, taskStore, taskRunner, curatorStore, sandboxMCPClient, mcpSchemaHints)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	srv := &http.Server{
@@ -511,11 +567,13 @@ func main() {
 		Handler: router,
 		// ReadTimeout covers header + body read; 30s is generous for any request.
 		ReadTimeout: 30 * time.Second,
-		// WriteTimeout must accommodate LLM inference latency, which can run
-		// 20-45+ seconds on CPU-heavy loads. Setting to 120s gives headroom
-		// while still bounding runaway connections. Per-route tighter timeouts
-		// (chat handler uses a 90s context) enforce the actual LLM budget.
-		WriteTimeout: 120 * time.Second,
+		// WriteTimeout must exceed the router's own RequestTimeout middleware
+		// (cfg.RequestTimeout(), applied in routes.go) with margin for response
+		// serialization, or the server would cut the TCP write before that
+		// middleware even gets to respond — derived from it, not an
+		// independent literal, so the local/cloud split in config.go can
+		// never leave this one lagging behind.
+		WriteTimeout: cfg.RequestTimeout() + 30*time.Second,
 		IdleTimeout:  90 * time.Second,
 	}
 
@@ -541,4 +599,62 @@ func main() {
 	}
 
 	slog.Info("orchestrator stopped")
+}
+
+// buildMCPCatalog renders the sandbox-mcp tool catalog for the graph
+// backend: catalogLine is ONE compact, names-only line for the step prompt —
+// see agent.Config.MCPCatalog's doc comment for why this must stay terse
+// rather than a per-tool schema dump (graph re-renders its entire system
+// prompt from scratch every step, with no conversation history to amortize
+// the cost against). schemaHints is NOT prompt-injected at all — it is kept
+// in memory and consulted only when a specific tool call actually fails
+// (see node_tool.go's MCP branch), to turn a terse schema-validation
+// rejection into something the model can self-correct from on the next
+// attempt. Live-observed need for this: jinx-20b guessed term_open's session
+// field was named "name"; the real field is "label", and the raw validator
+// error ("unexpected additional properties") never said so — the model had
+// no way to recover without this. Best-effort throughout: a failed or
+// not-yet-up sandbox at startup just returns ("", nil), leaving MCP_TOOL
+// unavailable for this process lifetime (degrades to graph's pre-existing
+// shell-only behavior) — never fatal to orchestrator startup.
+func buildMCPCatalog(ctx context.Context, client *sandboxmcp.Client) (catalogLine string, schemaHints map[string]string) {
+	listCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	tools, err := client.ListTools(listCtx)
+	if err != nil {
+		slog.Warn("mcp catalog unavailable for graph backend; MCP_TOOL disabled until next restart", "error", err)
+		return "", nil
+	}
+	names := make([]string, 0, len(tools))
+	hints := make(map[string]string, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+		if fields := schemaFieldNames(t.InputSchema); len(fields) > 0 {
+			hints[t.Name] = strings.Join(fields, ", ")
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", "), hints
+}
+
+// schemaFieldNames extracts property names from an MCP tool's client-side
+// InputSchema — a map[string]any JSON Schema object per mcp.Tool's own doc
+// comment ("From the client, this field will hold the default JSON
+// marshaling of the server's input schema"). Returns nil on any shape this
+// doesn't recognize rather than guessing.
+func schemaFieldNames(inputSchema any) []string {
+	schema, ok := inputSchema.(map[string]any)
+	if !ok {
+		return nil
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

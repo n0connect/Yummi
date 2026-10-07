@@ -12,7 +12,7 @@ func consultNode(ctx context.Context, s *GraphState) (string, error) {
 	if !ok {
 		return "", ErrTaskNotFound
 	}
-	system := StepSystemPrompt(s.cfg.Persona)
+	system := StepSystemPrompt(s.cfg.Persona, s.cfg.MCPCatalog, s.cfg.LocalModel)
 	prompt := BuildStepPrompt(task, Wrap(s.consultTag, s.consultBody), s.memCtx.Summary, s.buildPreamble(ctx, task))
 
 	raw, err := s.llm.Chat(ctx, system, prompt)
