@@ -205,6 +205,64 @@ func unknownToolHandler(_ context.Context, name, _ string) (string, error) {
 	), nil
 }
 
+// resumeEvidenceDigestLimit bounds how many command/result pairs the resume
+// digest carries, so a long pre-pause run doesn't blow out the opening
+// message with everything the task ever did.
+const resumeEvidenceDigestLimit = 20
+
+// buildResumeEvidenceDigest reconstructs a compact, server-authored record of
+// what this task already did before it paused, from the durable
+// agent_activity log (ListActivity is session-scoped, so results are filtered
+// down to this task's own events). See the resumeMsg doc comment: Eino's
+// native chat history does not survive a pause, so without this the resumed
+// conversation's only continuity is the terse pause question/answer — it has
+// no idea it already got code execution, read a flag, or exhausted ten curl
+// variants, and reliably redoes recon from scratch instead of building on
+// what it already found.
+func buildResumeEvidenceDigest(store *agent.Store, sessionID, taskID string) string {
+	if store == nil {
+		return ""
+	}
+	events := store.ListActivity(sessionID, 500)
+	type cmdResult struct{ command, result string }
+	var pairs []cmdResult
+	var pendingCmd string
+	have := false
+	for _, e := range events {
+		if e.TaskID != taskID {
+			continue
+		}
+		switch e.Kind {
+		case agent.ActCommand:
+			pendingCmd, have = e.Detail, true
+		case agent.ActCommandDone:
+			if have {
+				pairs = append(pairs, cmdResult{pendingCmd, e.Detail})
+				have = false
+			}
+		}
+	}
+	if have {
+		pairs = append(pairs, cmdResult{pendingCmd, "(no result recorded before the pause)"})
+	}
+	if len(pairs) == 0 {
+		return ""
+	}
+	if len(pairs) > resumeEvidenceDigestLimit {
+		pairs = pairs[len(pairs)-resumeEvidenceDigestLimit:]
+	}
+	var b strings.Builder
+	b.WriteString("EVIDENCE DIGEST (server-recorded — commands already run before this pause; do NOT repeat these, build on them):\n")
+	for _, p := range pairs {
+		result := agent.SanitizeAgentText(p.result)
+		if rs := []rune(result); len(rs) > 300 {
+			result = string(rs[:300]) + "…"
+		}
+		fmt.Fprintf(&b, "- %s\n  RESULT: %s\n", strings.TrimSpace(p.command), strings.ReplaceAll(result, "\n", "\n  "))
+	}
+	return b.String()
+}
+
 func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	t, ok := r.store.Get(task.ID)
 	if !ok {
@@ -468,6 +526,14 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 				t.Goal, priorQuestion, answer)
 		} else {
 			initialGoal = fmt.Sprintf("Resuming task toward the original goal: %s\n\nRecovery guidance: %s", t.Goal, answer)
+		}
+		// Without this, the opening message above is all the resumed
+		// conversation gets — no record of what already ran. Live-observed:
+		// an operator granted more steps after a budget pause and watched the
+		// model restart with ping/nmap/whatweb from zero despite already
+		// having RCE and the user flag, because nothing told it otherwise.
+		if digest := buildResumeEvidenceDigest(r.store, t.SessionID, task.ID); digest != "" {
+			initialGoal += "\n\n" + digest
 		}
 	}
 

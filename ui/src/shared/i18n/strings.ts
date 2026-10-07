@@ -326,6 +326,8 @@ const en = {
   'taskTracker.resumeReplyPlaceholder': 'Answer the question, or leave empty to just continue…',
   'taskTracker.resume': 'Resume',
   'taskTracker.abandon': 'Abandon task',
+  'taskTracker.stepBudgetQuickReplyLabel': 'Grant more steps',
+  'taskTracker.resumeStepBudgetPlaceholder': 'Or type a custom step count (max 30)…',
 
   // ── taskSummary ──────────────────────────────────────────────────────────
   'taskSummary.title': 'Task Summary',
@@ -448,6 +450,8 @@ const en = {
   'assistant.proposalsHint': '↑↓ Navigate · Enter Run · Esc Close · ⌘C Copy',
   'assistant.run': 'Run',
   'assistant.inputPlaceholderTaskRunning': 'Task running — stop or watch...',
+  'assistant.inputPlaceholderTaskPaused': 'Agent paused — type your answer, or "stop" to end the task...',
+  'assistant.inputPlaceholderStepBudget': 'Agent paused — type a step count (max 30), or "stop" to end the task...',
   'assistant.inputPlaceholderProcessing': 'Processing...',
   'assistant.inputPlaceholderProposalReady': 'Press Enter to run the selected command...',
   'assistant.inputPlaceholderDefault': 'Write your goal or task...',
@@ -881,6 +885,8 @@ const tr = {
   'taskTracker.resumeReplyPlaceholder': 'Soruyu yanıtlayın, ya da boş bırakıp sadece devam ettirin…',
   'taskTracker.resume': 'Devam ettir',
   'taskTracker.abandon': 'Görevi bırak',
+  'taskTracker.stepBudgetQuickReplyLabel': 'Daha fazla adım ver',
+  'taskTracker.resumeStepBudgetPlaceholder': 'Veya özel bir adım sayısı yazın (en fazla 30)…',
 
   // ── taskSummary ──────────────────────────────────────────────────────────
   'taskSummary.title': 'Görev Özeti',
@@ -1003,6 +1009,8 @@ const tr = {
   'assistant.proposalsHint': '↑↓ Gezin · Enter Çalıştır · Esc Kapat · ⌘C Kopyala',
   'assistant.run': 'Çalıştır',
   'assistant.inputPlaceholderTaskRunning': 'Görev çalışıyor — durdur veya izle...',
+  'assistant.inputPlaceholderTaskPaused': 'Ajan duraklatıldı — yanıtınızı yazın ya da görevi bitirmek için "stop" yazın...',
+  'assistant.inputPlaceholderStepBudget': 'Ajan duraklatıldı — bir adım sayısı yazın (en fazla 30) ya da bitirmek için "stop" yazın...',
   'assistant.inputPlaceholderProcessing': 'İşleniyor...',
   'assistant.inputPlaceholderProposalReady': 'Enter ile seçili komutu çalıştır...',
   'assistant.inputPlaceholderDefault': 'Hedefini veya görevini yaz...',

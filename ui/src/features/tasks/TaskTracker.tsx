@@ -242,6 +242,18 @@ export function TaskTracker({
   const [replyText, setReplyText] = useState('')
   const pct =
     task.step_budget > 0 ? Math.min(100, (task.steps_used / task.step_budget) * 100) : 0
+
+  // The Eino backend pauses with this exact, untranslated prefix (see
+  // orchestrator's eino/budget.go budgetPausePrefix) when a task's step
+  // budget runs out mid-goal — distinct from an ask_operator pause, which can
+  // ask about anything. A free-text box for "type a number, or the word
+  // stop" is real friction for something that's really a 4-way choice, and a
+  // typo here silently falls back to the backend's default grant (10) with no
+  // feedback — operator-observed confusion mistook this for the agent
+  // "restarting" rather than a budget decision. One-click buttons make the
+  // decision explicit and remove the typo path entirely; the free-text input
+  // still works underneath for an atypical grant amount.
+  const isBudgetPause = task.status === 'paused' && (task.question ?? '').startsWith('Step budget exhausted')
   const terminal = isTerminal(task.status)
   const recordTitles = new Set(
     (task.finding_records ?? []).map((record) =>
@@ -353,6 +365,23 @@ export function TaskTracker({
               {t('taskTracker.taskFailedNote')}
             </p>
           )}
+          {isBudgetPause && (
+            <div className="tt-budget-quick-replies" role="group" aria-label={t('taskTracker.stepBudgetQuickReplyLabel')}>
+              {[10, 20, 30].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className="tt-btn tt-btn-budget"
+                  onClick={() => onResume(String(n))}
+                >
+                  +{n}
+                </button>
+              ))}
+              <button type="button" className="tt-btn tt-btn-ghost" onClick={onStop}>
+                {t('taskTracker.stop')}
+              </button>
+            </div>
+          )}
           <div className="tt-resume">
             <input
               className="tt-resume-input"
@@ -365,8 +394,16 @@ export function TaskTracker({
                   setReplyText('')
                 }
               }}
-              placeholder={t('taskTracker.resumeReplyPlaceholder')}
-              aria-label={t('taskTracker.resumeReplyPlaceholder')}
+              placeholder={
+                isBudgetPause
+                  ? t('taskTracker.resumeStepBudgetPlaceholder')
+                  : t('taskTracker.resumeReplyPlaceholder')
+              }
+              aria-label={
+                isBudgetPause
+                  ? t('taskTracker.resumeStepBudgetPlaceholder')
+                  : t('taskTracker.resumeReplyPlaceholder')
+              }
             />
             <div className="tt-actions">
               <button

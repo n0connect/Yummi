@@ -1490,6 +1490,15 @@ export function AssistantPanel({
   // card contradicted it. Found live: the header kept showing "Task
   // running" for a task that had been sitting paused since a prior session.
   const taskPaused = activeTask?.status === 'paused'
+  // Mirrors TaskTracker's own isBudgetPause check (same untranslated backend
+  // prefix, eino/budget.go's budgetPausePrefix) — this box is a second,
+  // equally-live channel for answering the same pause (HandleChat special-
+  // cases a paused task's open question before normal intent classification),
+  // so it needs the same disambiguation: a plain "Task running" placeholder
+  // on a paused task reads as the agent still working, not as waiting on a
+  // step-count decision — operator-observed confusion mistook a correctly
+  // resumed task for a brand-new one for exactly this reason.
+  const isBudgetPause = taskPaused && (activeTask?.question ?? '').startsWith('Step budget exhausted')
   const isFreshWorkspace =
     !historyLoading &&
     !historyError &&
@@ -1904,13 +1913,17 @@ export function AssistantPanel({
               onKeyDown={handleKeyDown}
               rows={1}
               placeholder={
-                taskRunning
-                  ? t('assistant.inputPlaceholderTaskRunning')
-                  : isLoading
-                    ? t('assistant.inputPlaceholderProcessing')
-                    : proposals.length > 0
-                      ? t('assistant.inputPlaceholderProposalReady')
-                      : t('assistant.inputPlaceholderDefault')
+                isBudgetPause
+                  ? t('assistant.inputPlaceholderStepBudget')
+                  : taskPaused
+                    ? t('assistant.inputPlaceholderTaskPaused')
+                    : taskRunning
+                      ? t('assistant.inputPlaceholderTaskRunning')
+                      : isLoading
+                        ? t('assistant.inputPlaceholderProcessing')
+                        : proposals.length > 0
+                          ? t('assistant.inputPlaceholderProposalReady')
+                          : t('assistant.inputPlaceholderDefault')
               }
               aria-label={t('assistant.chatInputAriaLabel')}
               // While proposals are showing, this input drives selection over

@@ -556,6 +556,21 @@
   margin-top: var(--space-sm);
   word-break: break-word;
 }
+.tt-budget-quick-replies {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+}
+.tt-btn-budget {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.tt-btn-budget:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
 .tt-resume {
   display: flex;
   flex-direction: column;

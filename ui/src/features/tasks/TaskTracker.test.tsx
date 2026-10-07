@@ -96,6 +96,67 @@ describe('TaskTracker paused resume', () => {
     fireEvent.click(screen.getByText('Devam ettir'))
     expect(onResume).toHaveBeenCalledWith('')
   })
+
+  // Regression test for a live-observed bug: an operator granting more steps
+  // via the free-text box typed an answer the model could never distinguish
+  // from an ordinary ask_operator reply, and the composer elsewhere in the
+  // app still read "Task running" for a task that had actually paused. The
+  // one-click +10/+20/+30 buttons remove the free-text/typo path entirely
+  // for this specific, very common pause shape.
+  it('shows one-click step-grant buttons for a step-budget pause, not a generic ask_operator one', () => {
+    const task: AgentTask = {
+      id: 'task-4',
+      session_id: 'session-1',
+      goal: 'Compromise target',
+      status: 'paused',
+      steps_used: 15,
+      step_budget: 15,
+      question:
+        'Step budget exhausted (15 steps). Reply with a number to grant that many more steps (max 30 per decision), or "stop" to end the task here.'
+    }
+    const onResume = vi.fn()
+    const onStop = vi.fn()
+
+    render(
+      <TaskTracker
+        liveTask={task}
+        onClose={() => {}}
+        onApprove={() => {}}
+        onStop={onStop}
+        onResume={onResume}
+      />
+    )
+
+    fireEvent.click(screen.getByText('+10'))
+    expect(onResume).toHaveBeenCalledWith('10')
+
+    fireEvent.click(screen.getByText('+30'))
+    expect(onResume).toHaveBeenCalledWith('30')
+  })
+
+  it('does not show step-grant buttons for an ordinary ask_operator pause', () => {
+    const task: AgentTask = {
+      id: 'task-5',
+      session_id: 'session-1',
+      goal: 'Recon target',
+      status: 'paused',
+      steps_used: 6,
+      step_budget: 15,
+      question: 'Halted after 6 consecutive command failures. Operator guidance needed.'
+    }
+
+    render(
+      <TaskTracker
+        liveTask={task}
+        onClose={() => {}}
+        onApprove={() => {}}
+        onStop={() => {}}
+        onResume={() => {}}
+      />
+    )
+
+    expect(screen.queryByText('+10')).toBeNull()
+  })
 })
 
 describe('TaskTracker concurrent sub-agent approvals', () => {
