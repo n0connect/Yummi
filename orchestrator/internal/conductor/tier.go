@@ -32,6 +32,22 @@ type TierRegistry struct {
 // (4b/8b/14b/32b) this registry used before. A third or fourth named tier
 // here would have to alias one of these two same models under a different
 // name, which is worse than just not pretending a finer distinction exists.
+//
+// `standard` (20B) is NOT recommended for autonomous agent use — live-tested
+// (2026-10-07, a gpt-oss-20b derivative, graph AND Eino backends, a real
+// multi-stage CVE lab): it reliably lost track of the actual target IP
+// across turns, invented nonexistent CLI syntax instead of using the
+// agent's own tool-calling protocol, and needed deterministic server-side
+// correction for failures a human operator would consider basic. A real
+// OpenRouter frontier model, tested the same day against the same lab,
+// tracked the target correctly for 50+ turns and wrote working custom
+// exploit code. 20B is kept ONLY as the lightweight default for trying the
+// chat/UI flow without a large download; it is not a supported choice for
+// `make start`-driven autonomous tasks. For real autonomous use, run
+// `expert` (gpt-oss:120b) or point YUMMI_OLLAMA_MODEL at a genuinely large
+// local model — llama3.3:70b, qwen2.5:72b, qwen3:32b or larger, or
+// mixtral:8x22b are all realistic floors — or use an OpenRouter/cloud
+// override instead of staying local.
 func DefaultTierRegistry() *TierRegistry {
 	return &TierRegistry{
 		tiers: map[Tier]TierConfig{
@@ -41,7 +57,7 @@ func DefaultTierRegistry() *TierRegistry {
 				MaxTokens:   4096,
 				NumCtx:      32768,
 				Thinking:    false,
-				Description: "20B parameters (MXFP4) — runs on 16GB+ RAM, the recommended default.",
+				Description: "20B parameters (MXFP4) — a lightweight quick-start default for trying the chat/UI flow, nothing more. NOT supported for autonomous multi-step agent tasks (live-tested: loses the target, invents tool syntax, needs server-side correction to function at all). For autonomous use, pick the expert tier, a genuinely large local model (llama3.3:70b / qwen2.5:72b / qwen3:32b+ / mixtral:8x22b), or an OpenRouter cloud model.",
 			},
 			TierExpert: {
 				Tier:        TierExpert,
@@ -49,7 +65,7 @@ func DefaultTierRegistry() *TierRegistry {
 				MaxTokens:   8192,
 				NumCtx:      32768,
 				Thinking:    false,
-				Description: "120B parameters (MXFP4) — workstation-grade hardware, a single 80GB GPU or 64GB+ Mac with offload.",
+				Description: "120B parameters (MXFP4) — workstation-grade hardware, a single 80GB GPU or 64GB+ Mac with offload. The recommended floor for autonomous multi-step work if staying fully local; a cloud override is the realistic alternative on smaller hardware.",
 			},
 		},
 	}

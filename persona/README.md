@@ -32,6 +32,8 @@ Tiers are selected via `YUMMI_OLLAMA_TIER`. The actual model/context/thinking-mo
 
 Only two tiers exist because gpt-oss only ships in two real sizes on Ollama — a third or fourth name would just alias one of these two models under a different label.
 
+**`standard`/20B is a floor for autonomous work, not a recommendation** — live-tested (2026-10-07) against a real CVE lab, it did not reliably track the target or use the agent's tool-calling protocol across a multi-step task. `expert`, a larger local model (70B+), or an OpenRouter override is the realistic choice for sustained autonomy; see `tier.go`'s `DefaultTierRegistry` doc comment for the full writeup.
+
 Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Without an explicit model, `YUMMI_OLLAMA_TIER` selects the matching preset.
 
 **`tier_capabilities/*.yaml` is currently reference documentation only** — each file describes that tier's intended strengths/limitations for a human reader, but no Go code reads this directory (verified: `grep -rn tier_capabilities orchestrator --include='*.go'` returns nothing). If you change a tier's actual behavior, edit `tier.go`'s `DefaultTierRegistry()` map directly; update the matching `tier_capabilities/<name>.yaml` afterward to keep the description honest, but know that editing the YAML alone changes nothing at runtime.

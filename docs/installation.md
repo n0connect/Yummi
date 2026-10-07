@@ -292,14 +292,16 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 `YUMMI_OLLAMA_TIER` selects a preset (model + context window + thinking mode) from `orchestrator/internal/conductor/tier.go`. These are the **only two presets that exist** — OpenAI's gpt-oss family only ships in two real sizes on Ollama, unlike the four-rung ladder a single dense model family (e.g. qwen3's 4b/8b/14b/32b) can offer. There's no config file to tune this beyond what's below. If both variables are set, the more specific `YUMMI_OLLAMA_MODEL` override wins.
 
+**`standard`/20B is a floor, not a recommendation, for autonomous work.** Live-tested (2026-10-07) against a real multi-stage CVE lab on both agent backends: a 20B-class local model reliably lost track of the actual target across turns and did not reliably use the agent's own tool-calling protocol without server-side correction. It's fine for chat-style single-command suggestions; it is genuinely not a safe default to expect full, unattended multi-step autonomy from. For that, use `expert`, a larger local model (70B+), or point `YUMMI_EINO_MODEL_*` at an OpenRouter/cloud model — a real frontier model tracked a 50+-turn task correctly in the same test.
+
 | Tier | Model | Context window | Thinking mode | Approximate download size¹ | Rough RAM/VRAM needed¹ | Good fit for |
 |---|---|---|---|---|---|---|
-| `standard` | `gpt-oss:20b` | 32,768 tokens | off | ~13 GB (MXFP4) | 16 GB+ | **The registry, Compose, and install default** — native reliable tool-calling, pairs with the Eino backend; runs without a dedicated GPU |
-| `expert` | `gpt-oss:120b` | 32,768 tokens | off | ~65 GB (MXFP4) | 80 GB GPU, or 64 GB+ Mac with offload | Workstation-class hardware; same architecture and tool-calling reliability at ~6x the parameters |
+| `standard` | `gpt-oss:20b` | 32,768 tokens | off | ~13 GB (MXFP4) | 16 GB+ | The install/Compose default, runs without a dedicated GPU — fine for chat suggestions; **not reliable for sustained autonomous tasks** (see above) |
+| `expert` | `gpt-oss:120b` | 32,768 tokens | off | ~65 GB (MXFP4) | 80 GB GPU, or 64 GB+ Mac with offload | **The realistic recommended tier for autonomous multi-step work if staying fully local** |
 
 ¹ *Sizes and RAM figures are approximate, based on Ollama's default MXFP4 quantization for each tag at the time of writing — always let `ollama pull` and your own `ollama ps`/Activity Monitor be the source of truth for your actual hardware, not this table.*
 
-**The install and runtime defaults are intentionally the same:** `make install`, `make start`, Compose, and `scripts/doctor.sh` all use `gpt-oss:20b` unless `YUMMI_OLLAMA_MODEL`/`OLLAMA_MODEL` overrides it. The opt-in live agent test (`make test-agent-live`) still defaults `LIVE_TEST_MODEL` to a smaller qwen3 tag, deliberately independent of this tier registry — see that Makefile target's own comment for why.
+**The install and runtime defaults stay small on purpose, for a fast first run, not as a capability endorsement:** `make install`, `make start`, Compose, and `scripts/doctor.sh` all use `gpt-oss:20b` unless `YUMMI_OLLAMA_MODEL`/`OLLAMA_MODEL` overrides it. If you intend to actually run autonomous multi-step tasks rather than just try the chat flow, raise this before you start — `YUMMI_OLLAMA_TIER=expert`, a larger local model, or an OpenRouter override (see "Cloud & Frontier Models via OpenRouter or OpenAI Endpoints" below). The opt-in live agent test (`make test-agent-live`) still defaults `LIVE_TEST_MODEL` to a smaller qwen3 tag, deliberately independent of this tier registry — see that Makefile target's own comment for why.
 
 Set a tier by exporting the env var before `make start`, or editing `docker-compose.yml`'s `orchestrator.environment.YUMMI_OLLAMA_TIER` directly:
 ```bash
@@ -390,8 +392,8 @@ make conf
    - **CRITICAL**: The UI language is compiled directly into the React/Vite single-page application at **build time**. It cannot be changed at runtime via an in-app toggle. To switch languages later, run `make conf` and rebuild (`make start` or `make docker-ui`).
 
 3. **Agent Backend Engine (`YUMMI_AGENT_BACKEND`)**:
-   - `1) Graph`: 11-node deterministic state machine using the closed tag protocol (`RUN_COMMAND`, `FINISH`, `HANDOFF`, etc.). Optimized for small local models (`gpt-oss:20b`, `qwen3:8b`).
-   - `2) Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling against larger models running on local Ollama.
+   - `1) Graph`: 11-node deterministic state machine using the closed tag protocol (`RUN_COMMAND`, `FINISH`, `HANDOFF`, etc.). The architecture tolerates small local models (`gpt-oss:20b`, `qwen3:8b`) better than free-form prompting would, but "tolerates" is not "reliable" — live-tested, a 20B-class model still lost the target and needed server-side correction. For autonomous tasks, point this at a large local model (70B+) or a cloud override, not a small one.
+   - `2) Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling — needs a genuinely large model (70B+ local, or cloud) for reliable autonomous use; a small model's native tool-calling is not inherently more trustworthy than Graph's tag protocol.
    - `3) Eino Cloud (OpenRouter / OpenAI)`: Cloud frontier models with native tool-calling:
      - Provider selection: OpenRouter (`https://openrouter.ai/api/v1`), OpenAI (`https://api.openai.com/v1`), or Custom base URL.
      - Model name: e.g., `anthropic/claude-3.5-sonnet`, `deepseek/deepseek-chat`, `openai/gpt-4o`.

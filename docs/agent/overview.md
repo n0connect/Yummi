@@ -25,6 +25,18 @@ The agent is the autonomous offensive security engine of Yummi. It translates hi
 +-----------------------------------------------------------------------------------+
 ```
 
+> **"Optimized for"/"Scaled for" above describes architectural intent, not a
+> tested capability floor.** Live-tested (2026-10-07) against a real
+> multi-stage CVE lab: a 20B-class local model was NOT reliably capable of
+> sustained multi-step autonomy on either backend — it lost track of the
+> actual target and needed server-side correction to use its own
+> tool-calling protocol. Both backends' tag/tool-call MECHANISMS worked
+> correctly throughout (confirmed via a real OpenRouter frontier model in
+> the same test, which completed 50+ turns with only one, unrelated,
+> correction needed); the gap is model capability, not architecture. See
+> `orchestrator/internal/conductor/tier.go`'s `DefaultTierRegistry` doc
+> comment for the full comparison and a realistic model recommendation.
+
 ---
 
 ## Core System Architecture Principles

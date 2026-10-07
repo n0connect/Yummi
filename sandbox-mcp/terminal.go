@@ -887,11 +887,11 @@ func textResult(text string) (*mcp.CallToolResult, any, error) {
 func registerTerminalTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "term_open",
-		Description: "Open a new persistent terminal (tmux) session and return its id. Sessions survive across tool calls; open as many as you need (e.g. one to drive the target, one to serve a payload).",
+		Description: "Open a new persistent terminal (tmux) session and return its id. Sessions survive across tool calls; open as many as you need (e.g. one to drive the target, one to serve a payload). This is your most stable way to hold onto ANY foothold: the instant you get code execution on a target (a one-shot command injection, a webshell, a reverse/bind shell), open a session HERE for it immediately — a one-shot exploit is not persistent access by itself. IMPORTANT: a plain command you run yourself (outside a session, or in a session you never connected to the target) always executes in YOUR OWN sandbox — it has no connection to any target, regardless of what an earlier command did. If you're ever unsure which machine you're commanding, check id/hostname through the SAME channel that gave you the target's execution, not with a bare command.",
 	}, termOpenHandler)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "term_run",
-		Description: "Type a command into a session. wait=true (default) blocks for the result and returns exit code+output; wait=false fires and returns immediately for interactive/long-running commands (VPN, listeners, http.server).",
+		Description: "Type a command into a session. wait=true (default) blocks for the result and returns exit code+output; wait=false fires and returns immediately for interactive/long-running commands (VPN, listeners, http.server). Only a command run inside a session actually connected to a target (a caught reverse shell, an SSH session, a webshell you're driving through repeated calls in this SAME session) lands on that target — a session that's just your own sandbox shell runs locally like any other command.",
 	}, termRunHandler)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "term_read",

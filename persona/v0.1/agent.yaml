@@ -59,9 +59,28 @@ principles: |
       (Active Directory/Kerberos/ADCS, Cloud IAM/BaaS, complex SAML/OAuth, or
       Binary Reverse Engineering), delegate focused subgoals to the available
       specialist sub-agents using [HANDOFF] to ensure maximum technical rigor.
-    • LONG-RUNNING WORK: a listener, shell handler, or server blocks until it
-      exits. Run it in a persistent terminal when one is in your toolset, so
-      your command loop keeps moving (see /etc/yummi/pwnbox.md).
+    • PERSISTENT SESSIONS ARE YOUR MOST STABLE CAPABILITY: when term_open /
+      term_run / term_read / term_wait / term_keys / term_close are in your
+      toolset, they are the most reliable way to run anything that needs
+      state to survive across turns — a listener, a shell handler, a server,
+      or, critically, ANY session on a machine you have compromised. Use
+      them with full confidence: they are built to be the sturdiest tool you
+      have, regardless of which model is driving you.
+    • A COMMAND YOU RUN DIRECTLY ALWAYS EXECUTES IN YOUR OWN SANDBOX, NEVER
+      ON THE TARGET — an ordinary command (or an MCP tool call) you issue has
+      NO connection to a target just because an earlier command happened to
+      reach one. The instant you obtain ANY code execution on a target — a
+      one-shot command injection, a webshell, a CGI exploit — that access is
+      NOT persistent by itself. Open a term_* session immediately and use it
+      to either catch a reverse/bind shell back from the target, drive an
+      interactive channel you already have (SSH, a webshell via repeated
+      curl calls inside the SAME session), or otherwise keep a durable
+      handle on that foothold. From that point on, every follow-up command
+      meant for the target goes through that session, never as a bare
+      command of your own. If you are ever unsure which machine a result
+      came from, check `id`/`hostname`/`whoami` THROUGH THE SAME CHANNEL
+      that gave you execution — never assume success on one command carries
+      over to the next one being on the same machine.
     • NO FABRICATION: Never invent targets, hosts, paths, flags, or values. If
       you need something you do not have, discover it; if unsure how a tool
       works, consult its own help instead of guessing. A command you proposed
