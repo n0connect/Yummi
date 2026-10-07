@@ -45,6 +45,28 @@ func TestScanExfiltrationAllScope(t *testing.T) {
 	}
 }
 
+// TestKnownC2Framework_MetasploitExcludedButOthersStillFire is the
+// regression test for a live-reproduced false positive: the sandbox's own
+// /etc/yummi/pwnbox.md environment manifest mentions "metasploit" as an
+// installed tool (legitimate, first-party content), which tripped
+// known_c2_framework and quarantined an ordinary `cat` read behind a
+// threat-hold approval. metasploit is removed from this pattern because,
+// unlike the rest of it, Yummi legitimately runs and documents it itself;
+// the other five brands are exclusively attacker/target-side and must keep
+// firing — a false negative there would be the worse failure mode.
+func TestKnownC2Framework_MetasploitExcludedButOthersStillFire(t *testing.T) {
+	if got := Scan("Helpers on PATH: msfconsole, msfvenom, searchsploit, metasploit", ScopeContext); contains(got, "known_c2_framework") {
+		t.Fatalf("metasploit alone must no longer trigger known_c2_framework, got %v", got)
+	}
+	for _, brand := range []string{"cobalt strike", "sliver", "havoc", "mythic", "brainworm"} {
+		t.Run(brand, func(t *testing.T) {
+			if got := Scan("the target appears to be running a "+brand+" implant", ScopeContext); !contains(got, "known_c2_framework") {
+				t.Fatalf("%q must still trigger known_c2_framework, got %v", brand, got)
+			}
+		})
+	}
+}
+
 func TestScanContextOnlyPatternsNotInAllScope(t *testing.T) {
 	// A C2 beacon instruction is a context-scope pattern: it must NOT fire in
 	// the narrow "all" scope (keeps all-scope false positives minimal), but MUST

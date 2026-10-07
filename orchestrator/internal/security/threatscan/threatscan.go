@@ -95,8 +95,16 @@ var rawPatterns = []struct {
 	// ── Known offensive-security framework brands (near-zero FP; warn) ───
 	// NOTE: every token must be a distinctive offensive-security tool brand —
 	// never a common English word — or legitimate persona/skill content
-	// false-positives and the whole file is rejected.
-	{`\b(?:cobalt\s*strike|sliver|havoc|mythic|metasploit|brainworm)\b`, "known_c2_framework", ScopeContext},
+	// false-positives and the whole file is rejected. "metasploit" was
+	// removed (live-reproduced false positive): unlike the rest of this
+	// list, it's a legitimate, bundled, first-party tool in Yummi's OWN
+	// sandbox (sandbox/Dockerfile installs it; persona/v0.1/skills content
+	// and the sandbox's own /etc/yummi/pwnbox.md manifest both legitimately
+	// name it as an available tool) — a bare mention is routine operational
+	// vocabulary here, not a signal. The other five brands are exclusively
+	// attacker/target-side C2 frameworks Yummi never legitimately runs or
+	// recommends, so a mention of THOSE stays a strong, near-zero-FP signal.
+	{`\b(?:cobalt\s*strike|sliver|havoc|mythic|brainworm)\b`, "known_c2_framework", ScopeContext},
 	{`\bc2\s+(?:server|channel|infrastructure|beacon)\b`, "c2_explicit", ScopeContext},
 	{`\bcommand\s+and\s+control\b`, "c2_explicit_long", ScopeContext},
 
