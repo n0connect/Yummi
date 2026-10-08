@@ -32,7 +32,7 @@ Tiers are selected via `YUMMI_OLLAMA_TIER`. The actual model/context/thinking-mo
 
 Only two tiers exist because gpt-oss only ships in two real sizes on Ollama — a third or fourth name would just alias one of these two models under a different label.
 
-**`standard`/20B is a floor for autonomous work, not a recommendation** — live-tested (2026-10-07) against a real CVE lab, it did not reliably track the target or use the agent's tool-calling protocol across a multi-step task. `expert`, a larger local model (70B+), or an OpenRouter override is the realistic choice for sustained autonomy; see `tier.go`'s `DefaultTierRegistry` doc comment for the full writeup.
+**`standard`/20B is a floor for autonomous work, not a recommendation** — live-tested (2026-10-07) against a real CVE lab, it did not reliably track the target or use the agent's tool-calling protocol across a multi-step task, and a separate 20B-class run fabricated an entire fake exploit chain with zero real tool calls. `expert`, an equivalently large local model (120B+), or an OpenRouter override is the realistic floor for sustained autonomy — not a 70B-class or smaller tag; see `tier.go`'s `DefaultTierRegistry` doc comment for the full writeup.
 
 Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Without an explicit model, `YUMMI_OLLAMA_TIER` selects the matching preset.
 

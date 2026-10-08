@@ -37,17 +37,20 @@ type TierRegistry struct {
 // (2026-10-07, a gpt-oss-20b derivative, graph AND Eino backends, a real
 // multi-stage CVE lab): it reliably lost track of the actual target IP
 // across turns, invented nonexistent CLI syntax instead of using the
-// agent's own tool-calling protocol, and needed deterministic server-side
-// correction for failures a human operator would consider basic. A real
-// OpenRouter frontier model, tested the same day against the same lab,
-// tracked the target correctly for 50+ turns and wrote working custom
-// exploit code. 20B is kept ONLY as the lightweight default for trying the
-// chat/UI flow without a large download; it is not a supported choice for
-// `make start`-driven autonomous tasks. For real autonomous use, run
-// `expert` (gpt-oss:120b) or point YUMMI_OLLAMA_MODEL at a genuinely large
-// local model — llama3.3:70b, qwen2.5:72b, qwen3:32b or larger, or
-// mixtral:8x22b are all realistic floors — or use an OpenRouter/cloud
-// override instead of staying local.
+// agent's own tool-calling protocol, and on a SEPARATE run (a different
+// 20B-class local tag) called finish with a fully fabricated exploit
+// narrative — wrong target IP, a nonexistent tool, a fake flag — having
+// made zero real tool calls at all. A real OpenRouter frontier model,
+// tested the same week against the same lab, tracked the target correctly
+// across 80+ turns and completed the full chain (RCE, a reverse-shell
+// listener via the agent's own terminal-session tools, and privilege
+// escalation) for real. 20B is kept ONLY as the lightweight default for
+// trying the chat/UI flow without a large download; it is not a supported
+// choice for `make start`-driven autonomous tasks. For real autonomous
+// use, the floor is `expert` (gpt-oss:120b) or an equivalently large local
+// model (120B+ parameters) — not a 70B-class or smaller tag, which is
+// still well below the capability bar this floor is based on — or an
+// OpenRouter/cloud override instead of staying local.
 func DefaultTierRegistry() *TierRegistry {
 	return &TierRegistry{
 		tiers: map[Tier]TierConfig{
@@ -57,7 +60,7 @@ func DefaultTierRegistry() *TierRegistry {
 				MaxTokens:   4096,
 				NumCtx:      32768,
 				Thinking:    false,
-				Description: "20B parameters (MXFP4) — a lightweight quick-start default for trying the chat/UI flow, nothing more. NOT supported for autonomous multi-step agent tasks (live-tested: loses the target, invents tool syntax, needs server-side correction to function at all). For autonomous use, pick the expert tier, a genuinely large local model (llama3.3:70b / qwen2.5:72b / qwen3:32b+ / mixtral:8x22b), or an OpenRouter cloud model.",
+				Description: "20B parameters (MXFP4) — a lightweight quick-start default for trying the chat/UI flow, nothing more. NOT supported for autonomous multi-step agent tasks (live-tested: loses the target, invents tool syntax, needs server-side correction to function at all, and can fabricate an entire fake exploit run with zero real tool calls). For autonomous use, the floor is the expert tier (gpt-oss:120b) or an equivalently large local model (120B+) — not a 70B-class or smaller tag — or an OpenRouter cloud model.",
 			},
 			TierExpert: {
 				Tier:        TierExpert,
