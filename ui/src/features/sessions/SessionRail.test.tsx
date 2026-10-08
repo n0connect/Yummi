@@ -138,4 +138,109 @@ describe('SessionRail', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  // Regression test: export used to fetch ONLY /messages, which silently
+  // dropped every agent task, executed command, and finding — none of those
+  // are ever persisted as chat_messages rows (see handleExport's own doc
+  // comment). This proves the export now merges all four sources and orders
+  // them by their real timestamp, not just whatever happened to be in the
+  // messages table.
+  it('exports the full session — messages, tasks, executions, and findings merged by time', async () => {
+    const mockSessions = [
+      { id: 's1', name: 'Pentest Session Alpha', status: 'active', created_at: 1700000000, updated_at: 1700000000 },
+    ]
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = url.toString()
+      if (urlStr.includes('/sessions/s1/messages')) {
+        return new Response(
+          JSON.stringify([
+            { id: 1, session_id: 's1', role: 'user', content: 'scan the target', created_at: 1000 },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (urlStr.includes('/sessions/s1/tasks')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 't1', session_id: 's1', goal: 'compromise the target', status: 'completed',
+              steps_used: 5, step_budget: 15, summary: 'got root', created_at: 2000,
+            },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (urlStr.includes('/sessions/s1/executions')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'e1', session_id: 's1', status: 'completed', command: 'nmap -sV 198.51.100.10',
+              sanitized_output: 'port 80 open', created_at: 1500,
+            },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (urlStr.includes('/sessions/s1/findings')) {
+        return new Response(
+          JSON.stringify([
+            { id: 'f1', session_id: 's1', severity: 'high', title: 'Apache path traversal', created_at: 2500 },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (urlStr.includes('/api/v1/sessions') && !urlStr.includes('/s1/')) {
+        return new Response(JSON.stringify(mockSessions), { status: 200 })
+      }
+      return new Response(JSON.stringify([]), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    let capturedBlob: Blob | null = null
+    const originalCreateObjectURL = URL.createObjectURL
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob
+      return 'blob:mock'
+    })
+    const originalRevoke = URL.revokeObjectURL
+    URL.revokeObjectURL = vi.fn()
+
+    try {
+      render(
+        <SessionRail open onToggle={() => {}} activeSessionID="s1" refreshKey={0} onSelect={() => {}} />,
+      )
+      await screen.findByText('Pentest Session Alpha')
+
+      fireEvent.click(screen.getByLabelText('Sohbeti dışa aktar'))
+
+      // The export's fetches are async (Promise.all inside the handler) —
+      // wait for the blob to actually land before asserting on it.
+      await vi.waitFor(() => expect(capturedBlob).not.toBeNull())
+
+      // jsdom's Blob polyfill has no .text(), and wrapping it in a Response
+      // here stringifies it instead of reading its content — FileReader is
+      // the one Blob-reading API jsdom actually implements correctly.
+      const text = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error)
+        reader.readAsText(capturedBlob!)
+      })
+      expect(text).toContain('scan the target')
+      expect(text).toContain('compromise the target')
+      expect(text).toContain('got root')
+      expect(text).toContain('nmap -sV 198.51.100.10')
+      expect(text).toContain('port 80 open')
+      expect(text).toContain('Apache path traversal')
+
+      // Chronological order: message(1000) -> execution(1500) -> task(2000) -> finding(2500)
+      const order = ['scan the target', 'nmap -sV 198.51.100.10', 'compromise the target', 'Apache path traversal']
+      const positions = order.map((needle) => text.indexOf(needle))
+      expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevoke
+      vi.unstubAllGlobals()
+    }
+  })
 })

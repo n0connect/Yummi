@@ -290,7 +290,18 @@
 .rail-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 var(--space-md) var(--space-md);
+  /* Right padding is --space-md MINUS the app's own fixed scrollbar width
+     (app.css's ::-webkit-scrollbar { width: 10px }) — this is the only
+     scrolling container in the rail, so its scrollbar already eats 10px
+     out of clientWidth before any padding is applied. Left at a plain
+     --space-md, every .rail-item ends up 10px narrower than its
+     non-scrolling siblings (.rail-search-section, the archive toggle),
+     which lose nothing to a scrollbar. Subtracting that same fixed 10px
+     here cancels it out so the measured content width matches exactly
+     (verified via getBoundingClientRect: 306px both). Operator-reported:
+     wanted row width visually consistent with the search bar and archive
+     button above it. */
+  padding: 0 calc(var(--space-md) - 10px) var(--space-md) var(--space-md);
   box-sizing: border-box;
 }
 .rail-empty { padding: var(--space-lg); color: var(--text-muted); font-size: var(--text-xs); text-align: center; }

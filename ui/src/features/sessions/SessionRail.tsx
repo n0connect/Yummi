@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import type { SessionSummary, ServerChatMessage } from '../../entities/types'
+import type { SessionSummary, ServerChatMessage, AgentTask, ExecutionRecord, Finding } from '../../entities/types'
 import { fetchJSON } from '../../shared/api/http'
 import { t } from '../../shared/i18n/strings'
 import './SessionRail.css'
@@ -171,7 +171,81 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
   const handleExport = useCallback(async (s: SessionSummary, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      const msgs = await fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${s.id}/messages?limit=1000`)
+      // Plain chat_messages rows are only a fraction of what actually
+      // happened in a session — every agent task (goal/plan/summary),
+      // every executed command, and every recorded finding lives in its
+      // own separate table/endpoint and is reconstructed client-side at
+      // view time (AssistantPanel's onTask/onExecution handlers), never
+      // persisted back as a chat_messages row. Exporting messages alone
+      // silently dropped the entire substance of any session with real
+      // agent activity — the commands run, their output, the task's own
+      // plan/summary — leaving only whatever plain chat bubbles existed
+      // around it. Fetching all four sources and merging them by
+      // timestamp reconstructs the same complete picture the live UI
+      // shows, not just its chat sidebar. Each fetch is independently
+      // tolerant of failure (an endpoint erroring or returning nothing)
+      // so one missing data source never blanks the whole export.
+      const [msgs, tasks, executions, findings] = await Promise.all([
+        fetchJSON<ServerChatMessage[]>(`/api/v1/sessions/${s.id}/messages?limit=1000`).catch(() => []),
+        fetchJSON<AgentTask[]>(`/api/v1/sessions/${s.id}/tasks`).catch(() => []),
+        fetchJSON<ExecutionRecord[]>(`/api/v1/sessions/${s.id}/executions?limit=1000`).catch(() => []),
+        fetchJSON<Finding[]>(`/api/v1/sessions/${s.id}/findings`).catch(() => [])
+      ])
+
+      type ExportItem = { at: number; render: () => string[] }
+      const items: ExportItem[] = []
+
+      for (const m of msgs ?? []) {
+        items.push({
+          at: m.created_at ?? 0,
+          render: () => [`### [${m.role.toUpperCase()}]`, '', m.content]
+        })
+      }
+      for (const t of tasks ?? []) {
+        items.push({
+          at: t.created_at ?? 0,
+          render: () => {
+            const out = [`### [AGENT TASK] ${t.status.toUpperCase()}`, '', `**Goal:** ${t.goal}`]
+            if (t.plan && t.plan.length > 0) {
+              out.push('', '**Plan:**')
+              for (const step of t.plan) out.push(`- [${step.status}] ${step.description}`)
+            }
+            if (t.summary) out.push('', '**Summary:**', t.summary)
+            if (t.findings && t.findings.length > 0) {
+              out.push('', '**Findings:**')
+              for (const f of t.findings) out.push(`- ${f}`)
+            }
+            out.push('', `_${t.steps_used}/${t.step_budget} steps used_`)
+            return out
+          }
+        })
+      }
+      for (const ex of executions ?? []) {
+        items.push({
+          at: ex.created_at ?? 0,
+          render: () => {
+            const out = [`### [COMMAND] ${ex.status.toUpperCase()}`, '', '```', ex.command, '```']
+            const output = ex.sanitized_output ?? ex.output
+            if (output) out.push('', 'Output:', '```', output, '```')
+            const error = ex.sanitized_error ?? ex.error
+            if (error) out.push('', `Error: ${error}`)
+            return out
+          }
+        })
+      }
+      for (const f of findings ?? []) {
+        items.push({
+          at: f.created_at ?? 0,
+          render: () => {
+            const out = [`### [FINDING] ${f.severity.toUpperCase()}: ${f.title}`]
+            if (f.description) out.push('', f.description)
+            if (f.evidence) out.push('', 'Evidence:', '```', f.evidence, '```')
+            return out
+          }
+        })
+      }
+      items.sort((a, b) => a.at - b.at)
+
       const lines = [
         `# Yummi Pentest Session: ${s.name}`,
         `Session ID: ${s.id}`,
@@ -180,18 +254,15 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
         '---',
         ''
       ]
-      if (msgs && msgs.length > 0) {
-        for (const m of msgs) {
-          const time = m.created_at ? new Date(m.created_at * 1000).toLocaleString() : ''
-          lines.push(`### [${m.role.toUpperCase()}] ${time}`)
-          lines.push('')
-          lines.push(m.content)
-          lines.push('')
-          lines.push('---')
-          lines.push('')
+      if (items.length > 0) {
+        for (const item of items) {
+          const time = item.at ? new Date(item.at * 1000).toLocaleString() : ''
+          const rendered = item.render()
+          lines.push(`${rendered[0]} ${time}`, ...rendered.slice(1))
+          lines.push('', '---', '')
         }
       } else {
-        lines.push('*(No messages recorded in this session)*')
+        lines.push('*(Nothing recorded in this session)*')
       }
       const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
       const url = URL.createObjectURL(blob)
