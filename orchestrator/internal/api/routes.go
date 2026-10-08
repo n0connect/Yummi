@@ -117,6 +117,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		// sandbox status & direct exec
 		r.Get("/sandbox/status", HandleSandboxStatus(bridge))
 		r.Post("/sandbox/exec", HandleSandboxExec(bridge, pc, sm))
+		r.Post("/sandbox/upload", HandleSandboxUpload(bridge, sm))
 
 		// Proxy & traffic ingestion bridge
 		r.Get("/proxy/status", HandleProxyStatus())

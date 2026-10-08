@@ -68,6 +68,95 @@ func TestExecEmptyCommand(t *testing.T) {
 	}
 }
 
+func TestSanitizeUploadFilename(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"vpn-config.ovpn", "vpn-config.ovpn", false},
+		{".ovpn-auth", ".ovpn-auth", false},
+		{"My VPN Config.ovpn", "My VPN Config.ovpn", false}, // spaces: a completely normal real filename, must not be rejected
+		{"şirket-vpn.ovpn", "şirket-vpn.ovpn", false},       // Unicode: same — real operators have non-ASCII filenames
+		{"../../etc/passwd", "passwd", false},               // Base() strips the traversal; "passwd" alone is a valid name
+		{"/etc/passwd", "passwd", false},
+		{"..", "", true},
+		{"", "", true},
+		{"a;rm -rf /", "a;rm -rf ", false}, // no shell is ever involved (argv, not a shell string) — only "/" is special to Base(), and the trailing one is simply stripped
+		{"$(whoami)", "$(whoami)", false},  // same: inert as a literal argv element
+		{"bad\x00name", "", true},          // NUL and other control bytes stay rejected
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := SanitizeUploadFilename(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("SanitizeUploadFilename(%q) = %q, want error", tt.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SanitizeUploadFilename(%q) unexpected error: %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Fatalf("SanitizeUploadFilename(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// Integration test — only runs when the real sandbox container is available
+// (self-skips otherwise, matching this file's other Integration tests).
+func TestUploadFileIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	b := NewBridge("yummi-sandbox")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := b.Ping(ctx); err != nil {
+		t.Skipf("sandbox container not available: %v", err)
+	}
+
+	name := "yummi-bridge-test-upload.txt"
+	content := "hello from TestUploadFileIntegration\n"
+	if err := b.UploadFile(ctx, name, strings.NewReader(content)); err != nil {
+		t.Fatalf("UploadFile failed: %v", err)
+	}
+	defer func() { _, _ = b.Exec(context.Background(), "rm -f "+desktopDir+"/"+name) }()
+
+	result, err := b.Exec(ctx, "cat "+desktopDir+"/"+name)
+	if err != nil {
+		t.Fatalf("exec cat failed: %v", err)
+	}
+	if result.Stdout != content {
+		t.Fatalf("uploaded content mismatch: got %q, want %q", result.Stdout, content)
+	}
+	// Confirm it landed owned by the pentester user, not some host UID
+	// `docker cp` would have left it as (see UploadFile's own doc comment).
+	owner, err := b.Exec(ctx, "stat -c %u:%g "+desktopDir+"/"+name)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if strings.TrimSpace(owner.Stdout) != "1000:1000" {
+		t.Fatalf("uploaded file owner = %q, want 1000:1000", strings.TrimSpace(owner.Stdout))
+	}
+}
+
+// A path-traversal attempt is neutralized (Base() reduces it to the
+// harmless leaf name — see TestSanitizeUploadFilename), not rejected with an
+// error; this test covers the name SanitizeUploadFilename genuinely still
+// rejects, verifying UploadFile never reaches docker exec for it at all
+// (a bogus "test-container" would otherwise fail for an unrelated reason —
+// no such container — making a nil-container test ambiguous about WHY it
+// failed).
+func TestUploadFileRejectsBadFilename(t *testing.T) {
+	b := NewBridge("test-container")
+	if err := b.UploadFile(context.Background(), "..", strings.NewReader("x")); err == nil {
+		t.Fatal("expected error for a filename that reduces to \"..\"")
+	}
+}
+
 // Integration test — only runs when sandbox container is available.
 func TestExecIntegration(t *testing.T) {
 	if testing.Short() {

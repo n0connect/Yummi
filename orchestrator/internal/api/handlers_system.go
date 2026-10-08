@@ -75,6 +75,55 @@ func HandleSandboxStatus(bridge *sandbox.Bridge) http.HandlerFunc {
 	}
 }
 
+// HandleSandboxUpload copies one operator-supplied file onto the sandbox
+// desktop (bridge.UploadFile's desktopDir) — e.g. a VPN config or a private
+// key the operator wants available to tools running inside the sandbox.
+// Deliberately NOT routed through executor.RunScopedCommand/gateway: this
+// never touches the network, local host-to-sandbox filesystem copy only, the
+// same reasoning sandboxmcp.NeedsTarget already applies to pure local-file
+// MCP tools (checksec_audit, consolidate_hosts, ...). multipart/form-data,
+// field name "file" (optional "session_id" field for audit attribution);
+// size is bounded by BodyLimit's existing 8 MiB cap.
+//
+// Every other side-effecting operator action in this codebase leaves an
+// audit trail (the gateway's own hash-chained log for scope/rule decisions,
+// appendAuditSafe for a blocked sandbox/exec) — a silent file landing in the
+// sandbox would be the one exception. Logged on both outcomes (sm may be
+// nil, e.g. in tests exercising the handler directly — appendAuditSafe
+// degrades to a no-op rather than panicking, same as every other caller).
+func HandleSandboxUpload(bridge *sandbox.Bridge, sm *session.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if bridge == nil {
+			writeError(w, http.StatusServiceUnavailable, "sandbox bridge not configured", nil)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "file field is required", err)
+			return
+		}
+		defer func() { _ = file.Close() }()
+		sessionID := normalizeSessionID(r.FormValue("session_id"))
+
+		safeName, err := sandbox.SanitizeUploadFilename(header.Filename)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid filename", err)
+			return
+		}
+		if err := bridge.UploadFile(r.Context(), safeName, file); err != nil {
+			appendAuditSafe(sm, sessionID, "sandbox.upload.failed", "operator", map[string]any{
+				"filename": safeName, "size": header.Size, "error": err.Error(),
+			})
+			writeError(w, http.StatusBadGateway, "upload to sandbox failed", err)
+			return
+		}
+		appendAuditSafe(sm, sessionID, "sandbox.upload", "operator", map[string]any{
+			"filename": safeName, "size": header.Size,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"filename": safeName, "status": "uploaded"})
+	}
+}
+
 // HandleSandboxExec runs a single command in the sandbox Kali container.
 // All commands pass through a gateway scope check before execution; fail-closed
 // if gateway is unavailable.

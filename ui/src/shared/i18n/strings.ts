@@ -103,6 +103,11 @@ const en = {
   'desktopPanel.retry': 'Retry connection',
   'desktopPanel.enterFullscreen': 'Fullscreen',
   'desktopPanel.exitFullscreen': 'Exit fullscreen',
+  'desktopPanel.uploadButton': 'Upload to Desktop',
+  'desktopPanel.dropzoneTitle': 'Drop to copy onto the sandbox Desktop',
+  'desktopPanel.dropzoneHint': 'VPN configs, keys, wordlists — lands directly on the sandbox\'s Desktop',
+  'desktopPanel.uploadSuccessPrefix': 'Copied to sandbox Desktop: ',
+  'desktopPanel.uploadErrorPrefix': 'Upload failed: ',
 
   // ── GatewayPage ─────────────────────────────────────────────────────────
   'gateway.title': 'Gateway',
@@ -661,6 +666,11 @@ const tr = {
   'desktopPanel.retry': 'Bağlantıyı tekrar dene',
   'desktopPanel.enterFullscreen': 'Tam ekran',
   'desktopPanel.exitFullscreen': 'Tam ekrandan çık',
+  'desktopPanel.uploadButton': 'Masaüstüne Yükle',
+  'desktopPanel.dropzoneTitle': 'Sandbox Masaüstüne kopyalamak için bırakın',
+  'desktopPanel.dropzoneHint': 'VPN yapılandırmaları, anahtarlar, kelime listeleri — doğrudan sandbox\'ın Masaüstüne iner',
+  'desktopPanel.uploadSuccessPrefix': 'Sandbox Masaüstüne kopyalandı: ',
+  'desktopPanel.uploadErrorPrefix': 'Yükleme başarısız: ',
 
   // ── GatewayPage ─────────────────────────────────────────────────────────
   'gateway.title': 'Gateway',

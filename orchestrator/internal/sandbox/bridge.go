@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -209,6 +211,79 @@ func (b *Bridge) ExecStream(ctx context.Context, command string, onChunk func(so
 		Stderr:   stderr.String(),
 		Duration: elapsed,
 	}, nil
+}
+
+// desktopDir is where UploadFile lands a file — the pentester's XFCE
+// Desktop, so a dropped file (a VPN config, a private key, a wordlist) is
+// immediately visible in the Desktop tab's GUI, not buried in some path the
+// operator has to go find with a terminal.
+const desktopDir = "/home/pentester/Desktop"
+
+// maxUploadFilenameLen mirrors common filesystem limits (ext4/APFS/NTFS all
+// cap a single filename at 255 bytes); generous enough for any real file,
+// not a restrictive guess.
+const maxUploadFilenameLen = 255
+
+// SanitizeUploadFilename reduces name to its base component (filepath.Base
+// discards any directory part — including a literal ".." — a caller sent,
+// so the result can never escape desktopDir) and rejects only what could
+// genuinely corrupt the destination path or a terminal displaying it:
+// empty/"."/"..", control characters (0x00-0x1F, 0x7F), and anything over
+// maxUploadFilenameLen. Real filenames — spaces, Unicode (öğüşç, 中文),
+// mixed case — are explicitly NOT restricted beyond that: UploadFile passes
+// the result as a single literal argv element to `tee`, never through a
+// shell, so there is no shell-metacharacter class to defend against here
+// the way classifyRisk's command-shape allowlist must for an actual command
+// string. Exported so the API handler can reject a bad name with a clear
+// 400 before ever touching the sandbox, instead of UploadFile doing it deep
+// inside an exec call.
+func SanitizeUploadFilename(name string) (string, error) {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("invalid filename %q: empty after removing any path", name)
+	}
+	if len(base) > maxUploadFilenameLen {
+		return "", fmt.Errorf("filename too long (%d bytes, max %d)", len(base), maxUploadFilenameLen)
+	}
+	for _, r := range base {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("invalid filename %q: contains a control character", name)
+		}
+	}
+	return base, nil
+}
+
+// UploadFile streams content into desktopDir/name inside the sandbox,
+// running as the pentester user (uid 1000) from the start — unlike `docker
+// cp`, which writes as whatever UID the host-side docker CLI process has
+// (confirmed live: ends up owned by neither root nor pentester, and a
+// plain `--user 1000:1000 docker exec` cannot chown a file it doesn't own,
+// so a post-copy chown is not a reliable fix). `tee` takes the destination
+// as a literal argv element, never a shell string, so name's own content
+// can never be interpreted as a command regardless of what characters it
+// contains — SanitizeUploadFilename is still required first, but as a
+// second, independent layer, not the only one.
+func (b *Bridge) UploadFile(ctx context.Context, name string, content io.Reader) error {
+	safe, err := SanitizeUploadFilename(name)
+	if err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+
+	dest := desktopDir + "/" + safe
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", "1000:1000", b.container, "tee", dest)
+	cmd.Stdin = content
+	cmd.Stdout = io.Discard // tee also echoes stdin to stdout; we only want the file written
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("upload to sandbox failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // Ping checks if the sandbox container is reachable.

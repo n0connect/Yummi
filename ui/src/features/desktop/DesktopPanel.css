@@ -56,6 +56,13 @@
 
 .desktop-fullscreen-btn { flex-shrink: 0; }
 
+.desktop-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .desktop-status-label {
   margin-left: var(--space-sm);
   color: var(--text-tertiary);
@@ -173,4 +180,22 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 6px 12px;
+}
+
+/* Transient result banner for a file upload (success or error). */
+.desktop-upload-note {
+  position: absolute;
+  bottom: var(--space-lg);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: 80%;
+  background: rgba(10, 12, 14, 0.92);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: 8px 16px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  backdrop-filter: blur(10px);
+  animation: fadeIn 0.16s ease;
 }
