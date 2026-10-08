@@ -2,9 +2,12 @@
 #
 # You normally do NOT write this file by hand: run `make conf` for an
 # interactive setup that persists your choices to a gitignored `.yummi.conf`
-# (masked entry for any API key). This example documents every field that
-# file can hold, so you can see the options at a glance — or copy it to
-# `.yummi.conf` and edit directly if you prefer.
+# (masked entry for any API key). It's deliberately short — container engine
+# and UI language are auto-detected, and picking a model is ONE question
+# (local: just a model name, cloud: just an API key). This example documents
+# every field that file CAN hold, including the ones `make conf`'s simple
+# path never asks about, so you can see the full set at a glance — or copy
+# it to `.yummi.conf` and edit directly if you prefer.
 #
 #   cp .yummi.conf.example .yummi.conf
 #
@@ -13,44 +16,78 @@
 # it, so every `make build`/`make start`/etc. picks these up automatically.
 
 # ── Container engine ────────────────────────────────────────────────────────
-# docker | podman. On macOS, OrbStack (used as the docker engine) is the
-# recommended, no-workarounds option — see docs/installation.md.
+# docker | podman. `make conf` auto-detects this (OrbStack/Docker Desktop via
+# the active `docker context`, else Podman, else Linux native) and only asks
+# if nothing could be detected. On macOS, OrbStack (used as the docker
+# engine) is the recommended, no-workarounds option — see docs/installation.md.
 CONTAINER_ENGINE=docker
 
 # ── Network mode ────────────────────────────────────────────────────────────
 # secure          — the default; yummi_internal is `internal: true`, so the
-#                   sandbox's only path out is through the gateway.
+#                   sandbox's only path out is through the gateway. Always
+#                   paired with CONTAINER_ENGINE=docker by `make conf`.
 # insecure-bridge — compatibility workaround that restores ordinary bridge
-#                   egress; weakens the fail-closed topology. Only if you
-#                   understand the trade-off (docs/installation.md).
+#                   egress; weakens the fail-closed topology. What `make conf`
+#                   pairs with podman (podman's own networking needs it) or
+#                   Docker Desktop if picked manually. Only use this with
+#                   docker if you understand the trade-off (docs/installation.md).
 YUMMI_NETWORK_MODE=secure
 
 # ── UI display language (build-time) ────────────────────────────────────────
 # en | tr. Baked into the UI at build time; there is no runtime switch.
+# `make conf` suggests tr when your shell's $LANG looks Turkish, en otherwise
+# — either way it's one keypress (or Enter) to confirm, never silently forced.
 YUMMI_LANG=en
 
 # ── Agentic engine ──────────────────────────────────────────────────────────
-# graph — tag-protocol state machine, tuned for smaller local models (default).
-# eino  — native tool-calling ReAct loop, better for larger tool-calling models.
-# Runtime-only: change it without rebuilding.
-YUMMI_AGENT_BACKEND=graph
+# graph — tag-protocol state machine. eino — native tool-calling ReAct loop,
+# with full cataloged-tool and terminal-session parity with graph as of
+# 2026-10-07. `make conf` always sets eino now, for both the local and cloud
+# model paths — there's no longer a meaningful reason to pick graph over it
+# on a fresh setup. Runtime-only either way: change it without rebuilding.
+YUMMI_AGENT_BACKEND=eino
 
-# ── Local model (Ollama) ────────────────────────────────────────────────────
-# Any Ollama model tag. Wins over YUMMI_OLLAMA_TIER when both are set.
+# ── Model: pick ONE of the three shapes below ───────────────────────────────
+# `make conf`'s model question is exactly these three choices. Local asks
+# only a model name; Cloud/Custom asks only (plus a model name with a sane
+# default) an API key — everything else in this section is filled in for you.
+
+# 1) Local (Ollama) — just a model tag. A 20B-class model (the Ollama default
+#    below) is fine for trying the chat/UI flow, but is NOT reliable for
+#    autonomous multi-step tasks (confirmed: it can lose track of the target,
+#    invent tool syntax, or fabricate an entire fake exploit run with zero
+#    real tool calls). For real autonomous use this needs to be 120B+ — e.g.
+#    gpt-oss:120b, which `make conf` offers as its own default. See
+#    orchestrator/internal/conductor/tier.go's DefaultTierRegistry doc
+#    comment for the full writeup.
 YUMMI_OLLAMA_MODEL=gpt-oss:20b
 # Optional: override the context window for a custom model tag (default: the
-# resolved tier's own value). Leave unset for the named tiers.
+# resolved tier's own value). Not asked by `make conf`'s simple path — hand-edit
+# if you need it.
 #YUMMI_OLLAMA_NUM_CTX=32768
 
-# ── Optional: point ONLY the Eino backend at a different OpenAI-compatible
-#    server/model than Ollama (LM Studio, vLLM, llama.cpp, OpenRouter, …).
-#    All blank by default; the conductor (chat/intent) always stays on Ollama.
+# 2) Cloud (OpenRouter/OpenAI) — just an API key. `make conf`'s Cloud choice
+#    fills in the base URL/provider below for you and defaults the model name
+#    to deepseek/deepseek-chat-v3.1 (confirmed working end to end against a
+#    real multi-stage exploit chain) unless you type a different one.
+#YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1
+#YUMMI_EINO_MODEL_NAME=deepseek/deepseek-chat-v3.1
+#YUMMI_EINO_MODEL_API_KEY=
+#YUMMI_EINO_PROVIDER=openrouter
+
+# 3) Custom endpoint (LM Studio, vLLM, llama.cpp, a different OpenAI-compatible
+#    server) — `make conf`'s third model choice; asks base URL, model name,
+#    and an optional API key.
 #YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1
 #YUMMI_EINO_MODEL_NAME=openai/gpt-oss-20b
 #YUMMI_EINO_MODEL_API_KEY=
-#YUMMI_EINO_PROVIDER=            # ollama | openai | openrouter (auto-detected if blank)
+#YUMMI_EINO_PROVIDER=openai
 
 # ── Optional: "brain" frontier-model runner (docs: brain/README.md) ─────────
+# `make conf` asks this once, at the end, defaulting to skip. If you already
+# configured an OpenRouter key above, it offers to reuse it here with zero
+# extra typing; otherwise it's the same one-key, one-model-name shape as the
+# Cloud model choice above.
 #YUMMI_BRAIN_MODEL_BASE_URL=https://openrouter.ai/api/v1
 #YUMMI_BRAIN_MODEL_NAME=deepseek/deepseek-chat-v3.1
 #YUMMI_BRAIN_MODEL_API_KEY=      # your key — stored only in the gitignored .yummi.conf

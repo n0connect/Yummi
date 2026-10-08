@@ -309,146 +309,121 @@ _container-ensure:
 #  USER COMMANDS  (the ones you run every day)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## conf    Interactive one-time setup: container engine, network mode, UI
-##         language, the orchestrator's own agent backend (local or cloud),
-##         and optionally the LangGraph brain's cloud model credentials.
-##         Persists everything to .yummi.conf so `make build`/`make start`/
-##         `make brain-run`/etc. never need those flags again. Re-run
-##         anytime to change any of it — every question shows what a
-##         default/skip does, nothing is silently required.
+## conf    Interactive one-time setup, kept to the fewest questions that
+##         actually need a human: container engine and UI language are
+##         auto-detected and only asked about when detection genuinely can't
+##         tell; picking a model is ONE path (local: a model name, cloud: an
+##         API key) with everything else — network mode, agent backend —
+##         decided for you. Persists to .yummi.conf so `make build`/
+##         `make start`/`make brain-run`/etc. never need those flags again.
+##         Re-run anytime to change any of it.
 conf:
 	@$(call log_section,Yummi Configuration)
-	@printf "$(BOLD)How are you running containers on this machine?$(RESET)\n\n"; \
-	printf "  $(CYAN)1)$(RESET) OrbStack                    $(DIM)recommended — no known trade-offs$(RESET)\n"; \
-	printf "  $(CYAN)2)$(RESET) Docker Desktop\n"; \
-	printf "  $(CYAN)3)$(RESET) Podman\n"; \
-	printf "  $(CYAN)4)$(RESET) Linux native Docker Engine   $(DIM)no VM, no known bug$(RESET)\n\n"; \
-	printf "$(BOLD)Choice [1-4]: $(RESET)"; \
-	read choice; \
-	case "$$choice" in \
-		1) engine=docker; mode=secure ;; \
-		2) engine=docker; mode=insecure-bridge ;; \
-		3) engine=podman; mode=insecure-bridge ;; \
-		4) engine=docker; mode=secure ;; \
-		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-4.$(RESET)\n" "$$choice"; exit 1 ;; \
-	esac; \
+	@detected=""; detected_label=""; \
+	if [ "$$(uname -s)" = "Darwin" ]; then \
+		ctx="$$(docker context show 2>/dev/null || true)"; \
+		if [ "$$ctx" = "orbstack" ] || [ -d "/Applications/OrbStack.app" ]; then detected=1; detected_label="OrbStack"; \
+		elif [ "$$ctx" = "desktop-linux" ] || [ -d "/Applications/Docker.app" ]; then detected=2; detected_label="Docker Desktop"; \
+		elif command -v podman >/dev/null 2>&1; then detected=3; detected_label="Podman"; \
+		fi; \
+	else \
+		if command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then detected=3; detected_label="Podman"; \
+		elif command -v docker >/dev/null 2>&1; then detected=4; detected_label="Linux native Docker Engine"; \
+		fi; \
+	fi; \
+	if [ -n "$$detected" ]; then \
+		case "$$detected" in \
+			1) engine=docker; mode=secure ;; \
+			2) engine=docker; mode=insecure-bridge ;; \
+			3) engine=podman; mode=insecure-bridge ;; \
+			4) engine=docker; mode=secure ;; \
+		esac; \
+		printf "$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Container engine: %s (detected)$(RESET)\n" "$$detected_label"; \
+	else \
+		printf "$(BOLD)How are you running containers on this machine?$(RESET)$(DIM) (nothing detected automatically)$(RESET)\n\n"; \
+		printf "  $(CYAN)1)$(RESET) OrbStack                    $(DIM)recommended — no known trade-offs$(RESET)\n"; \
+		printf "  $(CYAN)2)$(RESET) Docker Desktop\n"; \
+		printf "  $(CYAN)3)$(RESET) Podman\n"; \
+		printf "  $(CYAN)4)$(RESET) Linux native Docker Engine   $(DIM)no VM, no known bug$(RESET)\n\n"; \
+		printf "$(BOLD)Choice [1-4]: $(RESET)"; \
+		read choice; \
+		case "$$choice" in \
+			1) engine=docker; mode=secure ;; \
+			2) engine=docker; mode=insecure-bridge ;; \
+			3) engine=podman; mode=insecure-bridge ;; \
+			4) engine=docker; mode=secure ;; \
+			*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-4.$(RESET)\n" "$$choice"; exit 1 ;; \
+		esac; \
+	fi; \
 	if [ "$$mode" = "insecure-bridge" ]; then \
 		$(MAKE) _check-network-mode CONTAINER_ENGINE=$$engine YUMMI_NETWORK_MODE=insecure-bridge || exit 1; \
 	fi; \
+	lang_detected=en; \
+	case "$$LANG" in tr_*|*.tr|tr) lang_detected=tr ;; esac; \
 	printf "\n$(BOLD)UI display language?$(RESET) $(DIM)(build-time only — changing it later needs 'make conf' + a rebuild)$(RESET)\n\n"; \
 	printf "  $(CYAN)1)$(RESET) English\n"; \
 	printf "  $(CYAN)2)$(RESET) Türkçe\n\n"; \
-	printf "$(BOLD)Choice [1-2]: $(RESET)"; \
+	if [ "$$lang_detected" = "tr" ]; then dl=2; else dl=1; fi; \
+	printf "$(BOLD)Choice [1-2, blank=%s]: $(RESET)" "$$dl"; \
 	read langchoice; \
+	if [ -z "$$langchoice" ]; then langchoice="$$dl"; fi; \
 	case "$$langchoice" in \
 		1) lang=en ;; \
 		2) lang=tr ;; \
 		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-2.$(RESET)\n" "$$langchoice"; exit 1 ;; \
 	esac; \
-	printf "\n$(BOLD)Agent backend?$(RESET) $(DIM)(which engine drives the orchestrator's own chat/task loop —\n"; \
-	printf "independent of the LangGraph brain asked about further below)$(RESET)\n\n"; \
-	printf "  $(CYAN)1)$(RESET) Graph        $(DIM)— small/local models, tag-protocol state machine (default)$(RESET)\n"; \
-	printf "  $(CYAN)2)$(RESET) Eino local   $(DIM)— larger local models via Ollama, native tool-calling$(RESET)\n"; \
-	printf "  $(CYAN)3)$(RESET) Eino cloud   $(DIM)— native tool-calling against OpenRouter/OpenAI/any OpenAI-compatible endpoint$(RESET)\n\n"; \
+	backend=eino; model=""; einoprovider=""; einobaseurl=""; einomodel=""; einoapikey=""; \
+	printf "\n$(BOLD)Local model or a cloud model?$(RESET)\n\n"; \
+	printf "  $(CYAN)1)$(RESET) Local   $(DIM)— runs on your own machine via Ollama; just needs a model name$(RESET)\n"; \
+	printf "  $(CYAN)2)$(RESET) Cloud   $(DIM)— OpenRouter/OpenAI/any frontier model; just needs an API key$(RESET)\n"; \
+	printf "  $(CYAN)3)$(RESET) Custom endpoint   $(DIM)— a different OpenAI-compatible server (LM Studio, vLLM, ...)$(RESET)\n\n"; \
 	printf "$(BOLD)Choice [1-3]: $(RESET)"; \
-	read backendchoice; \
-	einoprovider=""; einobaseurl=""; einomodel=""; einoapikey=""; \
-	case "$$backendchoice" in \
-		1) backend=graph ;; \
-		2) backend=eino ;; \
-		3) backend=eino; \
-		   printf "\n$(BOLD)Cloud provider for the eino backend$(RESET)\n\n"; \
-		   printf "  $(CYAN)1)$(RESET) OpenRouter   $(DIM)https://openrouter.ai — recommended, 400+ models behind one key$(RESET)\n"; \
-		   printf "  $(CYAN)2)$(RESET) OpenAI       $(DIM)https://api.openai.com$(RESET)\n"; \
-		   printf "  $(CYAN)3)$(RESET) Custom       $(DIM)any OpenAI-compatible base URL — vLLM, LM Studio, ...$(RESET)\n\n"; \
-		   printf "$(BOLD)Choice [1-3]: $(RESET)"; \
-		   read einoproviderchoice; \
-		   case "$$einoproviderchoice" in \
-			   1) einoprovider=openrouter; einobaseurl="https://openrouter.ai/api/v1" ;; \
-			   2) einoprovider=openai; einobaseurl="https://api.openai.com/v1" ;; \
-			   3) einoprovider=openai; \
-			      printf "\n$(BOLD)Base URL$(RESET) $(DIM)(include /v1 or whatever path prefix the server needs)$(RESET): "; \
-			      read einobaseurl; \
-			      if [ -z "$$einobaseurl" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Base URL cannot be empty.$(RESET)\n"; exit 1; fi ;; \
-			   *) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$einoproviderchoice"; exit 1 ;; \
-		   esac; \
-		   printf "\n$(BOLD)Model name$(RESET) $(DIM)(e.g. anthropic/claude-3.5-sonnet, deepseek/deepseek-chat, openai/gpt-4o)$(RESET): "; \
+	read modeltypechoice; \
+	case "$$modeltypechoice" in \
+		1) printf "\n$(BOLD)Ollama model name$(RESET) $(DIM)(a 20B-class model is fine for trying the chat flow, but is NOT\n"; \
+		   printf "reliable for autonomous multi-step tasks — see persona/README.md. For real autonomous use, this\n"; \
+		   printf "needs to be 120B+, e.g. gpt-oss:120b.)$(RESET)\n"; \
+		   printf "Model tag [blank = gpt-oss:120b]: "; \
+		   read model; \
+		   if [ -z "$$model" ]; then model=gpt-oss:120b; fi ;; \
+		2) printf "\n$(BOLD)OpenRouter API key$(RESET) $(DIM)(input hidden as you type; stored in gitignored .yummi.conf, never committed)$(RESET): "; \
+		   read -s einoapikey; printf "\n"; \
+		   if [ -z "$$einoapikey" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)API key cannot be empty.$(RESET)\n"; exit 1; fi; \
+		   einoprovider=openrouter; einobaseurl="https://openrouter.ai/api/v1"; \
+		   printf "\n$(BOLD)Model name$(RESET) $(DIM)[blank = deepseek/deepseek-chat-v3.1 — confirmed working end to end against\n"; \
+		   printf "a real exploit chain; e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o for something else]: $(RESET)"; \
+		   read einomodel; \
+		   if [ -z "$$einomodel" ]; then einomodel="deepseek/deepseek-chat-v3.1"; fi ;; \
+		3) printf "\n$(BOLD)Base URL$(RESET) $(DIM)(include /v1 or whatever path prefix the server needs, e.g.\n"; \
+		   printf "http://host.docker.internal:1234/v1 for LM Studio)$(RESET): "; \
+		   read einobaseurl; \
+		   if [ -z "$$einobaseurl" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Base URL cannot be empty.$(RESET)\n"; exit 1; fi; \
+		   printf "\n$(BOLD)Model name$(RESET): "; \
 		   read einomodel; \
 		   if [ -z "$$einomodel" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model name cannot be empty.$(RESET)\n"; exit 1; fi; \
-		   printf "\n$(BOLD)API key$(RESET) $(DIM)(input hidden as you type; stored in gitignored .yummi.conf, never committed)$(RESET): "; \
+		   printf "\n$(BOLD)API key$(RESET) $(DIM)(optional — press Enter if the server doesn't need one; hidden as you type)$(RESET): "; \
 		   read -s einoapikey; printf "\n"; \
-		   if [ -z "$$einoapikey" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)API key cannot be empty.$(RESET)\n"; exit 1; fi ;; \
-		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$backendchoice"; exit 1 ;; \
+		   einoprovider=openai ;; \
+		*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$modeltypechoice"; exit 1 ;; \
 	esac; \
-	if [ "$$backendchoice" = "3" ]; then \
-		model=""; numctx=""; \
-		printf "\n$(BOLD)Local Ollama fallback model?$(RESET) $(DIM)(optional — cloud model ($$einomodel) will drive both\n"; \
-		printf "the conductor and the agent loop; local Ollama is NOT required. Press Enter to skip.)$(RESET)\n\n"; \
-		printf "  $(CYAN)1)$(RESET) Skip / None        $(DIM)— run cloud-only, no local Ollama daemon or model needed (default)$(RESET)\n"; \
-		printf "  $(CYAN)2)$(RESET) Standard          $(DIM)— gpt-oss:20b fallback$(RESET)\n"; \
-		printf "  $(CYAN)3)$(RESET) Expert            $(DIM)— gpt-oss:120b fallback$(RESET)\n\n"; \
-		printf "$(BOLD)Choice [1-3, blank=1]: $(RESET)"; \
-		read localchoice; \
-		case "$$localchoice" in \
-			""|1) model="" ;; \
-			2) model=gpt-oss:20b ;; \
-			3) model=gpt-oss:120b ;; \
-			*) model="" ;; \
-		esac; \
-	else \
-		printf "\n$(BOLD)Which local model?$(RESET) $(DIM)(the orchestrator's conductor + agent loop run on this Ollama model.\n"; \
-		printf "Change any time by re-running 'make conf', no rebuild needed.)$(RESET)\n\n"; \
-		printf "  $(CYAN)1)$(RESET) Standard  $(DIM)— gpt-oss:20b, recommended default, runs on 16GB+ RAM without a dedicated GPU$(RESET)\n"; \
-		printf "  $(CYAN)2)$(RESET) Expert    $(DIM)— gpt-oss:120b, same family at ~6x the parameters, workstation-grade hardware (80GB GPU or 64GB+ Mac)$(RESET)\n"; \
-		printf "  $(CYAN)3)$(RESET) Custom    $(DIM)— any Ollama model tag you have (or will pull) — e.g. a large model on strong hardware$(RESET)\n\n"; \
-		printf "$(BOLD)Choice [1-3]: $(RESET)"; \
-		read modelchoice; \
-		numctx=""; \
-		case "$$modelchoice" in \
-			1) model=gpt-oss:20b ;; \
-			2) model=gpt-oss:120b ;; \
-			3) printf "\n$(BOLD)Exact Ollama model tag$(RESET) $(DIM)(e.g. kimi-k2:latest, deepseek-r1:671b — must already be pulled, or 'make start' will pull it)$(RESET): "; \
-			   read model; \
-			   if [ -z "$$model" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model tag cannot be empty.$(RESET)\n"; exit 1; fi; \
-			   printf "\n$(BOLD)Context window override in tokens?$(RESET) $(DIM)(optional — a custom model otherwise gets a fixed 32K context; a larger model with more headroom may want more, e.g. 131072. Press Enter to skip.)$(RESET)\n"; \
-			   printf "Context tokens [blank = 32K default]: "; \
-			   read numctx ;; \
-			*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$modelchoice"; exit 1 ;; \
-		esac; \
-	fi; \
-	printf "\n$(BOLD)Set up the LangGraph brain?$(RESET) $(DIM)(optional — brain/, a separate Python agent that drives Yummi's\n"; \
-	printf "sandbox/gateway over MCP using a frontier model, independent of the agent backend above. See brain/README.md.\n"; \
-	printf "Skip if you only want the Go orchestrator's own agent backend.)$(RESET)\n\n"; \
-	printf "$(BOLD)Set it up now? [y/N]: $(RESET)"; \
+	printf "\n$(BOLD)Set up the optional LangGraph brain too?$(RESET) $(DIM)(a separate Python agent, independent of the\n"; \
+	printf "choice above — see brain/README.md. Skip if you only want the Go orchestrator's own agent.)$(RESET)\n"; \
+	printf "Set it up now? [y/N]: "; \
 	read setup_brain; \
 	brainbaseurl=""; brainmodel=""; brainapikey=""; \
 	if [ "$$setup_brain" = "y" ] || [ "$$setup_brain" = "Y" ]; then \
-		printf "\n$(BOLD)Model provider for the brain$(RESET)\n\n"; \
-		printf "  $(CYAN)1)$(RESET) OpenRouter   $(DIM)https://openrouter.ai — recommended, 400+ models behind one key$(RESET)\n"; \
-		printf "  $(CYAN)2)$(RESET) OpenAI       $(DIM)https://api.openai.com$(RESET)\n"; \
-		printf "  $(CYAN)3)$(RESET) Custom       $(DIM)any OpenAI-compatible base URL$(RESET)\n\n"; \
-		printf "$(BOLD)Choice [1-3]: $(RESET)"; \
-		read brainproviderchoice; \
-		case "$$brainproviderchoice" in \
-			1) brainbaseurl="https://openrouter.ai/api/v1" ;; \
-			2) brainbaseurl="https://api.openai.com/v1" ;; \
-			3) printf "\n$(BOLD)Base URL$(RESET) $(DIM)(include /v1 or whatever path prefix the server needs)$(RESET): "; \
-			   read brainbaseurl; \
-			   if [ -z "$$brainbaseurl" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Base URL cannot be empty.$(RESET)\n"; exit 1; fi ;; \
-			*) printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Invalid choice '%s' — expected 1-3.$(RESET)\n" "$$brainproviderchoice"; exit 1 ;; \
-		esac; \
-		printf "\n$(BOLD)Model name$(RESET) $(DIM)(e.g. anthropic/claude-3.5-sonnet, deepseek/deepseek-chat, openai/gpt-4o)$(RESET): "; \
-		read brainmodel; \
-		if [ -z "$$brainmodel" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)Model name cannot be empty.$(RESET)\n"; exit 1; fi; \
-		if [ -n "$$einoapikey" ] && [ "$$einobaseurl" = "$$brainbaseurl" ]; then \
-			printf "\n$(DIM)Same provider as the eino backend above — reuse that API key? [Y/n]: $(RESET)"; \
-			read reusekey; \
-			if [ "$$reusekey" != "n" ] && [ "$$reusekey" != "N" ]; then brainapikey="$$einoapikey"; fi; \
-		fi; \
-		if [ -z "$$brainapikey" ]; then \
-			printf "\n$(BOLD)API key$(RESET) $(DIM)(input hidden as you type; stored in gitignored .yummi.conf, never committed)$(RESET): "; \
+		if [ -n "$$einoapikey" ] && [ "$$einoprovider" = "openrouter" ]; then \
+			brainbaseurl="$$einobaseurl"; brainmodel="$$einomodel"; brainapikey="$$einoapikey"; \
+			printf "$(DIM)Reusing the OpenRouter key and model from above.$(RESET)\n"; \
+		else \
+			printf "\n$(BOLD)OpenRouter API key for the brain$(RESET) $(DIM)(hidden as you type; a different provider/endpoint\n"; \
+			printf "can be set by hand afterward — see .yummi.conf.example)$(RESET): "; \
 			read -s brainapikey; printf "\n"; \
 			if [ -z "$$brainapikey" ]; then printf "$(RED)[ERROR]$(RESET) $(BOLD)conf$(RESET) $(DIM)API key cannot be empty.$(RESET)\n"; exit 1; fi; \
+			brainbaseurl="https://openrouter.ai/api/v1"; \
+			printf "\n$(BOLD)Model name$(RESET) [blank = deepseek/deepseek-chat-v3.1]: "; \
+			read brainmodel; \
+			if [ -z "$$brainmodel" ]; then brainmodel="deepseek/deepseek-chat-v3.1"; fi; \
 		fi; \
 	fi; \
 	{ \
@@ -457,7 +432,6 @@ conf:
 		printf "YUMMI_LANG=%s\n" "$$lang"; \
 		printf "YUMMI_AGENT_BACKEND=%s\n" "$$backend"; \
 		printf "YUMMI_OLLAMA_MODEL=%s\n" "$$model"; \
-		if [ -n "$$numctx" ]; then printf "YUMMI_OLLAMA_NUM_CTX=%s\n" "$$numctx"; fi; \
 		if [ -n "$$einobaseurl" ]; then \
 			printf "YUMMI_EINO_MODEL_BASE_URL=%s\n" "$$einobaseurl"; \
 			printf "YUMMI_EINO_MODEL_NAME=%s\n" "$$einomodel"; \
@@ -471,8 +445,9 @@ conf:
 		fi; \
 	} > .yummi.conf; \
 	printf "\n$(GREEN)[PASS]$(RESET) $(BOLD)conf$(RESET) $(DIM)Saved to .yummi.conf$(RESET)\n"; \
-	printf "$(DIM)  engine=$$engine  network=$$mode  lang=$$lang  backend=$$backend  local_model=$$model$(RESET)\n"; \
-	if [ -n "$$einomodel" ]; then printf "$(DIM)  eino_cloud=$$einoprovider/$$einomodel$(RESET)\n"; fi; \
+	printf "$(DIM)  engine=$$engine  network=$$mode  lang=$$lang  backend=$$backend$(RESET)\n"; \
+	if [ -n "$$model" ]; then printf "$(DIM)  local_model=$$model$(RESET)\n"; fi; \
+	if [ -n "$$einomodel" ]; then printf "$(DIM)  cloud=$$einoprovider/$$einomodel$(RESET)\n"; fi; \
 	if [ -n "$$brainmodel" ]; then printf "$(DIM)  brain=$$brainmodel @ $$brainbaseurl$(RESET)\n"; fi; \
 	printf "$(DIM)Every 'make build'/'make start'/'make brain-run'/etc. now uses this automatically. Run 'make conf' again to change it.$(RESET)\n\n"
 
