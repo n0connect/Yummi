@@ -20,7 +20,7 @@ LangGraph (supervisor + specialist roster, loaded from persona/v0.1/subagents/*.
 mcp_server.py  -- yummi_exec, yummi_get_scope, yummi_request_egress,
                   yummi_record_finding, yummi_list_findings,
                   yummi_list_skills, yummi_list_tactics, yummi_get_context,
-                  yummi_read_gateway_audit
+                  yummi_read_gateway_audit, yummi_propose_skill
         |  HTTP (existing REST API, unchanged)
         v
 orchestrator (Go)  -- internal/executor.RunScopedCommand: the SAME

@@ -150,6 +150,30 @@ async def yummi_list_skills() -> str:
 
 
 @mcp.tool()
+async def yummi_propose_skill(
+    task_id: str, session_id: str, goal: str, summary: str, observations: list[str] | None = None
+) -> str:
+    """Submit this task's trajectory to grow Yummi's skill library, the same
+    way a graph/eino-backed run does automatically when it finishes. Call
+    this ONCE, after a task succeeds, with the real goal you were given, a
+    concise summary of what actually worked, and a few key observations
+    (command outputs, tool choices) that captured the approach. This never
+    creates a live skill directly — it drafts a candidate from your
+    trajectory and queues it in the exact same quarantine an operator must
+    explicitly approve before it's ever loaded, so a bad or hallucinated
+    draft costs nothing beyond one skipped review. Skip this for a failed
+    or trivial task — nothing worth learning from an empty trajectory.
+    """
+    try:
+        result = await _client.propose_skill(
+            task_id=task_id, session_id=session_id, goal=goal, summary=summary, observations=observations
+        )
+    except YummiAPIError as e:
+        return f"REJECTED: {e}"
+    return _fmt(result)
+
+
+@mcp.tool()
 async def yummi_list_tactics(tool: str = "", limit: int = 50) -> str:
     """List learned procedural tactics: past command patterns (target
     redacted to <TARGET>) with their outcome (worked/failed/inconclusive),

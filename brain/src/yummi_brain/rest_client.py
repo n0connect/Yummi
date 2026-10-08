@@ -147,3 +147,24 @@ class YummiClient:
 
     async def get_context(self, session_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/api/v1/sessions/{session_id}/context")
+
+    # Deliberately NOT a raw knowledge write, unlike what the comment above
+    # this section warns against: this submits to the exact same quarantined
+    # pending_skills queue graph/eino feed internally (skillcurator.Worker →
+    # Curator.ProposeFromTask → sanitize + threatscan + operator-approval
+    # gate, orchestrator/internal/api/handlers_skills.go's
+    # HandleProposeSkillTrajectory). Nothing here ever becomes a live skill
+    # without the same explicit `POST .../approve` an auto-drafted graph/eino
+    # skill already requires — this closes brain's one real remaining gap
+    # (its tasks previously never grew the skill library the way graph/eino
+    # runs do), not a new unreviewed-write surface.
+    async def propose_skill(
+        self, task_id: str, session_id: str, goal: str, summary: str, observations: list[str] | None = None
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST", "/api/v1/skills/propose",
+            json={
+                "task_id": task_id, "session_id": session_id,
+                "goal": goal, "summary": summary, "observations": observations or [],
+            },
+        )

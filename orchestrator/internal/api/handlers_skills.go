@@ -148,6 +148,55 @@ func writeSkillAtomically(dir, name string, body []byte) error {
 	return nil
 }
 
+// HandleProposeSkillTrajectory submits an externally-driven task's
+// trajectory to the SAME skillcurator queue graph/eino feed internally from
+// finishNode/runner.go — the entry point for a client that isn't one of
+// Yummi's own Go agent backends, namely brain/ (the LangGraph surface),
+// which previously had no way to grow the skill library the way graph/eino
+// runs do: its tasks are driven by a Python supervisor graph, not this
+// module's Runner, so nothing ever called skillcurator.Curator.ProposeFromTask
+// on its behalf. POST /api/v1/skills/propose
+// {"task_id":"","session_id":"","goal":"","summary":"","observations":[]}.
+// worker.Submit itself is the exact same bounded, non-blocking queue
+// graph/eino use (see skillcurator.Worker's own doc comment) — a full queue
+// or a disabled curator just drops the submission rather than blocking the
+// caller, matching the fire-and-forget contract every other caller gets.
+// Tactics are deliberately not accepted here: knowledge.Tactic is an
+// internal procedural-memory shape tied to Go's own command-execution
+// records, not something an external MCP client can meaningfully construct;
+// Goal/Summary/Observations alone are enough for DraftSkill to work from.
+func HandleProposeSkillTrajectory(worker *skillcurator.Worker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if worker == nil {
+			writeError(w, http.StatusServiceUnavailable, "skill curator unavailable", errors.New("skill curator worker not configured"))
+			return
+		}
+		var req struct {
+			TaskID       string   `json:"task_id"`
+			SessionID    string   `json:"session_id"`
+			Goal         string   `json:"goal"`
+			Summary      string   `json:"summary"`
+			Observations []string `json:"observations"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body", err)
+			return
+		}
+		if req.Goal == "" && req.Summary == "" && len(req.Observations) == 0 {
+			writeError(w, http.StatusBadRequest, "empty trajectory", errors.New("goal, summary, and observations are all empty"))
+			return
+		}
+		accepted := worker.Submit(skillcurator.Trajectory{
+			TaskID:       req.TaskID,
+			SessionID:    req.SessionID,
+			Goal:         req.Goal,
+			Summary:      req.Summary,
+			Observations: req.Observations,
+		})
+		writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": accepted})
+	}
+}
+
 // HandleRejectPendingSkill discards a pending draft. POST
 // /api/v1/skills/pending/{id}/reject {"reason":""}
 func HandleRejectPendingSkill(store *skillcurator.Store) http.HandlerFunc {

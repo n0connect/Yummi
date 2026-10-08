@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -250,5 +251,84 @@ func TestHandleRejectPendingSkillMissingIDIs404(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Regression coverage for brain/'s skill-growth parity gap: a brain-driven
+// task has no agent.Runner of its own, so nothing ever called
+// skillcurator.Curator.ProposeFromTask on its behalf — this endpoint is the
+// entry point that closes that gap. Exercises the real queue→curator→store
+// pipeline end to end (a stub ChatFunc stands in for the LLM call only).
+const stubDraftReply = `{"name":"brain-recon-flow","description":"recon flow learned from a brain-driven task","triggers":["recon"],"tools":["nmap"],"knowledge":"run nmap first, then enumerate the web app"}`
+
+func TestHandleProposeSkillTrajectorySubmitsToCurator(t *testing.T) {
+	store, _ := skillcurator.NewStore(nil)
+	curator := skillcurator.NewCurator(store, func(context.Context, string, string) (string, error) {
+		return stubDraftReply, nil
+	}, nil)
+	worker := skillcurator.NewWorker(curator, 8, 5*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	worker.Start(ctx)
+
+	r := chi.NewRouter()
+	r.Post("/skills/propose", HandleProposeSkillTrajectory(worker))
+
+	body := `{"task_id":"brain-t1","session_id":"brain-s1","goal":"enumerate the target","summary":"found an open web app","observations":["nmap: 80/tcp open"]}`
+	req := httptest.NewRequest(http.MethodPost, "/skills/propose", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"accepted":true`) {
+		t.Fatalf("expected accepted:true, got: %s", w.Body.String())
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		items, err := store.List(context.Background(), "pending")
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(items) == 1 && items[0].TaskID == "brain-t1" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for the worker to draft the pending skill, got: %+v", items)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestHandleProposeSkillTrajectoryEmptyBodyIs400(t *testing.T) {
+	store, _ := skillcurator.NewStore(nil)
+	curator := skillcurator.NewCurator(store, func(context.Context, string, string) (string, error) {
+		return stubDraftReply, nil
+	}, nil)
+	worker := skillcurator.NewWorker(curator, 8, 5*time.Second)
+
+	r := chi.NewRouter()
+	r.Post("/skills/propose", HandleProposeSkillTrajectory(worker))
+
+	req := httptest.NewRequest(http.MethodPost, "/skills/propose", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an empty trajectory, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleProposeSkillTrajectoryNilWorkerIs503(t *testing.T) {
+	r := chi.NewRouter()
+	r.Post("/skills/propose", HandleProposeSkillTrajectory(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/skills/propose", strings.NewReader(`{"goal":"x"}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when no curator worker is configured, got %d: %s", w.Code, w.Body.String())
 	}
 }

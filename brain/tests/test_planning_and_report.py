@@ -60,7 +60,10 @@ async def test_full_flow_produces_plan_marks_steps_and_synthesizes_report() -> N
     builder = StateGraph(graph.BrainState)
     builder.add_node("planner", graph._planner_node(planner_llm, pz, {}))
     builder.add_node("supervisor", graph._supervisor_node(supervisor_llm, pz))
-    builder.add_node("summarize", graph._summarize_node(summarize_llm, pz))
+    # {} means tools_by_name.get("yummi_propose_skill") is None, so
+    # _propose_skill_from_run's best-effort call is a no-op here — this test
+    # is about plan/report flow, not skill-growth (see test_graph_skill_proposal.py).
+    builder.add_node("summarize", graph._summarize_node(summarize_llm, pz, {}))
     builder.add_node("recon", graph._specialist_node("recon", specialist_llm, [noop_tool], pz))
     builder.set_entry_point("planner")
     compiled = builder.compile(checkpointer=MemorySaver())

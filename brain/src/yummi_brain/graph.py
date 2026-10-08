@@ -450,7 +450,7 @@ remains incomplete or was blocked and why. Plain text, no markdown headers \
 needed."""
 
 
-def _summarize_node(llm: ChatOpenAI, pz: Persona):
+def _summarize_node(llm: ChatOpenAI, pz: Persona, tools_by_name: dict[str, Any]):
     system = SUMMARY_SYSTEM
     if pz.language_parity:
         system += "\n\n" + pz.language_parity
@@ -467,9 +467,48 @@ def _summarize_node(llm: ChatOpenAI, pz: Persona):
         ]
         reply = await _with_retry(lambda: llm.ainvoke(prompt))
         report = str(reply.content or "").strip()
+        await _propose_skill_from_run(tools_by_name, state, report)
         return Command(goto=END, update={"report": report})
 
     return node
+
+
+async def _propose_skill_from_run(tools_by_name: dict[str, Any], state: BrainState, report: str) -> None:
+    """Closes brain's one real remaining parity gap with graph/eino: a
+    brain-driven task previously never grew the skill library, since
+    nothing here ever called Go's skillcurator on its behalf (that package
+    is only ever invoked in-process by agent.Runner/EinoRunner, which brain
+    has no equivalent of). Mirrors graph.go's finishNode / eino's runner.go
+    exactly: fire-and-forget, after a run completes, never able to block or
+    fail the task — same best-effort, degrade-to-nothing contract
+    `_fetch_tool_text` already uses for this file's other direct tool
+    calls. An empty or trivial report (nothing really happened) is
+    deliberately skipped — DraftSkill would reject it anyway, no sense
+    paying for the call.
+    """
+    report = report.strip()
+    if not report:
+        return
+    tool = tools_by_name.get("yummi_propose_skill")
+    if tool is None:
+        return
+    observations = [
+        str(getattr(m, "content", "")).strip()[:500]
+        for m in state["messages"][-6:]
+        if str(getattr(m, "content", "")).strip()
+    ]
+    try:
+        await tool.ainvoke(
+            {
+                "task_id": f"brain:{state['session_id']}",
+                "session_id": state["session_id"],
+                "goal": state["goal"],
+                "summary": report,
+                "observations": observations,
+            }
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("summarize: yummi_propose_skill failed: %s", e)
 
 
 async def build_graph(cfg: config.Config | None = None):
@@ -507,7 +546,7 @@ async def build_graph(cfg: config.Config | None = None):
     builder = StateGraph(BrainState)
     builder.add_node("planner", _planner_node(llm, pz, tools_by_name))
     builder.add_node("supervisor", _supervisor_node(llm, pz))
-    builder.add_node("summarize", _summarize_node(llm, pz))
+    builder.add_node("summarize", _summarize_node(llm, pz, tools_by_name))
     for role in roster:
         builder.add_node(role, _specialist_node(role, llm, tools, pz))
     builder.set_entry_point("planner")

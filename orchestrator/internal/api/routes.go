@@ -22,7 +22,7 @@ import (
 )
 
 // NewRouter creates the Chi router with all routes.
-func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, resilientLLM *llm.Resilient, agg *health.Aggregator, taskStore *agent.Store, taskRunner agent.TaskRunner, curatorStore *skillcurator.Store, agentTerm agentTerminalCaller, mcpSchemaHints map[string]string) http.Handler {
+func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, resilientLLM *llm.Resilient, agg *health.Aggregator, taskStore *agent.Store, taskRunner agent.TaskRunner, curatorStore *skillcurator.Store, curatorWorker *skillcurator.Worker, agentTerm agentTerminalCaller, mcpSchemaHints map[string]string) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -83,6 +83,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/skills/pending", HandleListPendingSkills(curatorStore))
 		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
 		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
+		r.Post("/skills/propose", HandleProposeSkillTrajectory(curatorWorker))
 		// Operator briefing — "operator drives, AI assists": the same
 		// accumulated knowledge the agent is fed (matching skills, tactics,
 		// findings on record), surfaced for the operator's own manual work.
