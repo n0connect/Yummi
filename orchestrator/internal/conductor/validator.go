@@ -210,6 +210,22 @@ var safeLocalBinaries = map[string]bool{
 	"mkdir": true, "touch": true, "ls": true, "pwd": true, "cd": true, "which": true,
 	"true": true, "false": true, "date": true, "stat": true, "file": true,
 	"md5sum": true, "sha1sum": true, "sha256sum": true,
+	// Read-only system/network info display — same no-escape-hatch bar as the
+	// set above (no -exec, no embedded interpreter, no arbitrary-code
+	// argument), just a different domain (local host/network state instead of
+	// local files). Live-observed false positives this closes: an operator
+	// running Yummi with a capable model under auto-approve had to manually
+	// click through "ip addr show | grep inet" and "ps aux | grep ..." as
+	// "critical" — alert-fatigue noise for commands that read nothing a local
+	// `ip addr`/`ps` call wouldn't already show unchained. Deliberately still
+	// excludes `env`/`printenv` (can leak secrets into the model's context,
+	// see this var's own doc comment on why env stays off this list) and any
+	// network client (curl/wget/nc/...) — those keep their existing
+	// case-by-case risk treatment unchanged.
+	"ip": true, "ss": true, "ps": true, "who": true, "w": true, "uname": true,
+	"hostname": true, "arp": true, "netstat": true, "ifconfig": true, "route": true,
+	"id": true, "whoami": true, "uptime": true, "df": true, "free": true,
+	"lsof": true, "getent": true, "nproc": true,
 }
 
 // isSafeLocalPipeline reports whether cmd is a chain of ONLY local,

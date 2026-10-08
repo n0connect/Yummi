@@ -201,6 +201,19 @@ func TestClassifyRiskSafeLocalPipelines(t *testing.T) {
 		{"cd ~/work/example.com && cat subs_a.txt subs_b.txt | sort -u > union.txt", "medium"},
 		{"ls -la && cat resolved.txt | wc -l", "medium"},
 		{"cat a.txt | grep -E '\\.example\\.com$' | sort -u | tee clean.txt", "medium"},
+		// Read-only system/network info display, live-observed misclassified
+		// "critical" against a real target run under auto-approve: alert-
+		// fatigue noise for commands that read nothing a local, unchained
+		// `ip addr`/`ps aux` call wouldn't already show.
+		{"ip addr show | grep inet", "medium"},
+		{"ps aux | grep apache", "medium"},
+		{"netstat -tuln | grep LISTEN", "medium"},
+		{"ss -tuln | grep 443", "medium"},
+		// env/printenv deliberately stay off safeLocalBinaries (can leak
+		// secrets into the model's context) — this is a real protection, not
+		// a false positive, and must not regress.
+		{"env | grep -i target", "critical"},
+		{"printenv | grep -i key", "critical"},
 		// A single unchained command with redirection is simpleCommandPattern's
 		// territory (which does NOT allow ">" — this stays "critical" both
 		// before and after this change) — isSafeLocalPipeline only ever
