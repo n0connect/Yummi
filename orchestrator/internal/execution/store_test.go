@@ -512,7 +512,11 @@ func TestHeartbeatPublishesElapsedSecsWhileRunning(t *testing.T) {
 	// duration here are chosen to actually cross a second boundary rather
 	// than staying sub-second and testing nothing.
 	store.heartbeatInterval = 300 * time.Millisecond
-	blockFor := 1200 * time.Millisecond
+	// Long enough that at least one heartbeat falls past the one-second mark:
+	// with a 1.2s command the last heartbeat could land at ~0.9s and report 0,
+	// which made this test flaky under load (2026-10-09). 2.5s guarantees a
+	// nonzero elapsed reading, and the deadline below leaves headroom.
+	blockFor := 2500 * time.Millisecond
 
 	store.SetProcessor(func(ctx context.Context, rec Record) (string, error) {
 		time.Sleep(blockFor)
@@ -532,7 +536,7 @@ func TestHeartbeatPublishesElapsedSecsWhileRunning(t *testing.T) {
 
 	var runningEvents []int64
 	sawCompleted := false
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for !sawCompleted && time.Now().Before(deadline) {
 		select {
 		case evt := <-events:
