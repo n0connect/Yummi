@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchJSON } from '../../shared/api/http'
 import { t } from '../../shared/i18n/strings'
 import './AgentTerminalsPage.css'
 
 // Watch-only view of the terminals the AGENT opened in the sandbox. The
-// operator cannot type into or close these; the page has no input element and
-// the backend only exposes the read verbs. Control stays with the agent.
+// operator cannot type into these — the page has no input element, and the
+// backend only exposes the read verbs for everything else. Control over what
+// RUNS in a session stays with the agent. The one exception is ending a
+// session outright (the × below, gated behind a two-click confirm mirroring
+// SessionRail's delete pattern) — cleanup, not steering.
 
 type AgentTerminal = {
   id: string
@@ -26,7 +29,9 @@ export function AgentTerminalsPage() {
   const [output, setOutput] = useState<TerminalOutput | null>(null)
   const [error, setError] = useState<string>('')
   const [follow, setFollow] = useState(true)
+  const [confirmCloseId, setConfirmCloseId] = useState<string | null>(null)
   const paneRef = useRef<HTMLPreElement | null>(null)
+  const confirmTimerRef = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     let alive = true
@@ -75,6 +80,29 @@ export function AgentTerminalsPage() {
     if (follow && paneRef.current) paneRef.current.scrollTop = paneRef.current.scrollHeight
   }, [output, follow])
 
+  useEffect(() => () => {
+    if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current)
+  }, [])
+
+  const handleClose = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (confirmCloseId !== id) {
+      setConfirmCloseId(id)
+      if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = window.setTimeout(() => setConfirmCloseId(null), 3500)
+      return
+    }
+    if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current)
+    setConfirmCloseId(null)
+    try {
+      await fetchJSON(`/api/v1/agent-terminals/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      setTerminals(prev => prev.filter(x => x.id !== id))
+      setSelected(cur => (cur === id ? '' : cur))
+    } catch {
+      setError(t('agentTerm.closeError'))
+    }
+  }, [confirmCloseId])
+
   return (
     <section className="agent-terminals">
       <header className="agent-terminals-header">
@@ -91,7 +119,7 @@ export function AgentTerminalsPage() {
         <ul className="agent-terminals-list" aria-label={t('agentTerm.listAriaLabel')}>
           {terminals.length === 0 && <li className="agent-terminals-empty">{t('agentTerm.empty')}</li>}
           {terminals.map(term => (
-            <li key={term.id}>
+            <li key={term.id} className="agent-terminals-row">
               <button
                 type="button"
                 className={`agent-terminals-item${term.id === selected ? ' active' : ''}`}
@@ -100,6 +128,17 @@ export function AgentTerminalsPage() {
               >
                 <span className="agent-terminals-item-id">{term.label || term.id}</span>
                 <span className="agent-terminals-item-meta">{term.size} · {term.created}</span>
+              </button>
+              <button
+                type="button"
+                className={`agent-terminals-close${confirmCloseId === term.id ? ' confirming' : ''}`}
+                onClick={e => void handleClose(term.id, e)}
+                title={confirmCloseId === term.id ? t('agentTerm.confirmClose') : t('agentTerm.close')}
+                aria-label={confirmCloseId === term.id ? t('agentTerm.confirmClose') : t('agentTerm.close')}
+              >
+                <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                  <path d="M3 3 L13 13 M13 3 L3 13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
               </button>
             </li>
           ))}

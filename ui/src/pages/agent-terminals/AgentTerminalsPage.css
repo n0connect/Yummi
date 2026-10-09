@@ -6,10 +6,29 @@
 .agent-terminals-error { color: #f87171; margin: 0; font-size: 13px; }
 .agent-terminals-body { display: grid; grid-template-columns: 240px 1fr; gap: 12px; min-height: 0; flex: 1; }
 .agent-terminals-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
-.agent-terminals-item { width: 100%; text-align: left; background: transparent; border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 8px 10px; color: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.agent-terminals-row { position: relative; }
+.agent-terminals-item { width: 100%; box-sizing: border-box; text-align: left; background: transparent; border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 8px 32px 8px 10px; color: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .agent-terminals-item.active { border-color: var(--cyan, #38bdf8); background: rgba(56, 189, 248, 0.08); }
 .agent-terminals-item-id { font-family: ui-monospace, monospace; font-size: 13px; }
 .agent-terminals-item-meta { font-size: 11px; color: var(--text-tertiary, #6b7a80); }
+.agent-terminals-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary, #6b7a80);
+  cursor: pointer;
+  padding: 0;
+}
+.agent-terminals-close:hover { background: rgba(248, 113, 113, 0.14); color: #f87171; }
+.agent-terminals-close.confirming { background: #f87171; color: #0a0c0e; }
 .agent-terminals-empty { font-size: 13px; color: var(--text-tertiary, #6b7a80); padding: 8px; }
 .agent-terminals-pane-wrap { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border, #1e293b); border-radius: 8px; overflow: hidden; background: #0a0c0e; }
 .agent-terminals-pane-bar { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-family: ui-monospace, monospace; font-size: 12px; border-bottom: 1px solid var(--border, #1e293b); color: var(--text-secondary, #94a3b8); }

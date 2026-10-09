@@ -212,10 +212,12 @@ export type ActivityKind =
   | 'command_result'
   | 'memory_recalled'
   | 'skill_applied'
+  | 'skill_suggested'
   | 'handoff_started'
   | 'handoff_completed'
   | 'finding'
   | 'context_saved'
+  | 'context_rejected'
   | 'ask'
   | 'finish'
 

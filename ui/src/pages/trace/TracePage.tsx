@@ -16,10 +16,12 @@ const KIND_META: Record<ActivityKind, [string, string]> = {
   command_result:    ['✓', t('trace.kind.command_result')],
   memory_recalled:   ['○', t('trace.kind.memory_recalled')],
   skill_applied:     ['◆', t('trace.kind.skill_applied')],
+  skill_suggested:   ['◈', t('trace.kind.skill_suggested')],
   handoff_started:   ['↗', t('trace.kind.handoff_started')],
   handoff_completed: ['↙', t('trace.kind.handoff_completed')],
   finding:           ['!', t('trace.kind.finding')],
   context_saved:     ['·', t('trace.kind.context_saved')],
+  context_rejected:  ['⊘', t('trace.kind.context_rejected')],
   ask:               ['?', t('trace.kind.ask')],
   finish:            ['■', t('trace.kind.finish')],
 }

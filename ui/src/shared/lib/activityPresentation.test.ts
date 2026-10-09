@@ -19,7 +19,6 @@ describe('presentActivity', () => {
     'plan',
     'command_result',
     'memory_recalled',
-    'skill_applied',
     'handoff_started',
     'handoff_completed',
     'context_saved',
@@ -63,5 +62,33 @@ describe('presentActivity', () => {
   it('keeps a concise operator-facing finding', () => {
     const visible = presentActivity(activity('finding', '  TLS   yapılandırması   zayıf  '))
     expect(visible.summary).toBe('TLS yapılandırması zayıf')
+  })
+
+  // 'skill_applied' and 'skill_suggested' are the other deliberate exceptions:
+  // their Summary is always a validated skill name (server-side
+  // skillNamePattern, never target-controlled or model-generated prose), and
+  // the whole point of splitting them into two kinds was to let an operator
+  // tell "the system suggested this playbook" apart from "the model chose to
+  // load this playbook" — generalizing both away would erase that distinction
+  // again.
+  it('surfaces the real skill name for skill_applied', () => {
+    const visible = presentActivity(activity('skill_applied', 'web'))
+    expect(visible.summary).toBe('web')
+  })
+
+  it('surfaces the real skill name for skill_suggested', () => {
+    const visible = presentActivity(activity('skill_suggested', 'recon'))
+    expect(visible.summary).toBe('recon')
+  })
+
+  it('distinguishes skill_applied from skill_suggested by label', () => {
+    const applied = presentActivity(activity('skill_applied', 'web'))
+    const suggested = presentActivity(activity('skill_suggested', 'web'))
+    expect(applied.label).not.toBe(suggested.label)
+  })
+
+  it('never leaks Detail for a skill_applied or skill_suggested event', () => {
+    const visible = presentActivity(activity('skill_applied', 'web', 'hidden chain of thought'))
+    expect(JSON.stringify(visible)).not.toContain('chain of thought')
   })
 })
