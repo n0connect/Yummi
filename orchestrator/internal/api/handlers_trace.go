@@ -101,6 +101,21 @@ func HandleListSkills(reg *skill.Registry) http.HandlerFunc {
 	}
 }
 
+// HandleSkillUsageStats returns how often each playbook was suggested by the
+// system vs actually loaded by the model, across every session — operator
+// evidence for deciding whether a skill earns its place in the catalogue
+// (see agent.SkillUsage's doc comment for why this is read-only visibility,
+// never automatic pruning). GET /api/v1/skills/usage
+func HandleSkillUsageStats(taskStore *agent.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if taskStore == nil {
+			writeJSON(w, http.StatusOK, []agent.SkillUsage{})
+			return
+		}
+		writeJSON(w, http.StatusOK, taskStore.SkillUsageStats())
+	}
+}
+
 // HandleListRoles returns the available sub-agent roles. GET /api/v1/agent/roles
 func HandleListRoles(runner agent.TaskRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -80,6 +80,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Delete("/sessions/{sessionID}/context/{key}", HandleDeleteContext(ks))
 		r.Get("/tactics", HandleListTactics(ks))
 		r.Get("/skills", HandleListSkills(skillReg))
+		r.Get("/skills/usage", HandleSkillUsageStats(taskStore))
 		r.Get("/skills/pending", HandleListPendingSkills(curatorStore))
 		r.Post("/skills/pending/{id}/approve", HandleApprovePendingSkill(curatorStore, skillReg, autoSkillDir(cfg)))
 		r.Post("/skills/pending/{id}/reject", HandleRejectPendingSkill(curatorStore))
@@ -137,9 +138,12 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/agent/mode", HandleGetApprovalMode(taskRunner))
 		r.Post("/agent/mode", HandleSetApprovalMode(taskRunner))
 
-		// Agent-owned terminals: read-only watch view (control stays with the agent)
+		// Agent-owned terminals: read-only watch view (control stays with the agent),
+		// plus one sanctioned operator write — ending a session outright (see
+		// agent_terminals.go's HandleCloseAgentTerminal doc comment).
 		r.Get("/agent-terminals", HandleListAgentTerminals(agentTerm))
 		r.Get("/agent-terminals/{id}", HandleReadAgentTerminal(agentTerm))
+		r.Delete("/agent-terminals/{id}", HandleCloseAgentTerminal(agentTerm))
 
 		// Agent tasks
 		r.Post("/tasks", HandleCreateTask(taskRunner))

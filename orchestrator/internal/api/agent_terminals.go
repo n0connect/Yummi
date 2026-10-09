@@ -16,12 +16,22 @@ import (
 
 // agent_terminals.go: a watch-only view of the terminals the AGENT opens in
 // the sandbox (term_open/term_run/...). The operator can read them; the
-// operator can never write to them. Control stays entirely with the agent.
+// operator can never type into or drive them. Control over what RUNS in a
+// session stays entirely with the agent.
 //
-// Write-enforcement lives in one place: agentTerminalCall accepts only the
-// two read verbs below. term_run, term_keys, term_wait, term_close and
+// Write-enforcement for that lives in one place: agentTerminalCall accepts
+// only the two read verbs below. term_run, term_keys, term_wait and
 // term_open are deliberately NOT reachable from this file, so an operator
-// request cannot type into or close a session.
+// request can never type into a session or start a new one.
+//
+// term_close is the one deliberate, narrow exception: an operator may end a
+// session outright (the UI gates this behind an explicit two-click confirm,
+// mirroring SessionRail's delete pattern), because killing a tmux session the
+// agent is no longer using is a cleanup action, not a way to steer what the
+// agent does inside it. It is dispatched through its own dedicated handler
+// below, never through agentTerminalCall/allowedAgentTerminalVerb, so that
+// chokepoint's read-only guarantee for term_list/term_read stays exactly as
+// strict as the tests assert.
 
 // agentTerminalCaller is the orchestrator's sandbox MCP client. Only
 // CallTool is used.
@@ -142,5 +152,29 @@ func HandleReadAgentTerminal(c agentTerminalCaller) http.HandlerFunc {
 		clean := threatscan.StripANSI(out)
 		flag := threatscan.FirstThreatMessage(clean, threatscan.ScopeAll)
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "output": clean, "flagged": flag != "", "flag_reason": flag})
+	}
+}
+
+// HandleCloseAgentTerminal ends one agent-owned sandbox terminal session on
+// explicit operator request. See the package doc above: this is the single
+// sanctioned write from this view, dispatched directly (never through the
+// read-only agentTerminalCall chokepoint) and limited to exactly term_close
+// on one ID the regex below already validates.
+func HandleCloseAgentTerminal(c agentTerminalCaller) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if !agentTerminalIDPattern.MatchString(id) {
+			writeError(w, http.StatusBadRequest, "invalid terminal id", nil)
+			return
+		}
+		if c == nil {
+			writeError(w, http.StatusBadGateway, "sandbox terminal client not configured", nil)
+			return
+		}
+		if _, err := c.CallTool(r.Context(), "term_close", map[string]any{"id": id}); err != nil {
+			writeError(w, http.StatusBadGateway, "terminal close failed", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "closed": true})
 	}
 }
