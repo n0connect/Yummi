@@ -23,10 +23,14 @@ type handoffDeps struct {
 	taskID      string
 	sessionID   string
 	store       *agent.Store
-	subAgents   map[string]*agent.Runner
+	subAgents   map[string]agent.SubAgentRunner
 	hints       map[string]string
 	delegations *agent.DelegationCoordinator
 	timeout     time.Duration
+	// trace records this call the same way runToolPipeline's pentest-tool/
+	// run_command dispatch does (see InvokableRun's defer below for why).
+	// Nil-safe: runTrace.record no-ops on a nil receiver.
+	trace *runTrace
 }
 
 type handoffArgs struct {
@@ -34,7 +38,7 @@ type handoffArgs struct {
 	Subgoal string `json:"subgoal"`
 }
 
-func handoffInfo(subAgents map[string]*agent.Runner, hints map[string]string) *schema.ToolInfo {
+func handoffInfo(subAgents map[string]agent.SubAgentRunner, hints map[string]string) *schema.ToolInfo {
 	desc := "Hand a focused subtask to a specialist sub-agent. Call this more than once in the same turn to delegate " +
 		"to several specialists at once — they run concurrently, not one after another."
 	if block := buildDelegationBlock(subAgents, hints); block != "" {
@@ -83,6 +87,18 @@ func (ht *handoffTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		ht.emit(agent.ActHandoffOut, role+" specialist could not complete the subtask", reason)
 		return fmt.Sprintf("Sub-agent %q could not start on subtask %q: %s; handle it yourself or finish", role, subgoal, reason), nil
 	}
+	// Record this delegation as a real tool call the moment a genuine attempt
+	// begins (not on the earlier unknown-role/empty-subgoal rejection, which
+	// did no real work) — unconditionally via defer, success or failure,
+	// mirroring runToolPipeline's own defer. Without this, handoff was
+	// invisible to trace.pairs(), which the premature-FINISH guard reads to
+	// decide whether a turn did "zero tool calls": a turn whose only action
+	// was a successful handoff was reproducibly bounced as if nothing had
+	// happened, forcing the model to needlessly re-delegate (live-observed
+	// 2026-10-09: one real handoff re-run three extra times for exactly this
+	// reason — see the result returned below for the recorded text).
+	var resultText string
+	defer func() { ht.deps.trace.record("handoff "+role, resultText) }()
 	res, runErr := sub.RunSubtask(childCtx, ht.deps.sessionID, subgoal, ht.deps.taskID, func(taskID string) {
 		ht.deps.delegations.BindTask(delegationID, taskID)
 	})
@@ -94,7 +110,8 @@ func (ht *handoffTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			reason = fmt.Sprintf("timed out after %s", ht.deps.timeout)
 		}
 		ht.emit(agent.ActHandoffOut, role+" specialist could not complete the subtask", reason)
-		return fmt.Sprintf("Sub-agent %q failed on subtask %q: %s; handle it yourself or finish", role, subgoal, reason), nil
+		resultText = fmt.Sprintf("Sub-agent %q failed on subtask %q: %s; handle it yourself or finish", role, subgoal, reason)
+		return resultText, nil
 	}
 
 	// Content-layer fail-closed, identical policy to node_handoff.go: the
@@ -116,7 +133,8 @@ func (ht *handoffTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		}
 	}
 	ht.emit(agent.ActHandoffOut, role+" specialist completed the subtask", summary)
-	return b.String(), nil
+	resultText = b.String()
+	return resultText, nil
 }
 
 func (ht *handoffTool) emit(kind agent.ActivityKind, summary, detail string) {

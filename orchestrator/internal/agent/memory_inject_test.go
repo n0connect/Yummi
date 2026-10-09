@@ -9,20 +9,22 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/skill"
 )
 
-func TestPreambleInjectsRelevantSkill(t *testing.T) {
+// The per-step preamble carries the SKILLS index: the goal-matched playbook is
+// suggested by name, and no playbook body is injected. The body is loaded later
+// through [SKILL_VIEW], so the preamble stays small on every step.
+func TestPreambleIndexSuggestsRelevantSkillWithoutBody(t *testing.T) {
 	reg := skill.New([]skill.Skill{
-		{Name: "web", Triggers: []string{"web", "http"}, Knowledge: "fingerprint with whatweb first"},
-		{Name: "recon", Triggers: []string{"nmap"}, Knowledge: "nmap -sV first"},
+		{Name: "web", Description: "Web application testing playbook.", Triggers: []string{"web", "http"}, Knowledge: "fingerprint with whatweb first"},
+		{Name: "recon", Description: "Host reconnaissance playbook.", Triggers: []string{"nmap"}, Knowledge: "nmap -sV first"},
 	})
 	s := &GraphState{cfg: Config{Skills: reg}, recentCmds: []string{"whatweb http://x"}}
 
 	pre := s.buildPreamble(context.Background(), Task{Goal: "assess the web target"})
-	if !strings.Contains(pre, "SKILLS") || !strings.Contains(pre, "whatweb") {
-		t.Fatalf("relevant web skill not injected into preamble:\n%s", pre)
+	if !strings.Contains(pre, "SKILLS") || !strings.Contains(pre, "Suggested for this goal:\n  - web: Web application testing playbook.") {
+		t.Fatalf("relevant web skill not suggested in the SKILLS index:\n%s", pre)
 	}
-	// An unrelated skill must not appear.
-	if strings.Contains(pre, "nmap -sV first") {
-		t.Fatalf("irrelevant skill leaked into preamble:\n%s", pre)
+	if strings.Contains(pre, "fingerprint with whatweb first") || strings.Contains(pre, "nmap -sV first") {
+		t.Fatalf("playbook bodies must not be injected into the preamble:\n%s", pre)
 	}
 }
 

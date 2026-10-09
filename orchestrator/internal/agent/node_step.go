@@ -91,6 +91,22 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 			return s.convergeTerminalPlan()
 		}
 		slog.Warn("agent: step LLM error", "task", s.taskID, "error", err)
+		// A context-window overflow is not transient: re-sending the identical
+		// prompt can never succeed. Force the compaction route instead, bounded
+		// so an overflow compaction cannot cure falls through to the normal
+		// retry/give-up path rather than looping.
+		if IsContextOverflow(err) && len(s.memCtx.Observations) > 0 && s.overflowCompactions < maxOverflowCompactions {
+			s.overflowCompactions++
+			slog.Warn("agent: context window overflow; forcing compaction", "task", s.taskID, "attempt", s.overflowCompactions)
+			s.memCtx.TokensUsed = s.memCtx.TokenBudget
+			s.retryCtx = RetryContext{Caller: nodeStep}
+			return edgeContextFull, nil
+		}
+		if IsContextOverflow(err) {
+			// Compaction is exhausted (or had nothing to compact): say so plainly
+			// instead of letting the generic "LLM unavailable" message stand.
+			s.lastErr = fmt.Sprintf("context window exhausted after %d compaction(s); the goal needs a narrower scope or a new task", s.overflowCompactions)
+		}
 		s.retryCtx = RetryContext{Caller: nodeStep, Attempts: s.retryCtx.Attempts}
 		return edgeLLMError, nil
 	}
@@ -207,10 +223,16 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		}
 		return edgeHandoff, nil
 	case "REMEMBER":
-		if strings.TrimSpace(msg.Action.MemKey) == "" || strings.TrimSpace(msg.Action.MemValue) == "" {
+		// An empty value is valid: it forgets the key (see ApplyNote).
+		if strings.TrimSpace(msg.Action.MemKey) == "" {
 			return s.rejectStepAction()
 		}
 		return edgeRemember, nil
+	case "SKILL_VIEW":
+		if strings.TrimSpace(msg.Action.SkillName) == "" {
+			return s.rejectStepAction()
+		}
+		return edgeSkillView, nil
 	case "ASK_OPERATOR":
 		if strings.TrimSpace(msg.Action.Question) == "" {
 			return s.rejectStepAction()
@@ -355,60 +377,15 @@ func targetReminder(goal string) string {
 	return fmt.Sprintf("TARGET: %s — every command in this task must target exactly this address. Do NOT use 127.0.0.1, localhost, or any other address.", ip)
 }
 
-// buildSkills selects and renders the playbooks relevant to the goal and the
-// tools actually used so far. Empty when no registry / no match.
-//
-// This runs on EVERY step (graph re-renders its whole prompt from scratch
-// each turn, no conversation history to amortize against), and some real
-// playbooks are large — persona/v0.1/skills/osint-enum.yaml's Knowledge
-// alone is ~12KB (~3000 tokens); several others run 6-7KB. Up to 3 selected
-// skills rendered in full, every single turn, for a task's entire
-// duration, is exactly the kind of context cost a local model can't
-// absorb for long before compression kicks in — live-reproduced tokens_used
-// in the 7-10K range on tasks that hadn't run a single real tool yet.
-// renderSkillsBounded caps each selected skill's rendered length for a
-// local model only; a cloud model (and local before this existed) still
-// gets each skill's full text, unchanged.
+// buildSkills renders the SKILLS index: the catalogue of playbooks, with the
+// ones matching this goal suggested first. It is the same on every step, for
+// both engines, and it is small and bounded (skill.DefaultIndexBudget), so a
+// local model always knows which playbooks exist. A playbook's full text is
+// NOT injected here. The model loads it with [SKILL_VIEW] when a step reaches
+// that technique (see skillViewNode), so no step pays for playbooks it does not
+// use. Empty when there is no registry or no skills.
 func (s *GraphState) buildSkills(task Task) string {
-	if s.cfg.Skills == nil {
-		return ""
-	}
-	sel := s.cfg.Skills.Select(task.Goal, toolsFromCommands(s.recentCmds), 3)
-	if len(sel) > 0 {
-		names := make([]string, len(sel))
-		for i, sk := range sel {
-			names[i] = sk.Name
-		}
-		if sig := strings.Join(names, ", "); sig != s.lastSkillsSig {
-			s.lastSkillsSig = sig
-			s.emit(ActSkill, sig, "")
-		}
-	}
-	if s.cfg.LocalModel {
-		return renderSkillsBounded(s.cfg.Skills, sel, localSkillCharCap)
-	}
-	return s.cfg.Skills.Render(sel)
-}
-
-// localSkillCharCap bounds each individual skill's rendered text for a
-// local model (see buildSkills' doc comment) — ~150 tokens worth, enough
-// for a playbook's name and opening guidance without paying for its full
-// knowledge block on every single turn.
-const localSkillCharCap = 600
-
-// renderSkillsBounded renders each selected skill through the registry's
-// own Render (one skill at a time, so the existing format is reused
-// verbatim) and truncates any chunk over maxChars — never mid-UTF8-rune.
-func renderSkillsBounded(reg *skill.Registry, selected []skill.Skill, maxChars int) string {
-	var b strings.Builder
-	for _, sk := range selected {
-		chunk := reg.Render([]skill.Skill{sk})
-		if len(chunk) > maxChars {
-			chunk = chunk[:utf8SafeCut(chunk, maxChars)] + "…(truncated — full playbook under this skill's name)\n"
-		}
-		b.WriteString(chunk)
-	}
-	return b.String()
+	return s.cfg.Skills.Index(task.Goal, toolsFromCommands(s.recentCmds), skill.DefaultIndexBudget)
 }
 
 // buildDelegation lists the sub-agent roles the orchestrator may hand off to.
@@ -465,3 +442,7 @@ func toolsFromCommands(cmds []string) []string {
 	}
 	return tools
 }
+
+// maxOverflowCompactions bounds forced compactions per task (see GraphState's
+// overflowCompactions).
+const maxOverflowCompactions = 3

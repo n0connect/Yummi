@@ -61,7 +61,7 @@ func TestEinoRunner_CreateAndPlanPersistsRecoveryAnchor(t *testing.T) {
 func TestEinoRunner_SetApprovalModePropagatesAndReportsCapabilities(t *testing.T) {
 	store, _ := agent.NewStore(nil)
 	sub := agent.NewRunner(store, nil, nil, nil, agent.Config{})
-	r := NewEinoRunner(store, nil, nil, Config{SubAgents: map[string]*agent.Runner{"web": sub}})
+	r := NewEinoRunner(store, nil, nil, Config{SubAgents: map[string]agent.SubAgentRunner{"web": sub}})
 	if err := r.SetApprovalMode(agent.ModeAuto); err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +782,7 @@ func TestEinoRunner_Approve_ResolvesSubAgentGate(t *testing.T) {
 
 	r := NewEinoRunner(store, nil, nil, Config{
 		ModelBaseURL: srv.URL + "/v1", ModelName: "test", ApprovalMode: agent.ModeAuto,
-		SubAgents: map[string]*agent.Runner{"web": sub},
+		SubAgents: map[string]agent.SubAgentRunner{"web": sub},
 	})
 
 	task, err := r.CreateAndPlan(context.Background(), "sess-sub-approve", "delegate risky work")

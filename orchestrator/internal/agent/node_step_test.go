@@ -57,10 +57,10 @@ func TestTargetReminder_NoClearTargetIsEmpty(t *testing.T) {
 // osint-enum.yaml), and buildSkills re-renders up to 3 selected skills in
 // full on EVERY step for a task's whole duration — tokens_used was
 // observed in the 7-10K range before a single real tool had even run.
-// localSkillCharCap bounds this per skill, but ONLY when cfg.LocalModel —
-// a cloud model (and local before this existed) must still get each
-// skill's full, untruncated text.
-func TestBuildSkills_LocalModelBoundsEachSkillsRenderedLength(t *testing.T) {
+// Progressive disclosure: a playbook's full body is never in the per-step
+// SKILLS index (for either model size). The index names it, and the model loads
+// the body on demand with [SKILL_VIEW], which returns it whole.
+func TestBuildSkills_IndexNamesPlaybookWithoutItsBody(t *testing.T) {
 	bigKnowledge := strings.Repeat("x", 5000)
 	reg := skill.New([]skill.Skill{
 		{Name: "big-skill", Description: "test", Triggers: []string{"recon"}, Knowledge: bigKnowledge},
@@ -69,22 +69,49 @@ func TestBuildSkills_LocalModelBoundsEachSkillsRenderedLength(t *testing.T) {
 	store, _ := NewStore(openTestDB(t))
 	task, _ := store.Create("s", "recon the target", 5)
 
-	cloud := &GraphState{store: store, cfg: Config{Skills: reg}}
-	cloudRendered := cloud.buildSkills(task)
-	if !strings.Contains(cloudRendered, bigKnowledge) {
-		t.Errorf("cloud (LocalModel=false) must render the skill's full, untruncated knowledge")
+	for _, local := range []bool{false, true} {
+		gs := &GraphState{store: store, cfg: Config{Skills: reg, LocalModel: local}}
+		rendered := gs.buildSkills(task)
+		if strings.Contains(rendered, bigKnowledge) {
+			t.Errorf("LocalModel=%v: the index must not carry the playbook body", local)
+		}
+		if !strings.Contains(rendered, "big-skill") || !strings.Contains(rendered, "skill_view(name)") {
+			t.Errorf("LocalModel=%v: index must name the playbook and say how to load it, got: %s", local, rendered)
+		}
+		if len(rendered) > skill.DefaultIndexBudget+40 {
+			t.Errorf("LocalModel=%v: index is %d bytes, want within %d", local, len(rendered), skill.DefaultIndexBudget)
+		}
+	}
+}
+
+// skill_view returns the whole body, untruncated, and is recorded as an
+// ActSkill activity so TRACE shows the playbook was actually used.
+func TestSkillViewNodeReturnsFullBodyAndRecordsUse(t *testing.T) {
+	bigKnowledge := strings.Repeat("y", 5000)
+	reg := skill.New([]skill.Skill{
+		{Name: "big-skill", Description: "test", Triggers: []string{"recon"}, Knowledge: bigKnowledge},
+	})
+	store, _ := NewStore(openTestDB(t))
+	task, _ := store.Create("s", "recon the target", 5)
+
+	gs := &GraphState{store: store, taskID: task.ID, cfg: Config{Skills: reg}}
+	gs.pendingAct = Action{SkillName: "big-skill"}
+	if edge, err := skillViewNode(context.Background(), gs); err != nil || edge != edgeOK {
+		t.Fatalf("skill_view must continue the loop, got edge=%q err=%v", edge, err)
+	}
+	if !strings.Contains(gs.lastObs, bigKnowledge) {
+		t.Fatalf("skill_view must return the full, untruncated body")
+	}
+	if !strings.Contains(gs.lastObs, "[TOOL_RESPONSE]") {
+		t.Fatalf("a loaded playbook must come back as a TOOL_RESPONSE, got: %.80s", gs.lastObs)
 	}
 
-	local := &GraphState{store: store, cfg: Config{Skills: reg, LocalModel: true}}
-	localRendered := local.buildSkills(task)
-	if strings.Contains(localRendered, bigKnowledge) {
-		t.Errorf("local model must NOT get the skill's full 5000-char knowledge verbatim")
+	gs.pendingAct = Action{SkillName: "no-such-skill"}
+	if _, err := skillViewNode(context.Background(), gs); err != nil {
+		t.Fatalf("unknown skill must not error: %v", err)
 	}
-	if len(localRendered) > localSkillCharCap+200 { // +200: header line, truncation marker
-		t.Errorf("local model's rendered skill block is %d chars, want roughly <= %d", len(localRendered), localSkillCharCap)
-	}
-	if !strings.Contains(localRendered, "big-skill") {
-		t.Errorf("truncation must still keep the skill's name, got: %s", localRendered)
+	if !strings.Contains(gs.lastObs, "[TOOL_FAILED]") || !strings.Contains(gs.lastObs, "SKILLS index") {
+		t.Fatalf("unknown skill must be a recoverable TOOL_FAILED pointing at the index, got: %.120s", gs.lastObs)
 	}
 }
 

@@ -94,7 +94,7 @@ func (r *StructuredRetrieval) Retrieve(_ context.Context, q Query) ([]MemoryItem
 	// Procedural: tactics for each named tool, skipping current-task commands.
 	for _, tool := range q.Tools {
 		for _, tac := range r.store.ListTactics(tool, limit) {
-			if _, skip := excluded[tac.CommandPattern]; skip {
+			if _, skip := excluded[tac.CommandPattern]; skip || !retrievableTactic(tac) {
 				continue
 			}
 			items = append(items, MemoryItem{

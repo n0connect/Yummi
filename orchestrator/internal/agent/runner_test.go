@@ -87,7 +87,7 @@ func TestSetApprovalModePropagatesToSubAgents(t *testing.T) {
 	web := NewRunner(nil, nil, nil, nil, Config{})
 	recon := NewRunner(nil, nil, nil, nil, Config{})
 	top := NewRunner(nil, nil, nil, nil, Config{
-		SubAgents: map[string]*Runner{"web": web, "recon": recon},
+		SubAgents: map[string]SubAgentRunner{"web": web, "recon": recon},
 	})
 
 	if top.ApprovalMode() != ModeAskPermission || web.ApprovalMode() != ModeAskPermission || recon.ApprovalMode() != ModeAskPermission {

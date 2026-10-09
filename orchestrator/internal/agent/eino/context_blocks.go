@@ -29,17 +29,14 @@ func buildMemoryBlock(ctx context.Context, retrieval knowledge.RetrievalStrategy
 	return agent.FormatMemoryItems(items)
 }
 
-// buildSkillsBlock selects and renders the playbooks relevant to the goal,
-// mirroring node_step.go's buildSkills — queried once up front for the same
-// reason buildMemoryBlock is. Empty when no registry / no match. *skill.Registry
-// methods tolerate a nil receiver, matching the graph backend's own usage.
-// names is the selected skills' names, for the caller's activity emit.
-func buildSkillsBlock(skills *skill.Registry, goal string) (block string, names []string) {
-	sel := skills.Select(goal, nil, 3)
-	for _, sk := range sel {
-		names = append(names, sk.Name)
-	}
-	return skills.Render(sel), names
+// buildSkillsBlock renders the SKILLS index, the same catalogue node_step.go's
+// buildSkills renders per step on the graph engine: every playbook by name,
+// goal matches suggested first. Full playbook bodies are not folded in here;
+// the model loads one with the skill_view tool when a step reaches that
+// technique (see skill_tool.go). Empty when there is no registry or no skills.
+// *skill.Registry methods tolerate a nil receiver, matching the graph backend.
+func buildSkillsBlock(skills *skill.Registry, goal string) string {
+	return skills.Index(goal, nil, skill.DefaultIndexBudget)
 }
 
 // buildDelegationBlock lists the sub-agent roles the handoff tool can reach,
@@ -50,7 +47,7 @@ func buildSkillsBlock(skills *skill.Registry, goal string) (block string, names 
 // option). hints maps a role name to its short routing-hint sentence
 // (agent.Config.SubAgentHints); a role with no hint (or a nil map) still
 // renders as a bare name.
-func buildDelegationBlock(subAgents map[string]*agent.Runner, hints map[string]string) string {
+func buildDelegationBlock(subAgents map[string]agent.SubAgentRunner, hints map[string]string) string {
 	if len(subAgents) == 0 {
 		return ""
 	}

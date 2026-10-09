@@ -87,7 +87,7 @@ func TestHandoffTool_DelegatesToSubAgentAndReturnsSummary(t *testing.T) {
 
 	ht := newHandoffTool(handoffDeps{
 		taskID: task.ID, sessionID: "sess-1", store: store,
-		subAgents:   map[string]*agent.Runner{"web": sub},
+		subAgents:   map[string]agent.SubAgentRunner{"web": sub},
 		delegations: agent.NewDelegationCoordinator(3),
 		timeout:     5 * time.Second,
 	})
@@ -114,12 +114,101 @@ func TestHandoffTool_DelegatesToSubAgentAndReturnsSummary(t *testing.T) {
 	}
 }
 
+// A successful handoff must be visible to trace.pairs() — the regression this
+// closes: the premature-FINISH guard reads trace.pairs() to decide whether a
+// turn did "zero tool calls," and handoff never recorded into it, so a turn
+// whose only action was a successful delegation was bounced as if nothing had
+// happened (live-observed 2026-10-09: one real handoff re-run three extra
+// times for exactly this reason).
+func TestHandoffTool_RecordsIntoTraceOnSuccess(t *testing.T) {
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	execer := agent.NewStoreExecer(execution.NewStore(), 5*time.Second)
+	sub := newGraphSubAgent(t, store, execer,
+		`{"steps":[{"id":"s1","description":"assess"}]}`,
+		`[FINISH]
+{"summary":"web assessed"}`,
+	)
+	task, err := store.CreateSubtask("sess-1", "top-level goal", 5, "")
+	if err != nil {
+		t.Fatalf("CreateSubtask: %v", err)
+	}
+	trace := &runTrace{}
+	ht := newHandoffTool(handoffDeps{
+		taskID: task.ID, sessionID: "sess-1", store: store,
+		subAgents:   map[string]agent.SubAgentRunner{"web": sub},
+		delegations: agent.NewDelegationCoordinator(3),
+		timeout:     5 * time.Second,
+		trace:       trace,
+	})
+
+	if _, err := ht.InvokableRun(context.Background(), `{"role":"web","subgoal":"assess the web service"}`); err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+
+	pairs := trace.pairs()
+	if len(pairs) != 1 {
+		t.Fatalf("want exactly 1 recorded pair, got %d", len(pairs))
+	}
+	if pairs[0].Tool != "handoff" || !strings.Contains(pairs[0].Result, "web assessed") {
+		t.Fatalf("recorded pair = %+v, want tool=handoff and the sub-agent's summary", pairs[0])
+	}
+}
+
+// A FAILED handoff (sub-agent error, timeout) must also record — a genuine
+// attempt happened and produced a real (if unhappy) result, matching
+// runToolPipeline's own unconditional defer for pentest tools/run_command.
+func TestHandoffTool_RecordsIntoTraceOnSubAgentFailure(t *testing.T) {
+	store, err := agent.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	// A sub-agent whose scripted model reply is invalid JSON makes CreateAndPlan
+	// fail inside RunSubtask — a real, if early, failure.
+	execer := agent.NewStoreExecer(execution.NewStore(), 5*time.Second)
+	sub := agent.NewRunner(store, failingLLM{}, nil, execer, agent.Config{StepBudget: 5})
+	task, err := store.CreateSubtask("sess-1", "top-level goal", 5, "")
+	if err != nil {
+		t.Fatalf("CreateSubtask: %v", err)
+	}
+	trace := &runTrace{}
+	ht := newHandoffTool(handoffDeps{
+		taskID: task.ID, sessionID: "sess-1", store: store,
+		subAgents:   map[string]agent.SubAgentRunner{"web": sub},
+		delegations: agent.NewDelegationCoordinator(3),
+		timeout:     5 * time.Second,
+		trace:       trace,
+	})
+
+	if _, err := ht.InvokableRun(context.Background(), `{"role":"web","subgoal":"assess the web service"}`); err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+
+	pairs := trace.pairs()
+	if len(pairs) != 1 {
+		t.Fatalf("want exactly 1 recorded pair even on sub-agent failure, got %d", len(pairs))
+	}
+	if pairs[0].Tool != "handoff" || !strings.Contains(pairs[0].Result, "failed") {
+		t.Fatalf("recorded pair = %+v, want tool=handoff and a failure message", pairs[0])
+	}
+}
+
+// failingLLM always errors — enough to make a sub-agent's CreateAndPlan fail
+// without needing a real or scripted HTTP server for this one negative case.
+type failingLLM struct{}
+
+func (failingLLM) Chat(_ context.Context, _, _ string) (string, error) {
+	return "", fmt.Errorf("simulated LLM failure")
+}
+
 func TestHandoffTool_UnknownRoleRejected(t *testing.T) {
 	store, _ := agent.NewStore(nil)
 	task, _ := store.CreateSubtask("sess-1", "goal", 5, "")
 	ht := newHandoffTool(handoffDeps{
 		taskID: task.ID, sessionID: "sess-1", store: store,
-		subAgents:   map[string]*agent.Runner{"web": {}},
+		subAgents:   map[string]agent.SubAgentRunner{"web": &agent.Runner{}},
 		delegations: agent.NewDelegationCoordinator(3),
 		timeout:     5 * time.Second,
 	})
@@ -134,7 +223,7 @@ func TestHandoffTool_UnknownRoleRejected(t *testing.T) {
 }
 
 func TestHandoffInfo_ListsConfiguredRoles(t *testing.T) {
-	ht := newHandoffTool(handoffDeps{subAgents: map[string]*agent.Runner{"web": {}, "recon": {}}})
+	ht := newHandoffTool(handoffDeps{subAgents: map[string]agent.SubAgentRunner{"web": &agent.Runner{}, "recon": &agent.Runner{}}})
 	info, err := ht.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)

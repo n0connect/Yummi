@@ -10,6 +10,7 @@ package eino
 import (
 	"context"
 	"fmt"
+	"github.com/n0connect/yummi/orchestrator/internal/agent"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ func NewOllamaChatModel(ctx context.Context, baseURL, modelName, apiKey string, 
 			"HTTP-Referer": "https://github.com/n0connect/yummi",
 			"X-Title":      "Yummi Pentest Conductor",
 		}
+	}
+	// Yummi owns context management on this backend; OpenRouter must not
+	// silently rewrite the prompt (see agent.OpenRouterCompressionOff).
+	for k, v := range agent.OpenRouterCompressionOff(baseURL) {
+		extra[k] = v
 	}
 	if len(extra) > 0 {
 		cfg.ExtraFields = extra

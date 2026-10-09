@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -13,6 +14,16 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// MaxSessionContexts caps the persistent notes one engagement may hold. The cap
+// is what keeps the MEMORY block bounded over a long task, so it is enforced
+// here, not left to the prompt.
+const MaxSessionContexts = 200
+
+// ErrMemoryFull is returned by RecordContext when a session is at
+// MaxSessionContexts. Callers relay it to the model with the way out: forget a
+// stale key, then retry.
+var ErrMemoryFull = errors.New("session memory is full")
 
 // Store owns the world-model tables. db may be nil (in-memory map, for tests).
 type Store struct {
@@ -260,8 +271,8 @@ func (s *Store) RecordContext(ctx context.Context, pc PersistentContext) error {
 		if existing, ok := s.FindContext(pc.SessionID, pc.Key); ok {
 			pc.ID = existing.ID
 			pc.CreatedAt = existing.CreatedAt
-		} else if len(s.ListContexts(pc.SessionID)) >= 200 {
-			return fmt.Errorf("record context: session memory limit (200) reached")
+		} else if len(s.ListContexts(pc.SessionID)) >= MaxSessionContexts {
+			return fmt.Errorf("record context: %w (%d notes)", ErrMemoryFull, MaxSessionContexts)
 		}
 	}
 	if pc.ID == "" {

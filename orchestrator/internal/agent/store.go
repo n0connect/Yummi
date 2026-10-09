@@ -455,6 +455,97 @@ func (s *Store) ListActivity(sessionID string, limit int) []ActivityEvent {
 	return out
 }
 
+// ListTaskCommandEvidence returns one task's command and command-result
+// activity, oldest-first. Scoped by task_id in the query itself, NOT by
+// filtering ListActivity's session-wide window afterwards: a long multi-task
+// session would otherwise push an earlier task's evidence out of the window,
+// and a resumed run would silently lose the work it already did.
+func (s *Store) ListTaskCommandEvidence(taskID string, limit int) []ActivityEvent {
+	if limit <= 0 {
+		limit = 2000
+	}
+	if s.db == nil {
+		return []ActivityEvent{}
+	}
+	rows, err := s.db.Query(
+		`SELECT id,session_id,task_id,COALESCE(parent_task_id,''),kind,summary,COALESCE(detail,''),timestamp
+		 FROM agent_activity WHERE task_id=? AND kind IN (?, ?) ORDER BY timestamp ASC LIMIT ?`,
+		taskID, string(ActCommand), string(ActCommandDone), limit)
+	if err != nil {
+		slog.Error("agent: list task command evidence", "error", err)
+		return []ActivityEvent{}
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ActivityEvent, 0)
+	for rows.Next() {
+		var e ActivityEvent
+		var kind string
+		if err := rows.Scan(&e.ID, &e.SessionID, &e.TaskID, &e.ParentTaskID, &kind, &e.Summary, &e.Detail, &e.Timestamp); err != nil {
+			continue
+		}
+		e.Kind = ActivityKind(kind)
+		out = append(out, e)
+	}
+	return out
+}
+
+// SkillUsage summarizes how often a playbook was suggested by the system vs
+// actually loaded by the model, across every session this orchestrator has
+// run — the operator-visible evidence for deciding whether a skill earns its
+// place in the catalogue.
+//
+// This is deliberately read-only visibility, not automatic pruning.
+// Comparative review (2026-10) against another agent's periodic
+// skill-library curator — which can archive/consolidate skills on its own
+// schedule — found that pattern incompatible with Yummi's own invariant that
+// nothing reaches or leaves the live skill registry without an explicit
+// operator decision (the same reason skillcurator's drafts sit in a pending
+// queue instead of auto-promoting). SkillUsageStats gives an operator the
+// SAME visibility a periodic curator would act on, so they can retire a
+// skill themselves — it does not act on their behalf.
+type SkillUsage struct {
+	Name           string `json:"name"`
+	SuggestedCount int    `json:"suggested_count"` // ActSkillSuggested — the system pushed it, not evidence of model behavior
+	AppliedCount   int    `json:"applied_count"`   // ActSkill — the model itself loaded it
+	LastUsedAt     int64  `json:"last_used_at,omitempty"`
+}
+
+// SkillUsageStats aggregates every ActSkill/ActSkillSuggested activity ever
+// recorded, grouped by skill name (the Summary field both kinds share — see
+// ActSkill's doc comment), ranked by total usage descending. Returns an empty
+// slice (never an error) for a nil-db store, matching ListActivity's own
+// degrade-gracefully convention.
+func (s *Store) SkillUsageStats() []SkillUsage {
+	if s.db == nil {
+		return []SkillUsage{}
+	}
+	rows, err := s.db.Query(
+		`SELECT summary,
+		        SUM(CASE WHEN kind = ? THEN 1 ELSE 0 END),
+		        SUM(CASE WHEN kind = ? THEN 1 ELSE 0 END),
+		        MAX(timestamp)
+		 FROM agent_activity WHERE kind IN (?, ?)
+		 GROUP BY summary ORDER BY 2 + 3 DESC, summary ASC`,
+		string(ActSkillSuggested), string(ActSkill), string(ActSkillSuggested), string(ActSkill))
+	if err != nil {
+		slog.Error("agent: skill usage stats", "error", err)
+		return []SkillUsage{}
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]SkillUsage, 0)
+	for rows.Next() {
+		var u SkillUsage
+		if err := rows.Scan(&u.Name, &u.SuggestedCount, &u.AppliedCount, &u.LastUsedAt); err != nil {
+			continue
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("agent: skill usage stats row iteration", "error", err)
+	}
+	return out
+}
+
 // SubscribeActivity registers a listener for activity events (mirrors Subscribe).
 func (s *Store) SubscribeActivity(buffer int) (int, <-chan ActivityEnvelope, error) {
 	if buffer <= 0 {

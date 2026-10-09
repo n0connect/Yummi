@@ -359,6 +359,136 @@ func (r *Registry) Select(goal string, tools []string, max int) []Skill {
 	return out
 }
 
+// Lookup returns one skill by exact name. It backs the skill_view tool, so
+// the model can load a full playbook on demand instead of carrying every
+// playbook's body in every prompt.
+func (r *Registry) Lookup(name string) (Skill, bool) {
+	if r == nil {
+		return Skill{}, false
+	}
+	name = strings.TrimSpace(name)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, s := range r.skills {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return Skill{}, false
+}
+
+// indexSuggestedMax caps how many goal-matched skills get a one-line
+// description in the index. Every other skill appears by name only.
+const indexSuggestedMax = 5
+
+// indexDescRunes bounds one suggested skill's description line.
+const indexDescRunes = 160
+
+// Index renders the SKILLS catalogue that every task prompt carries. It is the
+// progressive-disclosure layer: the model always sees WHAT playbooks exist, and
+// loads the full text of one with skill_view when its next step falls in that
+// area. Goal-matched skills (Select) are listed first with a one-line
+// description; every other skill is listed by name only, so the full catalogue
+// stays cheap enough for a local model's context. budget bounds the whole block
+// in bytes (<= 0 means DefaultIndexBudget); names that do not fit are reported
+// as a count, never silently dropped. Empty when the registry has no skills.
+func (r *Registry) Index(goal string, tools []string, budget int) string {
+	if r == nil {
+		return ""
+	}
+	all := r.All()
+	if len(all) == 0 {
+		return ""
+	}
+	if budget <= 0 {
+		budget = DefaultIndexBudget
+	}
+	suggested := r.Select(goal, tools, indexSuggestedMax)
+	isSuggested := make(map[string]bool, len(suggested))
+	for _, s := range suggested {
+		isSuggested[s.Name] = true
+	}
+	var b strings.Builder
+	b.WriteString("SKILLS — playbooks you can load with skill_view(name). Before a technique that a playbook covers, load it and follow its method; do not improvise a method the playbook already gives.\n")
+	if len(suggested) > 0 {
+		b.WriteString("Suggested for this goal:\n")
+		for _, s := range suggested {
+			// A playbook without a description is listed by name alone. Falling
+			// back to its knowledge text would leak the body into the index,
+			// which must stay a catalogue, never a copy of the playbooks.
+			if d := oneLine(s.Description, indexDescRunes); d != "" {
+				fmt.Fprintf(&b, "  - %s: %s\n", s.Name, d)
+			} else {
+				fmt.Fprintf(&b, "  - %s\n", s.Name)
+			}
+		}
+	}
+	var others []string
+	for _, s := range all {
+		if !isSuggested[s.Name] {
+			others = append(others, s.Name)
+		}
+	}
+	sort.Strings(others)
+	if len(others) > 0 {
+		b.WriteString("Other playbooks: ")
+		listed := 0
+		for i, n := range others {
+			piece := n
+			if listed > 0 {
+				piece = ", " + n
+			}
+			// Reserve room for an overflow note so the block stays within budget.
+			remaining := len(others) - i - 1
+			note := ""
+			if remaining > 0 {
+				note = fmt.Sprintf(", … (+%d more)", remaining)
+			}
+			if b.Len()+len(piece)+len(note) > budget {
+				if listed > 0 {
+					b.WriteString(", ")
+				}
+				fmt.Fprintf(&b, "… (+%d more)", len(others)-listed)
+				break
+			}
+			b.WriteString(piece)
+			listed++
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// DefaultIndexBudget bounds the SKILLS index block in bytes. Roughly 900 tokens:
+// enough for the full catalogue's names plus the goal's suggestions.
+const DefaultIndexBudget = 3500
+
+// RenderBody formats one full playbook for the skill_view tool result: its
+// name, description, method text, and any reviewed plan constraint. The
+// knowledge text is already bounded at load time (Validate's 16000-byte cap).
+func RenderBody(s Skill) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "SKILL %s — %s\n", s.Name, strings.TrimSpace(s.Description))
+	b.WriteString(strings.TrimSpace(s.Knowledge))
+	b.WriteString("\n")
+	if s.PlanStepLimit > 0 {
+		fmt.Fprintf(&b, "Reviewed plan constraint: at most %d step(s).\n", s.PlanStepLimit)
+	}
+	return b.String()
+}
+
+// oneLine collapses whitespace and cuts s to at most maxRunes runes, ending
+// with an ellipsis when it had to cut. Rune-safe, so a multi-byte description
+// is never split mid-character.
+func oneLine(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes-1]) + "…"
+}
+
 // Render formats selected skills as a compact prompt block. Empty input yields
 // an empty string (no header).
 func (r *Registry) Render(selected []Skill) string {
@@ -366,7 +496,7 @@ func (r *Registry) Render(selected []Skill) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("SKILLS (relevant playbooks — apply the matching approach):\n")
+	b.WriteString("MATCHED PLAYBOOKS — apply their method to this goal:\n")
 	for _, s := range selected {
 		fmt.Fprintf(&b, "- %s: %s\n", s.Name, strings.TrimSpace(s.Knowledge))
 		if s.PlanStepLimit > 0 {

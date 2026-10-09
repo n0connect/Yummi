@@ -19,18 +19,20 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 )
 
-func TestRecordTacticOutcome(t *testing.T) {
+// Procedural memory learns from successes only. The executor has no failed-
+// tactic path any more, so a dead-end command can never be written, and the
+// target is scrubbed on the way in.
+func TestRecordWorkedTacticLearnsOnlyFromSuccess(t *testing.T) {
 	ks, _ := knowledge.NewStore(nil)
-	recordTacticOutcome(context.Background(), ks, "nmap -sV 10.0.0.5", true)
-	recordTacticOutcome(context.Background(), ks, "gobuster dir -u http://10.0.0.5", false)
+	recordWorkedTactic(context.Background(), ks, "nmap -sV 10.0.0.5")
+	recordWorkedTactic(context.Background(), ks, "") // empty: no-op, must not panic
 
 	worked := ks.ListTactics("nmap", 10)
-	if len(worked) != 1 || worked[0].Outcome != "worked" {
+	if len(worked) != 1 || worked[0].Outcome != knowledge.OutcomeWorked {
 		t.Fatalf("nmap tactic not recorded as worked: %+v", worked)
 	}
-	failed := ks.ListTactics("gobuster", 10)
-	if len(failed) != 1 || failed[0].Outcome != "failed" {
-		t.Fatalf("gobuster tactic not recorded as failed: %+v", failed)
+	if strings.Contains(worked[0].CommandPattern, "10.0.0.5") {
+		t.Fatalf("target leaked into the stored pattern: %q", worked[0].CommandPattern)
 	}
 }
 

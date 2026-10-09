@@ -95,11 +95,13 @@ type Config struct {
 	// Skills is the declarative playbook registry folded into Instruction the
 	// same way. Nil disables skill injection.
 	Skills *skill.Registry
-	// SubAgents maps a role name to a specialized sub-agent Runner the model
-	// may hand a focused subtask to via the handoff tool. Empty/nil disables
-	// delegation. Sub-agents are always graph Runners regardless of this
-	// backend — see (*agent.Runner).RunSubtask's doc comment.
-	SubAgents map[string]*agent.Runner
+	// SubAgents maps a role name to a specialized sub-agent the model may
+	// hand a focused subtask to via the handoff tool. The value is
+	// agent.SubAgentRunner, not a concrete type, so a sub-agent can be built
+	// on EITHER backend — see agent.SubAgentRunner's doc comment.
+	// cmd/orchestrator/main.go builds this roster on the same backend as the
+	// top-level task. Empty/nil disables delegation.
+	SubAgents map[string]agent.SubAgentRunner
 	// SubAgentHints maps a role name (same keys as SubAgents) to a short
 	// routing-hint sentence, mirroring agent.Config.SubAgentHints — rendered
 	// into the handoff tool's description alongside each role name.
@@ -142,6 +144,13 @@ type EinoRunner struct {
 	// claim that native token history was restored.
 	resumeMsg map[string]string
 }
+
+// Static assertion: *EinoRunner must keep satisfying agent.SubAgentRunner —
+// the capability that lets an Eino-driven top-level task delegate to an
+// Eino-driven sub-agent instead of always falling back to the graph engine.
+// If a future change to either interface breaks this, the build fails here
+// instead of at cmd/orchestrator/main.go's wiring.
+var _ agent.SubAgentRunner = (*EinoRunner)(nil)
 
 // NewEinoRunner wires the loop driver. validator may be nil (allow-all
 // classification — tests only, matching agent.NewRunner's own contract).
@@ -205,62 +214,77 @@ func unknownToolHandler(_ context.Context, name, _ string) (string, error) {
 	), nil
 }
 
-// resumeEvidenceDigestLimit bounds how many command/result pairs the resume
-// digest carries, so a long pre-pause run doesn't blow out the opening
-// message with everything the task ever did.
-const resumeEvidenceDigestLimit = 20
+// resumeEvidenceDigestLimit bounds how many command/result pairs a resumed run
+// is given. The first resumeEvidenceHeadPairs stay — early recon establishes
+// the topology that later work depends on — and the rest of the budget goes
+// to the most recent pairs. The omitted middle is counted, never silently cut.
+const (
+	resumeEvidenceDigestLimit = 20
+	resumeEvidenceHeadPairs   = 3
+)
 
-// buildResumeEvidenceDigest reconstructs a compact, server-authored record of
-// what this task already did before it paused, from the durable
-// agent_activity log (ListActivity is session-scoped, so results are filtered
-// down to this task's own events). See the resumeMsg doc comment: Eino's
-// native chat history does not survive a pause, so without this the resumed
-// conversation's only continuity is the terse pause question/answer — it has
-// no idea it already got code execution, read a flag, or exhausted ten curl
-// variants, and reliably redoes recon from scratch instead of building on
-// what it already found.
-func buildResumeEvidenceDigest(store *agent.Store, sessionID, taskID string) string {
+// resumeEvidencePair is one command a task already ran, with its result.
+type resumeEvidencePair struct{ Command, Result string }
+
+// resumeEvidence reads one task's command/result history from the durable
+// activity log (task-scoped query — see ListTaskCommandEvidence) and returns
+// the bounded view plus how many pairs were omitted from its middle.
+func resumeEvidence(store *agent.Store, taskID string) (pairs []resumeEvidencePair, omitted int) {
 	if store == nil {
-		return ""
+		return nil, 0
 	}
-	events := store.ListActivity(sessionID, 500)
-	type cmdResult struct{ command, result string }
-	var pairs []cmdResult
 	var pendingCmd string
 	have := false
-	for _, e := range events {
-		if e.TaskID != taskID {
-			continue
-		}
+	for _, e := range store.ListTaskCommandEvidence(taskID, 0) {
 		switch e.Kind {
 		case agent.ActCommand:
 			pendingCmd, have = e.Detail, true
 		case agent.ActCommandDone:
 			if have {
-				pairs = append(pairs, cmdResult{pendingCmd, e.Detail})
+				pairs = append(pairs, resumeEvidencePair{pendingCmd, e.Detail})
 				have = false
 			}
 		}
 	}
 	if have {
-		pairs = append(pairs, cmdResult{pendingCmd, "(no result recorded before the pause)"})
+		pairs = append(pairs, resumeEvidencePair{pendingCmd, "(no result recorded before the pause)"})
 	}
+	if len(pairs) > resumeEvidenceDigestLimit {
+		head := pairs[:resumeEvidenceHeadPairs]
+		tail := pairs[len(pairs)-(resumeEvidenceDigestLimit-resumeEvidenceHeadPairs):]
+		omitted = len(pairs) - len(head) - len(tail)
+		pairs = append(append([]resumeEvidencePair{}, head...), tail...)
+	}
+	return pairs, omitted
+}
+
+// renderEvidenceDigest formats resumeEvidence's pairs as the evidence section
+// of the resumed run's brief. Empty when there is nothing to report.
+func renderEvidenceDigest(pairs []resumeEvidencePair, omitted int) string {
 	if len(pairs) == 0 {
 		return ""
 	}
-	if len(pairs) > resumeEvidenceDigestLimit {
-		pairs = pairs[len(pairs)-resumeEvidenceDigestLimit:]
-	}
 	var b strings.Builder
 	b.WriteString("EVIDENCE DIGEST (server-recorded — commands already run before this pause; do NOT repeat these, build on them):\n")
-	for _, p := range pairs {
-		result := agent.SanitizeAgentText(p.result)
+	for i, p := range pairs {
+		if omitted > 0 && i == resumeEvidenceHeadPairs {
+			fmt.Fprintf(&b, "- … %d middle commands omitted for length; the most recent ones follow\n", omitted)
+		}
+		result := agent.SanitizeAgentText(p.Result)
 		if rs := []rune(result); len(rs) > 300 {
 			result = string(rs[:300]) + "…"
 		}
-		fmt.Fprintf(&b, "- %s\n  RESULT: %s\n", strings.TrimSpace(p.command), strings.ReplaceAll(result, "\n", "\n  "))
+		fmt.Fprintf(&b, "- %s\n  RESULT: %s\n", strings.TrimSpace(p.Command), strings.ReplaceAll(result, "\n", "\n  "))
 	}
 	return b.String()
+}
+
+// buildResumeEvidenceDigest is the rendered digest for one task. The sessionID
+// argument is no longer needed (the query is task-scoped) and is kept only so
+// the existing resume-digest tests keep their call shape.
+func buildResumeEvidenceDigest(store *agent.Store, _ string, taskID string) string {
+	pairs, omitted := resumeEvidence(store, taskID)
+	return renderEvidenceDigest(pairs, omitted)
 }
 
 func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
@@ -324,7 +348,8 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	}
 	tools := []tool.BaseTool{
 		newRunCommandTool(rcDeps),
-		newRememberTool(rememberDeps{taskID: task.ID, sessionID: t.SessionID, knowledge: r.cfg.Knowledge, origin: "agent"}),
+		newRememberTool(rememberDeps{taskID: task.ID, sessionID: t.SessionID, knowledge: r.cfg.Knowledge, origin: "agent", store: r.store}),
+		newSkillViewTool(skillViewDeps{taskID: task.ID, sessionID: t.SessionID, store: r.store, skills: r.cfg.Skills}),
 		newAskOperatorTool(ask),
 		newFinishTool(capture),
 		newUpdatePlanTool(r.store, task.ID),
@@ -353,26 +378,15 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 			taskID: task.ID, sessionID: t.SessionID, store: r.store,
 			subAgents: r.cfg.SubAgents, hints: r.cfg.SubAgentHints,
 			delegations: r.cfg.Delegations, timeout: r.cfg.SubAgentTimeout,
+			trace: trace,
 		}))
 	}
 
-	// MEMORY/SKILLS are folded into the static Instruction once, up front —
-	// see buildMemoryBlock's doc comment for why a one-time injection is the
-	// correct analogue of graph.go's per-step re-injection for a backend that
-	// already keeps native chat history.
+	// The static Instruction carries identity, principles, and the tool
+	// contract only. Per-task context (MEMORY, SKILLS, PLAYBOOK, the parts
+	// checklist) is built below as the TASK BRIEF and prefixed to every opening
+	// message — see brief.go for why it is not part of the system prompt.
 	instr := r.instruction(t.Goal)
-	if mem := buildMemoryBlock(ctx, r.cfg.Retrieval, t.SessionID, t.Goal); mem != "" {
-		instr += "\n\n" + mem
-		r.store.RecordActivity(agent.ActivityEvent{
-			SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActMemory, Summary: "Relevant session context applied",
-		})
-	}
-	if skillBlock, names := buildSkillsBlock(r.cfg.Skills, t.Goal); skillBlock != "" {
-		instr += "\n\n" + skillBlock
-		r.store.RecordActivity(agent.ActivityEvent{
-			SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActSkill, Summary: strings.Join(names, ", "),
-		})
-	}
 
 	// enumParts is computed here — BEFORE agent construction, not at its
 	// original spot right before the retry loop — specifically so it can
@@ -425,22 +439,11 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	// attempted before the model called finish — the SAME under-detection
 	// that under-sized the budget above also meant the finish-time audit
 	// judged its own too-short list as covered. Folding the detected parts
-	// into the static Instruction, same one-time-injection pattern as
-	// MEMORY/SKILLS above, keeps every part visible to the model on every
-	// turn instead of leaving it to native chat history alone — the
-	// cheapest fix that doesn't touch the audit-at-finish mechanism itself.
-	if len(enumParts) >= 2 {
-		var checklist strings.Builder
-		checklist.WriteString("This goal has multiple distinct parts. Address EACH one — do not call finish until every part below has been genuinely attempted, not just the first one or two:\n")
-		for i, part := range enumParts {
-			fmt.Fprintf(&checklist, "%d. %s\n", i+1, part)
-		}
-		instr += "\n\n" + checklist.String()
-		r.store.RecordActivity(agent.ActivityEvent{
-			SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
-			Summary: fmt.Sprintf("%d goal parts detected — tracking each in the task instruction", len(enumParts)),
-		})
-	}
+	// into the TASK BRIEF, which prefixes every opening message (first attempt,
+	// nudges, and retries), keeps every part visible to the model on every turn
+	// instead of leaving it to native chat history alone — the cheapest fix that
+	// doesn't touch the audit-at-finish mechanism itself.
+	brief := r.taskBrief(ctx, t.SessionID, task.ID, t.Goal, enumParts)
 
 	einoAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "yummi",
@@ -527,13 +530,18 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		} else {
 			initialGoal = fmt.Sprintf("Resuming task toward the original goal: %s\n\nRecovery guidance: %s", t.Goal, answer)
 		}
-		// Without this, the opening message above is all the resumed
-		// conversation gets — no record of what already ran. Live-observed:
-		// an operator granted more steps after a budget pause and watched the
-		// model restart with ping/nmap/whatweb from zero despite already
-		// having RCE and the user flag, because nothing told it otherwise.
-		if digest := buildResumeEvidenceDigest(r.store, t.SessionID, task.ID); digest != "" {
-			initialGoal += "\n\n" + digest
+		// The resumed run starts with the evidence its task already gathered:
+		// seeded into the trace (so the premature-FINISH guard and audit count
+		// it) and carried in the brief (so it survives every rebuild of the
+		// opening message — nudges and retries included). Live-observed: an
+		// operator granted more steps after a budget pause and watched the
+		// model redo recon from zero, because the nudge that followed an early
+		// finish rebuilt the message from the goal alone.
+		pairs, omitted := resumeEvidence(r.store, task.ID)
+		trace.seed(pairs)
+		brief += "\n" + resumeNoteBrief(priorQuestion, answer)
+		if digest := renderEvidenceDigest(pairs, omitted); digest != "" {
+			brief += "\n" + digest
 		}
 	}
 
@@ -551,10 +559,11 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	// the checklist is obeyed, never wedged. This is model-size-independent:
 	// the deterministic bounce, not a bigger model, is what forces the
 	// second attempt.
-	openingMessage := initialGoal
+	openingMessage := prefixBrief(brief, initialGoal)
 	nudgeCount := 0
 	const maxNudges = 3
 	transientRetries := 0
+	overflowRecoveries := 0
 	// nudgeCount replaces a first-attempt-only bool: the original single-shot
 	// nudge was NOT structurally enforced, only requested by its own text —
 	// live-observed nudged once, the model tried finish again one turn
@@ -616,8 +625,16 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 				// approaching. This is now the single, accurate choke point;
 				// runToolPipeline's own increment is removed to avoid
 				// double-counting a turn that also ran a tool.
+				// Capped at the budget: the step budget is the ceiling, and the
+				// ADK's own iteration limit (MaxIterations) — not this counter — is
+				// what actually stops the run. The final assistant event of an
+				// exhausted run would otherwise report e.g. 77/76.
 				if r.store != nil && event.Output.MessageOutput.Role == schema.Assistant {
-					_ = r.store.Update(task.ID, func(t *agent.Task) { t.StepsUsed++ })
+					_ = r.store.Update(task.ID, func(t *agent.Task) {
+						if t.StepBudget <= 0 || t.StepsUsed < t.StepBudget {
+							t.StepsUsed++
+						}
+					})
 				}
 			}
 		}
@@ -644,11 +661,22 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		if runErr != nil {
 			if isTransientToolCallError(runErr) && transientRetries < maxTransientRetries {
 				transientRetries++
-				openingMessage = buildRetryAfterErrorMessage(t.Goal, trace)
+				openingMessage = prefixBrief(brief, buildRetryAfterErrorMessage(t.Goal, trace))
 				r.store.RecordActivity(agent.ActivityEvent{
 					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
 					Summary: fmt.Sprintf("transient tool-call error, retrying (%d/%d): %s",
 						transientRetries, maxTransientRetries, runErr.Error()),
+				})
+				continue
+			}
+			if agent.IsContextOverflow(runErr) && overflowRecoveries < maxOverflowRecoveries {
+				overflowRecoveries++
+				compacted := compactTraceForRecovery(ctx, r.cfg.PlanLLM, trace)
+				openingMessage = prefixBrief(brief, buildOverflowRecoveryMessage(t.Goal, compacted))
+				r.store.RecordActivity(agent.ActivityEvent{
+					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
+					Summary: fmt.Sprintf("context window full — compacted prior work and continuing (%d/%d)",
+						overflowRecoveries, maxOverflowRecoveries),
 				})
 				continue
 			}
@@ -658,7 +686,11 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 					return nil
 				}
 			}
-			_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = runErr.Error() })
+			lastErr := runErr.Error()
+			if agent.IsContextOverflow(runErr) {
+				lastErr = fmt.Sprintf("context window exhausted after %d compaction(s); the goal needs a narrower scope or a new task", overflowRecoveries)
+			}
+			_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = lastErr })
 			return runErr
 		}
 
@@ -749,7 +781,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 			// entirely in this case.
 			if len(trace.pairs()) == 0 {
 				nudgeCount++
-				openingMessage = buildIncompleteGoalsMessage(t.Goal, enumParts, trace)
+				openingMessage = prefixBrief(brief, buildIncompleteGoalsMessage(t.Goal, enumParts, trace))
 				r.store.RecordActivity(agent.ActivityEvent{
 					SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
 					Summary: fmt.Sprintf("finish reached with ZERO tool calls for a %d-part goal — forcing continuation (%d/%d nudges)",
@@ -760,7 +792,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 			if r.cfg.PlanLLM != nil {
 				if uncovered := auditFinishCoverage(ctx, r.cfg.PlanLLM, enumParts, summary, trace); len(uncovered) > 0 {
 					nudgeCount++
-					openingMessage = buildIncompleteGoalsMessage(t.Goal, uncovered, trace)
+					openingMessage = prefixBrief(brief, buildIncompleteGoalsMessage(t.Goal, uncovered, trace))
 					r.store.RecordActivity(agent.ActivityEvent{
 						SessionID: t.SessionID, TaskID: task.ID, Kind: agent.ActPlan,
 						Summary: fmt.Sprintf("finish reached with %d/%d goal parts uncovered — continuing (%d/%d nudges)",
@@ -886,7 +918,10 @@ func (r *EinoRunner) instruction(goal string) string {
 			"call run_pentest_tool with the tool name and matching args — but this is only relevant for " +
 			"tools actually in that catalog; use run_command directly for everything else. "
 	}
-	instr += "Use remember to persist durable facts. Use update_plan if your approach changes. " +
+	instr += "Your first message is a TASK BRIEF: it restates the goal and carries the MEMORY notes from earlier " +
+		"turns, the SKILLS index, and any PLAYBOOK for this goal. Read it before your first action. Treat a MEMORY " +
+		"note as a lead to verify on this target, not as a fact. " +
+		"Use remember to persist durable facts. Use update_plan if your approach changes. " +
 		"Use report_progress when the operator would benefit from knowing where things stand: a significant " +
 		"established fact, a changed approach, a dead end, or a question for them. It does not pause you; use " +
 		"your own judgment about when, not a fixed schedule. Call finish with " +
@@ -1037,11 +1072,9 @@ func buildIncompleteGoalsMessage(goal string, uncoveredParts []string, trace *ru
 	for i, p := range uncoveredParts {
 		fmt.Fprintf(&b, "  %d) %s\n", i+1, strings.TrimSpace(p))
 	}
-	if pairs := trace.pairs(); len(pairs) > 0 {
+	if log := boundedWorkLog(trace.pairs()); log != "" {
 		b.WriteString("\nWork already completed (do NOT repeat these):\n")
-		for _, p := range pairs {
-			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
-		}
+		b.WriteString(log)
 	}
 	b.WriteString("\nRun a real command/tool for each part listed above, then call finish again once every part is genuinely done.")
 	return b.String()
@@ -1121,11 +1154,9 @@ func buildRetryAfterErrorMessage(goal string, trace *runTrace) string {
 	fmt.Fprintf(&b, "Continuing toward the original goal: %s\n\n", goal)
 	b.WriteString("The previous attempt was interrupted by a transient tool-call error, not a real problem " +
 		"with the goal or your reasoning — just retry.\n")
-	if pairs := trace.pairs(); len(pairs) > 0 {
+	if log := boundedWorkLog(trace.pairs()); log != "" {
 		b.WriteString("\nWork already completed (do NOT repeat these):\n")
-		for _, p := range pairs {
-			fmt.Fprintf(&b, "  - %s: %s\n", p.Tool, strings.TrimSpace(agent.CompressObservation(p.Result)))
-		}
+		b.WriteString(log)
 	}
 	b.WriteString("\nContinue from here toward the goal.")
 	return b.String()
@@ -1139,7 +1170,14 @@ func buildRetryAfterErrorMessage(goal string, trace *runTrace) string {
 // once Run() starts. StatusPlanning → StatusPlanned is a valid transition
 // (see agent.validNext), so the task is immediately startable.
 func (r *EinoRunner) CreateAndPlan(ctx context.Context, sessionID, goal string) (agent.Task, error) {
-	task, err := r.store.CreateSubtask(sessionID, goal, r.cfg.StepBudget, "")
+	return r.createAndPlan(ctx, sessionID, goal, "")
+}
+
+// createAndPlan is the shared implementation behind CreateAndPlan (top-level
+// task, parentTaskID "") and RunSubtask (sub-agent task, parentTaskID set) —
+// the same split graph's Runner.CreateAndPlan/createAndPlan use.
+func (r *EinoRunner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskID string) (agent.Task, error) {
+	task, err := r.store.CreateSubtask(sessionID, goal, r.cfg.StepBudget, parentTaskID)
 	if err != nil {
 		return agent.Task{}, err
 	}
@@ -1155,6 +1193,32 @@ func (r *EinoRunner) CreateAndPlan(ctx context.Context, sessionID, goal string) 
 	}
 	task, _ = r.store.Get(task.ID)
 	return task, nil
+}
+
+// RunSubtask creates, plans, and synchronously runs a focused subtask on this
+// Eino runner — the exact pattern (*agent.Runner).RunSubtask uses for the
+// graph engine (see its doc comment and agent.SubAgentRunner's), so a
+// sub-agent built on the Eino backend behaves identically from the caller's
+// side (graph's handoffNode, Eino's own handoff tool both dispatch through
+// the SubAgentRunner interface, never this concrete method directly).
+// created (if non-nil) is called with the new task's ID as soon as it's
+// created — used to bind a DelegationCoordinator entry before the run
+// completes. The depth-1 cap holds exactly as it does for graph: a sub-agent
+// is built with an empty cfg.SubAgents, so its own handoff tool is never
+// registered (see the len(r.cfg.SubAgents) > 0 guard in Run below).
+func (r *EinoRunner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string, created func(string)) (agent.SubResult, error) {
+	task, err := r.createAndPlan(ctx, sessionID, goal, parentTaskID)
+	if err != nil {
+		return agent.SubResult{}, err
+	}
+	if created != nil {
+		created(task.ID)
+	}
+	if err := r.Run(ctx, &task); err != nil {
+		return agent.SubResult{}, err
+	}
+	t, _ := r.store.Get(task.ID)
+	return agent.SubResult{Summary: t.Summary, Findings: t.Findings}, nil
 }
 
 func (r *EinoRunner) Start(taskID string, operatorMessage string) error {

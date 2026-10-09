@@ -26,6 +26,7 @@ const (
 	nodeAsk        = "ask"
 	nodeHandoff    = "handoff"
 	nodeRemember   = "remember"
+	nodeSkillView  = "skill_view"
 	nodeThreatHold = "threat_hold"
 )
 
@@ -49,6 +50,7 @@ const (
 	edgeDone             = "done"
 	edgeHandoff          = "handoff"
 	edgeRemember         = "remember"
+	edgeSkillView        = "skill_view"
 	// Live-control edges (consult channel).
 	edgeLongRunning = "long_running"
 	edgeContinue    = "continue"
@@ -77,12 +79,16 @@ var graphEdges = map[string]map[string]string{
 		edgeStopTask:    nodeFinish,
 		edgeHandoff:     nodeHandoff,
 		edgeRemember:    nodeRemember,
+		edgeSkillView:   nodeSkillView,
 		edgeLLMError:    nodeRetry,
 	},
 	nodeHandoff: {
 		edgeOK: nodeStep,
 	},
 	nodeRemember: {
+		edgeOK: nodeStep,
+	},
+	nodeSkillView: {
 		edgeOK: nodeStep,
 	},
 	nodeTool: {
@@ -141,6 +147,7 @@ func init() {
 		nodeAsk:        askNode,
 		nodeHandoff:    handoffNode,
 		nodeRemember:   rememberNode,
+		nodeSkillView:  skillViewNode,
 		nodeThreatHold: threatHoldNode,
 	}
 }
@@ -179,24 +186,27 @@ type GraphState struct {
 	autoFinishTerminalPlan bool
 
 	// Mutable per-run state
-	retryCtx        RetryContext
-	memCtx          MemoryContext
-	cmdWindow       []string           // command hashes for stuck detection (last stuckWindowSize)
-	recentCmds      []string           // actual commands for stuck display (last stuckWindowSize)
-	executedCmds    []string           // commands actually dispatched (blocked proposals excluded)
-	lastObs         string             // last observation for prompt injection (tag-wrapped)
-	pendingAct      Action             // action buffered from stepNode for toolNode / approvalNode
-	pendingProposal conductor.Proposal // validated proposal awaiting approval
-	pendingCommand  string             // validated command currently executing (for observeResult)
-	pendingHandle   ExecHandle         // running command handle while consulting (long_running)
-	consultTag      string             // agent→LLM tag describing the consult condition
-	consultBody     string             // consult content for the LLM
-	consultCaller   string             // node that triggered the consult (for CONTINUE routing)
-	lastErr         string             // error text for askNode to record in task.LastError
-	lastSkillsSig   string             // last emitted skill set (de-dupes per-step skill_applied events)
-	lastMemorySig   string             // last emitted memory signature (de-dupes memory_recalled events)
-	finishOutcome   finishOutcome      // how finishNode terminates the task
-	finishMsg       string             // summary (completed/stopped) or error (failed) for finishNode
+	retryCtx RetryContext
+	// overflowCompactions counts context-window overflows this task has answered
+	// by forcing compaction. Bounded so an overflow that compaction cannot cure
+	// (e.g. the brief alone is too large) cannot loop forever.
+	overflowCompactions int
+	memCtx              MemoryContext
+	cmdWindow           []string           // command hashes for stuck detection (last stuckWindowSize)
+	recentCmds          []string           // actual commands for stuck display (last stuckWindowSize)
+	executedCmds        []string           // commands actually dispatched (blocked proposals excluded)
+	lastObs             string             // last observation for prompt injection (tag-wrapped)
+	pendingAct          Action             // action buffered from stepNode for toolNode / approvalNode
+	pendingProposal     conductor.Proposal // validated proposal awaiting approval
+	pendingCommand      string             // validated command currently executing (for observeResult)
+	pendingHandle       ExecHandle         // running command handle while consulting (long_running)
+	consultTag          string             // agent→LLM tag describing the consult condition
+	consultBody         string             // consult content for the LLM
+	consultCaller       string             // node that triggered the consult (for CONTINUE routing)
+	lastErr             string             // error text for askNode to record in task.LastError
+	lastMemorySig       string             // last emitted memory signature (de-dupes memory_recalled events)
+	finishOutcome       finishOutcome      // how finishNode terminates the task
+	finishMsg           string             // summary (completed/stopped) or error (failed) for finishNode
 
 	pendingThreatResult ToolResult // quarantined threat tool result awaiting approval
 	// consecutiveFailures counts back-to-back command failures; any success

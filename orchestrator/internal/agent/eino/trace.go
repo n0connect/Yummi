@@ -30,6 +30,25 @@ func (t *runTrace) record(command, result string) {
 	}
 }
 
+// seed loads a resumed run with the evidence its task already gathered before
+// the pause. Every consumer of the trace — the premature-FINISH guard, its
+// coverage audit, and the nudge/retry carry-forward messages — then counts
+// prior work as done. Before this, a resumed run began with an empty trace:
+// the guard saw "zero tool calls" and rebuilt the opening message from the
+// goal alone, so the model redid recon from scratch (live-observed after a
+// budget grant, 2026-10-09; see TestResumedRunKeepsPriorEvidenceThroughEveryAttempt).
+func (t *runTrace) seed(prior []resumeEvidencePair) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, p := range prior {
+		t.observations = append(t.observations, p.Result)
+		t.tools = append(t.tools, firstToken(p.Command))
+	}
+}
+
 // snapshot returns copies of the collected observations and distinct tool
 // names, safe to read after Run()'s event loop has finished.
 func (t *runTrace) snapshot() (observations []string, tools []string) {

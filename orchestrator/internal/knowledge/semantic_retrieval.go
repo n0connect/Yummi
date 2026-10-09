@@ -108,7 +108,7 @@ func (r *SemanticRetrieval) Retrieve(ctx context.Context, q Query) ([]MemoryItem
 	}
 	count := 0
 	for _, tac := range tactics {
-		if _, skip := excluded[tac.CommandPattern]; skip {
+		if _, skip := excluded[tac.CommandPattern]; skip || !retrievableTactic(tac) {
 			continue
 		}
 		if count >= limit {
@@ -116,7 +116,7 @@ func (r *SemanticRetrieval) Retrieve(ctx context.Context, q Query) ([]MemoryItem
 		}
 		items = append(items, MemoryItem{
 			Kind: "tactic",
-			Text: fmt.Sprintf("%s (%s, used %dx)", tac.CommandPattern, tac.Outcome, tac.HitCount),
+			Text: fmt.Sprintf("%s (worked %dx)", tac.CommandPattern, tac.HitCount),
 		})
 		count++
 	}

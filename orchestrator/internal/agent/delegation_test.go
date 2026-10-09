@@ -53,7 +53,7 @@ func TestDelegationCoordinatorInterruptsOneRun(t *testing.T) {
 func TestNewRunnerAppliesDelegationSafetyDefaults(t *testing.T) {
 	store, _ := NewStore(nil)
 	sub := NewRunner(store, nil, nil, nil, Config{})
-	r := NewRunner(store, nil, nil, nil, Config{SubAgents: map[string]*Runner{"web": sub}})
+	r := NewRunner(store, nil, nil, nil, Config{SubAgents: map[string]SubAgentRunner{"web": sub}})
 	if r.cfg.MaxHandoffsPerStep != 4 || r.cfg.MaxConcurrentSubAgents != 3 || r.cfg.Delegations == nil {
 		t.Fatalf("delegation defaults not applied: %+v", r.cfg)
 	}

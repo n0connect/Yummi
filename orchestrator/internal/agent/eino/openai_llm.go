@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/n0connect/yummi/orchestrator/internal/agent"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -70,6 +72,9 @@ func (c *OpenAIChatClient) Chat(ctx context.Context, system, user string) (strin
 		},
 		"stream": false,
 	}
+	for k, v := range agent.OpenRouterCompressionOff(c.baseURL) {
+		payload[k] = v
+	}
 	isOllama := (c.apiKey == "" || c.apiKey == "ollama") && !strings.Contains(c.baseURL, "openrouter.ai") && !strings.Contains(c.baseURL, "api.openai.com")
 	if c.numCtx > 0 && isOllama {
 		payload["options"] = map[string]any{"num_ctx": c.numCtx}
@@ -96,7 +101,11 @@ func (c *OpenAIChatClient) Chat(ctx context.Context, system, user string) (strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai chat: http %d", resp.StatusCode)
+		// Include a bounded slice of the provider's error body: it is where the
+		// machine-readable reason (e.g. context_length_exceeded) lives, and the
+		// status code alone made overflow indistinguishable from any other 400.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("openai chat: http %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	var out struct {
 		Choices []struct {

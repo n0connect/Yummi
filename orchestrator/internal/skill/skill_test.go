@@ -51,7 +51,7 @@ knowledge: |
 	}
 
 	rendered := reg.Render(sel)
-	if !strings.Contains(rendered, "SKILLS") || !strings.Contains(rendered, "whatweb") {
+	if !strings.Contains(rendered, "MATCHED PLAYBOOKS") || !strings.Contains(rendered, "whatweb") {
 		t.Fatalf("render missing content:\n%s", rendered)
 	}
 }

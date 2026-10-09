@@ -245,17 +245,17 @@ func New(bridge *sandbox.Bridge, pc *gateway.Client, ks *knowledge.Store, mcpCli
 	}
 }
 
-// recordTacticOutcome derives a mechanical worked/failed outcome from an
-// execution and records a target-scrubbed tactic. Nil store is a no-op.
-func recordTacticOutcome(ctx context.Context, ks *knowledge.Store, command string, ok bool) {
+// recordWorkedTactic learns a target-scrubbed tactic from a SUCCESSFUL command
+// only. Failed commands are deliberately not recorded: procedural memory is a
+// library of approaches that worked, and a dead-end command written there was
+// later recalled as "prior knowledge" and copied back into new runs (see
+// knowledge.RecordTactic). Failure stays visible in the execution record and
+// in the task's own observations. Nil store is a no-op.
+func recordWorkedTactic(ctx context.Context, ks *knowledge.Store, command string) {
 	if ks == nil || command == "" {
 		return
 	}
-	outcome := "failed"
-	if ok {
-		outcome = "worked"
-	}
-	if err := ks.RecordTactic(ctx, command, outcome, nil, ""); err != nil {
+	if err := ks.RecordTactic(ctx, command, knowledge.OutcomeWorked, nil, ""); err != nil {
 		slog.Warn("executor: record tactic failed", "error", err)
 	}
 }
@@ -296,7 +296,6 @@ func handleExecError(ctx context.Context, ks *knowledge.Store, command string, r
 	if errors.As(err, &egressErr) {
 		return "", egressErr
 	}
-	recordTacticOutcome(ctx, ks, command, false)
 	if result != nil {
 		return result.Stderr, fmt.Errorf("command failed: %w", err)
 	}
@@ -339,10 +338,9 @@ func (e *Executor) ProcessFunc() execution.ProcessFunc {
 
 		out := combinedOutput(result)
 		if result.ExitCode != 0 {
-			recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
 			return out, fmt.Errorf("exit code %d", result.ExitCode)
 		}
-		recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
+		recordWorkedTactic(ctx, e.knowledge, rec.Command)
 
 		slog.Info("executor: command completed",
 			"execution_id", rec.ID,
@@ -399,10 +397,9 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 
 	out := combinedOutput(result)
 	if result.ExitCode != 0 {
-		recordTacticOutcome(ctx, e.knowledge, rec.Command, false)
 		return out, fmt.Errorf("exit code %d", result.ExitCode)
 	}
-	recordTacticOutcome(ctx, e.knowledge, rec.Command, true)
+	recordWorkedTactic(ctx, e.knowledge, rec.Command)
 	return out, nil
 }
 

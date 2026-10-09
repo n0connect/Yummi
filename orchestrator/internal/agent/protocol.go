@@ -52,12 +52,13 @@ var Registry = []Tag{
 	{"OPERATOR_ANSWER", AgentToLLM, "The operator's reply to your [ASK_OPERATOR] question. Use it to decide your next action.", "operator's message"},
 
 	// ── LLM → Agent (control / action) ──
-	{"RUN_COMMAND", LLMToAgent, "Run a shell command.", `{"command","step_id","rationale","risk_level","findings"?,"findings_detail"?}`},
+	{"RUN_COMMAND", LLMToAgent, "Run a one-shot shell command whose whole answer comes back in this call. For state that must persist across calls, a process that keeps running, or an interactive prompt, use a persistent terminal session via MCP_TOOL (see MCP TOOLS) instead.", `{"command","step_id","rationale","risk_level","findings"?,"findings_detail"?}`},
 	{"MCP_TOOL", LLMToAgent, "Call a cataloged sandbox tool or terminal-session verb by name — see MCP TOOLS below for the list. args is a flat JSON object of that tool's normal flags as key:value; if you get the shape wrong the error response tells you the exact fields expected, so a first guess is fine.", `{"tool","args","step_id","rationale","risk_level","findings"?,"findings_detail"?}`},
 	{"UPDATE_PLAN", LLMToAgent, "Revise the plan.", `{"steps":[...],"reason"}`},
 	{"FINISH", LLMToAgent, "Goal achieved. Before writing findings, re-scan every TOOL_RESPONSE above for concrete, specific facts (exact ports/versions/paths/cookies) rather than a generic summary — a specific fact like \"port 3306 open, MySQL 5.5.47\" is a real finding; \"open ports were found\" is not.", `{"summary","findings"?,"findings_detail"?}`},
 	{"HANDOFF", LLMToAgent, "Delegate a focused subtask to a named specialist sub-agent. To delegate to several specialists AT ONCE (they run concurrently), use \"handoffs\" instead.", `{"role","subgoal"} or {"handoffs":[{"role","subgoal"},...]}`},
-	{"REMEMBER", LLMToAgent, "Persist a structured memory (e.g. a code/connection map) under a key — never forgotten.", `{"key","value"}`},
+	{"REMEMBER", LLMToAgent, "Save a note under a key. It stays in your MEMORY block on every later turn and survives a restart. Save only your own factual summary, never raw target output. An EMPTY value forgets that key.", `{"key","value"}`},
+	{"SKILL_VIEW", LLMToAgent, "Load the full playbook named in the SKILLS index before a technique it covers. Its method is then in your context for the next turns.", `{"name"}`},
 	{"ASK_OPERATOR", LLMToAgent, "Blocked; need a human.", `{"question"}`},
 	{"SEND_FULL", LLMToAgent, "Resend the last truncated output in full.", `{}`},
 	{"CONTINUE", LLMToAgent, "Keep waiting / proceed (reply to a consult).", `{}`},
@@ -134,6 +135,8 @@ func ProtocolReference(localModel bool) string {
 			"[UPDATE_PLAN]\n{\"steps\":[{\"id\":\"s1\",\"description\":\"re-scan with a different port range\",\"status\":\"pending\"}],\"reason\":\"original scan missed the real service\"}\n")
 		b.WriteString("\nTo save a fact for later instead of running a command, copy this exact shape — change only \"key\" and \"value\":\n" +
 			"[REMEMBER]\n{\"key\":\"db_connection\",\"value\":\"mysql on 10.0.0.5:3306, user root\"}\n")
+		b.WriteString("\nTo load a playbook from the SKILLS index before a technique it covers, copy this exact shape — change only \"name\":\n" +
+			"[SKILL_VIEW]\n{\"name\":\"recon\"}\n")
 		b.WriteString("\nTo ask the human operator a question instead of running a command, copy this exact shape — change only \"question\":\n" +
 			"[ASK_OPERATOR]\n{\"question\":\"Should I proceed with the destructive step?\"}\n")
 	}
@@ -212,8 +215,10 @@ func inferControlTag(a Action) string {
 		return "MCP_TOOL"
 	case (strings.TrimSpace(a.Role) != "" && strings.TrimSpace(a.Subgoal) != "") || len(a.Handoffs) > 0:
 		return "HANDOFF"
-	case strings.TrimSpace(a.MemKey) != "" && strings.TrimSpace(a.MemValue) != "":
+	case strings.TrimSpace(a.MemKey) != "":
 		return "REMEMBER"
+	case strings.TrimSpace(a.SkillName) != "":
+		return "SKILL_VIEW"
 	case len(a.Steps) > 0:
 		return "UPDATE_PLAN"
 	case strings.TrimSpace(a.Question) != "":

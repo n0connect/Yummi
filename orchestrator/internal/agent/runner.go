@@ -91,11 +91,13 @@ type Config struct {
 	// is typically given a Subset scoped to its role.
 	Skills *skill.Registry
 
-	// SubAgents maps a role name to a specialized sub-agent Runner the brain may
-	// hand a focused subtask to via [HANDOFF]. Empty/nil disables delegation —
-	// and sub-agents themselves are built with an empty map, capping handoff
-	// depth at exactly 1 (no recursion).
-	SubAgents map[string]*Runner
+	// SubAgents maps a role name to a specialized sub-agent the brain may hand
+	// a focused subtask to via [HANDOFF]. The value is SubAgentRunner, not the
+	// concrete *Runner, so a sub-agent can be built on EITHER agentic backend
+	// — see SubAgentRunner's doc comment for why this matters. Empty/nil
+	// disables delegation — and sub-agents themselves are built with an empty
+	// map, capping handoff depth at exactly 1 (no recursion).
+	SubAgents map[string]SubAgentRunner
 	// SubAgentHints maps a role name (same keys as SubAgents) to the short,
 	// one-sentence SubAgentDef.RoutingHint describing when to hand work to
 	// that role. Purely presentational: rendered into the DELEGATION prompt
@@ -156,6 +158,11 @@ type Runner struct {
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
 }
+
+// Static assertion: *Runner must keep satisfying SubAgentRunner. If a future
+// change to either interface breaks this, the build fails here instead of at
+// cmd/orchestrator/main.go's wiring (or worse, only at a live HANDOFF).
+var _ SubAgentRunner = (*Runner)(nil)
 
 // NewRunner wires the loop driver. validator may be nil (no scope filtering —
 // tests only; production always passes the engine's validator).
@@ -240,17 +247,39 @@ type SubResult struct {
 	Findings []string
 }
 
+// SubAgentRunner is what a specialist sub-agent must offer to receive a
+// HANDOFF: the full TaskRunner surface (so the delegating runner can resolve
+// its gate, propagate an approval-mode change, and read its capabilities —
+// node_handoff.go's Approve/SetApprovalMode fallbacks need exactly this) plus
+// RunSubtask, the synchronous "run one focused subtask and return its
+// result" entry point a handoff actually drives.
+//
+// Both backends already implement TaskRunner (cmd/orchestrator/main.go wires
+// either one as the top-level agent.TaskRunner interchangeably) — RunSubtask
+// is the one method Eino's EinoRunner previously lacked, which is why every
+// sub-agent used to run on the graph engine regardless of which backend drove
+// the top-level task: HANDOFF had nowhere else to dispatch to. With both
+// backends satisfying this interface, cmd/orchestrator/main.go builds the
+// sub-agent roster on the SAME backend as the top-level task, so a handoff
+// never crosses from one engine's semantics into the other's.
+//
+// Recursion is capped at depth 1 the same way on either backend: a sub-agent
+// is itself built with an empty SubAgents map, so its own handoff
+// tool/action is never registered or accepted — nothing about this is
+// backend-specific, it is the empty-SubAgents convention both engines share.
+type SubAgentRunner interface {
+	TaskRunner
+	RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string, created func(string)) (SubResult, error)
+}
+
 // RunSubtask creates, plans, and synchronously runs a focused subtask on this
 // runner, returning the resulting task's summary and findings. created (if
 // non-nil) is called with the new task's ID as soon as planning creates it —
 // used to bind a DelegationCoordinator entry to its real child task before
-// the run completes. Both graph.go's handoffNode and the Eino backend's
-// handoff tool delegate through this: sub-agents are always graph Runners
-// regardless of which backend drives the top-level task (only the graph
-// engine implements the recursion cap that makes delegation depth-1-safe),
-// so Eino delegates by calling straight into the same specialist Runner
-// node_handoff.go itself uses. The sub-agent shares the caller's Store and
-// Knowledge, so its findings/tactics join the one world model automatically.
+// the run completes. graph.go's handoffNode and the Eino backend's handoff
+// tool both delegate through this via the SubAgentRunner interface — see its
+// doc comment. The sub-agent shares the caller's Store and Knowledge, so its
+// findings/tactics join the one world model automatically.
 func (r *Runner) RunSubtask(ctx context.Context, sessionID, goal, parentTaskID string, created func(string)) (SubResult, error) {
 	return r.runSubtask(ctx, sessionID, goal, parentTaskID, created)
 }
@@ -377,8 +406,11 @@ func (r *Runner) createAndPlan(ctx context.Context, sessionID, goal, parentTaskI
 	var skills string
 	var selectedSkills []skill.Skill
 	if r.cfg.Skills != nil {
+		// The planner sees the full SKILLS index so it can plan around any
+		// playbook. The goal's matched playbooks also contribute their reviewed
+		// constraints (plan_step_limit), which is why Select still runs here.
 		selectedSkills = r.cfg.Skills.Select(goal, nil, 3)
-		skills = r.cfg.Skills.Render(selectedSkills)
+		skills = r.cfg.Skills.Index(goal, nil, skill.DefaultIndexBudget) + r.cfg.Skills.Render(selectedSkills)
 	}
 	system, user := BuildPlanPrompt(r.cfg.Persona, skills, goal)
 	raw, err := r.llm.Chat(ctx, system, user)
@@ -554,7 +586,7 @@ func (r *Runner) Approve(taskID, proposalID string, approved bool, reason string
 		return nil
 	}
 	for _, sub := range r.cfg.SubAgents {
-		if err := sub.gate.Resolve(taskID, proposalID, approved, reason); err == nil {
+		if err := sub.Gate().Resolve(taskID, proposalID, approved, reason); err == nil {
 			return nil
 		}
 	}

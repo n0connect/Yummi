@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +46,20 @@ func tacticScore(t Tactic) float64 {
 	complexity := min(strings.Count(strings.TrimSpace(t.CommandPattern), " "), maxTacticComplexity)
 	weight := (1.0 + float64(complexity)) * outcomeWeight(t.Outcome)
 	return math.Log2(float64(t.HitCount)+1) * weight
+}
+
+// OutcomeWorked is the only tactic outcome the executor records and the only one
+// retrieval ever surfaces back into a prompt.
+const OutcomeWorked = "worked"
+
+// retrievableTactic reports whether a stored tactic may be injected as memory.
+// Failed tactics are NOT recalled: a dead-end command recalled as "prior
+// knowledge" was copied back into later runs (the self-poisoning loop fixed on
+// 2026-10-08), and a failure is already visible in the task's own observations.
+// Legacy failed rows stay in the table for the TRACE view but never reach a
+// prompt. Both retrieval strategies share this one predicate.
+func retrievableTactic(t Tactic) bool {
+	return t.Outcome == OutcomeWorked
 }
 
 // outcomeWeight is the shared "a proven approach beats a dead end" bonus,
@@ -93,6 +108,24 @@ func (s *Store) RecordTactic(ctx context.Context, command, outcome string, tags 
 	pattern, ok := scrubTarget(command)
 	if !ok {
 		return nil // fail-closed: could not guarantee target removal
+	}
+	// Self-poisoning guard: live-tested 2026-10-08, a model that fumbled a
+	// recalled tactic's <TARGET> placeholder emitted a command containing
+	// ANOTHER literal bracket placeholder of its own invention (<ATTACKER_IP>)
+	// instead of a real value. That broken, never-going-to-work command then
+	// got recorded here as a "tactic" (outcome=failed is still recalled —
+	// outcomeWeight keeps failed tactics visible as "don't repeat this"), so
+	// the NEXT task recalled the exact same broken placeholder soup as "prior
+	// knowledge" and copied it again verbatim — a closed feedback loop with no
+	// model-side fix, since the model can't tell a genuine recalled pattern
+	// from one that was never real to begin with. scrubTarget only ever
+	// introduces the canonical targetPlaceholder itself, so any OTHER
+	// bracketed ALL-CAPS-ish token surviving into pattern proves the
+	// underlying command was a half-filled template, not a real command —
+	// refuse to let it become a "learned" tactic at all.
+	if hasForeignPlaceholder(pattern) {
+		slog.Warn("knowledge: tactic rejected, contains an unsubstituted placeholder", "tool", tool, "pattern", pattern)
+		return nil
 	}
 	// Content-layer fail-closed: command_pattern/note are rendered verbatim
 	// into a future task's MEMORY prompt block (retrieval.go), the same
@@ -204,6 +237,27 @@ func (s *Store) ListTactics(tool string, limit int) []Tactic {
 		}
 	}
 	return rankTactics(out, limit)
+}
+
+// placeholderToken matches a bracketed stand-in token of the shape a half-
+// filled template leaves behind — <TARGET>, <ATTACKER_IP>, <IP>, <PORT>, and
+// so on. Deliberately loose (any run of letters/underscores in angle
+// brackets) because the whole point is catching tokens we did NOT introduce
+// ourselves, so an exhaustive allowlist would defeat the purpose.
+var placeholderToken = regexp.MustCompile(`<[A-Za-z][A-Za-z0-9_]{1,40}>`)
+
+// hasForeignPlaceholder reports whether pattern contains a bracketed
+// placeholder OTHER than the one scrubTarget itself is allowed to have
+// inserted. Called after scrubTarget, so a bare targetPlaceholder match is
+// expected and fine; anything else means the original command was never a
+// real, executable command.
+func hasForeignPlaceholder(pattern string) bool {
+	for _, m := range placeholderToken.FindAllString(pattern, -1) {
+		if m != targetPlaceholder {
+			return true
+		}
+	}
+	return false
 }
 
 // scrubTarget replaces the command's target token with the placeholder.

@@ -51,7 +51,7 @@ func TestHandoffDelegatesToSubAgent(t *testing.T) {
 	)
 	orchCfg := fastRetryCfg()
 	orchCfg.Knowledge = ks
-	orchCfg.SubAgents = map[string]*Runner{"web": subRunner}
+	orchCfg.SubAgents = map[string]SubAgentRunner{"web": subRunner}
 	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
 
 	task, err := orch.CreateAndPlan(context.Background(), "sess1", "assess the web target")
@@ -140,7 +140,7 @@ func TestHandoffSummaryIsStrippedAndBannerFlagged(t *testing.T) {
 
 	orchCfg := fastRetryCfg()
 	orchCfg.Knowledge = ks
-	orchCfg.SubAgents = map[string]*Runner{"web": sub}
+	orchCfg.SubAgents = map[string]SubAgentRunner{"web": sub}
 	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
 
 	task, err := orch.CreateAndPlan(context.Background(), "s1", "go")
@@ -171,7 +171,7 @@ func TestHandoffsExposesSubAgents(t *testing.T) {
 	store, _ := NewStore(openTestDB(t))
 	sub := NewRunner(store, nil, nil, nil, fastRetryCfg())
 	cfg := fastRetryCfg()
-	cfg.SubAgents = map[string]*Runner{"web": sub}
+	cfg.SubAgents = map[string]SubAgentRunner{"web": sub}
 	orch := NewRunner(store, nil, nil, nil, cfg)
 
 	hs := orch.Handoffs()
@@ -205,7 +205,7 @@ func TestHandoffEmitsNestedActivity(t *testing.T) {
 	)
 	orchCfg := fastRetryCfg()
 	orchCfg.Knowledge = ks
-	orchCfg.SubAgents = map[string]*Runner{"web": sub}
+	orchCfg.SubAgents = map[string]SubAgentRunner{"web": sub}
 	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
 	task, _ := orch.CreateAndPlan(context.Background(), "s1", "go")
 	if err := orch.Run(context.Background(), &task); err != nil {
@@ -258,7 +258,7 @@ func TestApproveResolvesSubAgentGate(t *testing.T) {
 	)
 	orchCfg := fastRetryCfg()
 	orchCfg.Knowledge = ks
-	orchCfg.SubAgents = map[string]*Runner{"web": sub}
+	orchCfg.SubAgents = map[string]SubAgentRunner{"web": sub}
 	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
 
 	sessionID := "sess-sub-approve"
@@ -437,7 +437,7 @@ func TestHandoffFanOutRunsSubAgentsConcurrently(t *testing.T) {
 
 	orchCfg := fastRetryCfg()
 	orchCfg.Knowledge = ks
-	orchCfg.SubAgents = map[string]*Runner{"a": subA, "b": subB}
+	orchCfg.SubAgents = map[string]SubAgentRunner{"a": subA, "b": subB}
 	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
 
 	task, err := orch.CreateAndPlan(context.Background(), "sess-fanout", "delegate to two specialists")
@@ -502,7 +502,7 @@ func TestHandoffFanOutRejectsWhenAnyTargetIsInvalid(t *testing.T) {
 	)
 	orchCfg := fastRetryCfg()
 	orchCfg.Knowledge = ks
-	orchCfg.SubAgents = map[string]*Runner{"a": subA}
+	orchCfg.SubAgents = map[string]SubAgentRunner{"a": subA}
 	orch := NewRunner(store, orchOllama, nil, execer, orchCfg)
 
 	task, err := orch.CreateAndPlan(context.Background(), "sess-fanout-reject", "delegate with a bad target")
@@ -558,7 +558,7 @@ func TestHandoffActionParse(t *testing.T) {
 // The DELEGATION block is shown only when sub-agents exist, so a sub-agent
 // (empty SubAgents) never sees the option — the structural depth-1 guard.
 func TestDelegationBlockOnlyWithSubAgents(t *testing.T) {
-	withSub := &GraphState{cfg: Config{SubAgents: map[string]*Runner{"web": {}, "recon": {}}}}
+	withSub := &GraphState{cfg: Config{SubAgents: map[string]SubAgentRunner{"web": &Runner{}, "recon": &Runner{}}}}
 	block := withSub.buildDelegation()
 	if !strings.Contains(block, "DELEGATION") || !strings.Contains(block, "web") || !strings.Contains(block, "recon") {
 		t.Fatalf("delegation block missing roles: %q", block)
@@ -574,7 +574,7 @@ func TestDelegationBlockOnlyWithSubAgents(t *testing.T) {
 // (or an empty one) falls back to a bare name instead of a dangling colon.
 func TestDelegationBlockRendersHints(t *testing.T) {
 	s := &GraphState{cfg: Config{
-		SubAgents:     map[string]*Runner{"web": {}, "recon": {}},
+		SubAgents:     map[string]SubAgentRunner{"web": &Runner{}, "recon": &Runner{}},
 		SubAgentHints: map[string]string{"web": "probe HTTP(S) targets", "recon": ""},
 	}}
 	block := s.buildDelegation()

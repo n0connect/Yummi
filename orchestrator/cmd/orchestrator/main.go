@@ -383,10 +383,14 @@ func main() {
 				slog.Info("graph backend: MCP_TOOL catalog loaded", "tool_count", strings.Count(mcpCatalogLine, ",")+1)
 			}
 
-			// Sub-agents: specialist Runners sharing the same Store + Knowledge +
-			// execution pipeline. Built with no SubAgents of their own, capping
-			// handoff depth at 1 (no recursion).
-			subAgents := map[string]*agent.Runner{}
+			// Sub-agent ROLE DEFINITIONS are backend-agnostic (persona, skills,
+			// routing hint) — only the Runner each role is built on differs.
+			// Loaded once here; the actual per-role Runner/EinoRunner
+			// construction happens inside the backend switch below, on
+			// whichever backend the top-level task also uses. See
+			// agent.SubAgentRunner's doc comment for why this split matters:
+			// a HANDOFF must never cross from one engine's semantics into the
+			// other's.
 			subAgentHints := map[string]string{}
 			subDefs, derr := agent.LoadSubAgentDefs(filepath.Join(cfg.PersonaDir, "subagents"))
 			if derr != nil {
@@ -394,45 +398,6 @@ func main() {
 			}
 			for _, d := range subDefs {
 				subAgentHints[d.Role] = d.RoutingHint
-				subAgents[d.Role] = agent.NewRunner(
-					taskStore,
-					agentLLM,
-					assistant.Validator(),
-					agent.NewStoreExecer(executionStore, 10*time.Minute),
-					agent.Config{
-						Persona:        d.Persona(),
-						Knowledge:      ks,
-						Retrieval:      retrieval,
-						Skills:         skillReg.Subset(d.Skills),
-						SkillCurator:   skillCuratorFn,
-						MCPExec:        graphMCPExec,
-						MCPCatalog:     mcpCatalogLine,
-						MCPSchemaHints: mcpSchemaHints,
-						LocalModel:     cfg.UsesLocalModel(),
-						// Sub-agents get a higher step budget than the top-level
-						// agent's default (15): a HANDOFF delegates one focused,
-						// narrower subtask, so the specialist should be able to
-						// run more tool calls against it than the generalist top-
-						// level loop needs for open-ended recon. Paired with the
-						// parent's SubAgentTimeout bump below, which is the actual
-						// wall-clock ceiling this step budget runs against.
-						StepBudget: 40,
-						// TokenBudget scales with the model's actual configured
-						// context window (resolvedNumCtx) instead of the
-						// package's hardcoded 6000 fallback, which was sized for
-						// nothing in particular and identical across lite/pro/
-						// expert tiers regardless of their real 8192/16384/32768
-						// windows. Half the window is reserved as compression
-						// headroom for persona/skills/plan overhead and model
-						// output; the other half is the raw-observation budget
-						// NeedsCompression watches. A higher step budget (40 vs
-						// 15) makes this even more load-bearing for sub-agents.
-						TokenBudget: resolvedNumCtx / 2,
-					},
-				)
-			}
-			if len(subAgents) > 0 {
-				slog.Info("sub-agents registered", "roles", len(subAgents))
 			}
 
 			// Agent backend selection: graph (default, tag-protocol state
@@ -455,6 +420,48 @@ func main() {
 			// two silently different ones.
 			switch backend := strings.ToLower(os.Getenv("YUMMI_AGENT_BACKEND")); backend {
 			case "eino":
+				// Sub-agents built on the SAME backend as the top-level task —
+				// an Eino-driven task now delegates to Eino-driven specialists,
+				// never silently into the graph engine's semantics. Shares one
+				// PlanLLM client (stateless — just config + an http.Client)
+				// across every sub-agent and the top-level runner below, rather
+				// than constructing one per role.
+				einoPlanLLM := eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, planLLMTimeout)
+				subAgents := map[string]agent.SubAgentRunner{}
+				for _, d := range subDefs {
+					subAgents[d.Role] = eino.NewEinoRunner(
+						taskStore,
+						assistant.Validator(),
+						agent.NewStoreExecer(executionStore, 10*time.Minute),
+						eino.Config{
+							ApprovalMode:  agent.ModeAskPermission,
+							ModelBaseURL:  einoModelBaseURL,
+							ModelName:     einoModelName,
+							ModelAPIKey:   cfg.EinoModelAPIKey,
+							ModelNumCtx:   einoModelNumCtx,
+							ModelThinking: resolvedThinking,
+							PlanLLM:       einoPlanLLM,
+							Persona:       d.Persona(),
+							Knowledge:     ks,
+							MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
+							MCPList:       sandboxMCPClient,
+							Retrieval:     retrieval,
+							Skills:        skillReg.Subset(d.Skills),
+							SkillCurator:  skillCuratorFn,
+							// Mirrors the graph backend's own sub-agent StepBudget
+							// (40 vs the top-level default 15) — see that
+							// field's comment in the default: branch below for
+							// why a focused subtask needs more room, not less.
+							// SubAgents is left unset (empty): caps handoff
+							// depth at exactly 1, same convention either
+							// backend relies on.
+							StepBudget: 40,
+						},
+					)
+				}
+				if len(subAgents) > 0 {
+					slog.Info("sub-agents registered", "roles", len(subAgents), "backend", "eino")
+				}
 				taskRunner = eino.NewEinoRunner(
 					taskStore,
 					assistant.Validator(),
@@ -483,7 +490,7 @@ func main() {
 						// regardless of prompt size, so it keeps the
 						// constructor's own tighter default rather than
 						// inheriting local's extra slack it never needs.
-						PlanLLM:       eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, planLLMTimeout),
+						PlanLLM:       einoPlanLLM,
 						Persona:       agentPersona,
 						Knowledge:     ks,
 						MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
@@ -502,6 +509,51 @@ func main() {
 				)
 				slog.Info("agent backend: eino", "model", einoModelName, "base_url", einoModelBaseURL, "provider", cfg.ResolvedEinoProvider())
 			default:
+				// Sub-agents: specialist Runners sharing the same Store +
+				// Knowledge + execution pipeline. Built with no SubAgents of
+				// their own, capping handoff depth at 1 (no recursion).
+				subAgents := map[string]agent.SubAgentRunner{}
+				for _, d := range subDefs {
+					subAgents[d.Role] = agent.NewRunner(
+						taskStore,
+						agentLLM,
+						assistant.Validator(),
+						agent.NewStoreExecer(executionStore, 10*time.Minute),
+						agent.Config{
+							Persona:        d.Persona(),
+							Knowledge:      ks,
+							Retrieval:      retrieval,
+							Skills:         skillReg.Subset(d.Skills),
+							SkillCurator:   skillCuratorFn,
+							MCPExec:        graphMCPExec,
+							MCPCatalog:     mcpCatalogLine,
+							MCPSchemaHints: mcpSchemaHints,
+							LocalModel:     cfg.UsesLocalModel(),
+							// Sub-agents get a higher step budget than the top-level
+							// agent's default (15): a HANDOFF delegates one focused,
+							// narrower subtask, so the specialist should be able to
+							// run more tool calls against it than the generalist top-
+							// level loop needs for open-ended recon. Paired with the
+							// parent's SubAgentTimeout bump below, which is the actual
+							// wall-clock ceiling this step budget runs against.
+							StepBudget: 40,
+							// TokenBudget scales with the model's actual configured
+							// context window (resolvedNumCtx) instead of the
+							// package's hardcoded 6000 fallback, which was sized for
+							// nothing in particular and identical across lite/pro/
+							// expert tiers regardless of their real 8192/16384/32768
+							// windows. Half the window is reserved as compression
+							// headroom for persona/skills/plan overhead and model
+							// output; the other half is the raw-observation budget
+							// NeedsCompression watches. A higher step budget (40 vs
+							// 15) makes this even more load-bearing for sub-agents.
+							TokenBudget: resolvedNumCtx / 2,
+						},
+					)
+				}
+				if len(subAgents) > 0 {
+					slog.Info("sub-agents registered", "roles", len(subAgents), "backend", "graph")
+				}
 				taskRunner = agent.NewRunner(
 					taskStore,
 					agentLLM,

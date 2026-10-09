@@ -34,9 +34,13 @@ type Action struct {
 	Subgoal  string        `json:"subgoal,omitempty"`
 	Handoffs []HandoffSpec `json:"handoffs,omitempty"`
 
-	// MemKey/MemValue carry a [REMEMBER]: persist MemValue under MemKey.
+	// MemKey/MemValue carry a [REMEMBER]: persist MemValue under MemKey. An
+	// empty MemValue forgets MemKey instead (see ApplyNote).
 	MemKey   string `json:"key,omitempty"`
 	MemValue string `json:"value,omitempty"`
+
+	// SkillName carries a [SKILL_VIEW]: load the full text of the named playbook.
+	SkillName string `json:"name,omitempty"`
 
 	// FindingsDetail is the optional rich form of findings. The brain MAY emit
 	// these; when absent, freetext Findings are wrapped as info notes instead.

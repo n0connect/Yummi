@@ -75,7 +75,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 		s.emit(ActHandoffIn, role+" specialist delegated", "")
 
 		wg.Add(1)
-		go func(i int, role, subgoal string, sub *Runner) {
+		go func(i int, role, subgoal string, sub SubAgentRunner) {
 			defer wg.Done()
 			if sub == nil {
 				results[i] = handoffResult{role: role, subgoal: subgoal, err: fmt.Errorf("unknown specialist role %q", role)}
@@ -86,7 +86,7 @@ func handoffNode(ctx context.Context, s *GraphState) (string, error) {
 				results[i] = handoffResult{role: role, subgoal: subgoal, err: beginErr}
 				return
 			}
-			res, err := sub.runSubtask(childCtx, task.SessionID, subgoal, s.taskID, func(taskID string) {
+			res, err := sub.RunSubtask(childCtx, task.SessionID, subgoal, s.taskID, func(taskID string) {
 				s.cfg.Delegations.BindTask(delegationID, taskID)
 			})
 			s.cfg.Delegations.Finish(delegationID, err)

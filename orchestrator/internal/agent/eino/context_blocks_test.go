@@ -48,23 +48,42 @@ func TestBuildMemoryBlock_EmptyOnNoItems(t *testing.T) {
 }
 
 func TestBuildSkillsBlock_NilRegistrySafe(t *testing.T) {
-	block, names := buildSkillsBlock(nil, "scan a web target")
-	if block != "" || len(names) != 0 {
-		t.Fatalf("nil registry should yield empty block/names, got block=%q names=%v", block, names)
+	if block := buildSkillsBlock(nil, "scan a web target"); block != "" {
+		t.Fatalf("nil registry should yield an empty index, got %q", block)
 	}
 }
 
-func TestBuildSkillsBlock_SelectsAndRendersMatchingSkill(t *testing.T) {
+// The Eino instruction carries the SKILLS index (names + goal suggestions), not
+// playbook bodies. The body reaches the model only through the skill_view tool.
+func TestBuildSkillsBlock_IndexNamesMatchingSkillWithoutBody(t *testing.T) {
 	reg := skill.New([]skill.Skill{{
 		Name: "web-recon", Description: "web recon playbook",
 		Triggers: []string{"web"}, Knowledge: "start with whatweb, then gobuster",
 	}})
-	block, names := buildSkillsBlock(reg, "assess the web application")
-	if len(names) != 1 || names[0] != "web-recon" {
-		t.Fatalf("expected web-recon selected, got names=%v", names)
+	block := buildSkillsBlock(reg, "assess the web application")
+	if !strings.Contains(block, "web-recon") || !strings.Contains(block, "web recon playbook") {
+		t.Fatalf("index must name the matched playbook with its description: %q", block)
 	}
-	if !strings.Contains(block, "web-recon") || !strings.Contains(block, "whatweb") {
-		t.Fatalf("rendered block missing skill content: %q", block)
+	if strings.Contains(block, "whatweb") {
+		t.Fatalf("index must not carry the playbook body: %q", block)
+	}
+}
+
+// skill_view returns the body and records the load as an ActSkill activity.
+func TestSkillViewTool_ReturnsBodyAndUnknownNameIsRecoverable(t *testing.T) {
+	reg := skill.New([]skill.Skill{{
+		Name: "web-recon", Description: "web recon playbook",
+		Triggers: []string{"web"}, Knowledge: "start with whatweb, then gobuster",
+	}})
+	tl := newSkillViewTool(skillViewDeps{taskID: "t1", sessionID: "s1", skills: reg})
+
+	out, err := tl.InvokableRun(context.Background(), `{"name":"web-recon"}`)
+	if err != nil || !strings.Contains(out, "start with whatweb, then gobuster") {
+		t.Fatalf("skill_view must return the full body, got err=%v out=%q", err, out)
+	}
+	out, err = tl.InvokableRun(context.Background(), `{"name":"nope"}`)
+	if err != nil || !strings.Contains(out, "SKILLS index") {
+		t.Fatalf("unknown name must be a recoverable message pointing at the index, got err=%v out=%q", err, out)
 	}
 }
 
@@ -75,7 +94,7 @@ func TestBuildDelegationBlock_EmptyWithNoSubAgents(t *testing.T) {
 }
 
 func TestBuildDelegationBlock_ListsRoles(t *testing.T) {
-	subAgents := map[string]*agent.Runner{"web": {}, "recon": {}}
+	subAgents := map[string]agent.SubAgentRunner{"web": &agent.Runner{}, "recon": &agent.Runner{}}
 	block := buildDelegationBlock(subAgents, nil)
 	if !strings.Contains(block, "web") || !strings.Contains(block, "recon") {
 		t.Fatalf("block missing configured roles: %q", block)
@@ -83,7 +102,7 @@ func TestBuildDelegationBlock_ListsRoles(t *testing.T) {
 }
 
 func TestBuildDelegationBlock_RendersHints(t *testing.T) {
-	subAgents := map[string]*agent.Runner{"web": {}, "recon": {}}
+	subAgents := map[string]agent.SubAgentRunner{"web": &agent.Runner{}, "recon": &agent.Runner{}}
 	hints := map[string]string{"web": "probe HTTP(S) targets", "recon": ""}
 	block := buildDelegationBlock(subAgents, hints)
 	if !strings.Contains(block, "web: probe HTTP(S) targets") {

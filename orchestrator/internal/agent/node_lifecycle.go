@@ -22,7 +22,12 @@ func retryNode(ctx context.Context, s *GraphState) (string, error) {
 
 	if s.retryCtx.Exhausted(cfg) {
 		msg := fmt.Sprintf("LLM unavailable after %d retries; pausing for operator.", cfg.MaxAttempts)
-		s.lastErr = msg
+		// Keep a more specific reason already recorded by the overflow path
+		// (see stepNode): "LLM unavailable" would otherwise hide that the real
+		// cause is the context window.
+		if !strings.Contains(s.lastErr, "context window exhausted") {
+			s.lastErr = msg
+		}
 		s.pendingAct = Action{Question: msg}
 		return edgeGiveUp, nil
 	}
