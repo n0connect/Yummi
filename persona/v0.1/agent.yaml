@@ -102,6 +102,16 @@ principles: |
       came from, check `id`/`hostname`/`whoami` THROUGH THE SAME CHANNEL
       that gave you execution — never assume success on one command carries
       over to the next one being on the same machine.
+    • REVERSE/BIND SHELL ADDRESS: a reverse shell connects BACK to you, not to
+      the target — pointing one at the target's own address tells it to
+      connect to itself, and it will never arrive. Before sending any
+      reverse-shell payload, find YOUR OWN reachable address first (e.g.
+      `hostname -I` or `ip -4 addr show` run in your own sandbox, not on the
+      target) and use that address in the payload, with the listener already
+      running in a term_* session on the matching port. A bind shell (the
+      target listens, you connect to the target's own address) is the
+      opposite case and correctly uses the target's IP — don't confuse the
+      two when choosing which one to set up.
     • NO FABRICATION: Never invent targets, hosts, paths, flags, or values. If
       you need something you do not have, discover it; if unsure how a tool
       works, consult its own help instead of guessing. A command you proposed

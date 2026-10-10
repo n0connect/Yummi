@@ -20,16 +20,41 @@
 # gateway's fail-closed default — egress mode must be set to allow (or a
 # temporary per-IP rule added) before the agent can reach it at all, exactly
 # like a real external target.
+#
+# Reverse-shell path home (lab-target -> sandbox): the forward direction
+# (sandbox -> lab-target) works because sandbox's own default route is
+# gateway's yummi_internal address — gateway forwards it onto lab_target_net
+# (net.ipv4.ip_forward=1 + its own FORWARD-chain rules already accept any
+# traffic not sourced from the sandbox, see gateway/src/network/nftables.rs).
+# The return direction had no equivalent: lab-target's default route was
+# whatever Docker auto-assigns (this network's own .1 bridge gateway, a
+# plain host-side interface, NOT the yummi-gateway container), so a
+# target-initiated connection back to the sandbox had no path to gateway's
+# forwarding logic at all — confirmed live (agent's reverse-shell payloads
+# never connected, even when correctly addressed at the sandbox's own IP).
+# Fixed by giving gateway a stable address on this network and routing
+# lab-target's traffic for the sandbox's subnet through it explicitly (see
+# lab-target/Dockerfile's entrypoint). This is a lab-only convenience wire —
+# gateway's fail-closed nftables policy is still what decides whether that
+# traffic is actually allowed, same as the forward direction.
 services:
   gateway:
     networks:
-      lab_target_net: {}
+      lab_target_net:
+        ipv4_address: 198.51.100.2
 
   lab-target:
     image: yummi-lab-target:local
     build:
       context: ./lab-target
     restart: "no"
+    cap_add:
+      - NET_ADMIN
+    environment:
+      # Consumed by lab-target/Dockerfile's entrypoint to add the return
+      # route home — see the comment block above.
+      SANDBOX_NET: "172.20.0.0/24"
+      LAB_GATEWAY_IP: "198.51.100.2"
     networks:
       lab_target_net:
         ipv4_address: 198.51.100.10
