@@ -36,6 +36,12 @@ The agent is the autonomous offensive security engine of Yummi. It translates hi
 > correction needed); the gap is model capability, not architecture. See
 > `orchestrator/internal/conductor/tier.go`'s `DefaultTierRegistry` doc
 > comment for the full comparison and a realistic model recommendation.
+>
+> **Recommended OpenRouter model: `minimax/minimax-m2.1`.** Live-tested
+> (2026-10-10) completing the same lab's full chain for real — RCE,
+> reverse-shell terminal, root privesc, both flags — plus memory recall
+> and a sub-agent handoff in the same session, at a fraction of a general
+> frontier model's cost. See `tier.go`'s doc comment for the full writeup.
 
 ---
 

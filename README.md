@@ -147,6 +147,15 @@ Running `make conf` writes your settings to `.yummi.conf` so subsequent commands
 | `YUMMI_OLLAMA_MODEL` | `gpt-oss:20b`, `gpt-oss:120b`, `qwen3` | Local intent classification and chat model. |
 | `YUMMI_EINO_MODEL_API_KEY` | *(Secret input)* | Optional OpenRouter/OpenAI API key for frontier cloud reasoning models. |
 
+> **Recommended OpenRouter model: `minimax/minimax-m2.1`.** Live-tested
+> completing a full CVE-to-root chain end to end — exploit, reverse-shell
+> terminal, privesc, both flags — plus memory recall and a sub-agent
+> handoff, at a fraction of a general frontier model's cost. Set
+> `YUMMI_EINO_MODEL_NAME=minimax/minimax-m2.1` (and
+> `YUMMI_EINO_PROVIDER=openrouter`) in `.yummi.conf`, or via `make conf`.
+> See `orchestrator/internal/conductor/tier.go`'s `DefaultTierRegistry` doc
+> comment for the full writeup.
+
 ---
 
 ## Development

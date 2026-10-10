@@ -51,6 +51,23 @@ type TierRegistry struct {
 // model (120B+ parameters) — not a 70B-class or smaller tag, which is
 // still well below the capability bar this floor is based on — or an
 // OpenRouter/cloud override instead of staying local.
+//
+// Recommended OpenRouter override, if going that route:
+// YUMMI_EINO_MODEL_NAME=minimax/minimax-m2.1 (YUMMI_EINO_PROVIDER=openrouter).
+// Live-tested (2026-10-10) end to end against the same multi-stage CVE
+// lab on the Eino backend: completed the full chain for real in one run —
+// CVE-2021-41773 RCE, opened a persistent reverse-shell terminal session,
+// SUID-python3 GTFOBins privesc to root, read both flags, and saved them
+// via `remember` — plus a clean cross-task memory recall (1 step) and a
+// successful depth-1 sub-agent HANDOFF to a specialist role, all in the
+// same session. MiniMax built M2 specifically for long, many-small-tool-call
+// agent loops rather than general chat, which is exactly this backend's
+// shape (recon/exploit/memory/skill/terminal verbs, not free-form
+// conversation) — and at $0.30/$1.20 per million input/output tokens
+// (OpenRouter pricing, 2026-10-10) it is dramatically cheaper than a
+// general frontier model (e.g. gpt-4.1) for the same workload, with no
+// loss of reliability observed in this test. Not yet tested: whether it
+// holds up on a harder/longer chain than this lab's two stages.
 func DefaultTierRegistry() *TierRegistry {
 	return &TierRegistry{
 		tiers: map[Tier]TierConfig{
