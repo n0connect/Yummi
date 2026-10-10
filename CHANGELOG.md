@@ -1,5 +1,74 @@
 # Changelog
 
+## [1.1.0](https://github.com/n0connect/Yummi/compare/v1.0.1...v1.1.0) (2026-10-10)
+
+
+### Features
+
+* **agent,skills:** integrate 13 elite red-team skills and 5 specialist subagents ([8072768](https://github.com/n0connect/Yummi/commit/807276853846ff489fcf045abffb6b014018b487))
+* **agent,skills:** integrate 13 elite red-team skills and 7 specialist subagents from third-party repos ([47a798d](https://github.com/n0connect/Yummi/commit/47a798d500bee1b918b9f7b3da37c00b0715c3c2))
+* **agent:** add 12 elite red-team skills and 6 specialist subagents ([bc12050](https://github.com/n0connect/Yummi/commit/bc12050b13d0ddc31dd40d879d14222e202a8d3b))
+* **agent:** add 5 red-team skills, 4 subagents, and upgrade legacy skills ([b384e06](https://github.com/n0connect/Yummi/commit/b384e069709b5e2efcdeb5c600dfb35a056a2de3))
+* **agent:** add 7 advanced red-team skills and 4 specialist subagents ([555b005](https://github.com/n0connect/Yummi/commit/555b005b478401d1145aac9b0256e2207ba28f1b))
+* **agent:** add 7 enterprise red-team skills and 4 specialist subagents ([d3fed98](https://github.com/n0connect/Yummi/commit/d3fed98775e27174cdeaad874004c70e1401bf5b))
+* **agent:** add 9 elite red-team skills, 7 specialist subagents, and upgrade catalog to v3.0.0 ([63b49d5](https://github.com/n0connect/Yummi/commit/63b49d559143bb68133ea43b053c9cafdd9d43c1))
+* **agent:** add advanced red-team skills and specialist subagents for xxe, nosql, pivoting, windows privesc, container breakout, and cors ([13b901c](https://github.com/n0connect/Yummi/commit/13b901ccd348d3feb15b0844fc91fb9005a711c3))
+* **agent:** integrate battle-tested red-team skills and specialist subagents from industry research ([d6302ca](https://github.com/n0connect/Yummi/commit/d6302cabe0b723df0597fb5f95204cd1a4ceb381))
+* **agent:** local-model full-capability parity for the graph backend ([fd4eae9](https://github.com/n0connect/Yummi/commit/fd4eae9b13db710a271bdb48671e410b9af8957d))
+* **agent:** operator-approved step budget, report_progress tool, route-level loop guard ([f1aff7e](https://github.com/n0connect/Yummi/commit/f1aff7e5441e68bb0f3209de903d38961ae5ea0b))
+* **agent:** task brief, playbook push, and overflow recovery ([88d9c6e](https://github.com/n0connect/Yummi/commit/88d9c6e0b2e597ef00a13a68ff387ae5531db37a))
+* **api:** read-only watch endpoints for agent-owned sandbox terminals ([3f063db](https://github.com/n0connect/Yummi/commit/3f063db4a2db28576c5be42641b721aa509db0df))
+* **api:** skill usage stats and operator close for agent terminals ([de4a969](https://github.com/n0connect/Yummi/commit/de4a9696feb716ac9c160739583d0d8f1d98e132))
+* **brain:** grow the skill library from brain-driven tasks too ([ea21e22](https://github.com/n0connect/Yummi/commit/ea21e22cff4491b792c8affc54040736b92a5006))
+* **conf:** collapse make conf to the fewest questions that need a human ([3565795](https://github.com/n0connect/Yummi/commit/3565795b124d7954005af091a5af3c6aed0a84e8))
+* **desktop:** host-to-sandbox file sharing, drag-and-drop onto the Desktop ([2f2ce24](https://github.com/n0connect/Yummi/commit/2f2ce24af39458c69feaeea44a22d1c392d267ff))
+* **gateway:** implement 4 egress modes (block all, block except active rules, allow all, ask) ([81e80f9](https://github.com/n0connect/Yummi/commit/81e80f9361a41c8b9b1322f02f914b841a00b2fb))
+* **persona:** expose pwnbox workbench inventory and specialist swarm to connected models ([8911a3f](https://github.com/n0connect/Yummi/commit/8911a3f43bb97e01bbefefbe06ee851a49fc547f))
+* **ui:** add archive access button to sidebar and unselect target launcher modes by default ([c9560b7](https://github.com/n0connect/Yummi/commit/c9560b7775410f9fed2625693fbbea33467bf307))
+* **ui:** add dedicated persistent TaskSummaryMessage card and retain findings on reload ([98a1c0d](https://github.com/n0connect/Yummi/commit/98a1c0d0412826621a1cc80b1ed70504251faf21))
+* **ui:** add pin, export, archive, and delete action buttons to session rail cards ([783f16c](https://github.com/n0connect/Yummi/commit/783f16c57e7b14cd6081bb994ba3a0a8e201257f))
+* **ui:** agent terminal page, rail push layout, nav grouping, speaker dividers ([be4940f](https://github.com/n0connect/Yummi/commit/be4940f242738b59bead164166a7b57441df722a))
+* **ui:** default desktop tab to locked standby with eye-off overlay and click-to-activate ([9b4bc44](https://github.com/n0connect/Yummi/commit/9b4bc440c75a2fd4210aae4fa8981f7040bf3120))
+* **ui:** refine workspace aesthetics, add auto-growing textarea and drag-and-drop file upload ([b9d1a69](https://github.com/n0connect/Yummi/commit/b9d1a691ec3da8196a2828fea30bcfe1b931391a))
+* **ui:** show skill suggestions, rejected memory, and terminal close ([c7484bd](https://github.com/n0connect/Yummi/commit/c7484bdaa64f2e5aa545aec33575bdf6e5962f53))
+
+
+### Bug Fixes
+
+* **agent:** carry forward evidence digest across an Eino resume pause ([e5ac57d](https://github.com/n0connect/Yummi/commit/e5ac57d4da8e3a3ce8841fe7cf83b6ede45151ef))
+* **api:** route operator replies to a paused task as its answer ([410fa0f](https://github.com/n0connect/Yummi/commit/410fa0f2f6e36d051f66074aa5ab013e1ea4049c))
+* **build:** build only lab-target in lab-target-up recipe ([03e294b](https://github.com/n0connect/Yummi/commit/03e294b0c193ddf0cf0384661bd11739ca166811))
+* **build:** skip local Ollama daemon and model check when cloud model backend is configured ([930cf64](https://github.com/n0connect/Yummi/commit/930cf6438b62d33b9434c90df99811d5e5b58f61))
+* **chat:** remove hardcoded 120-message truncation and expand session query limits ([cdd8977](https://github.com/n0connect/Yummi/commit/cdd8977f8300027e7b48402c73d1145a5f7aea7c))
+* **ci:** bump Go toolchain to 1.27.2, fixing the govulncheck failure ([ea10fe8](https://github.com/n0connect/Yummi/commit/ea10fe8f36b1cb0a709baf88f5ed2e68638c9135))
+* **conductor:** reduce false-positive critical risk badges on read-only info commands ([79cd88a](https://github.com/n0connect/Yummi/commit/79cd88aa17a060027a71eeb500616b2be22892a2))
+* **eino:** cap max_tokens against metered cloud providers ([6a54655](https://github.com/n0connect/Yummi/commit/6a54655083d9d8f1e9284558ed35074b70544abb))
+* **executor:** scope-check URL-shaped MCP targets by host ([837a05a](https://github.com/n0connect/Yummi/commit/837a05ab7462d2f97ed4ce8635e87091877b0f2e))
+* **lab-target:** give a reverse shell a route home, teach the agent its own IP ([519f52d](https://github.com/n0connect/Yummi/commit/519f52d4b64ee4e07c82fe33a044529db236b7de))
+* **makefile:** add container daemon auto-bootstrap and robust error handling ([9b5db6f](https://github.com/n0connect/Yummi/commit/9b5db6f2f4c9f9faa51449c4e47e619bf70544af))
+* resolve clippy derivable_impls on EgressMode and update version badge in README ([e80d607](https://github.com/n0connect/Yummi/commit/e80d6076b2e2b0f3c081c9b59fe32c43f5e91f6f))
+* **sandbox-mcp:** format terminal_test.go with gofmt ([0c8e60d](https://github.com/n0connect/Yummi/commit/0c8e60d3aec66682f94c511e3894eb0562b7e909))
+* **sandbox,lab:** build-safe desktop launchers, certipy alias, tun guard, lab RCE chain ([e9513cf](https://github.com/n0connect/Yummi/commit/e9513cfbc6644131b64abd7bb8b4dd43c713a94d))
+* **sandbox:** fix bash motd banner alignment and suppress kali login notice ([732402e](https://github.com/n0connect/Yummi/commit/732402ec2e187085fae8e9287fb315a7d1b16cc9))
+* **security:** exclude metasploit from known_c2_framework pattern ([1d5b75c](https://github.com/n0connect/Yummi/commit/1d5b75cc5b9cd01a3caea8454dee45da54a016fd))
+* **terminal:** preserve spaces and special characters in term_keys ([8b2009a](https://github.com/n0connect/Yummi/commit/8b2009a21f4ca15afa21b08a6b478e7e9721cb10))
+* **terminal:** preserve wrapped lines with tmux -J and prevent key name hijacking in commands ([4cd5904](https://github.com/n0connect/Yummi/commit/4cd59040d3c3a56360beb49f492771c61fb5542e))
+* **terminal:** warn instead of silently garbling on a missed Enter ([f494c01](https://github.com/n0connect/Yummi/commit/f494c0174c96002a6d669587ac49154c2873551e))
+* **ui:** add @types/node for vite.config.ts's Node globals ([bb9e980](https://github.com/n0connect/Yummi/commit/bb9e98000f6ea80a1715137d34ce12f804e69fbd))
+* **ui:** align session rail layout and restore chat header symmetry ([8a3381f](https://github.com/n0connect/Yummi/commit/8a3381f29168904094e51383aa4fa761d070c167))
+* **ui:** expand desktop hidden card to fill viewport and remove activate button ([2a1207b](https://github.com/n0connect/Yummi/commit/2a1207bd598b0eba36722d6dbf54ffe09fdffa46))
+* **ui:** expand session rail width and fix search input overflow and glow styling ([8906f51](https://github.com/n0connect/Yummi/commit/8906f517709e8e3cf4ed4aa297d72d029e074fb3))
+* **ui:** export full session, not just chat messages; fix rail width and persistence ([b52026f](https://github.com/n0connect/Yummi/commit/b52026f6ae943216995d8525f9e2f20f42b2a6e1))
+* **ui:** hydrate tasks as task cards instead of user messages ([824b17c](https://github.com/n0connect/Yummi/commit/824b17caeac85e61b8d4373618e9fb592e82dcda))
+* **ui:** preserve execution bubbles across tab navigation and fix timestamp alignment ([0c5bccd](https://github.com/n0connect/Yummi/commit/0c5bccd338617da6e87923c5175eb2715a52c16f))
+* **ui:** respect .yummi.conf build language and set en as fallback ([3122838](https://github.com/n0connect/Yummi/commit/312283886a6628968a40bda4590b52d3f29b32dd))
+* **ui:** show task goals and summaries when the thread is loaded ([a1e9e52](https://github.com/n0connect/Yummi/commit/a1e9e529ce34ad24c3cebdb06e7178949801c7e9))
+
+
+### Performance Improvements
+
+* **build:** implement incremental native and container builds in Makefile ([95ec95e](https://github.com/n0connect/Yummi/commit/95ec95e6a55c06705eae1b00ad70dc730fa856bf))
+
 ## [v1.0.1b] (2026-10-05)
 
 ### Features
