@@ -73,12 +73,12 @@ var termWaitSpec = pentestToolSpec{
 
 var termKeysSpec = pentestToolSpec{
 	Name: "term_keys",
-	Desc: "Send raw keys, input, or commands to a session to interact with a running program — answer a prompt, interrupt with Ctrl-C, navigate a menu, or type into an interactive shell. Spaces and special characters are preserved.",
+	Desc: "Send raw keys or input to a session — answer a prompt, interrupt with Ctrl-C, navigate a menu, or type into an interactive program. NOT for an ordinary command: use term_run instead, which always executes what you send and tells you when it finished. term_keys never presses Return on its own — set enter=true to execute the line, or the text just sits typed on the pane and the NEXT term_keys call (yours or a later one) lands right after it on the SAME unexecuted line, silently concatenating both into one garbled command.",
 	Params: map[string]*schema.ParameterInfo{
 		"id":      idParam,
-		"keys":    {Type: "string", Desc: "Keys or command to send. Supports tmux key names (e.g. 'C-c', 'Enter', 'Up Up Enter') as well as text and commands. Spaces, quotes, and punctuation are fully preserved.", Required: true},
+		"keys":    {Type: "string", Desc: "Keys or input to send. Supports tmux key names (e.g. 'C-c', 'Up', 'Tab') as well as literal text. Spaces, quotes, and punctuation are fully preserved. Do not rely on embedding the word 'Enter' here — use the enter parameter instead.", Required: true},
 		"literal": {Type: "boolean", Desc: "Force sending keys strictly as literal characters without interpreting any tmux key names", Required: false},
-		"enter":   {Type: "boolean", Desc: "Append a Return keypress after sending (useful when typing a command or answering a prompt)", Required: false},
+		"enter":   {Type: "boolean", Desc: "Set true to press Return after sending — REQUIRED if you want this line to actually execute (answering a y/n prompt, submitting typed text). Omitted/false leaves the text sitting unexecuted on the pane.", Required: false},
 	},
 }
 

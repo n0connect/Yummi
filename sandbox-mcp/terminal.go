@@ -221,9 +221,9 @@ type termWaitArgs struct {
 
 type termKeysArgs struct {
 	ID      string `json:"id" jsonschema:"session id"`
-	Keys    string `json:"keys" jsonschema:"keys or command to send. Supports tmux key names (e.g. 'C-c', 'Enter', 'Up Up Enter') as well as text and commands. Spaces, quotes, and punctuation are fully preserved."`
+	Keys    string `json:"keys" jsonschema:"keys or input to send. Supports tmux key names (e.g. 'C-c', 'Up', 'Tab') as well as literal text. Spaces, quotes, and punctuation are fully preserved. Do not rely on embedding the word 'Enter' here — use the enter field instead."`
 	Literal bool   `json:"literal,omitempty" jsonschema:"force sending keys strictly as literal characters without interpreting any tmux key names"`
-	Enter   bool   `json:"enter,omitempty" jsonschema:"append a Return keypress after sending (useful when typing commands or answering prompts)"`
+	Enter   bool   `json:"enter,omitempty" jsonschema:"set true to press Return after sending — REQUIRED if you want this line to actually execute. Omitted/false leaves the text sitting unexecuted on the pane, and the next term_keys call lands right after it on the SAME line."`
 }
 
 type termIDArg struct {
@@ -623,6 +623,18 @@ func parseKeySegments(s string) []keySegment {
 	return segments
 }
 
+// enterKeyNames are the tmux key names that submit the current line — used
+// only to DETECT whether a call already pressed Return, never to inject one.
+// See termKeysHandler's trailing warning: we never auto-add Enter on the
+// model's behalf (that trades this bug for a worse one — a synthetic Return
+// landing on top of a sequence that already has its own, or firing after a
+// Ctrl-C/menu-navigation call that never wanted one, double-advancing a
+// pager or mis-answering a prompt). Detecting and saying so costs nothing
+// and can't itself cause a false positive, since it changes no keystrokes.
+var enterKeyNames = map[string]bool{"enter": true, "return": true, "kpenter": true, "c-m": true, "c-j": true}
+
+func isEnterKeyToken(tok string) bool { return enterKeyNames[strings.ToLower(tok)] }
+
 func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysArgs) (*mcp.CallToolResult, any, error) {
 	id := strings.TrimSpace(args.ID)
 	if err := requireSession(ctx, id); err != nil {
@@ -639,6 +651,7 @@ func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysA
 	lockSession(id)
 	defer unlockSession(id)
 	base := []string{"send-keys", "-t", tmuxName(id)}
+	pressedReturn := args.Enter // every path below that also presses Enter sets this true itself
 
 	if args.Literal {
 		if args.Keys != "" {
@@ -651,14 +664,20 @@ func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysA
 				return errResult(err.Error())
 			}
 		}
-		return textResult(fmt.Sprintf("[%s] keys sent.", id))
+		return keysSentResult(id, pressedReturn)
 	}
 
 	if args.Keys != "" {
 		if isAllTmuxKeys(args.Keys) {
 			// Pure space-separated tmux key names (e.g. "C-c", "Up Up Enter", "C-c C-c").
-			if _, err := runTmux(ctx, append(append(append([]string{}, base...), "--"), strings.Fields(args.Keys)...)...); err != nil {
+			fields := strings.Fields(args.Keys)
+			if _, err := runTmux(ctx, append(append(append([]string{}, base...), "--"), fields...)...); err != nil {
 				return errResult(err.Error())
+			}
+			for _, f := range fields {
+				if isEnterKeyToken(f) {
+					pressedReturn = true
+				}
 			}
 		} else if args.Enter {
 			// When Enter is requested alongside non-key text, the caller is typing a command or line
@@ -676,6 +695,9 @@ func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysA
 					if _, err := runTmux(ctx, append(append([]string{}, base...), "--", seg.text)...); err != nil {
 						return errResult(err.Error())
 					}
+					if isEnterKeyToken(seg.text) {
+						pressedReturn = true
+					}
 				} else {
 					if _, err := runTmux(ctx, append(append([]string{}, base...), "-l", "--", seg.text)...); err != nil {
 						return errResult(err.Error())
@@ -690,7 +712,19 @@ func termKeysHandler(ctx context.Context, _ *mcp.CallToolRequest, args termKeysA
 			return errResult(err.Error())
 		}
 	}
-	return textResult(fmt.Sprintf("[%s] keys sent.", id))
+	return keysSentResult(id, pressedReturn)
+}
+
+// keysSentResult is termKeysHandler's single return point, so the
+// no-Return warning can never be forgotten on a path that needs it.
+func keysSentResult(id string, pressedReturn bool) (*mcp.CallToolResult, any, error) {
+	if pressedReturn {
+		return textResult(fmt.Sprintf("[%s] keys sent.", id))
+	}
+	return textResult(fmt.Sprintf(
+		"[%s] keys sent — NOT executed: no Return was pressed, so this is now sitting unexecuted on the terminal's current input line. "+
+			"If you meant to run it, call term_keys again with enter=true (or keys=\"Enter\") now; otherwise your next call will be typed "+
+			"directly after it on the SAME line and the two will concatenate into one garbled command.", id))
 }
 
 func termListHandler(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
@@ -903,7 +937,7 @@ func registerTerminalTools(server *mcp.Server) {
 	}, termWaitHandler)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "term_keys",
-		Description: "Send raw keys to a session — tmux key names by default (C-c, Enter, 'y Enter', 'Up Up Enter') or literal characters. Use to answer interactive prompts or interrupt a running command.",
+		Description: "Send raw keys or input to a session — answer a prompt, interrupt with Ctrl-C, navigate a menu, or type into an interactive program. NOT for an ordinary command: use term_run instead, which always executes what you send and tells you when it finished. Return is NEVER pressed automatically — set the enter field to true to execute the line, or the text just sits typed on the pane and the NEXT term_keys call lands right after it on the SAME unexecuted line, silently concatenating both into one garbled command.",
 	}, termKeysHandler)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "term_list",

@@ -233,6 +233,82 @@ func TestTerminal_KeysPreserveSpacesAndPunctuation(t *testing.T) {
 	}
 }
 
+// TestTerminal_KeysWarnsWhenNoReturnPressed locks in the fix for a real bug a
+// live model run hit: term_keys never presses Return on its own, so a call
+// that omits enter=true (and doesn't embed an Enter-equivalent key itself)
+// leaves its text sitting unexecuted — and the model's NEXT term_keys call
+// lands right after it on the same line, silently concatenating two commands
+// into one garbled one. The fix is deliberately "detect and say so in the
+// result", never "silently press Enter for the model" — the latter would
+// trade this bug for double-Enters on sequences that already embed one, or
+// an unwanted Return after a bare interrupt/navigation key. So every case
+// below must leave the actual tmux keystrokes unchanged; only the WARNING
+// text in the result may differ.
+func TestTerminal_KeysWarnsWhenNoReturnPressed(t *testing.T) {
+	skipIfNoTmux(t)
+	ctx := context.Background()
+	id := openTempSession(t, ctx)
+
+	const warnSubstr = "NOT executed"
+
+	cases := []struct {
+		name     string
+		args     termKeysArgs
+		wantWarn bool
+	}{
+		{"plain text with enter=true executes, no warning", termKeysArgs{Keys: "echo a", Enter: true}, false},
+		{"plain text with enter omitted warns", termKeysArgs{Keys: "echo b"}, true},
+		{"text already embedding the word Enter needs no extra warning", termKeysArgs{Keys: "echo c Enter"}, false},
+		{"a bare interrupt key is not itself a Return, warns", termKeysArgs{Keys: "C-c"}, true},
+		{"pure key sequence that already ends in Enter, no warning", termKeysArgs{Keys: "Up Enter"}, false},
+		{"literal text can never act as Return on its own, warns even though it contains the word Enter", termKeysArgs{Keys: "echo Enter", Literal: true}, true},
+		{"literal text with enter=true executes, no warning", termKeysArgs{Keys: "echo d", Literal: true, Enter: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.args.ID = id
+			res, _, err := termKeysHandler(ctx, nil, tc.args)
+			out := resultText(t, res, err)
+			gotWarn := strings.Contains(out, warnSubstr)
+			if gotWarn != tc.wantWarn {
+				t.Errorf("args=%+v: warning present=%v, want %v (result: %q)", tc.args, gotWarn, tc.wantWarn, out)
+			}
+		})
+	}
+}
+
+// TestTerminal_KeysConcatenateWithoutReturn reproduces the actual live bug
+// end to end: two term_keys calls in a row, neither pressing Return,
+// concatenate into one unexecuted, garbled line on the real pane — proving
+// the warning above fires for exactly the sequence that caused it, without
+// this test itself trying to "fix" the concatenation (that is the model's
+// job, now that it's told clearly).
+func TestTerminal_KeysConcatenateWithoutReturn(t *testing.T) {
+	skipIfNoTmux(t)
+	ctx := context.Background()
+	id := openTempSession(t, ctx)
+
+	res1, _, err := termKeysHandler(ctx, nil, termKeysArgs{ID: id, Keys: "echo FIRST"})
+	out1 := resultText(t, res1, err)
+	if !strings.Contains(out1, "NOT executed") {
+		t.Fatalf("expected a no-Return warning on the first call, got: %q", out1)
+	}
+
+	res2, _, err := termKeysHandler(ctx, nil, termKeysArgs{ID: id, Keys: " echo SECOND", Enter: true})
+	resultText(t, res2, err)
+	time.Sleep(300 * time.Millisecond)
+
+	readRes, _, err := termReadHandler(ctx, nil, termReadArgs{ID: id, Lines: 10})
+	out := resultText(t, readRes, err)
+	// The two commands landed on the SAME line and ran as one, so neither
+	// "FIRST" nor "SECOND" appears as echoed output — only the garbled
+	// command line itself and (depending on the shell) a "command not
+	// found"-style error. This is the bug the warning now calls out.
+	if strings.Contains(out, "\nFIRST\n") || strings.Contains(out, "\nSECOND\n") {
+		t.Errorf("expected the two un-Entered calls to concatenate into one unexecuted line, got clean separate output:\n%s", out)
+	}
+}
+
 func TestTerminal_IsTmuxKeyAndSegments(t *testing.T) {
 	// Key recognition
 	for _, key := range []string{"C-c", "ctrl-c", "Enter", "enter", "Up", "down", "Space", "Tab", "M-x", "S-Up"} {
