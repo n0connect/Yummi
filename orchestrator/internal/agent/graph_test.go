@@ -155,7 +155,7 @@ func TestStepNodeConvergesWhenPlanIsTerminalWithoutCallingLLM(t *testing.T) {
 	s.llm = newFakeOllama(t, "not a control message")
 	edge, err := stepNode(context.Background(), s)
 	if err != nil || edge != edgeFinish || s.finishOutcome != outcomeCompleted {
-		t.Fatalf("terminal plan did not converge: edge=%q outcome=%q err=%v", edge, s.finishOutcome, err)
+		t.Fatalf("terminal plan did not converge: edge=%q outcome=%d err=%v", edge, s.finishOutcome, err)
 	}
 }
 

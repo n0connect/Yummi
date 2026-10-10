@@ -1,6 +1,6 @@
 module github.com/n0connect/yummi/orchestrator
 
-go 1.25.0
+go 1.27.2
 
 require (
 	github.com/cloudwego/eino v0.9.13
