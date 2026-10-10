@@ -29,9 +29,9 @@ Yummi translates natural language into verified security workflows while enforci
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/readme/hero-agent-tab.png" alt="Yummi's Agent tab after autonomously compromising a lab target: a completed task summary with CVE, exploit chain, and both captured flags" width="860">
+  <img src="docs/assets/screenshots/readme/hero-workspace.png" alt="Yummi's Agent workspace: a target field, two quick-start launchers (Bug Bounty Recon, Web Pentest), and a goal input — no command runs without operator approval" width="860">
 </p>
-<p align="center"><sub>A real, unmodified run — CVE-2021-41773 to RCE, a self-opened reverse-shell terminal, SUID-GTFOBins privesc to root, both flags read back. See the <a href="docs/usage-guide.md#eight-tabs">Usage Guide</a> for every tab.</sub></p>
+<p align="center"><sub>Drop a target, state a goal in one sentence, and Yummi plans before it acts. See the <a href="docs/usage-guide.md#eight-tabs">Usage Guide</a> for every tab, including a real completed run.</sub></p>
 
 ---
 

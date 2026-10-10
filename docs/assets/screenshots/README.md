@@ -15,7 +15,8 @@ All six below are real captures from a live, unmodified `minimax/minimax-m2.1` r
 
 | Path | Referenced from | What's visible |
 |---|---|---|
-| `readme/hero-agent-tab.png` | [README.md](../../../README.md), [agent/overview.md](../../agent/overview.md) | The completed task summary card: status pill, step count, executive summary, CVE tag, both captured flags |
+| `readme/hero-workspace.png` | [README.md](../../../README.md) | The Agent tab's empty-state workspace: goal input, target field, and the two quick-start launchers (Bug Bounty Recon, Web Pentest) |
+| `readme/hero-agent-tab.png` | [agent/overview.md](../../agent/overview.md) | The completed task summary card: status pill, step count, executive summary, CVE tag, both captured flags |
 | `usage-guide/agent-tab.png` | [usage-guide.md § Agent](../../usage-guide.md#tab-agent) | Mid-task: the model's plain-language narration above each dispatched command, with live status pills |
 | `usage-guide/terminals-tab.png` | [usage-guide.md § Terminals](../../usage-guide.md#tab-terminals), [sandbox-execution.md § Tier 4](../../agent/sandbox-execution.md#tier-4) | A reverse shell the agent caught itself, live in the watch-only Terminals view — already escalated to root, browsing the filesystem and reading a captured flag |
 | `usage-guide/bash-tab.png` | [usage-guide.md § Bash](../../usage-guide.md#tab-bash) | The operator's own Bash tab: the `yummi-pwnbox` ASCII banner and shortcut helpers |
