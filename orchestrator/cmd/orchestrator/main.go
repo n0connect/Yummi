@@ -128,6 +128,11 @@ func main() {
 	if einoModelNumCtx <= 0 {
 		einoModelNumCtx = resolvedNumCtx
 	}
+	// einoModelMaxTokens: no tier-resolved fallback needed, unlike num_ctx
+	// above — 0 already means exactly the right thing on its own
+	// (eino.resolveMaxTokens applies its own built-in cap for a metered
+	// cloud target and stays uncapped for a local one).
+	einoModelMaxTokens := cfg.EinoModelMaxTokens
 
 	// CloudBaseURL, when the operator explicitly set YUMMI_EINO_MODEL_BASE_URL,
 	// is a MANDATORY replacement for Ollama, not an addition alongside it: an
@@ -426,7 +431,7 @@ func main() {
 				// PlanLLM client (stateless — just config + an http.Client)
 				// across every sub-agent and the top-level runner below, rather
 				// than constructing one per role.
-				einoPlanLLM := eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, planLLMTimeout)
+				einoPlanLLM := eino.NewOpenAIChatClient(einoModelBaseURL, einoModelName, cfg.EinoModelAPIKey, einoModelNumCtx, einoModelMaxTokens, planLLMTimeout)
 				subAgents := map[string]agent.SubAgentRunner{}
 				for _, d := range subDefs {
 					subAgents[d.Role] = eino.NewEinoRunner(
@@ -434,20 +439,21 @@ func main() {
 						assistant.Validator(),
 						agent.NewStoreExecer(executionStore, 10*time.Minute),
 						eino.Config{
-							ApprovalMode:  agent.ModeAskPermission,
-							ModelBaseURL:  einoModelBaseURL,
-							ModelName:     einoModelName,
-							ModelAPIKey:   cfg.EinoModelAPIKey,
-							ModelNumCtx:   einoModelNumCtx,
-							ModelThinking: resolvedThinking,
-							PlanLLM:       einoPlanLLM,
-							Persona:       d.Persona(),
-							Knowledge:     ks,
-							MCPExec:       agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
-							MCPList:       sandboxMCPClient,
-							Retrieval:     retrieval,
-							Skills:        skillReg.Subset(d.Skills),
-							SkillCurator:  skillCuratorFn,
+							ApprovalMode:   agent.ModeAskPermission,
+							ModelBaseURL:   einoModelBaseURL,
+							ModelName:      einoModelName,
+							ModelAPIKey:    cfg.EinoModelAPIKey,
+							ModelNumCtx:    einoModelNumCtx,
+							ModelMaxTokens: einoModelMaxTokens,
+							ModelThinking:  resolvedThinking,
+							PlanLLM:        einoPlanLLM,
+							Persona:        d.Persona(),
+							Knowledge:      ks,
+							MCPExec:        agent.NewStoreMCPExecer(executionStore, 10*time.Minute),
+							MCPList:        sandboxMCPClient,
+							Retrieval:      retrieval,
+							Skills:         skillReg.Subset(d.Skills),
+							SkillCurator:   skillCuratorFn,
 							// Mirrors the graph backend's own sub-agent StepBudget
 							// (40 vs the top-level default 15) — see that
 							// field's comment in the default: branch below for
@@ -467,13 +473,14 @@ func main() {
 					assistant.Validator(),
 					agent.NewStoreExecer(executionStore, 10*time.Minute),
 					eino.Config{
-						StepBudget:    15,
-						ApprovalMode:  agent.ModeAskPermission,
-						ModelBaseURL:  einoModelBaseURL,
-						ModelName:     einoModelName,
-						ModelAPIKey:   cfg.EinoModelAPIKey,
-						ModelNumCtx:   einoModelNumCtx,
-						ModelThinking: resolvedThinking,
+						StepBudget:     15,
+						ApprovalMode:   agent.ModeAskPermission,
+						ModelBaseURL:   einoModelBaseURL,
+						ModelName:      einoModelName,
+						ModelAPIKey:    cfg.EinoModelAPIKey,
+						ModelNumCtx:    einoModelNumCtx,
+						ModelMaxTokens: einoModelMaxTokens,
+						ModelThinking:  resolvedThinking,
 						// Built from the SAME target as the ReAct loop above
 						// (not the conductor's agentLLM) so the goal-part
 						// audit call runs on whichever model is actually

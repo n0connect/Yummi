@@ -31,7 +31,7 @@ func TestNewOllamaChatModel_TalksToConfiguredBaseURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", "ollama", 0, 0, false)
+	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", "ollama", 0, 0, 0, false)
 	if err != nil {
 		t.Fatalf("NewOllamaChatModel: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestNewOllamaChatModel_InjectsNumCtxOption(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", "ollama", 0, 16384, false)
+	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "qwen3:14b", "ollama", 0, 16384, 0, false)
 	if err != nil {
 		t.Fatalf("NewOllamaChatModel: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestNewOllamaChatModel_ReasoningEffort(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "gpt-oss:20b", "ollama", 0, 0, tc.reasoning)
+			cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "gpt-oss:20b", "ollama", 0, 0, 0, tc.reasoning)
 			if err != nil {
 				t.Fatalf("NewOllamaChatModel: %v", err)
 			}
@@ -185,7 +185,7 @@ func TestNewOllamaChatModel_OpenRouterNoNumCtx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "anthropic/claude-3.5-sonnet", "sk-or-test-key", 0, 16384, false)
+	cm, err := NewOllamaChatModel(context.Background(), srv.URL+"/v1", "anthropic/claude-3.5-sonnet", "sk-or-test-key", 0, 16384, 0, false)
 	if err != nil {
 		t.Fatalf("NewOllamaChatModel: %v", err)
 	}
@@ -204,3 +204,38 @@ func TestNewOllamaChatModel_OpenRouterNoNumCtx(t *testing.T) {
 		t.Fatalf("options field should NOT be present for non-Ollama requests:\n%s", gotBody)
 	}
 }
+
+// TestResolveMaxTokens locks in the three cases that matter: an operator
+// override always wins; a metered cloud target gets the built-in default
+// when unset (the gap that let gpt-4.1 via OpenRouter 402 on turn one — see
+// defaultCloudMaxTokens's doc comment); a local target is left uncapped
+// either way, since it isn't billed per token and is already bounded by its
+// own context window.
+func TestResolveMaxTokens(t *testing.T) {
+	cases := []struct {
+		name     string
+		baseURL  string
+		explicit int
+		want     *int
+	}{
+		{"explicit override wins on a cloud target", "https://openrouter.ai/api/v1", 4096, intPtr(4096)},
+		{"explicit override wins on a local target too", "http://localhost:11434/v1", 2048, intPtr(2048)},
+		{"openrouter with no override gets the built-in default", "https://openrouter.ai/api/v1", 0, intPtr(defaultCloudMaxTokens)},
+		{"api.openai.com with no override gets the built-in default", "https://api.openai.com/v1", 0, intPtr(defaultCloudMaxTokens)},
+		{"local Ollama with no override is left uncapped", "http://localhost:11434/v1", 0, nil},
+		{"a local LM Studio/vLLM server is left uncapped", "http://host.docker.internal:1234/v1", 0, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveMaxTokens(tc.baseURL, tc.explicit)
+			if (got == nil) != (tc.want == nil) {
+				t.Fatalf("resolveMaxTokens(%q, %d) = %v, want %v", tc.baseURL, tc.explicit, got, tc.want)
+			}
+			if got != nil && *got != *tc.want {
+				t.Fatalf("resolveMaxTokens(%q, %d) = %d, want %d", tc.baseURL, tc.explicit, *got, *tc.want)
+			}
+		})
+	}
+}
+
+func intPtr(v int) *int { return &v }

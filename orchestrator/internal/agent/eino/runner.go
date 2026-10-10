@@ -48,6 +48,14 @@ type Config struct {
 	// configured tier/override, so both backends agree on context size.
 	// <=0 omits the field (server default, likely too small).
 	ModelNumCtx int
+	// ModelMaxTokens caps a single turn's completion size — see
+	// resolveMaxTokens's doc comment for why this exists (a metered cloud
+	// provider defaults to the model's absolute output ceiling when this is
+	// unset and 402s if the key's remaining credit can't cover that worst
+	// case, even though a real turn never needs anywhere near it). <=0 uses
+	// resolveMaxTokens's own built-in default for a cloud target, uncapped
+	// for a local one.
+	ModelMaxTokens int
 	// ModelThinking mirrors the resolved tier/override Thinking value the
 	// conductor already applies to its own calls — see NewOllamaChatModel's
 	// doc comment for why false maps to "medium" reasoning_effort here, not
@@ -321,7 +329,7 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 		return err
 	}
 
-	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelAPIKey, r.cfg.ModelTimeout, r.cfg.ModelNumCtx, r.cfg.ModelThinking)
+	cm, err := NewOllamaChatModel(ctx, r.cfg.ModelBaseURL, r.cfg.ModelName, r.cfg.ModelAPIKey, r.cfg.ModelTimeout, r.cfg.ModelNumCtx, r.cfg.ModelMaxTokens, r.cfg.ModelThinking)
 	if err != nil {
 		_ = r.store.Transition(task.ID, agent.StatusFailed, func(t *agent.Task) { t.LastError = err.Error() })
 		return err

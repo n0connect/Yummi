@@ -29,17 +29,20 @@ import (
 // the audit call runs on the same model as everything else Eino does, not
 // silently left on whatever the conductor happens to be configured with.
 type OpenAIChatClient struct {
-	baseURL string
-	model   string
-	apiKey  string
-	numCtx  int
-	http    *http.Client
+	baseURL   string
+	model     string
+	apiKey    string
+	numCtx    int
+	maxTokens int
+	http      *http.Client
 }
 
 // NewOpenAIChatClient builds a client against baseURL, which must include
 // any path prefix the target server needs (e.g. "http://localhost:1234/v1"
-// or "https://openrouter.ai/api/v1").
-func NewOpenAIChatClient(baseURL, model, apiKey string, numCtx int, timeout time.Duration) *OpenAIChatClient {
+// or "https://openrouter.ai/api/v1"). maxTokens is passed straight to
+// resolveMaxTokens (model.go) — <=0 uses its own default for a metered cloud
+// target, uncapped for a local one.
+func NewOpenAIChatClient(baseURL, model, apiKey string, numCtx, maxTokens int, timeout time.Duration) *OpenAIChatClient {
 	if timeout <= 0 {
 		// 60s is the right unspecified-default: this client is shared by
 		// BOTH a local Ollama OpenAI-compat target and a real OpenRouter/
@@ -54,11 +57,12 @@ func NewOpenAIChatClient(baseURL, model, apiKey string, numCtx int, timeout time
 		timeout = 60 * time.Second
 	}
 	return &OpenAIChatClient{
-		baseURL: strings.TrimSuffix(baseURL, "/"),
-		model:   model,
-		apiKey:  apiKey,
-		numCtx:  numCtx,
-		http:    &http.Client{Timeout: timeout},
+		baseURL:   strings.TrimSuffix(baseURL, "/"),
+		model:     model,
+		apiKey:    apiKey,
+		numCtx:    numCtx,
+		maxTokens: maxTokens,
+		http:      &http.Client{Timeout: timeout},
 	}
 }
 
@@ -78,6 +82,9 @@ func (c *OpenAIChatClient) Chat(ctx context.Context, system, user string) (strin
 	isOllama := (c.apiKey == "" || c.apiKey == "ollama") && !strings.Contains(c.baseURL, "openrouter.ai") && !strings.Contains(c.baseURL, "api.openai.com")
 	if c.numCtx > 0 && isOllama {
 		payload["options"] = map[string]any{"num_ctx": c.numCtx}
+	}
+	if mt := resolveMaxTokens(c.baseURL, c.maxTokens); mt != nil {
+		payload["max_tokens"] = *mt
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

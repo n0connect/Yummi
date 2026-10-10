@@ -116,7 +116,7 @@ func main() {
 	execStore.SetProcessor(executor.New(bridge, nil, nil, nil).ProcessFunc())
 
 	apiKey := envOr("EINO_MODEL_API_KEY", "")
-	planLLM := eino.NewOpenAIChatClient(baseURL, modelName, apiKey, numCtx, 60*time.Second)
+	planLLM := eino.NewOpenAIChatClient(baseURL, modelName, apiKey, numCtx, 0, 60*time.Second)
 
 	runner := eino.NewEinoRunner(taskStore, nil, agent.NewStoreExecer(execStore, 5*time.Minute), eino.Config{
 		StepBudget:   envIntOr("EINO_STEP_BUDGET", 10),

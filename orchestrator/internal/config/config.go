@@ -65,8 +65,18 @@ type Config struct {
 	EinoModelAPIKey  string
 	EinoProvider     string // "ollama" | "openrouter" | "openai" (auto-detected if blank)
 	EinoModelNumCtx  int
-	TLSDir           string // directory holding mTLS certificates for orchestrator ↔ gateway
-	GatewayTLS       bool   // opt-in until the Rust gateway IPC server supports TLS framing
+	// EinoModelMaxTokens caps a single ReAct turn's completion size against a
+	// metered cloud target (OpenRouter/OpenAI) — see
+	// eino.resolveMaxTokens's doc comment for why this exists: left at the
+	// default 0, a cloud provider can default max_tokens to the model's
+	// absolute output ceiling and reject the whole call if the key's
+	// remaining credit can't cover that worst case, even on a turn that
+	// never needed anywhere near it (live-observed with gpt-4.1 via
+	// OpenRouter). 0 = eino.resolveMaxTokens's own built-in default for a
+	// cloud target, uncapped for a local one.
+	EinoModelMaxTokens int
+	TLSDir             string // directory holding mTLS certificates for orchestrator ↔ gateway
+	GatewayTLS         bool   // opt-in until the Rust gateway IPC server supports TLS framing
 	// DataRetentionDays enables internal/retention's background pruning of
 	// old chat_messages/agent_activity/executions rows when > 0. 0 (the
 	// default) disables it entirely — see internal/retention's package doc
@@ -113,6 +123,7 @@ func Load() *Config {
 		EinoModelAPIKey:     strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_API_KEY")),
 		EinoProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("YUMMI_EINO_PROVIDER"))),
 		EinoModelNumCtx:     parseIntOr(os.Getenv("YUMMI_EINO_MODEL_NUM_CTX"), 0),
+		EinoModelMaxTokens:  parseIntOr(os.Getenv("YUMMI_EINO_MODEL_MAX_TOKENS"), 0),
 		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
 		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
 		DataRetentionDays:   parseIntOr(os.Getenv("YUMMI_DATA_RETENTION_DAYS"), 0),
