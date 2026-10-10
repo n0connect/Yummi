@@ -79,11 +79,15 @@ Direct Yummi using natural language or initiate autonomous red-team tasks:
   - `ask_permission`: Pauses at every command for explicit operator confirmation.
   - Per-task override: Specific tasks can be granted auto-approval via the UI toggle without switching the global mode.
 
+![Agent tab mid-task: the model narrates each step in plain language above the command it dispatches, with live status pills on every row](assets/screenshots/usage-guide/agent-tab.png)
+
 ### 2. Terminals (Agent Tmux Sessions) <a id="tab-terminals"></a>
 Live viewer for persistent background tmux sessions opened and managed by the agent:
 - Lists all active agent terminals with session IDs, running commands, and process status.
 - Watch-only terminal monitor allowing operators to follow live terminal output, inspect interactive CLI sessions (`msfconsole`, `gdb`, `sqlmap`), review background reverse shells, or verify listener logs without interrupting the agent.
 - Output matched against suspicious patterns is flagged with security advisory notices.
+
+![Terminals tab: a reverse shell the agent caught itself, visible to the operator in real time as it browses the filesystem and reads a captured flag — already escalated to root](assets/screenshots/usage-guide/terminals-tab.png)
 
 ### 3. Trace <a id="tab-trace"></a>
 Observability, intelligence, and asset management cockpit:
@@ -102,6 +106,8 @@ Interactive PTY web terminal directly into the Kali container (`yummi-pwnbox`) o
 - Operates in the exact same container environment as the AI agent (`UID 1000:1000`).
 - Features a tactical ASCII greeting banner, live network IP & VPN indicators (`myip`, `ports`), reverse shell generator (`revshell [PORT]`), and wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`).
 
+![Bash tab: the operator's own shell into yummi-pwnbox, the same container and user the agent executes in](assets/screenshots/usage-guide/bash-tab.png)
+
 ### 5. Desktop <a id="tab-desktop"></a>
 Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
 - **On-Demand Activation**: Rendered with a click-to-activate eye icon placeholder. The desktop stream stays dormant until activated by the operator, saving significant memory/VRAM and automatically deactivating when switching tabs.
@@ -109,6 +115,8 @@ Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
 - Desktop & home folder shortcuts for **PayloadsAllTheThings**, **SecLists**, **Nishang**, **Wordlists**, **ExploitDB**, and **Workspace**.
 - Shares the sandbox filesystem and network namespace with the agent.
 - Resizes cleanly with remote display resolution matching the browser viewport.
+
+![Desktop tab: the graphical yummi-pwnbox XFCE session, connected, with Burp Suite, Wireshark, SecLists, ExploitDB, and Metasploit Console one click away](assets/screenshots/usage-guide/desktop-tab.png)
 
 ### 6. Logs <a id="tab-logs"></a>
 Live Server-Sent Events (SSE) stream of internal orchestrator debug logs.
@@ -123,6 +131,8 @@ Operator control panel for the fail-closed network trust boundary:
   - `allow_all` (Blanket Allow): Permits outbound traffic to all public destinations not blocked.
   - `ask_every_time` (Interactive Authorization): Holds each new destination for operator sign-off.
   - *Resets to `block_all` on gateway restart.*
+
+![Gateway tab: kernel enforcement status, the 4-way egress mode switch, hostname policy, and the active nftables rules table — the operator's one view of the trust boundary](assets/screenshots/usage-guide/gateway-tab.png)
 
 ### 8. Health <a id="tab-health"></a>
 Real-time telemetry showing Go heap, goroutine count, component health, and LLM round-trip latencies.

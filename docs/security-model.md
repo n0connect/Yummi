@@ -82,6 +82,8 @@ Operators control external egress via a 4-way master switch (`EgressMode`):
 > - **Egress Mode (Gateway)** controls packet-layer network reachability.
 > - **Approval Mode (Orchestrator)** controls command execution authorization (`auto` vs. `ask_permission`).
 
+![The Gateway tab's own egress-mode switch, set to block_all here — this is the operator control that decides every claim on this page, not something the agent can touch](assets/screenshots/usage-guide/gateway-tab.png)
+
 ### Pre-Resolution Hostname Policy <a id="hostname-policy"></a>
 
 Because packet filters operate on IP headers, domain-level restrictions (`scope.hostname_allow`, `scope.hostname_block`) are enforced by the orchestrator prior to DNS resolution:

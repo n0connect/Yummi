@@ -112,6 +112,8 @@ First-class persistent terminal verbs backed by `tmux` inside the sandbox, solvi
 6. **`term_list`**: Lists all active persistent terminal sessions with labels and dimensions.
 7. **`term_close`**: Terminates and kills a session cleanly.
 
+![A session the agent opened itself: a caught reverse shell, visible to the operator in the Terminals tab as the agent drives it — here browsing the filesystem as root and reading a captured flag](../assets/screenshots/usage-guide/terminals-tab.png)
+
 ### Fallback: Free-Text Command Execution <a id="fallback"></a>
 - **`run_command`**: Free-text shell execution for utilities (`git`, `find`, `awk`, `sed`) that do not wrap a specialized pentest tool.
 

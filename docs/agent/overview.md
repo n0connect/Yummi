@@ -43,6 +43,8 @@ The agent is the autonomous offensive security engine of Yummi. It translates hi
 > and a sub-agent handoff in the same session, at a fraction of a general
 > frontier model's cost. See `tier.go`'s doc comment for the full writeup.
 
+![The completed task summary from that run: both flags, the CVE, and every step of the chain, rendered automatically from the agent's own trajectory](../assets/screenshots/readme/hero-agent-tab.png)
+
 ---
 
 ## Core System Architecture Principles

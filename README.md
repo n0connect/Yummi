@@ -28,6 +28,11 @@
 Yummi translates natural language into verified security workflows while enforcing strict operator authority and fail-closed network control. An autonomous agent drives a hardened Kali Linux workbench equipped with 54 native pentest tools, 99 battle-tested offensive skills, and 52 specialist sub-agents, while an independent Rust gateway enforces packet-level policy outside the model's reach.
 </p>
 
+<p align="center">
+  <img src="docs/assets/screenshots/readme/hero-agent-tab.png" alt="Yummi's Agent tab after autonomously compromising a lab target: a completed task summary with CVE, exploit chain, and both captured flags" width="860">
+</p>
+<p align="center"><sub>A real, unmodified run — CVE-2021-41773 to RCE, a self-opened reverse-shell terminal, SUID-GTFOBins privesc to root, both flags read back. See the <a href="docs/usage-guide.md#eight-tabs">Usage Guide</a> for every tab.</sub></p>
+
 ---
 
 ## Key Capabilities
