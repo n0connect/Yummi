@@ -10,7 +10,7 @@
   <a href="https://github.com/n0connect/yummi/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/n0connect/yummi/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-brightgreen?style=flat-square" /></a>
   <a href="CHANGELOG.md"><img alt="Version" src="https://img.shields.io/badge/version-v1.0.1b-brightgreen?style=flat-square" /></a>
-  <a href="docs/installation.md"><img alt="Go" src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square" /></a>
+  <a href="docs/installation.md"><img alt="Go" src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=flat-square" /></a>
   <a href="gateway/Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square" /></a>
   <a href="ui/package.json"><img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square" /></a>
 </p>
@@ -49,7 +49,7 @@ Yummi translates natural language into verified security workflows while enforci
 - **Active Directory & Network Pivoting** — Pre-staged Kerberos (`krb5-user`, `kerbrute`), Impacket, NetExec, Nishang, Metasploit Framework, OpenVPN lab profiles (`/dev/net/tun`), and an automatic reverse shell generator (`revshell`).
 
 ### Autonomous Reasoning & Specialized Agents
-- **Dual Agent Backends** — Choose between a deterministic 11-node Graph State Machine (optimized for local 8B models with closed tag protocol) or CloudWeGo's Eino ADK (native tool-calling for 14B+ models).
+- **Dual Agent Backends** — A deterministic 11-node Graph State Machine (closed tag protocol) or CloudWeGo's Eino ADK (native tool-calling). Both architectures scale down to small local models, but live-tested autonomous reliability needs a 120B+ local model or a cloud model — see [Agent Overview](docs/agent/overview.md) for the tested floor and a [specific recommendation](docs/agent/overview.md#three-agent-engines-behind-one-substrate).
 - **99 Offensive Skills & 52 Specialist Sub-Agents** — Declarative offensive methodologies and bounded depth-1 specialist roles spanning Active Directory, Web/APIs, Cloud/K8s, Binary RE, Hardware/RF, and Adversary Emulation.
 - **Active Exploit Verification Oracles** — Findings require deterministic proof (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) before acceptance, eliminating hallucinated vulnerabilities.
 

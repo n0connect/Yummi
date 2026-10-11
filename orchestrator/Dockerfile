@@ -1,7 +1,10 @@
 # --- Build stage ---
-# orchestrator/go.mod pins go 1.25.0 (bumped by adding the MCP SDK dependency
-# for internal/sandboxmcp — its own floor is 1.25.0).
-FROM golang:1.25-bookworm AS builder
+# Must track orchestrator/go.mod's own `go` directive exactly — GOTOOLCHAIN
+# defaults to local in this image, so `go mod download` hard-fails instead of
+# auto-fetching a newer toolchain if this tag falls behind go.mod's floor
+# (confirmed live: a go.mod bump to 1.27.2 broke this build with exactly that
+# error before this comment existed).
+FROM golang:1.27.2-bookworm AS builder
 
 WORKDIR /build
 

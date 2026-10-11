@@ -17,7 +17,7 @@
 # way — this container's default route still goes through gateway, same as
 # before.
 
-FROM golang:1.26.6-bookworm AS mcpbuilder
+FROM golang:1.27.2-bookworm AS mcpbuilder
 WORKDIR /build
 COPY sandbox-mcp/go.mod sandbox-mcp/go.sum ./
 RUN go mod download
@@ -33,7 +33,7 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/yummi-sandbox-mcp .
 # and consistent with this image's design: the base is kali-rolling:latest and
 # subfinder/nuclei come from rolling apt, so the sandbox is deliberately a
 # rolling/latest environment, not a pinned one.
-FROM golang:1.26.6-bookworm AS recontools
+FROM golang:1.27.2-bookworm AS recontools
 ENV CGO_ENABLED=0 GOBIN=/out
 RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest
 RUN go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest
