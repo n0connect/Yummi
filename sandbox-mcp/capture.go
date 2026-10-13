@@ -81,6 +81,9 @@ func runCaptured(ctx context.Context, program string, args ...string) (*mcp.Call
 // root) — rather than a global os.Setenv, which would race across this
 // server's concurrently-handled tool calls.
 func runCapturedEnv(ctx context.Context, extraEnv []string, program string, args ...string) (*mcp.CallToolResult, any, error) {
+	if err := requireSandboxRuntime(); err != nil {
+		return errResult(err.Error())
+	}
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
 
@@ -182,6 +185,9 @@ func writeConfinedFile(path string, content []byte) (clean string, reason string
 		return "", "must be an absolute path"
 	}
 	clean = filepath.Clean(path)
+	if info, err := os.Lstat(clean); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", "output file must not be a symlink"
+	}
 	if !hasPathPrefix(clean, sandboxHome) {
 		return "", fmt.Sprintf("must be under %s", sandboxHome)
 	}

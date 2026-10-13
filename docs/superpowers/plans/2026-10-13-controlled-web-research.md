@@ -1,5 +1,14 @@
 # Controlled Web Research Implementation Plan
 
+**SUSPENDED / SUPERSEDED — do not execute the steps below.**
+The operator prohibited all host-side execution and all mocks. The earlier
+steps incorrectly proposed host `go test`, injected resolvers, and a fake
+provider. They are retained only as history after the corrections below.
+The subsequent authorized implementation is documented in
+`docs/superpowers/plans/2026-10-13-browser-research-quality.md` and
+`docs/agent/web-research.md`. Search/fetch are now registered inside sandbox-MCP.
+The historical steps below remain superseded and must not be executed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an operator-approved, read-only, source-attributed public-web research capability without weakening Yummi's fail-closed execution boundary.
@@ -56,7 +65,7 @@
 - Consumes: `Candidate`, `Evidence`, and `Normalize` from Task 1.
 - Produces: `researchFetch(ctx context.Context, rawURL string) (researchEvidence, error)`.
 
-- [ ] **Step 1: Write failing tests** with an injected resolver and HTTPS transport proving allowlisted HTTPS succeeds; HTTP, literal loopback/private/ULA addresses, an off-policy redirect, and a redirect to a private resolved address fail before fetching its body.
+- [ ] **Step 1: Superseded.** Future tests must exercise the real sandbox resolver and HTTPS transport inside Docker; no injected dependencies are permitted.
 - [ ] **Step 2: Run** `cd sandbox-mcp && go test -run 'TestResearchFetch|TestResearchURL' -count=1` **and observe missing policy/fetcher symbols.**
 - [ ] **Step 3: Implement the minimum fetcher.** Canonicalize hosts, resolve before every hop, reject unsafe addresses, set `CheckRedirect` to rerun the policy, bind the transport dialer to the validated IP set, permit only HTTPS and `text/html`/`text/plain`, cap redirects at three and response bodies at 32 KiB.
 - [ ] **Step 4: Run focused tests**, then `cd sandbox-mcp && go test ./...`.
@@ -75,7 +84,7 @@
 - Produces: `web_search` and `web_fetch_source` MCP tools. Their provider configuration is environment-only in the sandbox container.
 - Consumes: Task 2 fetcher and Task 1 evidence models.
 
-- [ ] **Step 1: Write failing service/config tests** for no provider configuration, query/result-limit validation, a fake provider returning one valid and one blocked candidate, and errors that never include the configured key.
+- [ ] **Step 1: Superseded.** Future tests must exercise real provider configuration inside Docker, including disabled mode, validation and credential redaction; no fake provider is permitted.
 - [ ] **Step 2: Run** `cd sandbox-mcp && go test -run 'TestWebSearch|TestWebResearch' -count=1` **and confirm the new behavior is absent.**
 - [ ] **Step 3: Implement the smallest provider adapter and disabled default.** Read a fixed provider endpoint/key only from sandbox environment, validate query length and 1–5 limit, and do not add a scrape or browser fallback.
 - [ ] **Step 4: Run focused tests** and `cd sandbox-mcp && go test ./...`.

@@ -208,8 +208,32 @@ export function AssistantPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const dragCounterRef = useRef(0)
+
+  useEffect(() => {
+    fetch('/api/v1/system/web-search')
+      .then(r => r.json())
+      .then(d => {
+        if (typeof d?.enabled === 'boolean') setWebSearchEnabled(d.enabled)
+      })
+      .catch(() => {})
+  }, [])
+
+  const toggleWebSearch = async () => {
+    const next = !webSearchEnabled
+    setWebSearchEnabled(next)
+    try {
+      await fetch('/api/v1/system/web-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      })
+    } catch {
+      setWebSearchEnabled(!next)
+    }
+  }
 
   // ── Persistence / hydration ──────────────────────────────────────────────────
 
@@ -1893,6 +1917,22 @@ export function AssistantPanel({
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
+            </button>
+            <button
+              type="button"
+              className={`btn-web-search ${webSearchEnabled ? 'active' : ''}`}
+              onClick={() => void toggleWebSearch()}
+              title={webSearchEnabled ? t('assistant.webSearchActive') : t('assistant.webSearchInactive')}
+              aria-label={webSearchEnabled ? t('assistant.webSearchActive') : t('assistant.webSearchInactive')}
+              aria-pressed={webSearchEnabled}
+              disabled={isLoading}
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              {webSearchEnabled && <span className="btn-web-search-badge">{t('assistant.webSearchBadge')}</span>}
             </button>
             <input
               ref={fileInputRef}

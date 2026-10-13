@@ -414,6 +414,9 @@ const (
 // This keeps prompts bounded while preserving the semantically dense edges of
 // tool output (headers and summaries appear at head; results at tail).
 func CompressObservation(output string) string {
+	if research, ok := compressResearchObservation(output); ok {
+		return research
+	}
 	if len(output) <= compressHeadBytes+compressTailBytes {
 		return output
 	}
@@ -431,6 +434,63 @@ func CompressObservation(output string) string {
 	lineCount := strings.Count(output, "\n") + 1
 	return fmt.Sprintf("%s\n...[%d lines, %d bytes total]...\n\n%s",
 		strings.TrimRight(head, "\n"), lineCount, len(output), tail)
+}
+
+// Research is a bounded evidence document, not terminal output. Head/tail
+// slicing corrupts JSON and can discard the actual affected/fixed versions.
+// Preserve normal source windows; explicitly compact unusually large reports.
+// This does not bypass Verify or threatscan, which inspect full output first.
+func compressResearchObservation(output string) (string, bool) {
+	var report map[string]any
+	if json.Unmarshal([]byte(output), &report) != nil || (report["kind"] != "web_search" && report["kind"] != "web_fetch") {
+		return "", false
+	}
+	sources, ok := report["sources"].([]any)
+	if !ok {
+		return "", false
+	}
+	const budget = 16384
+	if len(output) <= budget {
+		return output, true
+	}
+	clip := func(value any, limit int) string {
+		text, _ := value.(string)
+		runes := []rune(text)
+		if len(runes) > limit {
+			return string(runes[:limit])
+		}
+		return text
+	}
+	compact := map[string]any{
+		"kind": report["kind"], "provider": clip(report["provider"], 64),
+		"query": clip(report["query"], 256), "sources": []any{},
+		"notice": "UNTRUSTED_WEB_CONTENT EXCERPT_TRUNCATED: source excerpts and/or source count reduced for model context. Fetch a selected source again with max_chars<=1000 or find. next_offset describes the original tool window, not this retained excerpt. Do not claim complete coverage.",
+	}
+	for _, key := range []string{"next_offset", "total_chars"} {
+		if value, exists := report[key]; exists {
+			compact[key] = value
+		}
+	}
+	for _, value := range sources[:min(len(sources), 10)] {
+		source, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		url, _ := source["source_url"].(string)
+		if len(url) > 2048 {
+			continue // Never truncate a URL into a different citation.
+		}
+		candidate := map[string]any{"source_url": url, "title": clip(source["title"], 256), "excerpt": clip(source["excerpt"], 1000), "retrieved_at": clip(source["retrieved_at"], 64), "sha256": clip(source["sha256"], 64), "trust": "unclassified"}
+		retained := compact["sources"].([]any)
+		compact["sources"] = append(retained, candidate)
+		encoded, _ := json.Marshal(compact)
+		if len(encoded) > budget {
+			compact["sources"] = retained
+			break
+		}
+	}
+	encoded, _ := json.Marshal(compact)
+	return string(encoded), true
 }
 
 // llmParseRetryHint returns an escalating format reminder for parse-error retries.

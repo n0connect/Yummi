@@ -19,6 +19,7 @@ thirdy-party/
 /bin/
 *.bin
 *.test
+!sandbox-mcp/Dockerfile.test
 *.out
 coverage.*
 

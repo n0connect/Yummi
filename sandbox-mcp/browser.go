@@ -66,7 +66,7 @@ func browserOpenHandler(ctx context.Context, _ *mcp.CallToolRequest, args browse
 	}
 
 	var text strings.Builder
-	fmt.Fprintf(&text, "Successfully navigated to: %s\nTitle: %s\n", info.URL, info.Title)
+	fmt.Fprintf(&text, "Navigated to: %s\nTitle: %s\nHTTP status: %d (0 = unavailable/non-HTTP)\n", info.URL, info.Title, info.HTTPStatus)
 	if info.InitialSnapshot != nil && info.InitialSnapshot.TreeText != "" {
 		text.WriteString("\n--- Accessibility Snapshot ---\n")
 		text.WriteString(info.InitialSnapshot.TreeText)
@@ -373,6 +373,7 @@ func browserLogsHandler(ctx context.Context, _ *mcp.CallToolRequest, args browse
 
 // registerBrowserTools registers all 8 browser tools onto the MCP server.
 func registerBrowserTools(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{Name: "browser_session", Description: "Read actual browser mode and isolated active session, or reset all browser sessions before changing headless/full mode."}, browserSessionHandler)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "browser_open",
 		Description: "Navigate to a URL with Chromium. Automatically extracts page title, initial @eN accessibility snapshot, and supports custom HTTP request headers.",
@@ -412,4 +413,20 @@ func registerBrowserTools(server *mcp.Server) {
 		Name:        "browser_logs",
 		Description: "Retrieve captured browser console logs (console.log, console.error) and network traffic (requests, errors, APIs).",
 	}, browserLogsHandler)
+}
+
+type browserSessionArgs struct {
+	Action string `json:"action" jsonschema:"status or reset (reset closes all tabs and isolated sessions)"`
+}
+
+func browserSessionHandler(ctx context.Context, _ *mcp.CallToolRequest, args browserSessionArgs) (*mcp.CallToolResult, any, error) {
+	result, err := globalBrowser.getDriver().Session(ctx, args.Action)
+	if err != nil {
+		return errResult(err.Error())
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		return errResult("browser status encoding failed")
+	}
+	return textResult(string(b))
 }

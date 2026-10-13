@@ -190,6 +190,7 @@ func main() {
 	// dispatch path (processMCP) regardless of which agent backend is active;
 	// only the Eino backend currently issues MCP tool calls.
 	sandboxMCPClient := sandboxmcp.NewClient(cfg.SandboxContainer)
+	defer func() { _ = sandboxMCPClient.Close() }()
 	// preloadNumCtx is the larger of the conductor's own resolved context and
 	// any explicit Eino override THAT TARGETS THE SAME OLLAMA INSTANCE (an
 	// unset EinoModelBaseURL, or one explicitly equal to the derived Ollama

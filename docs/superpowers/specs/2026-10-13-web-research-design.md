@@ -1,7 +1,16 @@
 # Controlled Web Research — Design
 
 **Date:** 2026-10-13  
-**Status:** Proposed  
+**Status:** Suspended — not an executable implementation brief.
+
+**2026-10-13 correction:** The prior design and plan are superseded by the
+operator's sandbox-only requirement. No research HTTP/DNS/provider operation
+may run on the host or in the orchestrator. The subsequently authorized
+sandbox-only delivery is described in `docs/agent/web-research.md` and
+`docs/superpowers/plans/2026-10-13-browser-research-quality.md`. Search/fetch are
+now registered there. Validation executes in Docker using real components,
+with no new mocks or provider substitutes. This document remains historical
+rationale, not the active implementation brief.
 **Decision:** Build a read-only research authority inside the existing sandbox,
 not a general-purpose browser mode or host-side service.
 
@@ -105,7 +114,7 @@ unavailable; no browser or shell fallback is allowed.
 
 - Unit tests prove URL canonicalization, private-address rejection, redirect
   revalidation, result limits, content-type/size bounds, and API-key redaction.
-- Integration tests use a local fake provider/fetcher and prove an allowed
+- Integration tests use the real sandbox fetcher and configured provider to prove an allowed
   result is normalized and cited while an off-policy redirect never connects.
 - Threatscan tests prove prompt-injection-shaped response content does not
   reach the model-facing evidence bundle or persistent knowledge.

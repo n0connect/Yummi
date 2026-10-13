@@ -50,6 +50,9 @@ export YUMMI_EINO_MODEL_NAME
 export YUMMI_EINO_MODEL_API_KEY
 export YUMMI_EINO_PROVIDER
 export YUMMI_EINO_MODEL_NUM_CTX
+export YUMMI_WEB_SEARCH_ENABLED
+export YUMMI_WEB_SEARCH_MODEL
+export YUMMI_WEB_SEARCH_API_KEY
 # The LangGraph brain (brain/) is a fully separate Python process — see
 # brain/README.md. It never reads YUMMI_OLLAMA_*/YUMMI_EINO_* (those govern
 # the Go orchestrator's own conductor/eino backends); these are its own,
@@ -469,7 +472,7 @@ build: _check-deps $(BIN_DIR)/$(BINARY) $(UI_DIST_DIR)/index.html $(BIN_DIR)/$(O
 ##         both run against it, no separate opt-in image/container.
 ##         Engine: CONTAINER_ENGINE=docker|podman (default docker).
 ##         Network trade-off: YUMMI_NETWORK_MODE=secure|insecure-bridge (default secure).
-start: _check-deps _container-ensure _ollama-ensure
+start: _runtime-deps _ollama-ensure
 	@$(call log_section,Starting Services)
 	@if ! $(CONTAINER_ENGINE) ps --format '{{.Names}}' 2>/dev/null | grep -q '^yummi-ui$$'; then \
 		if nc -z -w 1 127.0.0.1 3000 >/dev/null 2>&1; then \
@@ -501,6 +504,13 @@ start: _check-deps _container-ensure _ollama-ensure
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
 	@$(call log_pass,services,Running — UI on http://localhost:3000 — Desktop tab at http://localhost:3000/desktop)
+
+# Docker startup needs no native Go/Rust/npm toolchains and must not launch
+# host desktop applications when the Docker daemon is unavailable.
+.PHONY: _runtime-deps
+_runtime-deps:
+	@command -v $(CONTAINER_ENGINE) >/dev/null || { printf 'Container engine unavailable\n'; exit 1; }
+	@$(CONTAINER_ENGINE) info >/dev/null 2>&1 || { printf 'Container engine unavailable; start it explicitly\n'; exit 1; }
 
 ## rebase  Fast clean restart: down, rebuild images, up — Docker's OWN layer
 ##         cache does the work (go mod download / npm install layers are
@@ -779,8 +789,9 @@ _test-gateway:
 	@$(call log_pass,test,Gateway tests passed.)
 
 _test-sandbox-mcp:
-	@$(call log_info,test,Running sandbox-mcp module tests...)
-	@set -o pipefail; cd sandbox-mcp && go test ./... 2>&1 | sed 's/^/  /' || { $(call log_error,test,sandbox-mcp tests failed.); exit 1; }
+	@$(call log_info,test,Running sandbox-mcp tests inside isolated Kali Docker container...)
+	@$(CONTAINER_ENGINE) build -f sandbox-mcp/Dockerfile.test -t yummi/sandbox-mcp-test:local .
+	@$(CONTAINER_ENGINE) run --rm --pull never --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev --tmpfs /home/pentester:rw,nosuid,nodev,mode=1777 yummi/sandbox-mcp-test:local -test.v -test.timeout=5m
 	@$(call log_pass,test,sandbox-mcp tests passed.)
 
 _test-ui: $(UI_DIR)/node_modules

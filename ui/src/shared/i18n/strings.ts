@@ -5,6 +5,12 @@
 // `Record<keyof typeof en, string>` so a translation missing a key that `en`
 // has (or vice versa) is a compile error, not a silent runtime fallback.
 const en = {
+  'research.sources': 'Research sources',
+  'research.untrusted': 'External source evidence — verify important claims against the original source.',
+  'research.copyUrl': 'Copy URL',
+  'research.copied': 'Copied',
+  'research.kindSearch': 'Search',
+  'research.kindFetch': 'Fetch',
   // ── common ──────────────────────────────────────────────────────────────
   'common.sessionLabel': 'Session',
   'common.defaultSessionLabel': 'Adhoc',
@@ -474,6 +480,9 @@ const en = {
   'assistant.removeAttachment': 'Remove file',
   'assistant.fileTooLarge': 'File is too large (max 2MB)',
   'assistant.attachedFilesPrompt': 'Please analyze the attached file(s) and proceed with the assessment:',
+  'assistant.webSearchActive': 'Web search: Active (agent can search the web)',
+  'assistant.webSearchInactive': 'Web search: Inactive (click to enable)',
+  'assistant.webSearchBadge': 'Search',
 
   // ── activityPresentation ────────────────────────────────────────────────
   'activity.label.plan': 'Plan',
@@ -572,6 +581,12 @@ const en = {
 }
 
 const tr = {
+  'research.sources': 'Araştırma kaynakları',
+  'research.untrusted': 'Dış kaynak kanıtı — önemli iddiaları özgün kaynak üzerinden doğrulayın.',
+  'research.copyUrl': 'URL kopyala',
+  'research.copied': 'Kopyalandı',
+  'research.kindSearch': 'Arama',
+  'research.kindFetch': 'Kaynak',
   // ── common ──────────────────────────────────────────────────────────────
   'common.sessionLabel': 'Oturum',
   'common.defaultSessionLabel': 'Ad-hoc',
@@ -1047,6 +1062,9 @@ const tr = {
   'assistant.removeAttachment': 'Dosyayı kaldır',
   'assistant.fileTooLarge': 'Dosya çok büyük (maks 2MB)',
   'assistant.attachedFilesPrompt': 'Lütfen ekteki dosya(ları) analiz edin ve değerlendirmeye devam edin:',
+  'assistant.webSearchActive': 'Web arama: Aktif (ajan web araması yapabilir)',
+  'assistant.webSearchInactive': 'Web arama: Kapalı (etkinleştirmek için tıklayın)',
+  'assistant.webSearchBadge': 'Arama',
 
   // ── activityPresentation ────────────────────────────────────────────────
   'activity.label.plan': 'Plan',

@@ -1,0 +1,29 @@
+FROM golang:1.27.2-bookworm AS testbuild
+WORKDIR /build
+COPY sandbox-mcp/go.mod sandbox-mcp/go.sum ./
+RUN go mod download
+COPY sandbox-mcp/*.go ./
+RUN test -z "$(gofmt -l .)" && CGO_ENABLED=0 go test -c -o /out/sandbox-mcp.test . && CGO_ENABLED=0 go build -o /out/yummi-sandbox-mcp .
+RUN /out/sandbox-mcp.test -test.run '^TestConfinement' -test.v
+RUN if /out/yummi-sandbox-mcp; then exit 1; fi
+
+FROM golang:1.27.2-bookworm AS boundary-audit
+WORKDIR /orchestrator
+COPY orchestrator/ ./
+RUN --network=none go test ./internal/security/invariants -count=1 -v
+
+# No host mounts, network, Docker socket, or GUI forwarding at test runtime.
+FROM yummi/sandbox:local AS sandbox-test
+COPY sandbox-mcp/testdata/browser-qa.html /usr/local/share/yummi-qa/browser-qa.html
+COPY --from=testbuild /out/sandbox-mcp.test /usr/local/bin/sandbox-mcp.test
+COPY --from=testbuild /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
+# The runtime image gives nmap file capabilities. With ALL capabilities
+# dropped Docker rejects exec of that file. Exercise real unprivileged nmap
+# in this networkless test image, without changing the engagement image.
+RUN setcap -r /usr/lib/nmap/nmap
+USER 1000:1000
+ENV YUMMI_BROWSER_HEADLESS=true
+# Kali's /usr/bin/nmap wrapper forces --privileged for non-root users.
+# Use the actual nmap executable, which selects real TCP connect scanning.
+ENV PATH="/usr/lib/nmap:${PATH}"
+ENTRYPOINT ["/usr/local/bin/sandbox-mcp.test"]

@@ -333,4 +333,5 @@ func registerTools(server *mcp.Server) {
 	registerPassiveReconTool(server)
 	registerTerminalTools(server)
 	registerBrowserTools(server)
+	registerResearchTools(server)
 }

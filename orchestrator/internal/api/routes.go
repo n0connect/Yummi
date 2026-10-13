@@ -128,6 +128,8 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 		r.Get("/system/status", HandleSystemStatus(bridge, pc, cfg.DockerSocket, assistant))
 		r.Get("/system/health-metrics", HandleHealthMetrics(agg))
 		r.Get("/system/logs", HandleSystemLogs(lb))
+		r.Get("/system/web-search", HandleGetWebSearch(bridge))
+		r.Post("/system/web-search", HandleSetWebSearch(bridge, sm))
 		r.Get("/llm/status", HandleLLMStatus(llmClient, resilientLLM))
 
 		// Chat

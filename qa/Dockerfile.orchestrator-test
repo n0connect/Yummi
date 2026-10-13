@@ -1,0 +1,8 @@
+FROM docker:27-cli AS dockercli
+FROM yummi/orchestrator-quality:local
+# Exercise the real CLI error path without granting access to a Docker daemon.
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+# Shipped persona tests resolve this sibling of the module's /build directory.
+COPY persona /persona
+WORKDIR /build
+RUN --network=none go test ./... -count=1

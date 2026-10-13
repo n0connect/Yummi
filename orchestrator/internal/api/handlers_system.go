@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/n0connect/yummi/orchestrator/internal/executor"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
@@ -186,5 +187,51 @@ func HandleSandboxExec(bridge *sandbox.Bridge, pc *gateway.Client, sm *session.M
 			resp["warning"] = result.Warning
 		}
 		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// HandleGetWebSearch reports whether web research is currently enabled.
+// GET /api/v1/system/web-search
+func HandleGetWebSearch(bridge *sandbox.Bridge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if bridge == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+			return
+		}
+		res, err := bridge.Exec(r.Context(), "cat /tmp/yummi_web_search_state 2>/dev/null || echo ${YUMMI_WEB_SEARCH_ENABLED:-false}")
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+			return
+		}
+		val := strings.ToLower(strings.TrimSpace(res.Stdout))
+		enabled := val == "true" || val == "1" || val == "enabled" || val == "on"
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled})
+	}
+}
+
+// HandleSetWebSearch updates whether web research is dynamically enabled in sandbox.
+// POST /api/v1/system/web-search {"enabled": true|false}
+func HandleSetWebSearch(bridge *sandbox.Bridge, sm *session.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if bridge == nil {
+			writeError(w, http.StatusServiceUnavailable, "sandbox unavailable", nil)
+			return
+		}
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request", err)
+			return
+		}
+		cmd := "echo false > /tmp/yummi_web_search_state"
+		if req.Enabled {
+			cmd = "echo true > /tmp/yummi_web_search_state"
+		}
+		if _, err := bridge.Exec(r.Context(), cmd); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update web search state", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 	}
 }

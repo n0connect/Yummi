@@ -78,6 +78,16 @@ var catalog = map[string]ToolSpec{
 	"browser_storage":    {TargetField: "", Render: renderBrowserStorage},
 	"browser_tabs":       {TargetField: "", Render: renderBrowserTabs},
 	"browser_logs":       {TargetField: "", Render: renderBrowserLogs},
+	// Research resolves and checks gateway hostname policy INSIDE the sandbox.
+	// Neither tool opens a gateway rule; packet policy still gates every dial.
+	"web_search": {TargetField: "", Render: func(a map[string]any) string { return fmt.Sprintf("web_search query=%q", a["query"]) }},
+	"web_fetch": {TargetField: "", Render: func(a map[string]any) string {
+		url, _ := a["url"].(string)
+		find, _ := a["find"].(string)
+		offset, _ := renderIntField(a, "offset")
+		return fmt.Sprintf("web_fetch url=%q offset=%d find=%q", url, offset, find)
+	}},
+	"browser_session": {TargetField: "", Render: func(a map[string]any) string { return fmt.Sprintf("browser_session action=%v", a["action"]) }},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -639,8 +649,15 @@ func renderBrowserOpen(a map[string]any) string {
 }
 
 func renderBrowserSnapshot(a map[string]any) string {
+	var parts []string
+	if io, ok := a["interactive_only"].(bool); ok && !io {
+		parts = append(parts, "interactive_only=false")
+	}
 	if sel, _ := a["selector"].(string); sel != "" {
-		return fmt.Sprintf("browser snapshot selector=%s", sel)
+		parts = append(parts, "selector="+sel)
+	}
+	if len(parts) > 0 {
+		return "browser snapshot " + strings.Join(parts, " ")
 	}
 	return "browser snapshot"
 }

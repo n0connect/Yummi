@@ -38,7 +38,11 @@ func newClient(newTransport func(ctx context.Context) mcp.Transport) *Client {
 // `docker exec -i --user 1000:1000 <container> /usr/local/bin/yummi-sandbox-mcp`.
 func NewClient(container string) *Client {
 	return newClient(func(ctx context.Context) mcp.Transport {
-		cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", "1000:1000",
+		// The transport belongs to Client, not to the first tool invocation.
+		// execution.Store cancels its per-call context after returning; tying
+		// docker exec to that context destroys browser refs/storage between
+		// otherwise successful calls. CommandTransport.Close owns termination.
+		cmd := exec.CommandContext(context.WithoutCancel(ctx), "docker", "exec", "-i", "--user", "1000:1000",
 			container, "/usr/local/bin/yummi-sandbox-mcp")
 		return &mcp.CommandTransport{Command: cmd}
 	})

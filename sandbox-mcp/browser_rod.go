@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/png"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -21,26 +25,38 @@ import (
 
 // RodDriver implements BrowserDriver using go-rod and stealth.
 type RodDriver struct {
-	mu           sync.Mutex
-	browser      *rod.Browser
-	launcherURL  string
-	activePage   *rod.Page
-	currentRefs  map[string]*rod.Element
-	currentElems []SnapshotElement
-	logsBuffer   []LogEntry
+	mu            sync.Mutex
+	browser       *rod.Browser
+	launcherURL   string
+	activePage    *rod.Page
+	currentRefs   map[string]*rod.Element
+	currentElems  []SnapshotElement
+	logsBuffer    map[string][]LogEntry
+	contexts      map[string]*rod.Browser
+	activeSession string
+	headless      bool
+	requestRouter *rod.HijackRouter
 }
 
 // NewRodDriver creates a new RodDriver instance.
 func NewRodDriver() *RodDriver {
 	return &RodDriver{
 		currentRefs: make(map[string]*rod.Element),
-		logsBuffer:  make([]LogEntry, 0, 100),
+		logsBuffer:  make(map[string][]LogEntry),
+		contexts:    make(map[string]*rod.Browser),
 	}
 }
 
 // ensureBrowser ensures a running browser instance is connected.
 func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error {
+	// Must precede browser discovery, profile writes, lock removal and CDP calls.
+	if err := requireSandboxRuntime(); err != nil {
+		return err
+	}
 	if d.browser != nil {
+		if reqHeadless != nil && *reqHeadless != d.headless {
+			return fmt.Errorf("browser mode is already active; call browser_session reset before changing headless mode")
+		}
 		// Ping browser to ensure connection is still alive (bounded 1s timeout)
 		if _, err := d.browser.Context(ctx).Timeout(1 * time.Second).Version(); err == nil {
 			return nil
@@ -57,36 +73,47 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 	// Find Chromium binary in container
 	binPath := "/usr/bin/chromium"
 	if _, err := os.Stat(binPath); err != nil {
-		if path, found := launcher.LookPath(); found {
-			binPath = path
-		}
+		return fmt.Errorf("sandbox Chromium missing: %w", err)
 	}
 
 	userDataDir := os.Getenv("CHROMIUM_USER_DATA_DIR")
 	if userDataDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			userDataDir = filepath.Join(home, ".config", "chromium-agent")
+			userDataDir = filepath.Join(home, ".config", "chromium-agent", fmt.Sprintf("process-%d", os.Getpid()))
 		} else {
 			userDataDir = "/tmp/chromium-agent"
 		}
 	}
-	_ = os.MkdirAll(userDataDir, 0755)
+	if !filepath.IsAbs(userDataDir) || !hasPathPrefix(filepath.Clean(userDataDir), "/home/pentester") {
+		return fmt.Errorf("browser profile must remain under sandbox home")
+	}
+	if err := os.MkdirAll(userDataDir, 0755); err != nil {
+		return fmt.Errorf("sandbox browser profile unavailable: %w", err)
+	}
+	cleanProfile, reason := confineDir(userDataDir)
+	if reason != "" {
+		return fmt.Errorf("sandbox browser profile: %s", reason)
+	}
+	userDataDir = cleanProfile
+	// Chrome's documented Local State preferences keep DNS in the sandbox
+	// and use the same Cloudflare resolver over HTTPS where port 53 is blocked.
+	state := map[string]any{}
+	statePath := filepath.Join(userDataDir, "Local State")
+	if b, err := os.ReadFile(statePath); err == nil {
+		_ = json.Unmarshal(b, &state)
+	}
+	if state == nil {
+		state = make(map[string]any)
+	}
+	state["dns_over_https"] = map[string]any{"mode": "secure", "templates": "https://1.1.1.1/dns-query{?dns}"}
+	state["async_dns"] = map[string]any{"enabled": true}
+	stateBytes, _ := json.Marshal(state)
+	if _, reason := writeConfinedFile(statePath, stateBytes); reason != "" {
+		return fmt.Errorf("sandbox browser DNS profile: %s", reason)
+	}
 	_ = os.Remove(filepath.Join(userDataDir, "SingletonLock"))
 	_ = os.Remove(filepath.Join(userDataDir, "SingletonSocket"))
 	_ = os.Remove(filepath.Join(userDataDir, "SingletonCookie"))
-
-	// 1. Check if Chromium is already running on port 9222
-	if wsURL, err := launcher.ResolveURL("127.0.0.1:9222"); err == nil && wsURL != "" {
-		b := rod.New().ControlURL(wsURL)
-		if err := b.Connect(); err == nil {
-			if _, vErr := b.Context(ctx).Timeout(1 * time.Second).Version(); vErr == nil {
-				d.browser = b
-				d.launcherURL = wsURL
-				return nil
-			}
-		}
-		_ = b.Close()
-	}
 
 	forceHeadless := os.Getenv("YUMMI_BROWSER_HEADLESS") == "true" || os.Getenv("YUMMI_BROWSER_HEADLESS") == "1"
 	if reqHeadless != nil {
@@ -96,7 +123,7 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 	l := launcher.New().
 		Bin(binPath).
 		Leakless(false).
-		RemoteDebuggingPort(9222).
+		RemoteDebuggingPort(0).
 		Set("display", display).
 		Set("no-sandbox").
 		Set("disable-dev-shm-usage").
@@ -111,12 +138,13 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 		l = launcher.New().
 			Bin(binPath).
 			Leakless(false).
-			RemoteDebuggingPort(9222).
+			RemoteDebuggingPort(0).
 			Set("no-sandbox").
 			Set("disable-dev-shm-usage").
 			Set("user-data-dir", userDataDir).
 			Headless(true)
 		wsURL, err = l.Launch()
+		forceHeadless = true
 		if err != nil {
 			return fmt.Errorf("failed to launch chromium: %w", err)
 		}
@@ -131,17 +159,114 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 	}
 
 	d.browser = browser
+	d.headless = forceHeadless
+	d.contexts = make(map[string]*rod.Browser)
+	d.activeSession = "default"
+	// All external browser requests, including redirects, WebSockets and new tabs,
+	// consult the gateway's name policy before proceeding. Packet policy is still
+	// enforced by the gateway itself. No policy mutation is available here.
+	router := browser.HijackRequests()
+	if err := router.Add("*", "", func(h *rod.Hijack) {
+		u := h.Request.URL()
+		scheme := strings.ToLower(u.Scheme)
+		if scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" || h.Request.Type() == proto.NetworkResourceTypeWebSocket {
+			host := u.Hostname()
+			ip := net.ParseIP(host)
+			if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+				policyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				policyErr := researchHostnameAllowed(policyCtx, host)
+				cancel()
+				if policyErr != nil {
+					h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+					return
+				}
+			}
+		}
+		h.ContinueRequest(&proto.FetchContinueRequest{})
+	}); err != nil {
+		_ = browser.Close()
+		d.browser = nil
+		return fmt.Errorf("browser request policy setup failed: %w", err)
+	}
+	d.requestRouter = router
+	go router.Run()
 	return nil
 }
 
+func (d *RodDriver) activeBrowserLocked() (*rod.Browser, error) {
+	label := d.activeSession
+	if label == "" {
+		label = "default"
+		d.activeSession = label
+	}
+	if b := d.contexts[label]; b != nil {
+		return b, nil
+	}
+	if len(d.contexts) >= 16 {
+		return nil, fmt.Errorf("browser session limit reached; reset unused sessions")
+	}
+	b, err := d.browser.Incognito()
+	if err != nil {
+		return nil, fmt.Errorf("isolated browser session failed: %w", err)
+	}
+	d.contexts[label] = b
+	return b, nil
+}
+
+// Rod.Pages lists targets across contexts; filter explicitly before exposing
+// tabs or selecting a fallback page from the active isolated session.
+func sessionPages(ctx context.Context, b *rod.Browser) (rod.Pages, error) {
+	pages, err := b.Pages()
+	if err != nil {
+		return nil, err
+	}
+	var own rod.Pages
+	for _, page := range pages {
+		info, err := page.Context(ctx).Info()
+		if err == nil && info.BrowserContextID == b.BrowserContextID {
+			own = append(own, page)
+		}
+	}
+	return own, nil
+}
+
+func (d *RodDriver) appendLogLocked(session string, entry LogEntry) {
+	if session == "" {
+		session = "default"
+	}
+	if d.logsBuffer == nil {
+		d.logsBuffer = make(map[string][]LogEntry)
+	}
+	buf := d.logsBuffer[session]
+	buf = append(buf, entry)
+	if len(buf) > 500 {
+		buf = buf[100:]
+	}
+	d.logsBuffer[session] = buf
+}
+
 // hookPageEvents attaches listeners for console logs, network errors, and auto-dismisses JavaScript dialogs.
-func (d *RodDriver) hookPageEvents(page *rod.Page) {
+func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 	if page == nil {
 		return
+	}
+	if sessionLabel == "" {
+		sessionLabel = d.activeSession
+	}
+	if sessionLabel == "" {
+		sessionLabel = "default"
 	}
 	// Enable Page and Network domains so Chromium dispatches dialog and network events
 	_ = proto.PageEnable{}.Call(page)
 	_ = proto.NetworkEnable{}.Call(page)
+
+	// Apply kernel/gateway blocked hostname patterns natively to Chromium network stack
+	// This blocks HTTP/S and WS/WSS connections matching blocked hostnames with net::ERR_BLOCKED_BY_CLIENT
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if patterns, err := getGatewayBlockedURLPatterns(ctx); err == nil && len(patterns) > 0 {
+		_ = proto.NetworkSetBlockedURLs{Urls: patterns}.Call(page)
+	}
+	cancel()
 
 	// Intercept and neutralize modal dialogs (alert, confirm, prompt) before page scripts run
 	_, _ = page.EvalOnNewDocument(`
@@ -153,14 +278,11 @@ func (d *RodDriver) hookPageEvents(page *rod.Page) {
 	// Auto-dismiss/accept any JavaScript dialogs (alert, confirm, prompt) so they never freeze CDP
 	go page.EachEvent(func(e *proto.PageJavascriptDialogOpening) {
 		d.mu.Lock()
-		d.logsBuffer = append(d.logsBuffer, LogEntry{
+		d.appendLogLocked(sessionLabel, LogEntry{
 			Type:      "dialog." + string(e.Type),
 			Text:      e.Message,
 			Timestamp: time.Now().Format(time.RFC3339),
 		})
-		if len(d.logsBuffer) > 500 {
-			d.logsBuffer = d.logsBuffer[100:]
-		}
 		d.mu.Unlock()
 		_ = proto.PageHandleJavaScriptDialog{
 			Accept:     true,
@@ -176,14 +298,11 @@ func (d *RodDriver) hookPageEvents(page *rod.Page) {
 		for _, arg := range e.Args {
 			msg = append(msg, fmt.Sprintf("%v", arg.Value))
 		}
-		d.logsBuffer = append(d.logsBuffer, LogEntry{
+		d.appendLogLocked(sessionLabel, LogEntry{
 			Type:      "console." + string(e.Type),
 			Text:      strings.Join(msg, " "),
 			Timestamp: time.Now().Format(time.RFC3339),
 		})
-		if len(d.logsBuffer) > 500 {
-			d.logsBuffer = d.logsBuffer[100:]
-		}
 	})()
 
 	// Hook outgoing network requests to capture API endpoints and HTTP methods
@@ -200,14 +319,43 @@ func (d *RodDriver) hookPageEvents(page *rod.Page) {
 		if len(u) > 120 {
 			u = u[:117] + "..."
 		}
-		d.logsBuffer = append(d.logsBuffer, LogEntry{
+		d.appendLogLocked(sessionLabel, LogEntry{
 			Type:      "network.request",
 			Text:      fmt.Sprintf("[%s] %s", method, u),
 			Timestamp: time.Now().Format(time.RFC3339),
 		})
-		if len(d.logsBuffer) > 500 {
-			d.logsBuffer = d.logsBuffer[100:]
+		d.mu.Unlock()
+	})()
+
+	// Hook WebSocket creation and enforce hostname policy at the WebSocket level
+	go page.EachEvent(func(e *proto.NetworkWebSocketCreated) {
+		u := e.URL
+		host := ""
+		if parsed, err := url.Parse(u); err == nil {
+			host = parsed.Hostname()
 		}
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) && host != "" {
+			policyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			policyErr := researchHostnameAllowed(policyCtx, host)
+			cancel()
+			if policyErr != nil {
+				d.mu.Lock()
+				d.appendLogLocked(sessionLabel, LogEntry{
+					Type:      "network.blocked",
+					Text:      fmt.Sprintf("[WS_BLOCKED] %s (%v)", u, policyErr),
+					Timestamp: time.Now().Format(time.RFC3339),
+				})
+				d.mu.Unlock()
+				return
+			}
+		}
+		d.mu.Lock()
+		d.appendLogLocked(sessionLabel, LogEntry{
+			Type:      "network.websocket",
+			Text:      fmt.Sprintf("[WS] %s", u),
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
 		d.mu.Unlock()
 	})()
 
@@ -228,14 +376,11 @@ func (d *RodDriver) hookPageEvents(page *rod.Page) {
 			if len(u) > 120 {
 				u = u[:117] + "..."
 			}
-			d.logsBuffer = append(d.logsBuffer, LogEntry{
+			d.appendLogLocked(sessionLabel, LogEntry{
 				Type:      entryType,
 				Text:      fmt.Sprintf("[%d] %s (type=%s)", status, u, e.Response.MIMEType),
 				Timestamp: time.Now().Format(time.RFC3339),
 			})
-			if len(d.logsBuffer) > 500 {
-				d.logsBuffer = d.logsBuffer[100:]
-			}
 			d.mu.Unlock()
 		}
 	})()
@@ -253,30 +398,34 @@ func (d *RodDriver) getActivePageLocked(ctx context.Context) (*rod.Page, error) 
 	if err := d.ensureBrowser(ctx, nil); err != nil {
 		return nil, err
 	}
-	pages, err := d.browser.Pages()
+	activeBrowser, err := d.activeBrowserLocked()
+	if err != nil {
+		return nil, err
+	}
+	pages, err := sessionPages(ctx, activeBrowser)
 	if err == nil && len(pages) > 0 {
 		// Prefer the most recent non-blank page
 		for i := len(pages) - 1; i >= 0; i-- {
 			if info, err := pages[i].Context(ctx).Timeout(1 * time.Second).Info(); err == nil && info != nil && info.URL != "" && info.URL != "about:blank" {
 				d.activePage = pages[i]
-				d.hookPageEvents(d.activePage)
+				d.hookPageEvents(d.activePage, d.activeSession)
 				return d.activePage, nil
 			}
 		}
 		// Fallback to the last page
 		d.activePage = pages[len(pages)-1]
-		d.hookPageEvents(d.activePage)
+		d.hookPageEvents(d.activePage, d.activeSession)
 		return d.activePage, nil
 	}
-	page, err := stealth.Page(d.browser)
+	page, err := stealth.Page(activeBrowser)
 	if err != nil {
-		page, err = d.browser.Page(proto.TargetCreateTarget{URL: ""})
+		page, err = activeBrowser.Page(proto.TargetCreateTarget{URL: ""})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create page: %w", err)
 		}
 	}
 	d.activePage = page
-	d.hookPageEvents(d.activePage)
+	d.hookPageEvents(d.activePage, d.activeSession)
 	return d.activePage, nil
 }
 
@@ -288,17 +437,29 @@ func (d *RodDriver) Open(ctx context.Context, p OpenParams) (*PageInfo, error) {
 	if err := d.ensureBrowser(ctx, p.Headless); err != nil {
 		return nil, err
 	}
-
-	page, err := stealth.Page(d.browser)
+	label := strings.TrimSpace(p.Session)
+	if label == "" {
+		label = "default"
+	}
+	if !sessIDPattern.MatchString(label) {
+		return nil, fmt.Errorf("session label must be 1-40 letters, digits, underscores or hyphens")
+	}
+	d.activeSession = label
+	activeBrowser, err := d.activeBrowserLocked()
 	if err != nil {
-		page, err = d.browser.Page(proto.TargetCreateTarget{URL: ""})
+		return nil, err
+	}
+
+	page, err := stealth.Page(activeBrowser)
+	if err != nil {
+		page, err = activeBrowser.Page(proto.TargetCreateTarget{URL: ""})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create page: %w", err)
 		}
 	}
 
 	// Close any initial blank pages left behind by browser startup
-	if allPages, err := d.browser.Pages(); err == nil {
+	if allPages, err := sessionPages(ctx, activeBrowser); err == nil {
 		for _, pge := range allPages {
 			if pge != page {
 				if info, _ := pge.Info(); info != nil && (info.URL == "" || info.URL == "about:blank") {
@@ -320,7 +481,7 @@ func (d *RodDriver) Open(ctx context.Context, p OpenParams) (*PageInfo, error) {
 		DownloadPath: downloadDir,
 	}.Call(d.browser)
 
-	d.hookPageEvents(page)
+	d.hookPageEvents(page, label)
 
 	// Inject custom HTTP headers if provided
 	if len(p.Headers) > 0 {
@@ -331,6 +492,18 @@ func (d *RodDriver) Open(ctx context.Context, p OpenParams) (*PageInfo, error) {
 		_ = proto.NetworkSetExtraHTTPHeaders{Headers: hdrMap}.Call(page)
 	}
 
+	var httpStatus atomic.Int64
+	if strings.HasPrefix(p.URL, "http://") || strings.HasPrefix(p.URL, "https://") {
+		statusCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go page.Context(statusCtx).EachEvent(func(e *proto.NetworkResponseReceived) bool {
+			if e.Type == proto.NetworkResourceTypeDocument && e.Response != nil {
+				httpStatus.Store(int64(e.Response.Status))
+				return true
+			}
+			return false
+		})()
+	}
 	if err := page.Context(ctx).Navigate(p.URL); err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", p.URL, err)
 	}
@@ -357,6 +530,7 @@ func (d *RodDriver) Open(ctx context.Context, p OpenParams) (*PageInfo, error) {
 	return &PageInfo{
 		URL:             currentURL,
 		Title:           title,
+		HTTPStatus:      int(httpStatus.Load()),
 		InitialSnapshot: snap,
 	}, nil
 }
@@ -377,8 +551,8 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 		title = info.Title
 	}
 
-	// JavaScript extractor script that collects interactive DOM elements
-	const extractJS = `(selector) => {
+	// JavaScript extractor script that collects interactive and content DOM elements
+	const extractJS = `(selector, interactiveOnly) => {
 		const root = selector ? document.querySelector(selector) : document.body;
 		if (!root) return [];
 
@@ -391,6 +565,7 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 
 		const interactiveTags = new Set(['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']);
 		const interactiveRoles = new Set(['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'combobox', 'textbox', 'searchbox', 'switch']);
+		const contentRoles = new Set(['status', 'alert', 'heading', 'article', 'region', 'banner', 'main', 'complementary']);
 
 		const elements = [];
 		let idx = 1;
@@ -401,12 +576,17 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 			const tag = node.tagName ? node.tagName.toUpperCase() : '';
 			const role = (node.getAttribute && node.getAttribute('role') || '').toLowerCase();
 			const isClickable = node.hasAttribute && (node.hasAttribute('onclick') || node.hasAttribute('tabindex'));
+			const isInteractive = interactiveTags.has(tag) || interactiveRoles.has(role) || isClickable;
 
-			if (interactiveTags.has(tag) || interactiveRoles.has(role) || isClickable) {
+			if (isInteractive) {
 				const ref = '@e' + idx;
 				node.setAttribute('data-yummi-ref', ref);
 
-				let name = (node.innerText || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || '').trim();
+				const root = node.getRootNode();
+				const referenced = (node.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+					.map(id => root.getElementById?.(id)?.textContent || '').join(' ').trim();
+				const labels = Array.from(node.labels || []).map(label => label.textContent || '').join(' ').trim();
+				let name = (referenced || node.getAttribute('aria-label') || labels || node.innerText || node.getAttribute('alt') || node.getAttribute('title') || node.getAttribute('placeholder') || '').trim();
 				if (name.length > 80) name = name.substring(0, 77) + '...';
 
 				const elInfo = {
@@ -424,6 +604,28 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 				elements.push(elInfo);
 				idx++;
 				if (elements.length >= 100) return;
+			} else if (!interactiveOnly) {
+				const isHeading = /^H[1-6]$/.test(tag);
+				const isContent = isHeading || tag === 'P' || tag === 'PRE' || contentRoles.has(role);
+				if (isContent) {
+					const text = (node.innerText || node.textContent || '').trim();
+					if (text) {
+						let trimmed = text.length > 120 ? text.substring(0, 117) + '...' : text;
+						elements.push({
+							ref: '',
+							tag: tag.toLowerCase(),
+							role: role || (isHeading ? 'heading' : (tag === 'P' ? 'text' : tag.toLowerCase())),
+							name: (contextPrefix ? '[' + contextPrefix + '] ' : '') + trimmed,
+							type: '',
+							value: '',
+							placeholder: '',
+							href: '',
+							id: node.id || '',
+							nameAttr: '',
+						});
+						if (elements.length >= 100) return;
+					}
+				}
 			}
 
 			// Traverse open Shadow DOM
@@ -489,12 +691,13 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 		return elements;
 	}`
 
-	val, err := page.Eval(extractJS, selector)
+	val, err := page.Eval(extractJS, selector, interactiveOnly)
 	if err != nil {
 		return nil, fmt.Errorf("eval snapshot extractor: %w", err)
 	}
 
 	var rawItems []struct {
+		Ref         string `json:"ref"`
 		Tag         string `json:"tag"`
 		Role        string `json:"role"`
 		Name        string `json:"name"`
@@ -515,48 +718,62 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 	var b strings.Builder
 	fmt.Fprintf(&b, "Page: %s\nURL: %s\n\n", title, urlStr)
 
-	for i, item := range rawItems {
-		ref := fmt.Sprintf("@e%d", i+1)
-		snapEl := SnapshotElement{
-			Ref:         ref,
-			Role:        item.Role,
-			Name:        item.Name,
-			Type:        item.Type,
-			Value:       item.Value,
-			Placeholder: item.Placeholder,
-			Href:        item.Href,
-			Attributes:  map[string]string{},
-		}
-		if item.ID != "" {
-			snapEl.Attributes["id"] = item.ID
-		}
-		if item.NameAttr != "" {
-			snapEl.Attributes["name"] = item.NameAttr
-		}
+	for _, item := range rawItems {
+		if item.Ref != "" {
+			snapEl := SnapshotElement{
+				Ref:         item.Ref,
+				Role:        item.Role,
+				Name:        item.Name,
+				Type:        item.Type,
+				Value:       item.Value,
+				Placeholder: item.Placeholder,
+				Href:        item.Href,
+				Attributes:  map[string]string{},
+			}
+			if item.ID != "" {
+				snapEl.Attributes["id"] = item.ID
+			}
+			if item.NameAttr != "" {
+				snapEl.Attributes["name"] = item.NameAttr
+			}
 
-		d.currentElems = append(d.currentElems, snapEl)
+			d.currentElems = append(d.currentElems, snapEl)
 
-		// Render compact line
-		b.WriteString(ref + " [" + item.Role + "]")
-		if item.Type != "" {
-			b.WriteString(` type="` + item.Type + `"`)
+			// Render compact line
+			b.WriteString(item.Ref + " [" + item.Role + "]")
+			if item.ID != "" {
+				b.WriteString(` id="` + item.ID + `"`)
+			}
+			if item.Type != "" {
+				b.WriteString(` type="` + item.Type + `"`)
+			}
+			if item.NameAttr != "" {
+				b.WriteString(` name="` + item.NameAttr + `"`)
+			}
+			if item.Placeholder != "" {
+				b.WriteString(` placeholder="` + item.Placeholder + `"`)
+			}
+			if item.Name != "" {
+				b.WriteString(` "` + item.Name + `"`)
+			}
+			if item.Href != "" {
+				b.WriteString(` href="` + item.Href + `"`)
+			}
+			if item.Value != "" && item.Type != "password" {
+				b.WriteString(` value="` + item.Value + `"`)
+			}
+			b.WriteString("\n")
+		} else {
+			// Non-interactive structural/content element (when interactiveOnly == false)
+			b.WriteString("[" + item.Role + "]")
+			if item.ID != "" {
+				b.WriteString(` id="` + item.ID + `"`)
+			}
+			if item.Name != "" {
+				b.WriteString(` "` + item.Name + `"`)
+			}
+			b.WriteString("\n")
 		}
-		if item.NameAttr != "" {
-			b.WriteString(` name="` + item.NameAttr + `"`)
-		}
-		if item.Placeholder != "" {
-			b.WriteString(` placeholder="` + item.Placeholder + `"`)
-		}
-		if item.Name != "" {
-			b.WriteString(` "` + item.Name + `"`)
-		}
-		if item.Href != "" {
-			b.WriteString(` href="` + item.Href + `"`)
-		}
-		if item.Value != "" && item.Type != "password" {
-			b.WriteString(` value="` + item.Value + `"`)
-		}
-		b.WriteString("\n")
 	}
 
 	if len(rawItems) == 0 {
@@ -1024,7 +1241,14 @@ func (d *RodDriver) Interact(ctx context.Context, p InteractParams) (*InteractRe
 		if p.Duration > 0 {
 			dur = time.Duration(p.Duration * float64(time.Second))
 		}
-		time.Sleep(dur)
+		if dur > 30*time.Second {
+			return nil, fmt.Errorf("wait duration exceeds 30 seconds")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(dur):
+		}
 		res.Message = fmt.Sprintf("waited for %v", dur)
 
 	default:
@@ -1170,14 +1394,14 @@ func (d *RodDriver) Screenshot(ctx context.Context, fullPage, annotate bool, out
 		return nil, fmt.Errorf("screenshot capture failed: %w", err)
 	}
 
-	if err := os.WriteFile(targetPath, imgBytes, 0o644); err != nil {
-		return nil, fmt.Errorf("write screenshot file: %w", err)
+	if _, reason := writeConfinedFile(targetPath, imgBytes); reason != "" {
+		return nil, fmt.Errorf("write screenshot file: %s", reason)
 	}
 
 	return &ScreenshotResult{
 		FilePath:  targetPath,
-		Width:     1600,
-		Height:    900,
+		Width:     screenshotWidth(imgBytes),
+		Height:    screenshotHeight(imgBytes),
 		Annotated: annotate,
 	}, nil
 }
@@ -1311,8 +1535,8 @@ func (d *RodDriver) Storage(ctx context.Context, p StorageParams) (*StorageResul
 		if err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(fullSavePath, b, 0o600); err != nil {
-			return nil, fmt.Errorf("write auth state: %w", err)
+		if _, reason := writeConfinedFile(fullSavePath, b); reason != "" {
+			return nil, fmt.Errorf("write auth state: %s", reason)
 		}
 		return &StorageResult{
 			Action:  act,
@@ -1321,7 +1545,10 @@ func (d *RodDriver) Storage(ctx context.Context, p StorageParams) (*StorageResul
 		}, nil
 
 	case "load_state":
-		clean := filepath.Clean(p.Path)
+		clean, reason := confinedBrowserRead(p.Path)
+		if reason != "" {
+			return nil, fmt.Errorf("load_state path: %s", reason)
+		}
 		data, err := os.ReadFile(clean)
 		if err != nil {
 			return nil, fmt.Errorf("read auth state: %w", err)
@@ -1366,7 +1593,11 @@ func (d *RodDriver) Tabs(ctx context.Context, action string, tabID int, urlStr s
 		}
 	}
 
-	pages, err := d.browser.Pages()
+	activeBrowser, err := d.activeBrowserLocked()
+	if err != nil {
+		return nil, err
+	}
+	pages, err := sessionPages(ctx, activeBrowser)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pages: %w", err)
 	}
@@ -1395,17 +1626,21 @@ func (d *RodDriver) Tabs(ctx context.Context, action string, tabID int, urlStr s
 		return res, nil
 
 	case "new":
-		newPage, err := stealth.Page(d.browser)
+		newPage, err := stealth.Page(activeBrowser)
 		if err != nil {
-			newPage, err = d.browser.Page(proto.TargetCreateTarget{URL: ""})
+			newPage, err = activeBrowser.Page(proto.TargetCreateTarget{URL: ""})
 			if err != nil {
 				return nil, err
 			}
 		}
 		if urlStr != "" {
-			_ = newPage.Navigate(urlStr)
+			if err := newPage.Context(ctx).Navigate(urlStr); err != nil {
+				_ = newPage.Close()
+				return nil, err
+			}
 		}
 		d.activePage = newPage
+		d.hookPageEvents(newPage, d.activeSession)
 		d.currentRefs = make(map[string]*rod.Element)
 		d.currentElems = nil
 		res.ActiveTab = len(pages) + 1
@@ -1427,7 +1662,7 @@ func (d *RodDriver) Tabs(ctx context.Context, action string, tabID int, urlStr s
 		} else if d.activePage != nil {
 			_ = d.activePage.Close()
 		}
-		newPages, _ := d.browser.Pages()
+		newPages, _ := sessionPages(ctx, activeBrowser)
 		if len(newPages) > 0 {
 			d.activePage = newPages[0]
 		} else {
@@ -1445,21 +1680,25 @@ func (d *RodDriver) Logs(ctx context.Context, filter string, clear bool) (*LogsR
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	session := d.activeSession
+	if session == "" {
+		session = "default"
+	}
 	flt := strings.ToLower(strings.TrimSpace(filter))
 	var filtered []LogEntry
-	for _, entry := range d.logsBuffer {
-		if flt == "" || strings.Contains(strings.ToLower(entry.Type), flt) || strings.Contains(strings.ToLower(entry.Text), flt) {
-			filtered = append(filtered, entry)
+	if d.logsBuffer != nil {
+		for _, entry := range d.logsBuffer[session] {
+			if flt == "" || strings.Contains(strings.ToLower(entry.Type), flt) || strings.Contains(strings.ToLower(entry.Text), flt) {
+				filtered = append(filtered, entry)
+			}
+		}
+		if clear {
+			d.logsBuffer[session] = nil
 		}
 	}
 
-	total := len(filtered)
-	if clear {
-		d.logsBuffer = d.logsBuffer[:0]
-	}
-
 	return &LogsResult{
-		TotalEntries: total,
+		TotalEntries: len(filtered),
 		Entries:      filtered,
 	}, nil
 }
@@ -1469,13 +1708,73 @@ func (d *RodDriver) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	d.logsBuffer = make(map[string][]LogEntry)
 	if d.browser != nil {
+		if d.requestRouter != nil {
+			_ = d.requestRouter.Stop()
+			d.requestRouter = nil
+		}
 		err := d.browser.Close()
 		d.browser = nil
 		d.activePage = nil
 		d.currentRefs = nil
 		d.currentElems = nil
+		d.contexts = make(map[string]*rod.Browser)
+		d.activeSession = ""
 		return err
 	}
 	return nil
+}
+
+func screenshotWidth(b []byte) int {
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		return 0
+	}
+	return cfg.Width
+}
+func screenshotHeight(b []byte) int {
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		return 0
+	}
+	return cfg.Height
+}
+
+func confinedBrowserRead(path string) (string, string) {
+	if !filepath.IsAbs(path) {
+		return "", "absolute path required"
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", "file unavailable"
+	}
+	home, err := filepath.EvalSymlinks(sandboxHome)
+	if err != nil || !hasPathPrefix(real, home) {
+		return "", "file must remain inside sandbox home"
+	}
+	return real, ""
+}
+
+func (d *RodDriver) Session(ctx context.Context, action string) (map[string]any, error) {
+	if err := requireSandboxRuntime(); err != nil {
+		return nil, err
+	}
+	switch action {
+	case "reset":
+		if err := d.Close(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"running": false, "reset": true}, nil
+	case "status":
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		labels := make([]string, 0, len(d.contexts))
+		for name := range d.contexts {
+			labels = append(labels, name)
+		}
+		return map[string]any{"running": d.browser != nil, "headless": d.headless, "active_session": d.activeSession, "sessions": labels, "environment": "sandbox"}, nil
+	default:
+		return nil, fmt.Errorf("browser_session action must be status or reset")
+	}
 }

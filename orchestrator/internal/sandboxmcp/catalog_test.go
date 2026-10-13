@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+func TestResearchRenderMissingOptionalArguments(t *testing.T) {
+	got := RenderCommand("web_fetch", map[string]any{"url": "https://www.openssh.com/releasenotes.html"})
+	want := `web_fetch url="https://www.openssh.com/releasenotes.html" offset=0 find=""`
+	if got != want {
+		t.Fatalf("optional research args must not introduce fake shell redirections: got %q, want %q", got, want)
+	}
+}
+
 func TestTarget(t *testing.T) {
 	cases := []struct {
 		tool string

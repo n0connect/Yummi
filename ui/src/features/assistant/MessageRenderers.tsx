@@ -4,6 +4,7 @@ import { TaskTracker } from '../tasks/TaskTracker'
 import { sanitizeOperatorText } from '../../shared/lib/operatorText'
 import { t, LANG } from '../../shared/i18n/strings'
 import type { MessageRole } from './messageTypes'
+import { ResearchSources } from './ResearchSources'
 
 // ─── Message row renderers ──────────────────────────────────────────────────
 // Pure presentational pieces of the message thread — each takes only the
@@ -406,6 +407,7 @@ export function ExecutionMessage({
         )}
         {!isActive && visibleOutput && (
           <div className="execution-output-wrap">
+            <ResearchSources output={visibleOutput} />
             <div className="execution-output-meta">
               <span>{outputView.lineCount.toLocaleString(NUMBER_LOCALE)} {t('assistant.lineCountSuffix')}</span>
               {outputView.truncated && (

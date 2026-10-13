@@ -36,6 +36,7 @@ type BrowserDriver interface {
 
 	// Close terminates the browser session and frees resources.
 	Close() error
+	Session(ctx context.Context, action string) (map[string]any, error)
 }
 
 // OpenParams defines parameters for browser_open.

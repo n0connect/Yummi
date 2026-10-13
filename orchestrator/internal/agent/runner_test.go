@@ -531,6 +531,12 @@ func TestSplitEnumeratedParts(t *testing.T) {
 			t.Errorf("part %d = %q, want %q", i, got[i], want[i])
 		}
 	}
+	// Browser QA format: 1. ... 2. ...
+	browserGoal := "Only authorized app: http://127.0.0.1:18888/browser-qa.html. 1. browser_session action=reset. 2. browser_open url=http://127.0.0.1:18888/browser-qa.html. 3. browser_snapshot. 4. browser_interact action=fill. 5. browser_interact action=click. 6. browser_snapshot. 7. browser_interact action=set_viewport. 8. browser_screenshot. 9. browser_session action=status."
+	if parts := SplitEnumeratedParts(browserGoal); len(parts) != 9 {
+		t.Fatalf("browserGoal got %d parts, want 9: %#v", len(parts), parts)
+	}
+
 	// Non-enumerated → nil.
 	if p := SplitEnumeratedParts("just find the biggest file"); p != nil {
 		t.Errorf("free-form goal split to %#v, want nil", p)

@@ -7,16 +7,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func liveChromiumAvailable() bool {
+	if requireSandboxRuntime() != nil {
+		return false
+	}
 	if _, err := os.Stat("/usr/bin/chromium"); err == nil {
 		return true
 	}
-	_, found := launcher.LookPath()
-	return found
+	return false
 }
 
 func TestBrowserToolsRegistration(t *testing.T) {

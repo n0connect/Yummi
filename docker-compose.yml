@@ -84,6 +84,10 @@ services:
   sandbox:
     container_name: yummi-sandbox
     hostname: yummi-pwnbox
+    environment:
+      YUMMI_WEB_SEARCH_ENABLED: "${YUMMI_WEB_SEARCH_ENABLED:-false}"
+      YUMMI_WEB_SEARCH_MODEL: "${YUMMI_WEB_SEARCH_MODEL:-}"
+      YUMMI_WEB_SEARCH_API_KEY: "${YUMMI_WEB_SEARCH_API_KEY:-}"
     build:
       context: .
       dockerfile: sandbox/Dockerfile
@@ -148,9 +152,9 @@ services:
     security_opt:
       - no-new-privileges:false
     volumes:
-      - ${HOME}/.yummi/wordlists:/wordlists:ro
-      - ${HOME}/.yummi/workspace:/workspace:rw
-      - ${HOME}/.yummi/payloads:/payloads:ro
+      - ${YUMMI_HOST_DATA_DIR:-${HOME}/.yummi}/wordlists:/wordlists:ro
+      - ${YUMMI_HOST_DATA_DIR:-${HOME}/.yummi}/workspace:/workspace:rw
+      - ${YUMMI_HOST_DATA_DIR:-${HOME}/.yummi}/payloads:/payloads:ro
     networks:
       yummi_internal:
         ipv4_address: 172.20.0.10

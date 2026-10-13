@@ -4,6 +4,22 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
+### Mandatory sandbox execution placement
+
+- Run sandbox-MCP builds/tests through Docker. Never run `go test` directly in
+  `sandbox-mcp` on the developer machine: live tests launch real tools.
+- `make _test-sandbox-mcp` builds `sandbox-mcp/Dockerfile.test` and runs real
+  tests in an isolated Kali container with no network or host mounts.
+- Sandbox MCP startup, Chromium, command capture, and tmux execution require
+  Linux Docker, UID 1000, and the installed sandbox binary. No host-browser
+  discovery or environment-variable bypass is permitted.
+- Web-search HTTP, DNS, provider credentials, and content parsing must execute
+  inside the gateway-routed sandbox. Do not add a host/orchestrator research
+  client. `web_search` and `web_fetch` execute only inside sandbox-MCP;
+  provider credentials/model are sandbox configuration and never tool args.
+- New tests use real components; do not introduce mocks, fake providers,
+  injected resolvers, or replacement transports.
+
 Yummi is a privacy-first AI pentest conductor that translates natural language into practical security workflows while maintaining explicit traffic control and operator authority. The system enforces a fail-closed trust boundary between the AI orchestrator and the Kali-based execution sandbox.
 
 Four components, three Cargo/Go/npm build units:
@@ -134,7 +150,7 @@ cd gateway && cargo test policy_engine::tests::test_allow_rule
    - `internal/dnsresolve` — leaf package dialing Cloudflare DNS (1.1.1.1:53) directly.
    - `internal/tlsutil` — mTLS cert generation (ECDSA P-256).
 
-3. **sandbox-mcp module** (`sandbox-mcp/go.mod`, `github.com/n0connect/yummi/sandbox-mcp`): the MCP server that runs *inside* the Kali sandbox container — compiled into `sandbox/Dockerfile`'s image via a Go multi-stage build. Registers **62 tools** across 5 tiers: 6 individually-typed tools (`tools.go`), 39 cataloged pentest tools (`tools_extended.go`), 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`), 7 persistent tmux terminal session tools (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`), and 8 full-capability browser automation tools (`browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`).
+3. **sandbox-mcp module** (`sandbox-mcp/go.mod`, `github.com/n0connect/yummi/sandbox-mcp`): the MCP server that runs *inside* the Kali sandbox container — compiled into `sandbox/Dockerfile`'s image via a Go multi-stage build. Real MCP discovery currently registers **58 tools**: typed/cataloged pentest tools, 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`), 7 persistent tmux tools, 9 browser tools (`browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`, `browser_session`), and 2 sandbox-only research tools (`web_search`, `web_fetch`). Discover actual schemas rather than relying on historical tool counts. Persistent Docker transport must outlive individual execution contexts; close it on orchestrator shutdown. Research observations must remain bounded valid JSON, not generic head/tail fragments.
 
 Tests under `orchestrator/internal/*` and `sandbox-mcp/` must run from their own module directory (or with that prefix) — running `go test ./...` from the repo root will silently skip them since they're different modules.
 

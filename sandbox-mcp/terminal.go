@@ -149,6 +149,9 @@ func tmuxName(id string) string { return tmuxSessionPrefix + id }
 // writes its diagnostics ("can't find session", "no server running") to
 // stderr and they are the useful part of the failure.
 func runTmux(ctx context.Context, args ...string) (string, error) {
+	if err := requireSandboxRuntime(); err != nil {
+		return "", err
+	}
 	tmuxMu.Lock()
 	defer tmuxMu.Unlock()
 	cmd := exec.CommandContext(ctx, "tmux", args...)
@@ -164,6 +167,9 @@ func runTmux(ctx context.Context, args ...string) (string, error) {
 }
 
 func tmuxAvailable() bool {
+	if requireSandboxRuntime() != nil {
+		return false
+	}
 	_, err := exec.LookPath("tmux")
 	return err == nil
 }

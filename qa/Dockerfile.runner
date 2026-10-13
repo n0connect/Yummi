@@ -1,0 +1,4 @@
+FROM docker:27-cli
+RUN apk add --no-cache bash make git python3
+WORKDIR /repo
+ENTRYPOINT ["make"]
