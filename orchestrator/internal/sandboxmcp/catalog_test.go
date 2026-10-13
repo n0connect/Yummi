@@ -15,6 +15,8 @@ func TestTarget(t *testing.T) {
 		{"nmap_scan", map[string]any{"target": "10.0.0.5"}, "10.0.0.5", true},
 		{"nmap_scan", map[string]any{"target": ""}, "", false},
 		{"gobuster_dir", map[string]any{"url": "http://x"}, "http://x", true},
+		{"browser_open", map[string]any{"url": "http://target.local"}, "http://target.local", true},
+		{"browser_snapshot", map[string]any{}, "", false},
 		{"unknown_tool", map[string]any{"target": "x"}, "", false},
 	}
 	for _, c := range cases {
@@ -31,6 +33,10 @@ func TestNeedsTarget(t *testing.T) {
 		want bool
 	}{
 		{"nmap_scan", true},
+		{"browser_open", true},
+		{"browser_snapshot", false},
+		{"browser_interact", false},
+		{"browser_eval", false},
 		{"checksec_audit", false},
 		{"radare2_disasm", false},
 		{"consolidate_hosts", false},

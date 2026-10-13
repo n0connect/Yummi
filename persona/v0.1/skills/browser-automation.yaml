@@ -1,0 +1,106 @@
+schema_version: 1
+version: 1.0.0
+name: browser-automation
+description: >
+  Full-capability browser automation using Chromium in the sandbox.
+  Covers the accessibility snapshot-and-ref loop, interactive web exploitation,
+  Single-Page Application (SPA) navigation, DOM XSS verification, login form automation,
+  authenticated session export, and multi-tab privilege boundary testing.
+triggers:
+  - browser
+  - chrome
+  - chromium
+  - web app
+  - spa
+  - login
+  - authentication form
+  - dom xss
+  - postmessage
+  - csrf verification
+  - click
+  - fill form
+  - screenshot
+  - session sharing
+  - cookies
+tools:
+  - browser_open
+  - browser_snapshot
+  - browser_interact
+  - browser_eval
+  - browser_screenshot
+  - browser_storage
+  - browser_tabs
+  - browser_logs
+knowledge: |
+  Full-capability browser automation empowers the operator to interact with dynamic web applications,
+  bypassing the limitations of headless HTTP clients (curl/httpx) that cannot execute JavaScript.
+
+  THE CANONICAL BROWSER WORKFLOW:
+  1. NAVIGATE & ORIENT:
+     - Always start by opening the URL via `browser_open`:
+       `[MCP_TOOL] {"tool": "browser_open", "args": {"url": "http://target.local/login"}}`
+     - When testing authenticated endpoints or WAF bypasses, pass custom HTTP headers directly:
+       `[MCP_TOOL] {"tool": "browser_open", "args": {"url": "http://target.local/admin", "headers": {"Authorization": "Bearer <token>", "X-Forwarded-For": "127.0.0.1"}}}`
+     - The response automatically includes the page title, URL, and a compact Accessibility Tree snapshot
+       with numbered `@eN` references (~200-400 tokens), traversing both the main DOM, open Shadow DOM, and same-origin `<iframe>` contexts.
+
+  2. INTERACT USING REFS OR COORDINATES:
+     - Interact with elements using their exact `@eN` references:
+       - Fill inputs: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "fill", "ref": "@e3", "value": "admin"}}`
+       - Click buttons/links: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "click", "ref": "@e5"}}`
+       - Right click / context menu: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "right_click", "ref": "@e5"}}`
+       - Check / uncheck checkboxes: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "check", "ref": "@e6"}}`
+       - Press keys: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "press", "value": "Enter"}}`
+       - Select dropdowns: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "select", "ref": "@e7", "value": "admin"}}`
+       - Upload files: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "upload", "ref": "@e8", "value": "/home/pentester/work/shell.php"}}`
+       - Scroll to element: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "scroll_to", "ref": "@e9"}}`
+       - Wait for dynamic element: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "wait_for_selector", "selector": "#dashboard", "duration": 5}}`
+     - For canvas elements, charts, SVG maps, or visual drag targets:
+       - Coordinate click: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "click_at", "x": 450, "y": 320}}`
+       - Drag and drop: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "drag_and_drop", "ref": "@e2", "to_ref": "@e8"}}`
+       - Viewport emulation: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "set_viewport", "width": 375, "height": 812}}` (mobile responsive test)
+       - Clipboard read/write: `[MCP_TOOL] {"tool": "browser_interact", "args": {"action": "clipboard_read"}}`
+     - When navigation occurs, refs become stale. Run `browser_snapshot` to get the fresh element tree for the new page.
+
+  3. DOM INSPECTION & XSS VERIFICATION:
+     - Use `browser_eval` to execute JavaScript in the page execution context:
+       - Inspect window globals: `[MCP_TOOL] {"tool": "browser_eval", "args": {"script": "JSON.stringify(window.__INITIAL_STATE__)"}}`
+       - Check for DOM XSS sources/sinks: `[MCP_TOOL] {"tool": "browser_eval", "args": {"script": "document.location.hash"}}`
+       - Test postMessage listeners: `[MCP_TOOL] {"tool": "browser_eval", "args": {"script": "window.postMessage('test', '*')"}}`
+     - Check console logs for errors or payload reflections:
+       `[MCP_TOOL] {"tool": "browser_logs", "args": {"filter": "error"}}`
+
+  4. SESSION PERSISTENCE & TOOL CHAINING:
+     - Inspect cookies to share with CLI tools:
+       `[MCP_TOOL] {"tool": "browser_storage", "args": {"action": "get_cookies"}}`
+     - Inject auth or session cookies directly for session hijacking:
+       `[MCP_TOOL] {"tool": "browser_storage", "args": {"action": "set_cookie", "name": "PHPSESSID", "value": "stolen_token_123"}}`
+     - Inspect modern SPA JWT/tokens in localStorage/sessionStorage:
+       `[MCP_TOOL] {"tool": "browser_storage", "args": {"action": "get_storage"}}`
+     - Clear session state to test logout invalidation or unauthenticated endpoints:
+       `[MCP_TOOL] {"tool": "browser_storage", "args": {"action": "clear"}}`
+     - Export full session state:
+       `[MCP_TOOL] {"tool": "browser_storage", "args": {"action": "save_state", "path": "/home/pentester/work/session.json"}}`
+     - The extracted cookie string can then be passed to `sqlmap --cookie="..."` or `ffuf -H "Cookie: ..."` without needing to re-login!
+
+  5. NETWORK & API OBSERVABILITY & DOWNLOADS:
+     - Check console errors, dialogs, and background network traffic (outgoing HTTP requests, 4xx/5xx errors, JSON API calls):
+       `[MCP_TOOL] {"tool": "browser_logs", "args": {"filter": "network"}}`
+     - Any file downloaded during the session (e.g. database export, backup zip) is automatically placed in `/home/pentester/work/downloads/`.
+
+  6. MULTI-USER & PRIVILEGE BOUNDARY TESTING:
+     - Open separate isolated sessions to test Broken Object Level Authorization (BOLA/IDOR):
+       - Session A: `[MCP_TOOL] {"tool": "browser_open", "args": {"url": "http://target.local", "session": "admin"}}`
+       - Session B: `[MCP_TOOL] {"tool": "browser_open", "args": {"url": "http://target.local", "session": "attacker"}}`
+     - Test whether Session B can access private resources created by Session A.
+
+  7. VISUAL VERIFICATION & SET-OF-MARKS (SoM):
+     - Capture standard screenshots for reporting:
+       `[MCP_TOOL] {"tool": "browser_screenshot", "args": {"output_file": "/home/pentester/work/evidence.png"}}`
+     - Capture Set-of-Marks annotated screenshots with high-contrast color-coded badges matching @eN refs:
+       - Blue badges = Buttons
+       - Green badges = Inputs / Textareas / Selects
+       - Amber badges = Links
+       - Red badges = Other interactive elements
+       `[MCP_TOOL] {"tool": "browser_screenshot", "args": {"annotate": true, "output_file": "/home/pentester/work/evidence_som.png"}}`
+     - The browser runs headful on DISPLAY=:1 — the operator can view your live interactions in the [DESKTOP] tab!

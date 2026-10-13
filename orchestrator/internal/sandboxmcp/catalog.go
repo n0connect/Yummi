@@ -67,6 +67,17 @@ var catalog = map[string]ToolSpec{
 	"term_keys":  {TargetField: "", Render: renderTermKeys},
 	"term_list":  {TargetField: "", Render: renderTermList},
 	"term_close": {TargetField: "", Render: renderTermClose},
+	// Full-capability browser automation tools (sandbox-mcp/browser.go).
+	// browser_open carries TargetField "url" so gateway checks scope before
+	// navigation; all other browser verbs operate against the open origin.
+	"browser_open":       {TargetField: "url", Render: renderBrowserOpen},
+	"browser_snapshot":   {TargetField: "", Render: renderBrowserSnapshot},
+	"browser_interact":   {TargetField: "", Render: renderBrowserInteract},
+	"browser_eval":       {TargetField: "", Render: renderBrowserEval},
+	"browser_screenshot": {TargetField: "", Render: renderBrowserScreenshot},
+	"browser_storage":    {TargetField: "", Render: renderBrowserStorage},
+	"browser_tabs":       {TargetField: "", Render: renderBrowserTabs},
+	"browser_logs":       {TargetField: "", Render: renderBrowserLogs},
 }
 
 // Target returns the network target named by tool's schema, or ("", false)
@@ -620,4 +631,101 @@ func renderTermList(_ map[string]any) string { return "term_list" }
 func renderTermClose(a map[string]any) string {
 	id, _ := a["id"].(string)
 	return fmt.Sprintf("term_close[%s]", id)
+}
+
+func renderBrowserOpen(a map[string]any) string {
+	u, _ := a["url"].(string)
+	return fmt.Sprintf("browser open %s", u)
+}
+
+func renderBrowserSnapshot(a map[string]any) string {
+	if sel, _ := a["selector"].(string); sel != "" {
+		return fmt.Sprintf("browser snapshot selector=%s", sel)
+	}
+	return "browser snapshot"
+}
+
+func renderBrowserInteract(a map[string]any) string {
+	act, _ := a["action"].(string)
+	ref, _ := a["ref"].(string)
+	if ref == "" {
+		ref, _ = a["element"].(string)
+	}
+	val, _ := a["value"].(string)
+	if val == "" {
+		val, _ = a["text"].(string)
+	}
+	if val == "" {
+		val, _ = a["key"].(string)
+	}
+	if ref == "" {
+		ref, _ = a["selector"].(string)
+	}
+	if ref == "" && a["x"] != nil && a["y"] != nil {
+		return fmt.Sprintf("browser %s at (%v, %v)", act, a["x"], a["y"])
+	}
+	if val != "" && ref != "" {
+		return fmt.Sprintf("browser %s %s %q", act, ref, val)
+	}
+	if val != "" {
+		return fmt.Sprintf("browser %s %q", act, val)
+	}
+	if ref != "" {
+		return fmt.Sprintf("browser %s %s", act, ref)
+	}
+	return fmt.Sprintf("browser %s", act)
+}
+
+func renderBrowserEval(a map[string]any) string {
+	script, _ := a["script"].(string)
+	if script == "" {
+		script, _ = a["expression"].(string)
+	}
+	if script == "" {
+		script, _ = a["code"].(string)
+	}
+	if len(script) > 60 {
+		script = script[:57] + "..."
+	}
+	return fmt.Sprintf("browser eval %q", script)
+}
+
+func renderBrowserScreenshot(a map[string]any) string {
+	out, _ := a["output_file"].(string)
+	if out == "" {
+		out, _ = a["path"].(string)
+	}
+	if out != "" {
+		return fmt.Sprintf("browser screenshot -> %s", out)
+	}
+	return "browser screenshot"
+}
+
+func renderBrowserStorage(a map[string]any) string {
+	act, _ := a["action"].(string)
+	if act == "set_cookie" {
+		name, _ := a["name"].(string)
+		val, _ := a["value"].(string)
+		return fmt.Sprintf("browser storage set_cookie %s=%q", name, val)
+	}
+	path, _ := a["path"].(string)
+	if path != "" {
+		return fmt.Sprintf("browser storage %s %s", act, path)
+	}
+	return fmt.Sprintf("browser storage %s", act)
+}
+
+func renderBrowserTabs(a map[string]any) string {
+	act, _ := a["action"].(string)
+	if id, ok := renderIntField(a, "tab_id"); ok {
+		return fmt.Sprintf("browser tabs %s %d", act, id)
+	}
+	return fmt.Sprintf("browser tabs %s", act)
+}
+
+func renderBrowserLogs(a map[string]any) string {
+	if flt, _ := a["filter"].(string); flt != "" {
+		return fmt.Sprintf("browser logs filter=%s", flt)
+	}
+	return "browser logs"
 }

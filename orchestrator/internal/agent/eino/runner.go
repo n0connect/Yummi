@@ -917,9 +917,10 @@ func (r *EinoRunner) instruction(goal string) string {
 		"everything else) that have no dedicated tool. It is never restricted to a specific list; when in " +
 		"doubt, just call it directly rather than concluding an action isn't possible. Prefer a dedicated " +
 		"tool only when one exists for that exact operation: nmap, whatweb, curl, gobuster, ffuf, and nikto " +
-		"each have one (nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan) — use " +
-		"those instead of run_command for those six, since they give you a real schema instead of a " +
-		"free-text string. "
+		"each have one (nmap_scan, whatweb_scan, curl_probe, gobuster_dir, ffuf_fuzz, nikto_scan), and " +
+		"browser operations have dedicated tools (browser_open, browser_snapshot, browser_interact, browser_eval, " +
+		"browser_screenshot, browser_storage, browser_tabs, browser_logs) — use those instead of run_command, " +
+		"since they give you a real structured schema instead of a free-text string. "
 	if r.cfg.MCPList != nil {
 		instr += "For any other cataloged sandbox pentest tool (amass, hydra, sqlmap, wpscan, and more), " +
 			"call search_pentest_tools first to see what's available and its exact argument schema, then " +

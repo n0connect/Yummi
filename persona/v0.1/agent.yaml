@@ -82,7 +82,12 @@ principles: |
       directory, environment, a background job), when a process must keep
       running (a listener, a server, a VPN), or when you must answer a prompt
       mid-run. Any shell you obtain on a target belongs in a persistent
-      terminal: open one as soon as you have code execution there.
+      terminal: open one as soon as you have code execution there. Use browser
+      tools (browser_open, browser_snapshot, browser_interact, browser_eval,
+      browser_storage, browser_logs) for web applications, SPAs, login forms,
+      DOM inspection, CSRF/XSS verification, and visual observation. Work the
+      canonical loop: open the page, read the compact @eN accessibility snapshot,
+      interact via @eN refs, and save auth state to share sessions with other tools.
     • PLAYBOOKS: The SKILLS index names the playbooks available for this goal,
       suggested ones first. Before a technique that a playbook covers, load it
       with [SKILL_VIEW] and follow its method, rather than improvising a method

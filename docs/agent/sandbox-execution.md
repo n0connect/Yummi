@@ -10,11 +10,12 @@ This document traces the scoped execution pipeline used by agent tasks, approved
 
 - [The Single Execution Pipeline](#pipeline)
 - [Execution Flow & Gateway Trust Boundary](#execution-flow)
-- [The 54 Sandbox MCP Tools](#mcp-tools)
+- [The 62 Sandbox MCP Tools](#mcp-tools)
   - [Tier 1: Individually-Typed Tools](#tier-1)
   - [Tier 2: Cataloged Pentest Tools](#tier-2)
   - [Tier 3: Concurrency & Pure-Go Utilities](#tier-3)
   - [Tier 4: Persistent Terminal Sessions (tmux)](#tier-4)
+  - [Tier 5: Full-Capability Browser Automation](#tier-5)
   - [Fallback: Free-Text Command Execution](#fallback)
 - [Target Scope Resolution & Local Tool Exemption](#scope-resolution)
 - [Argv Execution Safety vs Shell Execution](#argv-safety)
@@ -112,7 +113,16 @@ First-class persistent terminal verbs backed by `tmux` inside the sandbox, solvi
 6. **`term_list`**: Lists all active persistent terminal sessions with labels and dimensions.
 7. **`term_close`**: Terminates and kills a session cleanly.
 
-![A session the agent opened itself: a caught reverse shell, visible to the operator in the Terminals tab as the agent drives it — here browsing the filesystem as root and reading a captured flag](../assets/screenshots/usage-guide/terminals-tab.png)
+### Tier 5: Full-Capability Browser Automation <a id="tier-5"></a>
+Detailed in [Browser Automation](browser-automation.md). 8 dedicated tools driving headful X11 Chromium with anti-bot stealth and compact `@eN` accessibility snapshots:
+1. **`browser_open`**: Navigate to URL with Gateway scope check and return initial snapshot.
+2. **`browser_snapshot`**: Generate compact accessibility element tree (`@eN` refs).
+3. **`browser_interact`**: Click, fill, type, select, upload, scroll, press keys via refs.
+4. **`browser_eval`**: Execute JavaScript in page context for DOM XSS and client-side audits.
+5. **`browser_screenshot`**: Full-page or viewport capture with optional Set-of-Marks labels.
+6. **`browser_storage`**: Inspect/save/load cookies and localStorage for CLI tool chaining.
+7. **`browser_tabs`**: Multi-tab management for SSO/OAuth testing.
+8. **`browser_logs`**: Capture console and network errors.
 
 ### Fallback: Free-Text Command Execution <a id="fallback"></a>
 - **`run_command`**: Free-text shell execution for utilities (`git`, `find`, `awk`, `sed`) that do not wrap a specialized pentest tool.

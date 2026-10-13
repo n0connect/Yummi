@@ -166,7 +166,7 @@ services:
         limits:
           cpus: "2.0"
           memory: 3g
-          pids: 512
+          pids: 4096
         reservations:
           memory: 512m
     healthcheck:

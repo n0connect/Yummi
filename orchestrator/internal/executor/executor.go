@@ -80,6 +80,13 @@ func checkTargetScope(ctx context.Context, pc *gateway.Client, target string, pi
 	// gateway scopes by host only, so reduce the URL to its host first.
 	target = hostForScope(target)
 
+	// Loopback destinations (127.0.0.1, localhost, ::1) are strictly local to
+	// the sandbox container's own network namespace and never transit the
+	// gateway's FORWARD chain. They are permitted without an external egress rule.
+	if isLoopbackTarget(target) {
+		return checkedTarget{target: target, ips: nil}, nil
+	}
+
 	// Name-level scope gate, BEFORE resolution: for a hostname target,
 	// consult the gateway's hostname allow/block policy. A "block" verdict
 	// is a hard, name-based deny (e.g. *.facebook.com) — reject without ever
@@ -470,6 +477,9 @@ func ruleDescription(label, command string) string {
 // the command still ran; "" means every rule went in cleanly. Shared by the
 // direct-run and post-approval retry paths so they open rules identically.
 func openAllowRules(pc *gateway.Client, target string, ips []string, command string) string {
+	if isLoopbackTarget(target) {
+		return ""
+	}
 	networks := resolvedNetworks(target, ips)
 	if len(networks) == 0 {
 		slog.Warn("executor: target has no resolvable IP, skipping nftables unlock (gateway needs an IP)",
@@ -515,6 +525,23 @@ func resolvedNetworks(target string, ips []string) []string {
 		}
 	}
 	return out
+}
+
+// isLoopbackTarget reports whether target is a local loopback address
+// (127.0.0.1, localhost, ::1) that resides strictly within the sandbox
+// container and never egresses through the gateway.
+func isLoopbackTarget(target string) bool {
+	t := strings.ToLower(strings.TrimSpace(target))
+	if t == "localhost" || t == "127.0.0.1" || t == "::1" {
+		return true
+	}
+	if strings.HasPrefix(t, "127.") {
+		return true
+	}
+	if addr, err := netip.ParseAddr(t); err == nil && addr.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 // isHostnameTarget reports whether target is a hostname (not an IP literal or

@@ -134,7 +134,7 @@ cd gateway && cargo test policy_engine::tests::test_allow_rule
    - `internal/dnsresolve` — leaf package dialing Cloudflare DNS (1.1.1.1:53) directly.
    - `internal/tlsutil` — mTLS cert generation (ECDSA P-256).
 
-3. **sandbox-mcp module** (`sandbox-mcp/go.mod`, `github.com/n0connect/yummi/sandbox-mcp`): the MCP server that runs *inside* the Kali sandbox container — compiled into `sandbox/Dockerfile`'s image via a Go multi-stage build. Registers **54 tools** across 4 tiers: 6 individually-typed tools (`tools.go`), 39 cataloged pentest tools (`tools_extended.go`), 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`), and 7 persistent tmux terminal session tools (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`).
+3. **sandbox-mcp module** (`sandbox-mcp/go.mod`, `github.com/n0connect/yummi/sandbox-mcp`): the MCP server that runs *inside* the Kali sandbox container — compiled into `sandbox/Dockerfile`'s image via a Go multi-stage build. Registers **62 tools** across 5 tiers: 6 individually-typed tools (`tools.go`), 39 cataloged pentest tools (`tools_extended.go`), 2 pure-Go utilities (`consolidate_hosts`, `passive_recon_batch`), 7 persistent tmux terminal session tools (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`), and 8 full-capability browser automation tools (`browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`).
 
 Tests under `orchestrator/internal/*` and `sandbox-mcp/` must run from their own module directory (or with that prefix) — running `go test ./...` from the repo root will silently skip them since they're different modules.
 
