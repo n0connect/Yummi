@@ -2,22 +2,22 @@
 
 **Date:** 2026-10-13  
 **Status:** Proposed  
-**Decision:** Build a read-only research authority, not a general-purpose browser mode.
+**Decision:** Build a read-only research authority inside the existing sandbox,
+not a general-purpose browser mode or host-side service.
 
 ## Goal
 
 Let an operator-authorized Yummi task search public security intelligence and
 return concise, source-attributed evidence without granting the agent arbitrary
-internet browsing, cookie access, JavaScript execution, or a new host-side
-network execution path.
+internet browsing, cookie access, JavaScript execution, or any new
+orchestrator/host-side network execution path.
 
 ## Scope
 
-The first release provides a `web_research` agent tool. It accepts a text
-query, runs it through a configured search-provider adapter, fetches a bounded
-set of selected result pages through a dedicated research container, and
-returns an evidence bundle: source URL, title, retrieval time, content digest,
-sanitized excerpt, and trust label.
+The first release provides two sandbox-MCP tools: `web_search` queries the
+configured provider and returns citations; `web_fetch_source` fetches one
+operator-scoped result URL and returns a bounded evidence bundle: source URL,
+title, retrieval time, content digest, sanitized excerpt, and trust label.
 
 It does not authenticate to websites, submit forms, execute page JavaScript,
 download files, store cookies, crawl arbitrary links, or write web content to
@@ -28,22 +28,19 @@ in-scope assessment target.
 
 ```
 agent intent
-  -> orchestrator/webresearch (query limits, provider API, audit record)
-  -> research container (HTTP fetch only; no shell/MCP/browser APIs)
+  -> orchestrator (MCP dispatch and audit record only; no HTTP/DNS)
+  -> sandbox-mcp web-research tools (query, provider API, fetch, normalization)
   -> gateway research egress policy (provider/source hostname allowlist)
   -> public web
 
 untrusted response -> normalizer -> threatscan -> evidence bundle -> model/UI
 ```
 
-The research container is distinct from the Kali sandbox. It has no Docker
-socket, no pentest binaries, no browser profile, no credentials, and no route
-to the Docker-internal control-plane services. It reaches public hosts only
-via the existing gateway. Its default egress is deny-all.
-
-The orchestrator remains the only caller of the research API. The feature must
-never use `net/http` directly from the agent package or create a host-side
-egress path.
+The sandbox-MCP process is the sole research-network client. It runs as the
+existing unprivileged sandbox user and reaches public hosts only through the
+existing gateway. Its default egress is deny-all. The orchestrator remains a
+MCP caller only: it must never use `net/http`, a provider SDK, DNS resolution,
+or a browser for research.
 
 ## Source and network policy
 
@@ -52,8 +49,10 @@ The operator enables research separately from the assessment egress mode. The
 initial list contains the chosen search provider and public, authoritative
 security sources; it is configuration, not agent input.
 
-Every provider result and every HTTP redirect is canonicalized and checked
-against that hostname policy before connection. Scheme is restricted to HTTPS.
+The provider endpoint is fixed in sandbox configuration and never comes from
+agent arguments. `web_fetch_source` is scoped by its explicit source URL via
+the existing gateway path. Every provider result and every HTTP redirect is
+canonicalized and checked against policy before connection. Scheme is HTTPS.
 Loopback, link-local, private, multicast, unspecified, and IPv6 ULA addresses
 are rejected after every DNS resolution. DNS answers are pinned for the request
 and all connections use the verified answer set. A redirect outside policy is
@@ -66,8 +65,8 @@ deployment configuration, never task input or repository data.
 
 ## Data contract and handling
 
-`ResearchRequest` contains only `query`, `max_results` (1–5), and an optional
-operator-visible source filter. `ResearchEvidence` contains `source_url`,
+`web_search` accepts only `query` and `max_results` (1–5). `web_fetch_source`
+accepts only the selected `source_url`. `ResearchEvidence` contains `source_url`,
 `title`, `retrieved_at`, `sha256`, `excerpt`, `trust` (`primary`, `secondary`,
 or `unclassified`), and a diagnostic status.
 
@@ -85,10 +84,10 @@ trust labels, never executable HTML.
 
 ## Agent and approval behavior
 
-`web_research` is read-only but causes public egress and therefore requires an
-explicit research approval by default. Approval names the query, provider,
-candidate source hosts, and result limit. The regular command-risk approval
-does not implicitly authorize research egress.
+The tools are read-only but cause public egress and therefore retain the
+existing MCP execution approval and gateway egress approval. `web_search`
+names the fixed provider and query; `web_fetch_source` names its selected
+source URL. The regular command-risk approval does not open external traffic.
 
 The tool's result is evidence, not instruction. Prompts must tell the model to
 treat excerpts as untrusted factual material, never as tool directives or

@@ -4,7 +4,7 @@
 
 **Goal:** Add an operator-approved, read-only, source-attributed public-web research capability without weakening Yummi's fail-closed execution boundary.
 
-**Architecture:** A new orchestrator `webresearch` package owns validation, provider contracts, evidence normalization, and audit-safe models. A dedicated research container performs only approved HTTPS fetches through the gateway; an adapter communicates with the configured search provider. Results are sanitized evidence, not browser output or trusted instructions.
+**Architecture:** Sandbox-MCP owns validation, provider communication, HTTPS fetching, evidence normalization, and audit-safe models. The orchestrator only dispatches those typed MCP calls through its existing execution record/gateway path; it never performs research HTTP or DNS. Results are sanitized evidence, not browser output or trusted instructions.
 
 **Tech Stack:** Go, SQLite, existing Go threatscan package, Rust gateway, Docker Compose, React/TypeScript UI.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Research is disabled and deny-all until an operator supplies provider configuration and enables the research policy.
-- No host-side agent-controlled network path; the dedicated container must traverse the gateway.
+- No new host- or orchestrator-side network path; every research HTTP/DNS operation runs in the existing unprivileged sandbox and traverses the gateway.
 - HTTPS only; redirect and DNS resolution must be revalidated; private, loopback, link-local, multicast, unspecified, and IPv6 ULA addresses are rejected.
 - No JavaScript, cookies, custom headers, uploads, browser storage, file downloads, or raw HTML returned to the model/UI.
 - Every model-visible excerpt is size-bounded, ANSI-stripped, strict-threatscanned, marked untrusted, and source-attributed.
@@ -30,65 +30,60 @@
 
 ---
 
-### Task 1: Research-domain models and untrusted-evidence normalizer
+### Task 1: Sandbox research models and untrusted-evidence normalizer
 
 **Files:**
-- Create: `orchestrator/internal/webresearch/types.go`
-- Create: `orchestrator/internal/webresearch/normalize.go`
-- Create: `orchestrator/internal/webresearch/normalize_test.go`
+- Create: `sandbox-mcp/web_research.go`
+- Create: `sandbox-mcp/web_research_test.go`
 
 **Interfaces:**
-- Produces: `Request`, `Candidate`, `Evidence`, `SourceFailure`, and `Normalize(candidate Candidate, body []byte, now time.Time) (Evidence, error)`.
-- Consumes: `threatscan.StripANSI` and `threatscan.FirstThreatMessage`.
+- Produces: `researchCandidate`, `researchEvidence`, and `normalizeResearchEvidence(candidate researchCandidate, body []byte, now time.Time) (researchEvidence, error)`.
+- Consumes: a local, conservative content-injection detector because sandbox-mcp deliberately has no orchestrator dependency.
 
 - [ ] **Step 1: Write failing normalization tests** for a valid HTML page, an HTML page containing an instruction-injection phrase, an oversized body, and a non-HTML content type. Assert valid evidence has URL/title/digest/excerpt/trust; unsafe input returns a typed omission error.
-- [ ] **Step 2: Run** `cd orchestrator && go test ./internal/webresearch -run TestNormalize -count=1` **and confirm it fails because the package does not exist.**
-- [ ] **Step 3: Implement minimal models and normalizer.** Use `net/url` for source URL parsing, SHA-256 over the bounded source body, stdlib HTML tokenization/text extraction, a 32 KiB raw-body ceiling, a 4 KiB excerpt ceiling, `StripANSI`, and `ScopeStrict` threat scanning. Return no raw body.
+- [ ] **Step 2: Run** `cd sandbox-mcp && go test -run TestNormalizeResearchEvidence -count=1` **and confirm it fails because the symbols do not exist.**
+- [ ] **Step 3: Implement minimal models and normalizer.** Use `net/url`, SHA-256 over the bounded source body, stdlib HTML tokenization/text extraction, a 32 KiB raw-body ceiling, a 4 KiB excerpt ceiling, ANSI stripping, and a conservative injection detector. Return no raw body.
 - [ ] **Step 4: Run the focused test** and confirm it passes.
 - [ ] **Step 5: Commit** `feat(webresearch): normalize cited untrusted evidence`.
 
-### Task 2: URL policy and DNS-pinned HTTPS fetcher
+### Task 2: Sandbox-only URL policy and HTTPS fetcher
 
 **Files:**
-- Create: `orchestrator/internal/webresearch/policy.go`
-- Create: `orchestrator/internal/webresearch/fetcher.go`
-- Create: `orchestrator/internal/webresearch/fetcher_test.go`
+- Modify: `sandbox-mcp/web_research.go`
+- Modify: `sandbox-mcp/web_research_test.go`
 
 **Interfaces:**
 - Consumes: `Candidate`, `Evidence`, and `Normalize` from Task 1.
-- Produces: `HostnamePolicy.Allows(host string) bool` and `Fetcher.Fetch(ctx context.Context, rawURL string) (Evidence, error)`.
+- Produces: `researchFetch(ctx context.Context, rawURL string) (researchEvidence, error)`.
 
 - [ ] **Step 1: Write failing tests** with an injected resolver and HTTPS transport proving allowlisted HTTPS succeeds; HTTP, literal loopback/private/ULA addresses, an off-policy redirect, and a redirect to a private resolved address fail before fetching its body.
-- [ ] **Step 2: Run** `cd orchestrator && go test ./internal/webresearch -run 'TestFetcher|TestURLPolicy' -count=1` **and observe missing policy/fetcher symbols.**
+- [ ] **Step 2: Run** `cd sandbox-mcp && go test -run 'TestResearchFetch|TestResearchURL' -count=1` **and observe missing policy/fetcher symbols.**
 - [ ] **Step 3: Implement the minimum fetcher.** Canonicalize hosts, resolve before every hop, reject unsafe addresses, set `CheckRedirect` to rerun the policy, bind the transport dialer to the validated IP set, permit only HTTPS and `text/html`/`text/plain`, cap redirects at three and response bodies at 32 KiB.
-- [ ] **Step 4: Run focused tests**, then `cd orchestrator && go test ./internal/webresearch -count=1`.
+- [ ] **Step 4: Run focused tests**, then `cd sandbox-mcp && go test ./...`.
 - [ ] **Step 5: Commit** `feat(webresearch): enforce pinned HTTPS source policy`.
 
-### Task 3: Provider contract, disabled-by-default configuration, and service
+### Task 3: Provider contract, disabled-by-default sandbox configuration, and MCP tools
 
 **Files:**
-- Create: `orchestrator/internal/webresearch/provider.go`
-- Create: `orchestrator/internal/webresearch/service.go`
-- Create: `orchestrator/internal/webresearch/service_test.go`
-- Modify: `orchestrator/internal/config/config.go`
-- Modify: `orchestrator/cmd/orchestrator/main.go`
+- Modify: `sandbox-mcp/web_research.go`
+- Modify: `sandbox-mcp/web_research_test.go`
+- Modify: `sandbox-mcp/tools.go`
+- Modify: `sandbox/Dockerfile`
+- Modify: `docker-compose.yml`
 
 **Interfaces:**
-- Produces: `Provider.Search(ctx context.Context, query string, limit int) ([]Candidate, error)`, `Service.Research(ctx context.Context, Request) Report`, and `Capability{Available bool, Reason string}`.
-- Consumes: Task 2 `Fetcher` and Task 1 evidence models.
+- Produces: `web_search` and `web_fetch_source` MCP tools. Their provider configuration is environment-only in the sandbox container.
+- Consumes: Task 2 fetcher and Task 1 evidence models.
 
 - [ ] **Step 1: Write failing service/config tests** for no provider configuration, query/result-limit validation, a fake provider returning one valid and one blocked candidate, and errors that never include the configured key.
-- [ ] **Step 2: Run** `cd orchestrator && go test ./internal/webresearch ./internal/config -run 'TestService|TestWebResearch' -count=1` **and confirm the new service/config behavior is absent.**
-- [ ] **Step 3: Implement a provider-neutral service and disabled default.** Define configuration as provider endpoint/key plus approved hostnames; instantiate no provider when incomplete; validate query length and 1–5 limit; process candidates independently and return per-source failures. Do not add a scrape fallback.
-- [ ] **Step 4: Run focused tests** and `cd orchestrator && go test ./internal/webresearch ./internal/config -count=1`.
+- [ ] **Step 2: Run** `cd sandbox-mcp && go test -run 'TestWebSearch|TestWebResearch' -count=1` **and confirm the new behavior is absent.**
+- [ ] **Step 3: Implement the smallest provider adapter and disabled default.** Read a fixed provider endpoint/key only from sandbox environment, validate query length and 1–5 limit, and do not add a scrape or browser fallback.
+- [ ] **Step 4: Run focused tests** and `cd sandbox-mcp && go test ./...`.
 - [ ] **Step 5: Commit** `feat(webresearch): add disabled-by-default research service`.
 
-### Task 4: Gateway-enforced research container and policy separation
+### Task 4: Gateway policy and orchestration integration
 
 **Files:**
-- Create: `research/Dockerfile`
-- Create: `research/entrypoint.sh`
-- Modify: `docker-compose.yml`
 - Modify: `gateway/config/default.yaml`
 - Modify: `gateway/src/config.rs`
 - Modify: `gateway/src/policy/hostname.rs`
@@ -96,52 +91,36 @@
 - Test: `gateway/src/config.rs`
 
 **Interfaces:**
-- Produces: a `yummi-research` container with no Docker socket and no published ports; named research hostname policy separate from assessment scope.
-- Consumes: gateway’s existing fail-closed egress enforcement.
+- Produces: a named research hostname policy and typed MCP catalog entries. Existing sandbox networking remains the only research execution environment.
+- Consumes: gateway’s existing fail-closed egress enforcement and executor MCP dispatch.
 
 - [ ] **Step 1: Write failing Rust tests** proving a research hostname list defaults to deny-all and never changes the existing assessment hostname policy or egress mode.
 - [ ] **Step 2: Run** `cd gateway && cargo test research -- --nocapture` **and confirm the policy field/behavior does not exist.**
-- [ ] **Step 3: Add the smallest policy/config surface and container.** The container contains only a statically built fetch helper or minimal Go binary, runs non-root, has a read-only root filesystem plus a tmpfs workspace, joins only the gateway-routed network, and has no control-plane network aliases, mounts, tools, or browser dependencies.
-- [ ] **Step 4: Run** `cd gateway && cargo test`, then `docker compose config` and a container-inspection test that asserts no exposed ports/socket mounts/capability additions.
+- [ ] **Step 3: Add the smallest policy/config surface and catalog wiring.** The existing sandbox-MCP process remains non-root and gateway-routed; no Docker socket, ports, capabilities, browser dependency, or host process is added.
+- [ ] **Step 4: Run** `cd gateway && cargo test`, `cd orchestrator && go test ./internal/sandboxmcp ./internal/executor`, and `docker compose config`.
 - [ ] **Step 5: Commit** `feat(research): isolate research egress behind gateway policy`.
 
-### Task 5: Executor/API integration, dedicated approval, and cited UI results
+### Task 5: Eino integration, documentation, and bounded live verification
 
 **Files:**
 - Modify: `orchestrator/internal/agent/eino/pentest_tools.go`
 - Modify: `orchestrator/internal/sandboxmcp/catalog.go`
 - Modify: `orchestrator/internal/executor/executor.go`
-- Modify: `orchestrator/internal/execution/store.go`
-- Modify: `orchestrator/internal/api/routes.go`
-- Create: `orchestrator/internal/api/handlers_research.go`
-- Create: `orchestrator/internal/api/handlers_research_test.go`
-- Modify: `ui/src/**` (exact existing task/result component selected after API contract is present)
-- Test: `ui/src/**.test.tsx` (co-located with the selected result component)
+- Modify: `orchestrator/internal/agent/eino/pentest_tools.go`
+- Modify: `orchestrator/internal/sandboxmcp/catalog.go`
+- Modify: `orchestrator/internal/sandboxmcp/catalog_test.go`
+- Create: `docs/agent/web-research.md`
+- Modify: `AGENTS.md`
 
 **Interfaces:**
 - Consumes: Task 3 `Service.Research` and Task 4 policy capability.
-- Produces: `POST /api/v1/research` plus an explicit research-approval state and a UI evidence card with URL, source host, retrieval time, digest prefix, trust label, and safe excerpt.
+- Produces: typed agent tools with cited plain-text output through the existing MCP execution/audit path, plus operator setup documentation.
 
-- [ ] **Step 1: Write failing API tests** proving research is unavailable when disabled, a request waits for research approval, approval calls the service exactly once, and an evidence response has only safe citation fields/no raw HTML or provider key. Write a failing UI test for plain-text rendering and external-link attributes.
-- [ ] **Step 2: Run focused Go and UI tests** and observe absent route/state/component failures.
-- [ ] **Step 3: Implement the smallest integration.** Keep research separate from command execution and regular command approvals; persist audit-safe request/result metadata; render evidence as text, never `dangerouslySetInnerHTML`; preserve session isolation for all asynchronous calls.
-- [ ] **Step 4: Run focused API/UI tests**, `cd orchestrator && go test ./...`, `cd ui && npm test`, `npm run build`, and `git diff --check`.
-- [ ] **Step 5: Commit** `feat(webresearch): expose approved cited research results`.
-
-### Task 6: Documentation and bounded live verification
-
-**Files:**
-- Create: `docs/agent/web-research.md`
-- Modify: `AGENTS.md`
-- Modify: `README.md`
-
-**Interfaces:**
-- Produces: operator setup, provider-key configuration, approval/audit model, source policy management, limitations, and a reproducible live smoke-test procedure.
-
-- [ ] **Step 1: Write documentation assertions/checklist** naming disabled behavior, required provider configuration, gateway policy, evidence trust labels, and the no-browser/no-memory guarantees.
-- [ ] **Step 2: Add the operator guide** with exact environment variable names selected in Task 3, compose profile/start requirements from Task 4, and the evidence fields returned by Task 5. State that live verification needs an operator-provided key and selected provider.
-- [ ] **Step 3: Run** `rg -n 'TODO|TBD|<.*>' docs/agent/web-research.md` **and confirm it returns no placeholders; run all project validation gates feasible in the environment.**
-- [ ] **Step 4: Commit** `docs: document controlled web research`.
+- [ ] **Step 1: Write failing catalog and Eino tests** proving `web_search` has no model-controlled provider endpoint, `web_fetch_source` carries its URL through the existing scope check, and neither exposes headers, cookies, or scripts.
+- [ ] **Step 2: Run focused tests** and observe absent catalog/spec failures.
+- [ ] **Step 3: Implement the smallest integration and guide.** Register tools through the existing MCP execution/audit path, expose only query/result-limit/source URL fields, and document gateway/operator configuration and sandbox-only guarantees.
+- [ ] **Step 4: Run** `cd orchestrator && go test ./...`, `cd sandbox-mcp && go test ./...`, `cd gateway && cargo test`, `make test`, and `git diff --check`.
+- [ ] **Step 5: Commit** `feat(webresearch): add sandbox-confined cited research`.
 
 ## Plan self-review
 
