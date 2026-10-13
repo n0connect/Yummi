@@ -25,17 +25,19 @@ import (
 
 // RodDriver implements BrowserDriver using go-rod and stealth.
 type RodDriver struct {
-	mu            sync.Mutex
-	browser       *rod.Browser
-	launcherURL   string
-	activePage    *rod.Page
-	currentRefs   map[string]*rod.Element
-	currentElems  []SnapshotElement
-	logsBuffer    map[string][]LogEntry
-	contexts      map[string]*rod.Browser
-	activeSession string
-	headless      bool
-	requestRouter *rod.HijackRouter
+	mu              sync.Mutex
+	browser         *rod.Browser
+	launcherURL     string
+	activePage      *rod.Page
+	currentRefs     map[string]*rod.Element
+	currentElems    []SnapshotElement
+	logsBuffer      map[string][]LogEntry
+	logGeneration   uint64
+	contexts        map[string]*rod.Browser
+	activeSession   string
+	headless        bool
+	requestRouter   *rod.HijackRouter
+	connectionProxy *browserProxy
 }
 
 // NewRodDriver creates a new RodDriver instance.
@@ -63,6 +65,10 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 		}
 		_ = d.browser.Close()
 		d.browser = nil
+		if d.connectionProxy != nil {
+			_ = d.connectionProxy.Close()
+			d.connectionProxy = nil
+		}
 	}
 
 	display := os.Getenv("DISPLAY")
@@ -120,10 +126,24 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 		forceHeadless = *reqHeadless
 	}
 
+	proxy, err := newBrowserProxy()
+	if err != nil {
+		return fmt.Errorf("sandbox browser connection guard: %w", err)
+	}
+	connected := false
+	defer func() {
+		if !connected {
+			_ = proxy.Close()
+		}
+	}()
 	l := launcher.New().
 		Bin(binPath).
 		Leakless(false).
 		RemoteDebuggingPort(0).
+		Set("proxy-server", "http://"+proxy.address).
+		Set("proxy-bypass-list", "<-loopback>").
+		Set("disable-quic").
+		Set("force-webrtc-ip-handling-policy", "disable_non_proxied_udp").
 		Set("display", display).
 		Set("no-sandbox").
 		Set("disable-dev-shm-usage").
@@ -139,6 +159,10 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 			Bin(binPath).
 			Leakless(false).
 			RemoteDebuggingPort(0).
+			Set("proxy-server", "http://"+proxy.address).
+			Set("proxy-bypass-list", "<-loopback>").
+			Set("disable-quic").
+			Set("force-webrtc-ip-handling-policy", "disable_non_proxied_udp").
 			Set("no-sandbox").
 			Set("disable-dev-shm-usage").
 			Set("user-data-dir", userDataDir).
@@ -159,6 +183,7 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 	}
 
 	d.browser = browser
+	d.connectionProxy = proxy
 	d.headless = forceHeadless
 	d.contexts = make(map[string]*rod.Browser)
 	d.activeSession = "default"
@@ -190,6 +215,7 @@ func (d *RodDriver) ensureBrowser(ctx context.Context, reqHeadless *bool) error 
 	}
 	d.requestRouter = router
 	go router.Run()
+	connected = true
 	return nil
 }
 
@@ -230,7 +256,10 @@ func sessionPages(ctx context.Context, b *rod.Browser) (rod.Pages, error) {
 	return own, nil
 }
 
-func (d *RodDriver) appendLogLocked(session string, entry LogEntry) {
+func (d *RodDriver) appendLogLocked(session string, generation uint64, entry LogEntry) {
+	if generation != d.logGeneration {
+		return
+	}
 	if session == "" {
 		session = "default"
 	}
@@ -247,6 +276,7 @@ func (d *RodDriver) appendLogLocked(session string, entry LogEntry) {
 
 // hookPageEvents attaches listeners for console logs, network errors, and auto-dismisses JavaScript dialogs.
 func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
+	generation := d.logGeneration
 	if page == nil {
 		return
 	}
@@ -260,8 +290,8 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 	_ = proto.PageEnable{}.Call(page)
 	_ = proto.NetworkEnable{}.Call(page)
 
-	// Apply kernel/gateway blocked hostname patterns natively to Chromium network stack
-	// This blocks HTTP/S and WS/WSS connections matching blocked hostnames with net::ERR_BLOCKED_BY_CLIENT
+	// Additional CDP URL filtering. The sandbox connection proxy, not these
+	// version-dependent URL filters or notification events, guards WS/WSS.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	if patterns, err := getGatewayBlockedURLPatterns(ctx); err == nil && len(patterns) > 0 {
 		_ = proto.NetworkSetBlockedURLs{Urls: patterns}.Call(page)
@@ -278,7 +308,7 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 	// Auto-dismiss/accept any JavaScript dialogs (alert, confirm, prompt) so they never freeze CDP
 	go page.EachEvent(func(e *proto.PageJavascriptDialogOpening) {
 		d.mu.Lock()
-		d.appendLogLocked(sessionLabel, LogEntry{
+		d.appendLogLocked(sessionLabel, generation, LogEntry{
 			Type:      "dialog." + string(e.Type),
 			Text:      e.Message,
 			Timestamp: time.Now().Format(time.RFC3339),
@@ -298,7 +328,7 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 		for _, arg := range e.Args {
 			msg = append(msg, fmt.Sprintf("%v", arg.Value))
 		}
-		d.appendLogLocked(sessionLabel, LogEntry{
+		d.appendLogLocked(sessionLabel, generation, LogEntry{
 			Type:      "console." + string(e.Type),
 			Text:      strings.Join(msg, " "),
 			Timestamp: time.Now().Format(time.RFC3339),
@@ -319,7 +349,7 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 		if len(u) > 120 {
 			u = u[:117] + "..."
 		}
-		d.appendLogLocked(sessionLabel, LogEntry{
+		d.appendLogLocked(sessionLabel, generation, LogEntry{
 			Type:      "network.request",
 			Text:      fmt.Sprintf("[%s] %s", method, u),
 			Timestamp: time.Now().Format(time.RFC3339),
@@ -327,7 +357,8 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 		d.mu.Unlock()
 	})()
 
-	// Hook WebSocket creation and enforce hostname policy at the WebSocket level
+	// Diagnostic WebSocket events only. A notification cannot cancel a socket;
+	// the connection proxy checks policy before any upstream connection opens.
 	go page.EachEvent(func(e *proto.NetworkWebSocketCreated) {
 		u := e.URL
 		host := ""
@@ -341,7 +372,7 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 			cancel()
 			if policyErr != nil {
 				d.mu.Lock()
-				d.appendLogLocked(sessionLabel, LogEntry{
+				d.appendLogLocked(sessionLabel, generation, LogEntry{
 					Type:      "network.blocked",
 					Text:      fmt.Sprintf("[WS_BLOCKED] %s (%v)", u, policyErr),
 					Timestamp: time.Now().Format(time.RFC3339),
@@ -351,7 +382,7 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 			}
 		}
 		d.mu.Lock()
-		d.appendLogLocked(sessionLabel, LogEntry{
+		d.appendLogLocked(sessionLabel, generation, LogEntry{
 			Type:      "network.websocket",
 			Text:      fmt.Sprintf("[WS] %s", u),
 			Timestamp: time.Now().Format(time.RFC3339),
@@ -376,7 +407,7 @@ func (d *RodDriver) hookPageEvents(page *rod.Page, sessionLabel string) {
 			if len(u) > 120 {
 				u = u[:117] + "..."
 			}
-			d.appendLogLocked(sessionLabel, LogEntry{
+			d.appendLogLocked(sessionLabel, generation, LogEntry{
 				Type:      entryType,
 				Text:      fmt.Sprintf("[%d] %s (type=%s)", status, u, e.Response.MIMEType),
 				Timestamp: time.Now().Format(time.RFC3339),
@@ -606,7 +637,7 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 				if (elements.length >= 100) return;
 			} else if (!interactiveOnly) {
 				const isHeading = /^H[1-6]$/.test(tag);
-				const isContent = isHeading || tag === 'P' || tag === 'PRE' || contentRoles.has(role);
+				const isContent = isHeading || tag === 'P' || tag === 'PRE' || tag === 'LI' || tag === 'TD' || tag === 'TH' || tag === 'BLOCKQUOTE' || tag === 'CODE' || contentRoles.has(role);
 				if (isContent) {
 					const text = (node.innerText || node.textContent || '').trim();
 					if (text) {
@@ -614,7 +645,7 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 						elements.push({
 							ref: '',
 							tag: tag.toLowerCase(),
-							role: role || (isHeading ? 'heading' : (tag === 'P' ? 'text' : tag.toLowerCase())),
+							role: role || (isHeading ? 'heading' : (tag === 'P' ? 'text' : (tag === 'LI' ? 'listitem' : (tag === 'TD' || tag === 'TH' ? 'cell' : tag.toLowerCase())))),
 							name: (contextPrefix ? '[' + contextPrefix + '] ' : '') + trimmed,
 							type: '',
 							value: '',
@@ -1709,6 +1740,11 @@ func (d *RodDriver) Close() error {
 	defer d.mu.Unlock()
 
 	d.logsBuffer = make(map[string][]LogEntry)
+	d.logGeneration++
+	if d.connectionProxy != nil {
+		_ = d.connectionProxy.Close()
+		d.connectionProxy = nil
+	}
 	if d.browser != nil {
 		if d.requestRouter != nil {
 			_ = d.requestRouter.Stop()

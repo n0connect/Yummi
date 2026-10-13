@@ -198,8 +198,8 @@ func HandleGetWebSearch(bridge *sandbox.Bridge) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 			return
 		}
-		res, err := bridge.Exec(r.Context(), "cat /tmp/yummi_web_search_state 2>/dev/null || echo ${YUMMI_WEB_SEARCH_ENABLED:-false}")
-		if err != nil {
+		res, err := bridge.Exec(r.Context(), "if test -e /tmp/yummi_web_search_state; then cat /tmp/yummi_web_search_state; else printf '%s\\n' \"${YUMMI_WEB_SEARCH_ENABLED:-false}\"; fi")
+		if err != nil || res == nil || res.ExitCode != 0 {
 			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 			return
 		}
@@ -228,7 +228,7 @@ func HandleSetWebSearch(bridge *sandbox.Bridge, sm *session.Manager) http.Handle
 		if req.Enabled {
 			cmd = "echo true > /tmp/yummi_web_search_state"
 		}
-		if _, err := bridge.Exec(r.Context(), cmd); err != nil {
+		if res, err := bridge.Exec(r.Context(), cmd); err != nil || res == nil || res.ExitCode != 0 {
 			writeError(w, http.StatusInternalServerError, "failed to update web search state", err)
 			return
 		}

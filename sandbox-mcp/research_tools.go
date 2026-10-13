@@ -50,6 +50,9 @@ func researchEnabled() bool {
 		if val == "true" || val == "1" || val == "enabled" || val == "on" {
 			return true
 		}
+		return false // Corrupt explicit state must never fall back to enabled.
+	} else if !os.IsNotExist(err) {
+		return false
 	}
 	return os.Getenv("YUMMI_WEB_SEARCH_ENABLED") == "true"
 }

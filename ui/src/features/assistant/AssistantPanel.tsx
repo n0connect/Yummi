@@ -209,6 +209,8 @@ export function AssistantPanel({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
   const [webSearchEnabled, setWebSearchEnabled] = useState(false)
+  const [webSearchUpdating, setWebSearchUpdating] = useState(false)
+  const webSearchToggleBusy = useRef(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const dragCounterRef = useRef(0)
 
@@ -222,16 +224,25 @@ export function AssistantPanel({
   }, [])
 
   const toggleWebSearch = async () => {
+    if (webSearchToggleBusy.current) return
+    webSearchToggleBusy.current = true
+    setWebSearchUpdating(true)
     const next = !webSearchEnabled
-    setWebSearchEnabled(next)
     try {
-      await fetch('/api/v1/system/web-search', {
+      const response = await fetch('/api/v1/system/web-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next }),
       })
+      if (!response.ok) throw new Error('Web search update rejected')
+      const state = await response.json()
+      if (typeof state.enabled !== 'boolean') throw new Error('Invalid web search state')
+      setWebSearchEnabled(state.enabled)
     } catch {
-      setWebSearchEnabled(!next)
+      // Keep the last acknowledged operator state on network/API failure.
+    } finally {
+      webSearchToggleBusy.current = false
+      setWebSearchUpdating(false)
     }
   }
 
@@ -1921,11 +1932,12 @@ export function AssistantPanel({
             <button
               type="button"
               className={`btn-web-search ${webSearchEnabled ? 'active' : ''}`}
+              disabled={webSearchUpdating || isLoading}
+              aria-busy={webSearchUpdating}
               onClick={() => void toggleWebSearch()}
               title={webSearchEnabled ? t('assistant.webSearchActive') : t('assistant.webSearchInactive')}
               aria-label={webSearchEnabled ? t('assistant.webSearchActive') : t('assistant.webSearchInactive')}
               aria-pressed={webSearchEnabled}
-              disabled={isLoading}
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="10" />

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Yummi Edge Cases Lab</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .hidden { display: none; }
+    #scroll-box { height: 150px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; }
+    .spacer { height: 600px; background: linear-gradient(#eee, #ccc); margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Edge Cases Lab</h1>
+
+    <!-- 1. Multi-tab popup -->
+    <section id="section-tabs">
+      <h2>Tabs Test</h2>
+      <a id="popup-link" href="edge-cases.html?tab=popup" target="_blank">Open Popup Tab</a>
+      <div id="popup-content" class="hidden">
+        <h3>Secret Admin Portal</h3>
+        <p id="popup-secret">Token: SECRETAUTH999</p>
+      </div>
+    </section>
+
+    <!-- 2. Dynamic Live Search / DOM Mutation -->
+    <section id="section-spa">
+      <h2>Live Search SPA</h2>
+      <label for="spa-input">Filter CVEs</label>
+      <input id="spa-input" type="text" placeholder="Type query...">
+      <ul id="spa-results"></ul>
+    </section>
+
+    <!-- 3. Dialogs (Alert, Confirm, Prompt) -->
+    <section id="section-dialogs">
+      <h2>Dialogs Test</h2>
+      <button id="btn-alert" type="button" onclick="alert('Danger Alert')">Trigger Alert</button>
+      <button id="btn-confirm" type="button" onclick="document.getElementById('dialog-status').textContent = confirm('Are you sure?') ? 'Confirmed' : 'Cancelled'">Trigger Confirm</button>
+      <p id="dialog-status" role="status">No dialog</p>
+    </section>
+
+    <!-- 4. Form inputs (select, checkbox, radio, textarea) -->
+    <section id="section-form">
+      <h2>Complex Form</h2>
+      <form id="complex-form" onsubmit="event.preventDefault(); document.getElementById('form-summary').textContent = 'Submitted: ' + document.getElementById('bio').value;">
+        <label><input type="checkbox" id="check-consent" name="consent"> I agree</label>
+        <label><input type="radio" id="role-admin" name="role" value="admin"> Admin</label>
+        <label><input type="radio" id="role-user" name="role" value="user" checked> User</label>
+        <select id="environment">
+          <option value="dev">Development</option>
+          <option value="prod">Production</option>
+        </select>
+        <textarea id="bio" placeholder="Enter notes..."></textarea>
+        <button id="form-submit" type="submit">Submit Form</button>
+      </form>
+      <p id="form-summary" role="status"></p>
+    </section>
+
+    <!-- 5. Scroll section -->
+    <section id="section-scroll">
+      <h2>Scroll Target</h2>
+      <div id="scroll-box">
+        <p>Top of scroll box</p>
+        <div class="spacer"></div>
+        <p id="scroll-bottom-target">Found Bottom Anchor</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // Reveal popup content if tab=popup param is present
+    if (new URLSearchParams(window.location.search).get('tab') === 'popup') {
+      document.getElementById('popup-content').classList.remove('hidden');
+    }
+
+    // Live filter implementation
+    const cves = ['CVE-2024-6387 OpenSSH', 'CVE-2024-3094 XZ Utils', 'CVE-2023-4863 libwebp'];
+    const input = document.getElementById('spa-input');
+    const results = document.getElementById('spa-results');
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      results.innerHTML = '';
+      if (!q) return;
+      cves.filter(c => c.toLowerCase().includes(q)).forEach(match => {
+        const li = document.createElement('li');
+        li.textContent = match;
+        results.appendChild(li);
+      });
+    });
+  </script>
+</body>
+</html>
