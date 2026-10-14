@@ -20,6 +20,7 @@ docs/
     browser-automation.md   Modern Chromium automation via Rod, 9 browser tools, accessibility trees
     web-research.md         Controlled sandbox-only web research, web_search/web_fetch, citations
     web-research-qc.md      Browser & research QC test suite, edge-cases and validation results
+    execution-provenance.md Structural blacklist protecting runner-owned execution history
     sandbox-confinement.md  Sandbox security boundaries, network isolation, UID 1000, caps
     graph-and-nodes.md      11-node state machine, routing table, active verification oracles
     tag-protocol.md         Closed tag vocabulary for deterministic agent-LLM protocol
@@ -36,6 +37,10 @@ docs/
 
   persona/
     persona-and-skills.md   Conductor vs. agent personas and safety boundaries
+
+  ui/
+    trace-bash.md           Scrollable Trace cards and persistent operator terminal lifecycle
+    ci-verification.md      CI/Docker quality gates and mandatory sandbox test placement
 ```
 
 The `brain/` directory (located at the repository root) contains an optional Python/LangGraph agent runtime: **[brain/README.md](../brain/README.md)**. It provides a supervisor-specialist multi-agent workflow driving the orchestrator via REST API and MCP.
