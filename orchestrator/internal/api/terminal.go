@@ -5,7 +5,7 @@
 //   WebSocket text frame    → JSON control message (resize, ping)
 //   Server → client binary  → PTY output (ANSI escape codes preserved)
 //
-// Using creack/pty allocates a real pseudo-terminal on the host, which enables
+// Using creack/pty allocates a real pseudo-terminal in the orchestrator container, which enables
 // full-screen TUI apps (vim, htop, nano) and correct ANSI colour rendering.
 
 package api
@@ -19,10 +19,33 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/n0connect/yummi/orchestrator/internal/sandbox"
 )
+
+// Each connection owns only its tmux client, never the persistent shell.
+// Docker CLI cancellation alone can leave the container-side client attached.
+const terminalAttachScript = `set -eu
+umask 077
+printf '%s\n' "$$" > "$1"
+exec tmux new-session -A -s operator`
+
+const terminalDetachScript = `set -eu
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  [ -f "$1" ] && break
+  sleep 0.1
+done
+[ -f "$1" ] || exit 0
+read -r attachment_pid < "$1"
+case "$attachment_pid" in ''|*[!0-9]*) exit 1 ;; esac
+tmux list-clients -t operator -F '#{client_pid} #{client_tty}' | while read -r candidate tty; do
+  if [ "$candidate" = "$attachment_pid" ]; then
+    tmux detach-client -t "$tty"
+  fi
+done
+rm -- "$1"`
 
 const (
 	terminalOutputChunkSize = 4096
@@ -58,7 +81,7 @@ func HandleTerminalWSBridge(bridge *sandbox.Bridge) http.HandlerFunc {
 		defer cancel()
 
 		// docker exec -it allocates a TTY inside the container; pty.Start()
-		// provides the matching PTY on the host side so ANSI codes flow correctly.
+		// provides the matching PTY in the orchestrator container so ANSI codes flow correctly.
 		//
 		// `tmux new-session -A -s operator` (attach if it exists, create if
 		// not) instead of a bare shell: every WS connection — a page refresh,
@@ -69,10 +92,11 @@ func HandleTerminalWSBridge(bridge *sandbox.Bridge) http.HandlerFunc {
 		// Bash tab was a disposable shell: the exact "cut off from
 		// everything, starts from zero every time" complaint that made it
 		// feel like a toy next to a real terminal.
+		attachmentPath := "/tmp/yummi-operator-" + uuid.NewString() + ".pid"
 		cmd := exec.CommandContext(ctx, "docker", "exec", "-it",
 			"--user", "1000:1000",
 			bridge.ContainerName(),
-			"tmux", "new-session", "-A", "-s", "operator",
+			"/bin/sh", "-c", terminalAttachScript, "yummi-operator-terminal", attachmentPath,
 		)
 
 		ptyFile, err := pty.Start(cmd)
@@ -85,6 +109,13 @@ func HandleTerminalWSBridge(bridge *sandbox.Bridge) http.HandlerFunc {
 			_ = ptyFile.Close()
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cleanupCancel()
+			cleanup := exec.CommandContext(cleanupCtx, "docker", "exec", "--user", "1000:1000",
+				bridge.ContainerName(), "/bin/sh", "-c", terminalDetachScript, "yummi-operator-terminal", attachmentPath)
+			if err := cleanup.Run(); err != nil {
+				slog.Warn("terminal ws: own client cleanup failed", "error", err)
 			}
 		}()
 

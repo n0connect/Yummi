@@ -7,7 +7,7 @@
 /* Findings gets more real estate than the other TRACE grid cells (filter
    toolbar + a potentially long list) — span the full grid width instead of
    sharing a single auto-fit column. */
-.trace-section-findings { grid-column: 1 / -1; }
+.trace-section-findings { min-width: 0; }
 
 .findings-panel {
   display: flex;

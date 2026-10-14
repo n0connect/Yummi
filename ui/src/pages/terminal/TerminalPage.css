@@ -7,11 +7,19 @@
   gap: var(--space-lg);
 }
 .workbench-terminal { min-width: 0; }
+.workbench-wide { grid-template-columns: minmax(0, 1fr); }
+.workbench-briefing[hidden] { display: none; }
+.workbench-session-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: var(--text-xs); }
 .workbench-briefing { min-width: 0; height: 100%; min-height: 0; }
 
 /* Same session id ChatPage owns — reinforces "same workspace" when
    switching from Agent to Bash, not a disconnected tool. */
 .workbench-session-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   flex-shrink: 0;
   padding: var(--space-sm) var(--space-lg);
   border-bottom: 1px solid var(--border-subtle);

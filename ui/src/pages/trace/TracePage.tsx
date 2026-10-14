@@ -204,20 +204,20 @@ function Section({
         <span className="trace-section-title">{title}</span>
         {typeof count === 'number' && <span className="trace-section-count">{count}</span>}
       </div>
+      <div className="trace-section-body" tabIndex={0} role="region" aria-label={title} aria-live={live ? 'polite' : undefined} aria-relevant={live ? 'additions' : undefined}>
       {count === 0 ? (
         <div className="trace-empty">{t('trace.emptyDash')}</div>
-      ) : live ? (
-        <div aria-live="polite" aria-relevant="additions">{children}</div>
       ) : (
         children
       )}
+      </div>
     </div>
   )
 }
 
 export function TracePage(): JSX.Element {
   const [sessionID] = useState(resolveSessionID)
-  const { activity, findings, targets, assets, tactics, context, skills, roles, capabilities, refresh } = useTraceData(sessionID)
+  const { activity, findings, targets, assets, tactics, context, skills, roles, capabilities, refresh, loading, errors } = useTraceData(sessionID)
   const { pending: pendingSkills, rejected: rejectedSkills, approve: approveSkill, reject: rejectSkill } = usePendingSkills()
   const [skillError, setSkillError] = useState<string | null>(null)
   const [showReportModal, setShowReportModal] = useState<boolean>(false)
@@ -240,25 +240,29 @@ export function TracePage(): JSX.Element {
   }
 
   return (
-    <main className="trace-page">
+    <main className="trace-page" aria-busy={loading}>
       <div className="trace-header">
         <span className="trace-page-title">{t('trace.title')}</span>
         <span className="trace-page-sub">{t('trace.subtitle')}</span>
         <button className="small-button" onClick={() => setShowReportModal(true)}>{t('trace.reports.generate')}</button>
         <button className="small-button" onClick={refresh}>{t('trace.refresh')}</button>
       </div>
+      {loading && <div className="trace-load-state" role="status">{t('trace.loadingData')}</div>}
+      {errors.length > 0 && <div className="trace-load-state trace-load-error" role="alert">
+        <span>{t('trace.loadFailed')} {errors.join(', ')}</span>
+        <button className="small-button" onClick={refresh}>{t('common.retry')}</button>
+      </div>}
 
       <div className="trace-grid">
-        {capabilities && (
-          <Section title={t('trace.sectionCapabilities')} count={1}>
+          <Section title={t('trace.sectionCapabilities')} count={capabilities ? 1 : undefined}>
+            {!capabilities ? <div className="trace-empty">{loading ? t('trace.loadingData') : t('trace.unavailable')}</div> :
             <dl className="trace-capability-grid">
               <div><dt>{t('trace.capabilityBackend')}</dt><dd>{capabilities.backend} · {readableCapability(capabilities.execution_model)}</dd></div>
               <div><dt>{t('trace.capabilityRecovery')}</dt><dd>{capabilities.resumable ? readableCapability(capabilities.recovery_model) : '—'}</dd></div>
               <div><dt>{t('trace.capabilityMemory')}</dt><dd>{capabilities.memory_enabled ? capabilities.retrieval_model : t('trustRail.memoryOff')}</dd></div>
               <div><dt>{t('trace.capabilityGovernance')}</dt><dd>{readableCapability(capabilities.skill_governance)} · {capabilities.skill_count}</dd></div>
-            </dl>
+            </dl>}
           </Section>
-        )}
         {/* Live trace */}
         <Section title={t('trace.sectionActivity')} count={activity.length} live>
           <div className="trace-list">
@@ -275,7 +279,9 @@ export function TracePage(): JSX.Element {
             <span className="trace-section-title">{t('trace.sectionFindings')}</span>
             <span className="trace-section-count">{findings.length}</span>
           </div>
-          <FindingsPanel findings={findings} targets={targets} />
+          <div className="trace-section-body" tabIndex={0} role="region" aria-label={t('trace.sectionFindings')}>
+            <FindingsPanel findings={findings} targets={targets} />
+          </div>
         </div>
 
         {/* Attack Surface Management (ASM) & Hierarchical Asset Tree */}

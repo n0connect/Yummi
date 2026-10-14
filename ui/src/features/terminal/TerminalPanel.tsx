@@ -63,6 +63,7 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
 
     // ── WebSocket with exponential backoff reconnect ──────────────────────
     let retries = 0
+    let disposed = false
     let retryTimer: number | undefined
     let ws: WebSocket
 
@@ -74,12 +75,14 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
     }
 
     const connect = () => {
+      if (disposed) return
       ws = new WebSocket(websocketURL('/ws/terminal'))
       // Binary frames: PTY I/O arrives as ArrayBuffer
       ws.binaryType = 'arraybuffer'
       socketRef.current = ws
 
       ws.onopen = () => {
+        if (disposed) { ws.close(); return }
         setConnected(true)
         retries = 0
         term.write(`\r\n\x1b[32m${t('terminalPanel.connectedMsg')}\x1b[0m\r\n`)
@@ -88,6 +91,7 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
       }
 
       ws.onmessage = e => {
+        if (disposed) return
         if (e.data instanceof ArrayBuffer) {
           term.write(new Uint8Array(e.data))
         } else {
@@ -96,6 +100,7 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
       }
 
       ws.onclose = () => {
+        if (disposed) return
         setConnected(false)
         retries++
         const delay = Math.min(1500 * retries, 10_000)
@@ -104,6 +109,7 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
       }
 
       ws.onerror = () => {
+        if (disposed) return
         term.write(`\r\n\x1b[31m${t('terminalPanel.errorMsg')}\x1b[0m\r\n`)
       }
     }
@@ -121,12 +127,14 @@ export function TerminalPanel({ compact = false, onConnectedChange }: Props = {}
 
     // ── Resize observer — refit and notify backend ────────────────────────
     const resizeObserver = new ResizeObserver(() => {
+      if (disposed) return
       fitAddon.fit()
       sendResize(term.cols, term.rows)
     })
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      disposed = true
       if (retryTimer) clearTimeout(retryTimer)
       dataDispose.dispose()
       resizeObserver.disconnect()

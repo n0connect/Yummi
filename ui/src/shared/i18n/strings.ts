@@ -5,6 +5,12 @@
 // `Record<keyof typeof en, string>` so a translation missing a key that `en`
 // has (or vice versa) is a compile error, not a silent runtime fallback.
 const en = {
+  'trace.loadingData': 'Loading records…',
+  'trace.loadFailed': 'Some records could not be loaded:',
+  'trace.unavailable': 'Data unavailable. Retry loading.',
+  'terminal.sharedSession': 'Shared sandbox shell · operator',
+  'terminal.hideBriefing': 'Hide briefing',
+  'terminal.showBriefing': 'Show briefing',
   'assistant.operatorActions': 'Your action is needed',
   'assistant.followLatest': 'New activity — jump to latest',
   'assistant.operatorActionsHint': 'Decide here to continue. Nothing runs without the required approval.',
@@ -585,6 +591,12 @@ const en = {
 }
 
 const tr = {
+  'trace.loadingData': 'Kayıtlar yükleniyor…',
+  'trace.loadFailed': 'Bazı kayıtlar yüklenemedi:',
+  'trace.unavailable': 'Veriye erişilemiyor. Yeniden yükleyin.',
+  'terminal.sharedSession': 'Ortak sandbox terminali · operator',
+  'terminal.hideBriefing': 'Bilgilendirmeyi gizle',
+  'terminal.showBriefing': 'Bilgilendirmeyi göster',
   'assistant.operatorActions': 'İşlem yapmanız gerekiyor',
   'assistant.followLatest': 'Yeni etkinlik — son mesaja git',
   'assistant.operatorActionsHint': 'Devam etmek için buradan karar verin. Gereken onay olmadan işlem çalışmaz.',
