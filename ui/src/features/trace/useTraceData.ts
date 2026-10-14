@@ -90,10 +90,15 @@ export function useTraceData(sessionID: string): TraceData {
     ]).finally(() => { if (generation === version.current && !signal.aborted) setLoading(false) })
   }, [sessionID, load])
 
+  const invalidate = useCallback(() => {
+    version.current++
+    controller.current?.abort()
+  }, [])
+
   useEffect(() => {
     refresh()
-    return () => { version.current++; controller.current?.abort() }
-  }, [refresh])
+    return invalidate
+  }, [refresh, invalidate])
 
   // Live: append streamed activity for this session; refetch tactics/context on
   // events that change the world model so those panels stay current.

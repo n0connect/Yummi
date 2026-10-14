@@ -38,7 +38,7 @@ export function ResearchSources({ output }: { output: string }): JSX.Element | n
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(url).catch(() => {})
       }
-    } catch {}
+    } catch { /* Clipboard access can be unavailable in restricted browsers. */ }
     setCopiedUrl(url)
     setTimeout(() => setCopiedUrl(null), 2000)
   }
@@ -54,7 +54,7 @@ export function ResearchSources({ output }: { output: string }): JSX.Element | n
       <div className="research-sources-list">
         {sources.map(source => {
           let host = ''
-          try { host = new URL(source.source_url).hostname } catch {}
+          try { host = new URL(source.source_url).hostname } catch { /* Keep the source title as the fallback. */ }
           const isCopied = copiedUrl === source.source_url
           return (
             <article key={source.source_url} className="research-source">

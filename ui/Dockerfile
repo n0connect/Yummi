@@ -11,7 +11,7 @@ ENV VITE_YUMMI_LANG=$VITE_YUMMI_LANG
 RUN npm run build
 
 FROM builder AS quality
-RUN unset VITE_YUMMI_LANG; npm test -- --run
+RUN npm run lint && (unset VITE_YUMMI_LANG; npm test -- --run)
 
 FROM nginx:1.27-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html

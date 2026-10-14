@@ -41,13 +41,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      # Real tools require the installed sandbox binary, Linux Docker and UID
+      # 1000. Never weaken confinement to run live tests on the CI runner.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build real Kali sandbox
+        uses: docker/build-push-action@v6
         with:
-          go-version-file: sandbox-mcp/go.mod
-      - run: go build ./...
-        working-directory: sandbox-mcp
-      - run: go test ./...
-        working-directory: sandbox-mcp
+          context: .
+          file: sandbox/Dockerfile
+          load: true
+          tags: yummi/sandbox:local
+          cache-from: type=gha,scope=sandbox-ci
+          cache-to: type=gha,mode=max,scope=sandbox-ci
+      - name: Test sandbox-MCP in isolated Kali
+        run: make _test-sandbox-mcp CONTAINER_ENGINE=docker
 
   go-lint:
     name: golangci-lint
