@@ -638,7 +638,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("orchestrator starting", "addr", addr, "version", "v1.0.1b")
+		slog.Info("orchestrator starting", "addr", addr, "version", "v1.1.1b")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)

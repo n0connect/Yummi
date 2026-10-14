@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.1b](https://github.com/n0connect/Yummi/compare/v1.1.0...v1.1.1b) (2026-10-14)
+
+Beta release. See [release notes](docs/releases/v1.1.1b.md) for verification
+scope, upgrade instructions and known model limitations.
+
 ### Features
 
 * **agent:** enforce execution-history provenance boundary preventing model plan forgery and receipt overwrites (`Store.ReplaceModelPlan`)
@@ -13,6 +18,10 @@
 
 ### Bug Fixes
 
+* **ui:** keep operator approvals, gateway decisions and additional-step controls above the composer; update conversations without page reload
+* **ui:** balance Trace cards with keyboard-accessible inner scrolling and visible loading/error states
+* **terminal:** detach only the disconnected operator tmux client, preserving the shared shell and other clients
+* **ci:** run sandbox-MCP tests in isolated Kali Docker and include UI lint in the Docker quality target
 * **browser:** resolve proxy body read panic on HTTP/S error responses and expand accessibility tree with semantic tags (`li`, `td`, `th`, `blockquote`, `code`)
 * **sandbox-mcp:** keep persistent Docker transport alive across execution contexts to preserve browser pages and refs
 * **qa:** add edge-case QC suite, browser research live validation, and UI verification scripts

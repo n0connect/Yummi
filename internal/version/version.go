@@ -3,7 +3,7 @@ package version
 
 // Build-time variables populated with -ldflags.
 var (
-	Semver    = "v1.0.1b"
+	Semver    = "v1.1.1b"
 	GitSHA    = "dev"
 	BuildDate = "unknown"
 )
