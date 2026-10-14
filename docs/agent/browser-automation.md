@@ -10,10 +10,11 @@ Yummi provides an autonomous, full-capability browser automation engine built in
 
 - [Architectural Overview](#architecture)
 - [Accessibility Tree & @eN Reference Paradigm](#snapshot-ref)
+- [In-Sandbox Connection Proxy & Hostname Policy](#browser-proxy)
 - [Anti-Bot Evasion & Headful X11 Execution](#anti-bot)
 - [Operator Live Observability via noVNC](#observability)
 - [Gateway Scope Enforcement & Fail-Closed Egress](#gateway-scope)
-- [The 8 Browser MCP Tools](#tools)
+- [The 9 Browser MCP Tools](#tools)
 - [Session Sharing & Tool Chaining](#session-sharing)
 - [Dual-Backend Compatibility (Graph & Eino)](#dual-backend)
 
@@ -39,6 +40,8 @@ Yummi provides an autonomous, full-capability browser automation engine built in
 |       v                                                                     |
 |   yummi-sandbox-mcp (BrowserDriver interface -> RodDriver)                  |
 |       |                                                                     |
+|       +--> In-Sandbox Connection Proxy (browser_proxy.go)                   |
+|       |       | (Enforces gateway hostname policy on HTTP/S and WS/WSS)     |
 |       v CDP (stealth.Page)                                                  |
 |   Chromium Browser (DISPLAY=:1, X11 headful, 1600x900)                      |
 |       |                                                                     |
@@ -53,7 +56,7 @@ Yummi provides an autonomous, full-capability browser automation engine built in
 
 Traditional scraping tools flood the model's context window with 50,000+ tokens of raw HTML, leading to context rot, high costs, and hallucinations.
 
-Yummi extracts an **interactive Accessibility Tree snapshot** via Chrome DevTools Protocol (CDP). Non-interactive structural divs and hidden elements are filtered out, producing a compact **200–400 token representation** with numbered `@eN` references:
+Yummi extracts an **interactive Accessibility Tree snapshot** via Chrome DevTools Protocol (CDP). Non-interactive structural divs and hidden elements are filtered out, while semantic content elements (`H1-H6`, `P`, `PRE`, `LI` as `listitem`, `TD`/`TH` as `cell`, `BLOCKQUOTE`, `CODE`) are extracted alongside interactive controls (`input`, `button`, `select`, `a`), producing a compact **200–400 token representation** with numbered `@eN` references:
 
 ```text
 Page: DVWA - Vulnerability: SQL Injection
@@ -75,6 +78,16 @@ The model interacts with elements with near-100% precision:
 ```
 
 When a click triggers navigation or dynamic DOM mutation, references are marked stale, and the agent refreshes the snapshot via `browser_snapshot`.
+
+---
+
+## In-Sandbox Connection Proxy & Hostname Policy <a id="browser-proxy"></a>
+
+To guarantee fail-closed security for dynamic in-page resources, redirects, and WebSockets:
+- An internal HTTP/CONNECT/WebSocket proxy (`sandbox-mcp/browser_proxy.go`) runs locally inside the sandbox.
+- Standard HTTP/S requests are forwarded via `http.Transport.RoundTrip`, preserving request bodies and stream integrity.
+- WebSocket upgrades (`Upgrade: websocket`) and `CONNECT` tunnels are intercepted and verified against the gateway hostname policy (`GET /api/v1/gateway/hostname-policy`) **before** establishing any upstream TCP socket.
+- Blocked destinations are terminated immediately with HTTP 403 Forbidden, preventing unapproved data exfiltration or policy bypass over WebSocket streams.
 
 ---
 
@@ -104,10 +117,10 @@ Yummi maintains its strict fail-closed network boundary:
 
 ---
 
-## The 8 Browser MCP Tools <a id="tools"></a>
+## The 9 Browser MCP Tools <a id="tools"></a>
 
 1. **`browser_open`**: Navigate to URL, wait for stability (`networkidle`, `domcontentloaded`, `load`), and return the initial `@eN` snapshot. Supports custom HTTP headers via `headers: {"Authorization": "Bearer ...", "X-Forwarded-For": "..."}`. Configures automatic download handling to `/home/pentester/work/downloads/`.
-2. **`browser_snapshot`**: Generate a token-efficient interactive element tree (~200-400 tokens) with recursive traversal through open Shadow DOM and same-origin `<iframe>` documents.
+2. **`browser_snapshot`**: Generate a token-efficient interactive element tree (~200-400 tokens) with recursive traversal through open Shadow DOM and same-origin `<iframe>` documents, including non-interactive content blocks (`li`, `td`, `th`, `blockquote`, `code`).
 3. **`browser_interact`**: Execute actions against `@eN` references, CSS selectors, or screen coordinates:
    - `click` / `dblclick`: Mouse click with JavaScript fallback and DOM-settle waiting.
    - `right_click` / `context_menu`: Context menu invocation via right mouse button.
@@ -132,8 +145,9 @@ Yummi maintains its strict fail-closed network boundary:
    - Amber badges (`#f59e0b`): Hyperlinks
    - Red badges (`#ef4444`): Other clickable or custom interactive elements
 6. **`browser_storage`**: Inspect cookies (`get_cookies`), inject session cookies (`set_cookie`), extract `localStorage` and `sessionStorage` (`get_storage`), wipe session state (`clear`), export login sessions (`save_state`), or load saved state (`load_state`).
-7. **`browser_tabs`**: Multi-tab control (`list`, `new`, `switch`, `close`).
-8. **`browser_logs`**: Retrieve console messages (`console.log`, `console.error`), dialog messages (`alert`, `confirm`), and network traffic (outgoing requests, HTTP 4xx/5xx errors, JSON API calls). Clears log buffer on demand when `clear: true`.
+7. **`browser_tabs`**: Multi-tab control (`list`, `new`, `switch`, `close`). Automatically tracks tabs created via `target="_blank"`.
+8. **`browser_logs`**: Retrieve console messages (`console.log`, `console.error`), dialog messages (`alert`, `confirm`), and network traffic (outgoing requests, HTTP 4xx/5xx errors, JSON API calls). JavaScript dialogs are automatically dismissed to prevent CDP locking. Isolated per driver session generation. Clears log buffer on demand when `clear: true`.
+9. **`browser_session`**: Isolated session profiles and security roles (`action: "status"` or `"reset"`). Enables testing role-based access control (e.g. `admin` vs `victim` vs unauthenticated) with segregated cookie storage and clean session wiping.
 
 ---
 

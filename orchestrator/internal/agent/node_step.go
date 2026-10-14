@@ -242,7 +242,9 @@ func stepNode(ctx context.Context, s *GraphState) (string, error) {
 		if len(msg.Action.Steps) == 0 {
 			return s.rejectStepAction()
 		}
-		_ = s.store.Update(s.taskID, func(t *Task) { t.Plan = msg.Action.Steps })
+		if err := s.store.ReplaceModelPlan(s.taskID, msg.Action.Steps); err != nil {
+			return "", err
+		}
 		s.lastObs = Wrap("PLAN_UPDATED", msg.Action.Reason)
 		return edgeUpdatePlan, nil
 	default:

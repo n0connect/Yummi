@@ -251,7 +251,7 @@ type updatePlanArgs struct {
 
 var updatePlanInfo = &schema.ToolInfo{
 	Name: "update_plan",
-	Desc: "Revise the task plan.",
+	Desc: "Revise future plan intentions (id, description, pending/skipped). Execution status, command, result, error, duration and retry counts are server-owned. Recorded execution history cannot be manufactured, rewritten or removed.",
 	ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 		"steps":  {Type: "array", ElemInfo: &schema.ParameterInfo{Type: "object"}, Desc: "The new ordered list of plan steps", Required: true},
 		"reason": {Type: "string", Desc: "Why the plan is changing", Required: true},
@@ -272,7 +272,7 @@ func (u *updatePlanTool) InvokableRun(_ context.Context, argumentsInJSON string,
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil || len(args.Steps) == 0 {
 		return "update_plan needs a non-empty steps array", nil
 	}
-	if err := u.store.Update(u.taskID, func(t *agent.Task) { t.Plan = args.Steps }); err != nil {
+	if err := u.store.ReplaceModelPlan(u.taskID, args.Steps); err != nil {
 		return "failed to update plan: " + err.Error(), nil
 	}
 	return "plan updated: " + args.Reason, nil

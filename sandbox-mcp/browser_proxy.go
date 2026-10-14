@@ -88,14 +88,17 @@ func (p *browserProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method != http.MethodConnect && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		outReq := r.Clone(ctx)
+		// Setup deadlines must not cancel long downloads or event streams.
+		outReq := r.Clone(r.Context())
 		outReq.RequestURI = ""
 		outReq.Header.Del("Proxy-Authorization")
 		outReq.Header.Del("Proxy-Connection")
 
 		transport := &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialAddresses(ctx, addresses, port)
+				connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				return dialAddresses(connectCtx, addresses, port)
 			},
 			ResponseHeaderTimeout: 30 * time.Second,
 		}
@@ -114,7 +117,13 @@ func (p *browserProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			return
+		}
+		if _, err := io.Copy(browserStreamWriter{w}, resp.Body); err != nil {
+			// Do not turn a truncated upstream response into a successful EOF.
+			panic(http.ErrAbortHandler)
+		}
 		return
 	}
 
@@ -172,6 +181,17 @@ func (p *browserProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = client.Close()
 	_ = upstream.Close()
 	<-done
+}
+
+// Flush each upstream chunk so SSE and incremental responses stay interactive.
+type browserStreamWriter struct{ http.ResponseWriter }
+
+func (w browserStreamWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	if err == nil {
+		err = http.NewResponseController(w.ResponseWriter).Flush()
+	}
+	return n, err
 }
 
 func dialAddresses(ctx context.Context, addresses []string, port string) (net.Conn, error) {

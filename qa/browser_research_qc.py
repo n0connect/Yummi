@@ -61,6 +61,13 @@ def verify_case(name, task, records):
             if "9.8" in summary and not any(word in summary.lower() for word in ["fix", "patch", "düzelt"]):
                 failures.append("Fixed release appears without a fix/patch distinction; review against original vendor evidence")
     else:
+        actions = []
+        for record in completed:
+            if record.get('mcp_tool') == 'browser_interact':
+                value = record.get('mcp_args', {})
+                actions.append(json.loads(value) if isinstance(value, str) else value)
+        if not any(a.get('action') == 'click' and a.get('selector') in ('#submit', '@e2') for a in actions):
+            failures.append('Actual form submission click missing; input values or mutated DOM are not proof')
         modes = [r for r in reports if r.get("running") and r.get("environment") == "sandbox"]
         expected = name == "browser-headless"
         if not modes or modes[-1].get("headless") is not expected:
@@ -81,6 +88,13 @@ def api(path, body=None):
     request = urllib.request.Request(BASE + path, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=180) as response:
         return json.load(response)
+
+
+def assert_qc_model():
+    status = api('/system/status')
+    conductor = next((module for module in status.get('modules', []) if module.get('name') == 'conductor'), {})
+    metadata = conductor.get('meta', {})
+    assert metadata.get('backend') == 'cloud' and metadata.get('model') == 'minimax/minimax-m2.1', 'QC requires actual OpenRouter/MiniMax runtime; start through make start. Current model: ' + str(metadata.get('model'))
 
 
 class MCP:
@@ -158,9 +172,10 @@ def direct_checks():
 
 
 def agent_case(name, goal, required):
+    assert_qc_model()
     session = api("/sessions", {"name": "Browser Search QC - " + name})
     sid = session.get("id") or session.get("session_id")
-    task = api("/tasks", {"session_id": sid, "goal": goal, "step_budget": 30, "auto_approve_non_critical": True})
+    task = api("/tasks", {"session_id": sid, "goal": goal})
     task = task.get("task", task)
     tid = task["id"]
     api("/tasks/" + tid + "/start", {})
@@ -246,6 +261,10 @@ def main():
             for name, goal, tools in cases:
                 if args.case and args.case != name:
                     continue
+                if name.startswith('browser-'):
+                    for step in range(1, 10):
+                        goal = goal.replace(' ' + str(step) + '.', '\n' + str(step) + '.')
+                    goal += '\nNever fabricate the expected result by modifying the DOM. Verify an actual browser_interact click on #submit and the resulting application status. Use browser_screenshot output_file directly; no shell file copying.'
                 print("RUN", name, flush=True)
                 result = agent_case(name, goal, tools)
                 report["results"].append(result)

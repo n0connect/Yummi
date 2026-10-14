@@ -6,12 +6,60 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/net/websocket"
 )
+
+func TestBrowserProxyStreamsPastConnectionDeadline(t *testing.T) {
+	if !liveChromiumAvailable() {
+		t.Skip("real sandbox required")
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: first\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(16 * time.Second):
+			_, _ = fmt.Fprint(w, "data: complete\n")
+			w.(http.Flusher).Flush()
+		case <-r.Context().Done():
+		}
+	})}
+	go func() { _ = s.Serve(l) }()
+	defer s.Close()
+	p, err := newBrowserProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	u, _ := url.Parse("http://" + p.address)
+	transport := &http.Transport{Proxy: http.ProxyURL(u)}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 22 * time.Second}
+	started := time.Now()
+	response, err := client.Get("http://" + l.Addr().String() + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	first, err := reader.ReadString('\n')
+	if err != nil || first != "data: first\n" || time.Since(started) > 2*time.Second {
+		t.Fatalf("stream was buffered: %q %v elapsed=%s", first, err, time.Since(started))
+	}
+	last, err := reader.ReadString('\n')
+	if err != nil || last != "data: complete\n" {
+		t.Fatalf("stream cancelled by connection timeout: %q %v", last, err)
+	}
+}
 
 func TestBrowserProxyFailClosedBeforeConnect(t *testing.T) {
 	if !liveChromiumAvailable() {

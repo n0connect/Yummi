@@ -77,5 +77,9 @@ they are missing.
   waits for a connection, such as a listener, a shell handler, or `http.server`, will
   hit that cap.
 - If the persistent terminal tools (`term_open`, `term_run`, `term_read`, `term_wait`,
-  `term_keys`, `term_close`) are in your toolset, run listeners and servers there.
-  Use `term_wait` with a pattern to know when something is ready.
+  `term_keys`, `term_list`, `term_close`) are in your toolset, run listeners and servers there.
+  Use `term_wait` with a pattern to know when something is ready. Use `term_list` to inspect active sessions.
+
+## Browser Automation & Web Research
+- **Browser Automation (`browser_*` tools)**: Headless Chromium running with an in-sandbox HTTP/WS proxy (`127.0.0.1:18080`) enforcing gateway hostname scope. Use `browser_open`, `browser_snapshot` (renders structured, accessible DOM trees), `browser_interact` (click, type, keypress, select, scroll), `browser_eval` (sandboxed JavaScript execution), `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`, and `browser_session`.
+- **Sandboxed Web Research (`web_*` tools)**: Controlled search (`web_search`) and retrieval (`web_fetch`) for external OSINT/CVE research, with active script/style stripping and `UNTRUSTED_WEB_CONTENT` tagging. Requires the operator web-search toggle to be enabled.

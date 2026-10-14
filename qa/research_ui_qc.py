@@ -21,10 +21,16 @@ class UIForwarder(socketserver.BaseRequestHandler):
                 if not ready:
                     return
                 for source in ready:
-                    data = source.recv(65536)
+                    try:
+                        data = source.recv(65536)
+                    except OSError:
+                        return
                     if not data:
                         return
-                    (upstream if source is self.request else self.request).sendall(data)
+                    try:
+                        (upstream if source is self.request else self.request).sendall(data)
+                    except OSError:
+                        return
 
 
 def main():

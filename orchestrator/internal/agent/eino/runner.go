@@ -853,12 +853,8 @@ func (r *EinoRunner) Run(ctx context.Context, task *agent.Task) error {
 	}
 	if err := r.store.Transition(task.ID, agent.StatusCompleted, func(t *agent.Task) {
 		t.Summary = summary
-		for i := range t.Plan {
-			if t.Plan[i].Status == agent.StepPending || t.Plan[i].Status == agent.StepRunning {
-				t.Plan[i].Status = agent.StepDone
-				t.Plan[i].Result = summary
-			}
-		}
+		// A model finish is not an execution receipt. Never turn unexecuted
+		// plan steps into done or copy the model narrative into their results.
 		if len(findings) > 0 {
 			t.Findings = findings
 		}

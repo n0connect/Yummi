@@ -30,7 +30,15 @@ sandbox is the unified Dockerized Kali Linux environment where pentest commands 
 
 ## Sandbox MCP Server
 
-The Kali image includes a compiled binary at `/usr/local/bin/yummi-sandbox-mcp` (built from the host's `sandbox-mcp/` Go module via multi-stage build). It registers 54 pentest, recon, and persistent terminal session tools (6 typed, 39 cataloged, 2 pure-Go utilities, and 7 tmux-backed terminal verbs) that can be invoked via MCP stdio over persistent `docker exec -i` by orchestrator's Eino agent backend.
+The Kali image includes a compiled binary at `/usr/local/bin/yummi-sandbox-mcp` (built from the host's `sandbox-mcp/` Go module via multi-stage build). It registers 58 native pentest, recon, persistent terminal, browser automation, and web research tools across 6 tiers:
+- **Tier 1 (6 Typed Pentest Tools)**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
+- **Tier 2 (32 Cataloged Pentest Tools)**: CLI-wrapped pentesting and analysis tools (`hydra`, `sqlmap`, `wpscan`, `commix`, `amass`, `sublist3r`, `enum4linux`, etc.).
+- **Tier 3 (2 Go Recon Utilities)**: Pure-Go network utilities (`consolidate_hosts`, `passive_recon_batch`).
+- **Tier 4 (7 Persistent Tmux Tools)**: Stateful terminal multiplexing (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`).
+- **Tier 5 (9 Browser Automation Tools)**: Headless Chromium automation (`browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`, `browser_session`) routed via in-sandbox connection proxy (`browser_proxy.go`).
+- **Tier 6 (2 Sandboxed Web Research Tools)**: Controlled external research and retrieval (`web_search`, `web_fetch`) with untrusted content containment.
+
+Tools are invoked via MCP stdio over persistent `docker exec -i` by the orchestrator.
 
 ---
 

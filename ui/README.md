@@ -19,7 +19,7 @@ src/
   app/            Global providers, router, App.tsx, app.css (design tokens)
   entities/       Shared TypeScript types (AgentTask, ExecutionRecord, etc.)
   features/       Self-contained feature modules
-    assistant/    Chat panel — auto-expanding multiline input with file drag-and-drop, message rendering with command rationales, TaskSummaryMessage completion cards (flags, copy, CVE badges), proposal bar
+    assistant/    Chat panel — auto-expanding multiline input with file drag-and-drop, web-search toggle button (`btn-web-search`), message rendering with command rationales, TaskSummaryMessage completion cards (flags, copy, CVE badges), cited ResearchSources cards, proposal bar
     chat/         Chat/event stream hook (useChatStream — WS, jittered backoff)
     desktop/      Desktop panel — on-demand click-to-activate noVNC/websockify canvas & status (saves RAM/VRAM)
     operator/     Operator Trust Rail & Briefing panel
@@ -110,6 +110,7 @@ The UI communicates with orchestrator via:
 | `/ws/events` | WS | Monotonic replayable event stream (execution, task, activity, gateway, skill, chat stream) |
 | `/ws/terminal` | WS | PTY terminal stream (Bash tab) |
 | `/ws/desktop` | WS | noVNC / websockify stream (Desktop tab) |
+| `/api/v1/system/web-search` | GET/POST | Query or toggle operator web-search capability |
 | `/api/v1/system/logs` | SSE | Structured log stream (Logs tab) |
 
 ## State management

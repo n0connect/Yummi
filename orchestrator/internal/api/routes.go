@@ -24,6 +24,7 @@ import (
 // NewRouter creates the Chi router with all routes.
 func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registry, cfg *config.Config, assistant *conductor.Engine, approvals *conductor.ApprovalStore, executions *execution.Store, bridge *sandbox.Bridge, pc *gateway.Client, lb *LogBuffer, llmClient *llm.Client, resilientLLM *llm.Resilient, agg *health.Aggregator, taskStore *agent.Store, taskRunner agent.TaskRunner, curatorStore *skillcurator.Store, curatorWorker *skillcurator.Worker, agentTerm agentTerminalCaller, mcpSchemaHints map[string]string) http.Handler {
 	r := chi.NewRouter()
+	eventHub := NewEventHub(executions, taskStore, agg, curatorStore, assistant)
 
 	// Middleware
 	// Note: chi's middleware.RealIP is deliberately not used — it's deprecated
@@ -46,11 +47,11 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 
 		// Sessions
 		r.Get("/sessions", HandleListSessions(sm))
-		r.Post("/sessions", HandleCreateSession(sm))
+		r.Post("/sessions", HandleCreateSession(sm, eventHub))
 		r.Get("/sessions/{id}", HandleGetSession(sm))
 		r.Get("/sessions/{id}/messages", HandleListMessages(sm))
-		r.Patch("/sessions/{id}", HandleUpdateSession(sm))
-		r.Delete("/sessions/{id}", HandleDeleteSession(sm))
+		r.Patch("/sessions/{id}", HandleUpdateSession(sm, eventHub))
+		r.Delete("/sessions/{id}", HandleDeleteSession(sm, eventHub))
 
 		// Targets (owned by the knowledge store)
 		r.Get("/sessions/{sessionID}/targets", HandleListTargets(ks))
@@ -160,7 +161,7 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 	// WebSocket
 	r.Get("/ws/terminal", HandleTerminalWSBridge(bridge))
 	r.Get("/ws/desktop", HandleDesktopWSBridge(cfg.SandboxDesktopAddr))
-	r.Get("/ws/events", HandleEventsWS(executions, taskStore, agg, curatorStore, assistant))
+	r.Get("/ws/events", HandleEventHubWS(eventHub))
 
 	return r
 }

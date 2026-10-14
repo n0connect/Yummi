@@ -40,7 +40,7 @@ internal/
     activity.go            Typed TRACE ActivityEvents
     oracle.go, verdict.go  Active exploit proof verification (ActivePoC, DOM, OOB, Diff)
     evaluation.go          Objective quality metrics and assertion gates
-    eino/                  Cloud / Eino-driven ReAct agent backend (54 tools across 4 tiers including 7 persistent terminal verbs)
+    eino/                  Cloud / Eino-driven ReAct agent backend (58 tools across 6 tiers including 7 persistent terminal verbs, 9 browser automation tools, and 2 web research tools)
   knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
     store.go               targets, findings, procedural_memory, persistent_context, assets, scope_rules
     assets.go              Hierarchical Attack Surface Management (ASM) tree matrix
@@ -64,7 +64,7 @@ internal/
   execution/ executor/   Execution lifecycle store (rationale-aware) and processor (scope check -> sandbox)
   llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
   sandbox/ gateway/      Docker exec bridge, IPC client to the gateway daemon
-  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (54 tools & persistent terminal sessions)
+  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (58 tools across 6 tiers, browser automation & web research)
   retention/             Background retention cleaner for aged session data
   session/ health/       SQLite session CRUD, ring-buffer health metrics
   api/                   REST routes, domain handlers (assets, scope rules, report, proxy), WS events/terminal

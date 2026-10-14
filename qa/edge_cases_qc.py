@@ -132,36 +132,44 @@ def test_web_research_edge_cases(client):
     print("TEST: Web Research Boundary & Adversarial Inputs...", flush=True)
 
     # 1. Regex characters in literal find must NOT cause regex compilation errors
-    client.tool("web_fetch", {
+    failure = client.tool("web_fetch", {
         "url": "https://www.openssh.com/releasenotes.html",
         "find": "[.*+?^${}()|]"
     }, expect_error=True)
+    assert "Literal text not found in source" in failure, failure
 
     # 2. Out-of-range offset beyond 1MB ceiling must be rejected to prevent DOS
-    client.tool("web_fetch", {
+    failure = client.tool("web_fetch", {
         "url": "https://www.openssh.com/releasenotes.html",
         "offset": 99999999
     }, expect_error=True)
+    assert "offset outside supported range" in failure, failure
 
     # 3. Offset exceeding document length must be cleanly rejected
-    client.tool("web_fetch", {
+    baseline = json.loads(client.tool("web_fetch", {"url": "https://www.openssh.com/releasenotes.html", "max_chars": 256}))
+    total = baseline["total_chars"]
+    assert isinstance(total, int) and total > 0
+    failure = client.tool("web_fetch", {
         "url": "https://www.openssh.com/releasenotes.html",
-        "offset": 600000
+        "offset": total + 1
     }, expect_error=True)
+    assert "offset exceeds source text length" in failure, failure
 
     # 4. Tail pagination reading the end of document cleanly returns next_offset=0 (omitted or 0)
     fetch_tail = json.loads(client.tool("web_fetch", {
         "url": "https://www.openssh.com/releasenotes.html",
-        "offset": 549000
+        "offset": max(0, total - 128), "max_chars": 256
     }))
     assert fetch_tail.get("next_offset", 0) == 0, f"Expected next_offset=0 for tail pagination: {fetch_tail}"
+    assert fetch_tail["sources"][0]["sha256"] == baseline["sources"][0]["sha256"], "Original source changed during pagination QC"
+    assert len(fetch_tail["sources"][0]["excerpt"]) == min(128, total)
 
     # 3. Search query with complex quotes, boolean operators, and XSS payload
     search_res = json.loads(client.tool("web_search", {
         "query": "\"OpenSSH\" AND 'sshd' CVE-2024-6387 <script>alert(1)</script>",
         "max_results": 2
     }))
-    assert "sources" in search_res, f"Search failed on complex characters: {search_res}"
+    assert search_res.get("sources") and all(s["source_url"].startswith("https://") for s in search_res["sources"]), f"No usable actual citations: {search_res}"
     print("PASS: Web Research Boundary & Adversarial Inputs", flush=True)
 
 

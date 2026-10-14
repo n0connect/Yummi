@@ -14,13 +14,16 @@ This document specifies the guarantees, implementation mechanisms, and operation
   - [Unconditional Address Floor](#always-blocked-floor)
   - [Runtime Egress Modes (4-Way Gateway Switch)](#egress-modes)
   - [Pre-Resolution Hostname Policy](#hostname-policy)
+  - [In-Sandbox Browser & WebSocket Proxy](#browser-proxy)
   - [Rule Provenance and Precedence](#rule-sources)
 - [Layer 2: Content Boundary (`threatscan`)](#layer-content)
   - [Threat Model and Rationale](#why-content-layer)
   - [Three Inspection Scopes](#threatscan-scopes)
   - [Enforcement Points in Execution Pipeline](#threatscan-call-sites)
+  - [Untrusted Web Research Containment](#web-research-containment)
   - [Single-Command Result Review](#threatscan-single-command)
 - [Layer 3: Tamper-Evident Audit Logging](#layer-audit)
+- [Layer 4: Execution Provenance & Integrity](#layer-provenance)
 - [Container Isolation and Sandboxing](#container-isolation)
   - [Unified Sandbox Architecture](#unified-sandbox)
 - [Fingerprint Minimization](#fingerprint-masking)
@@ -97,6 +100,15 @@ Decision Precedence:
 
 Wildcards (`*.example.com`) cover both apex domains and arbitrary subdomains. Evaluated domain blocks are recorded in the tamper-evident audit log.
 
+### In-Sandbox Browser & WebSocket Proxy <a id="browser-proxy"></a>
+
+While external packet filtering is enforced at the network perimeter by the gateway firewall, headless browser instances (`rod` / Chromium) execute complex multi-tab navigation, redirections, and WebSockets inside the sandbox container. To prevent unauthorized in-page redirects, iframe escapes, or direct WebSocket bypasses:
+- Sandboxed Chromium runs with `--proxy-server=http://127.0.0.1:18080`.
+- The in-sandbox proxy (`browser_proxy.go`) intercepts all outbound HTTP/HTTPS `CONNECT` tunnels and plain HTTP requests.
+- Before opening an upstream connection, the proxy consults `pc.CheckHostname(targetHost)` against the gateway hostname policy.
+- WebSocket handshakes (`Upgrade: websocket`) undergo explicit hostname verification before connection establishment.
+- If a target is blocked or out-of-scope, the proxy immediately terminates the request with `HTTP 403 Forbidden` and audits the attempt.
+
 ### Rule Provenance and Precedence <a id="rule-sources"></a>
 
 Policy rules carry provenance metadata:
@@ -134,6 +146,16 @@ Network firewalls cannot prevent indirect prompt injection or payload smuggling 
 3. **Memory Ingestion**: `REMEMBER` writes pass through `ScopeStrict` validation before persisting to SQLite.
 4. **Sub-Agent Summaries**: Delegation results are scanned before merging into parent task context.
 5. **Skill Registry**: YAML playbook definitions are verified with `ScopeStrict` during load time.
+6. **Untrusted Web Research Containment**: Data retrieved via `web_search` and `web_fetch` is parsed, stripped of active scripts/styles, bounded in size, and tagged with `UNTRUSTED_WEB_CONTENT` headers before being supplied to the conductor. It is treated as untrusted observational input and is prohibited from automatic permanent memory ingestion.
+
+### Untrusted Web Research Containment <a id="web-research-containment"></a>
+
+External web search results and fetched HTML pages represent uncontrolled, third-party content subject to prompt injection, malicious instructions, or data exfiltration attempts. Yummi protects the model and system through:
+- **Strict Sandbox Localization**: `web_search` and `web_fetch` execute solely within the sandbox container under the gateway egress policy. The host orchestrator never initiates direct web queries.
+- **Structural Text Transformation**: Raw HTML is converted to clean text (removing `<script>`, `<style>`, inline iframes, and hidden CSS tags) and truncated to safe byte bounds.
+- **Untrusted Content Envelope**: Ingested snippets are enclosed in an explicit `UNTRUSTED_WEB_CONTENT / PROMPT_INJECTION_RISK` wrapper so the model evaluates facts without adopting injected persona instructions.
+- **No Automatic Memory Insertion**: External web content is never written directly to long-term memory (`REMEMBER` / SQLite knowledge base).
+- **Operator Toggle Control**: Web search capability is gated by an operator-controlled switch in the UI (`GET/POST /api/v1/system/web-search`); when toggled off, search tools are disabled and rejected.
 
 ### Single-Command Result Review <a id="threatscan-single-command"></a>
 
@@ -150,6 +172,16 @@ Each log record includes a cryptographic SHA-256 hash that incorporates the hash
 $$\text{Hash}_n = \text{SHA256}(\text{Record}_n \mathbin{\Vert} \text{Hash}_{n-1})$$
 
 Any modification, deletion, or insertion of historical log entries invalidates the forward hash chain, providing verifiable audit integrity.
+
+---
+
+## Layer 4: Execution Provenance & Integrity <a id="layer-provenance"></a>
+
+To prevent untrusted or hallucinating models from forging tool execution receipts, Yummi enforces an architectural execution-history boundary:
+- **Server-Owned Execution Receipts**: Step execution statuses, timestamps, error records, exit codes, and output streams are strictly owned by the orchestrator runner (`Store.ReplaceModelPlan`).
+- **Blacklist of Model Structural Writes**: The model cannot backfill completed execution metadata, mark pending steps as done, or alter recorded command outputs.
+- **Preservation of Progress**: When updating plans, only pending or explicitly skipped steps can be modified. Existing runner-owned progress and audit cards are immutably preserved.
+- See [Execution Provenance](agent/execution-provenance.md) for detailed structural invariants.
 
 ---
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* **agent:** enforce execution-history provenance boundary preventing model plan forgery and receipt overwrites (`Store.ReplaceModelPlan`)
+* **browser,proxy:** implement in-sandbox HTTP/HTTPS and WebSocket connection proxy (`browser_proxy.go`) enforcing gateway hostname scope on Chromium traffic
+* **browser:** add 9 production-grade browser automation tools (`browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`, `browser_session`) with deep DOM snapshots and dialog handling
+* **ui:** add operator-controlled web search toggle button (`btn-web-search`) with optimistic rollbacks and bilingual i18n
+* **ui:** add cited research source cards (`ResearchSources.tsx`) with SHA-256 hashes, URLs, and retrieval timestamps
+* **webresearch:** add controlled sandboxed web research tools (`web_search`, `web_fetch`) with HTML text conversion, script/style stripping, and `UNTRUSTED_WEB_CONTENT` tagging
+
+### Bug Fixes
+
+* **browser:** resolve proxy body read panic on HTTP/S error responses and expand accessibility tree with semantic tags (`li`, `td`, `th`, `blockquote`, `code`)
+* **sandbox-mcp:** keep persistent Docker transport alive across execution contexts to preserve browser pages and refs
+* **qa:** add edge-case QC suite, browser research live validation, and UI verification scripts
+
 ## [1.1.0](https://github.com/n0connect/Yummi/compare/v1.0.1...v1.1.0) (2026-10-10)
 
 

@@ -27,7 +27,17 @@ func HandleListSessions(sm *session.Manager) http.HandlerFunc {
 	}
 }
 
-func HandleCreateSession(sm *session.Manager) http.HandlerFunc {
+// Invalidate the operator's global conversation list without broadcasting
+// conversation contents across session-filtered streams. Replay heals reconnects.
+func publishSessionChange(hubs []*EventHub, event, id string) {
+	for _, hub := range hubs {
+		if hub != nil {
+			hub.publish("session.changed", event, time.Now().Unix(), "", "", map[string]string{"id": id}, true)
+		}
+	}
+}
+
+func HandleCreateSession(sm *session.Manager, hubs ...*EventHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name string `json:"name"`
@@ -58,6 +68,7 @@ func HandleCreateSession(sm *session.Manager) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "failed to create session", err)
 			return
 		}
+		publishSessionChange(hubs, "session.created", s.ID)
 		writeJSON(w, http.StatusCreated, s)
 	}
 }
@@ -103,7 +114,7 @@ func HandleListMessages(sm *session.Manager) http.HandlerFunc {
 	}
 }
 
-func HandleUpdateSession(sm *session.Manager) http.HandlerFunc {
+func HandleUpdateSession(sm *session.Manager, hubs ...*EventHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if !isValidSessionID(id) {
@@ -155,11 +166,12 @@ func HandleUpdateSession(sm *session.Manager) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "failed to update session", err)
 			return
 		}
+		publishSessionChange(hubs, "session.updated", s.ID)
 		writeJSON(w, http.StatusOK, s)
 	}
 }
 
-func HandleDeleteSession(sm *session.Manager) http.HandlerFunc {
+func HandleDeleteSession(sm *session.Manager, hubs ...*EventHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if !isValidSessionID(id) {
@@ -170,6 +182,7 @@ func HandleDeleteSession(sm *session.Manager) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "failed to delete session", err)
 			return
 		}
+		publishSessionChange(hubs, "session.deleted", id)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

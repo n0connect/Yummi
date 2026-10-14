@@ -67,9 +67,9 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 |   | yummi-gateway (Rust)          |   |  |   | sandbox (Hardened Kali Linux)  |   |
 |   |                               |   |  |   | UID 1000 (pentester user)      |   |
 |   | - nftables FORWARD Rules      |   |  |   |                                |   |
-|   | - Fail-Closed DROP Policy     |   |  |   | - 54 Native Pentest MCP Tools  |   |
+|   | - Fail-Closed DROP Policy     |   |  |   | - 58 Native MCP & Pentest Tools|   |
 |   | - Hostname / IP Scope Engine  |   |  |   | - tmux Terminal Sessions       |   |
-|   | - SHA-256 Audit Hash Chain    |   |  |   | - XFCE / noVNC Graphical GUI   |   |
+|   | - SHA-256 Audit Hash Chain    |   |  |   | - Browser & Desktop (noVNC)    |   |
 |   +---------------+---------------+   |  |   +----------------+---------------+   |
 |                   |                   |  |                    |                   |
 +-------------------|-------------------+  +--------------------|-------------------+
@@ -98,7 +98,7 @@ Two strictly segregated control channels reach the Kali sandbox:
 |---|---|---|---|
 | **orchestrator** | Go (`CGO_ENABLED=1`) | AI Conductor, Graph / Eino state machine, REST/WebSocket API, execution pipeline, ASM, and reporting engine. | Cannot open raw network sockets to target networks or modify firewall rules. |
 | **gateway** | Rust binary (`yummi-gateway`) | Installs fail-closed `nftables` FORWARD rules, evaluates egress scope, logs tamper-evident audit trail. | Isolated from LLM logic and direct command execution; manages network filter only. |
-| **sandbox** | Kali Linux container (`yummi-pwnbox`) | Unified offensive operations workbench (54 MCP & terminal tools, Metasploit, Nishang, Kerbrute, OpenVPN), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
+| **sandbox** | Kali Linux container (`yummi-pwnbox`) | Unified offensive operations workbench (58 MCP, browser, and terminal tools, Metasploit, Nishang, Kerbrute, OpenVPN), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
 | **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; container lifecycle mutations are blocked. |
 | **ui** | React 18 + TypeScript (nginx) | Web operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
 
@@ -127,11 +127,15 @@ Yummi includes a dedicated offensive security and bug bounty substrate:
 ```
 
 ### Key Subsystems:
-- **54 Sandbox-Resident MCP Tools (`sandbox-mcp`)**:
-  - **6 Typed Tools**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
-  - **39 Cataloged Pentest Tools**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `dnsrecon_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `gitleaks_scan`, `masscan_scan`, `sslscan_probe`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`, `whois_query`.
-  - **2 Concurrency Utilities**: `consolidate_hosts`, `passive_recon_batch`.
-  - **7 Persistent Terminal Session Tools**: `term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close` (persistent tmux sessions for background listeners, VPNs, and interactive CLI programs).
+- **58 Sandbox-Resident MCP Tools (`sandbox-mcp`) across 6 Tiers**:
+  - **Tier 1 (6 Typed Tools)**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
+  - **Tier 2 (32 Cataloged Pentest Tools)**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `dnsrecon_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `gitleaks_scan`, `masscan_scan`, `sslscan_probe`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`, `whois_query`.
+  - **Tier 3 (2 Concurrency Utilities)**: `consolidate_hosts`, `passive_recon_batch`.
+  - **Tier 4 (7 Persistent Terminal Tools)**: `term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close` (persistent tmux sessions for background listeners, VPNs, and interactive CLI programs).
+  - **Tier 5 (9 Browser Automation Tools)**: `browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`, `browser_session` (headless and headful X11 Chromium automation with token-efficient accessibility trees).
+  - **Tier 6 (2 Sandboxed Web Research Tools)**: `web_search`, `web_fetch` (privacy-first cited research via OpenRouter/Exa and direct HTTPS plaintext extraction with prompt-injection defense).
+- **In-Sandbox Hostname Connection Proxy (`browser_proxy.go`)**:
+  - Transparently intercepts all browser HTTP/S and WS/WSS connections inside the sandbox, verifying destination hosts against the gateway hostname policy (`check_hostname`) before opening sockets.
 - **Active Verification Exploit Oracles**:
   - `OracleActivePoC`: Confirms SQL injection errors, command execution, SSRF metadata responses.
   - `OracleDOMExecution`: Validates XSS and DOM sink execution.

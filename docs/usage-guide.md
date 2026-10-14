@@ -69,7 +69,10 @@ The interface opens at `http://localhost:3000`. Every engagement is scoped to a 
 
 ### 1. Agent <a id="tab-agent"></a>
 Direct Yummi using natural language or initiate autonomous red-team tasks:
-- **Interactive Chat Input**: Bounded auto-expanding multiline input supporting copy-paste and clean file drag-and-drop.
+- **Interactive Chat Input**: Bounded auto-expanding multiline input supporting copy-paste, clean file drag-and-drop, and keyboard shortcuts (Shift+Enter for newline, Enter to send).
+- **Operator-Controlled Web Search Toggle**: Dedicated toggle button (`btn-web-search`, globe icon) located in the chat composer bar. Controls whether the agent can execute external research lookups (`web_search`, `web_fetch`). When enabled, the button turns active with phosphor-teal glow (`aria-pressed="true"`); when disabled, research tools immediately fail closed. Includes busy locking (`aria-busy`) and optimistic rollbacks on persistence errors.
+- **Cited Research Source Cards**: Live and historical research actions render interactive source cards (`ResearchSources.tsx`) showing source URLs, page titles, retrieved timestamps, SHA-256 hashes, and security notices (`UNTRUSTED_WEB_CONTENT`). Excerpts are safely escaped to protect operator context from untrusted remote text.
+- **Full Browser Automation**: Directs native Chromium inside the sandbox using token-efficient accessibility trees (`@eN` refs including semantic content elements `li`, `td`, `th`, `blockquote`, `code`). The agent can fill forms, click buttons, evaluate JavaScript for DOM XSS, capture screenshots with Set-of-Marks visual overlays, and manage multi-tab workflows.
 - **Single Command Proposals**: Narrow queries ("run nmap on 10.0.0.5") yield structured proposals with risk ratings.
 - **Autonomous Multi-Step Tasks**: Broad goals trigger the state machine graph, generating structured plans and executing steps.
 - **Command Rationale Surfacing**: Each command row in the execution timeline surfaces the model's explicit rationale explaining why this command was chosen right now.
@@ -83,8 +86,8 @@ Direct Yummi using natural language or initiate autonomous red-team tasks:
 
 ### 2. Terminals (Agent Tmux Sessions) <a id="tab-terminals"></a>
 Live viewer for persistent background tmux sessions opened and managed by the agent:
-- Lists all active agent terminals with session IDs, running commands, and process status.
-- Watch-only terminal monitor allowing operators to follow live terminal output, inspect interactive CLI sessions (`msfconsole`, `gdb`, `sqlmap`), review background reverse shells, or verify listener logs without interrupting the agent.
+- Lists all active agent terminals (`term_list`) with session IDs, running commands, and process status.
+- Watch-only terminal monitor allowing operators to follow live terminal output, inspect interactive CLI sessions (`msfconsole`, `gdb`, `sqlmap`), review background reverse shells, or verify listener logs without interrupting the agent (`term_read`, `term_wait`, `term_keys`, `term_close`).
 - Output matched against suspicious patterns is flagged with security advisory notices.
 
 ![Terminals tab: a reverse shell the agent caught itself, visible to the operator in real time as it browses the filesystem and reads a captured flag — already escalated to root](assets/screenshots/usage-guide/terminals-tab.png)

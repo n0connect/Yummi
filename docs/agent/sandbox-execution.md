@@ -10,12 +10,13 @@ This document traces the scoped execution pipeline used by agent tasks, approved
 
 - [The Single Execution Pipeline](#pipeline)
 - [Execution Flow & Gateway Trust Boundary](#execution-flow)
-- [The 62 Sandbox MCP Tools](#mcp-tools)
+- [The 58 Sandbox MCP Tools](#mcp-tools)
   - [Tier 1: Individually-Typed Tools](#tier-1)
   - [Tier 2: Cataloged Pentest Tools](#tier-2)
   - [Tier 3: Concurrency & Pure-Go Utilities](#tier-3)
   - [Tier 4: Persistent Terminal Sessions (tmux)](#tier-4)
   - [Tier 5: Full-Capability Browser Automation](#tier-5)
+  - [Tier 6: Sandboxed Web Research & Intelligence Tools](#tier-6)
   - [Fallback: Free-Text Command Execution](#fallback)
 - [Target Scope Resolution & Local Tool Exemption](#scope-resolution)
 - [Argv Execution Safety vs Shell Execution](#argv-safety)
@@ -75,7 +76,7 @@ Orchestrator                      Gateway Daemon                     Kali Sandbo
 
 ---
 
-## The 54 Sandbox MCP Tools <a id="mcp-tools"></a>
+## The 58 Sandbox MCP Tools <a id="mcp-tools"></a>
 
 `sandbox-mcp` is a standalone Go MCP server compiled directly into `/usr/local/bin/yummi-sandbox-mcp` inside the Kali container and accessed via persistent stdio over `docker exec -i`.
 
@@ -89,7 +90,7 @@ These tools expose explicit JSON schema parameters directly to the LLM's native 
 5. **`ffuf_fuzz`**: High-performance HTTP fuzzing for directories, parameters, and virtual hosts.
 6. **`nikto_scan`**: Web server vulnerability scanning, misconfiguration detection, and default files.
 
-### Tier 2: 39 Cataloged Pentest Tools <a id="tier-2"></a>
+### Tier 2: 32 Cataloged Pentest Tools <a id="tier-2"></a>
 Dispatched dynamically via `search_pentest_tools` and `run_pentest_tool`:
 
 - **Web & Bug Bounty**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `arjun_scan`, `corsy_scan`, `graphql_cop_scan`, `jsluice_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`.
@@ -114,15 +115,21 @@ First-class persistent terminal verbs backed by `tmux` inside the sandbox, solvi
 7. **`term_close`**: Terminates and kills a session cleanly.
 
 ### Tier 5: Full-Capability Browser Automation <a id="tier-5"></a>
-Detailed in [Browser Automation](browser-automation.md). 8 dedicated tools driving headful X11 Chromium with anti-bot stealth and compact `@eN` accessibility snapshots:
+Detailed in [Browser Automation](browser-automation.md). 9 dedicated tools driving headful X11 Chromium with anti-bot stealth, compact `@eN` accessibility snapshots, and in-sandbox connection proxying:
 1. **`browser_open`**: Navigate to URL with Gateway scope check and return initial snapshot.
-2. **`browser_snapshot`**: Generate compact accessibility element tree (`@eN` refs).
+2. **`browser_snapshot`**: Generate compact accessibility element tree (`@eN` refs including semantic content elements `li`, `td`, `th`, `blockquote`, `code`).
 3. **`browser_interact`**: Click, fill, type, select, upload, scroll, press keys via refs.
 4. **`browser_eval`**: Execute JavaScript in page context for DOM XSS and client-side audits.
 5. **`browser_screenshot`**: Full-page or viewport capture with optional Set-of-Marks labels.
 6. **`browser_storage`**: Inspect/save/load cookies and localStorage for CLI tool chaining.
-7. **`browser_tabs`**: Multi-tab management for SSO/OAuth testing.
-8. **`browser_logs`**: Capture console and network errors.
+7. **`browser_tabs`**: Multi-tab management for SSO/OAuth testing and popup workflows.
+8. **`browser_logs`**: Capture console and network errors, auto-dismissing JS dialogs.
+9. **`browser_session`**: Isolated session profiles, security roles (`admin` vs `victim`), and context resets.
+
+### Tier 6: Sandboxed Web Research & Intelligence Tools <a id="tier-6"></a>
+Detailed in [Web Research](web-research.md). 2 dedicated tools executing purely within the sandbox, backed by OpenRouter/Exa and direct HTTPS plaintext extraction:
+1. **`web_search`**: Privacy-first search with cited sources via OpenRouter/Exa entirely inside the sandbox. Supports domain inclusions/exclusions and standard/deep modes.
+2. **`web_fetch`**: Read, find, and paginate original public HTTPS sources into cited plain text. Operates strictly on port 443, enforces body and redirect bounds, and tags all outputs with `UNTRUSTED_WEB_CONTENT` to prevent prompt injection.
 
 ### Fallback: Free-Text Command Execution <a id="fallback"></a>
 - **`run_command`**: Free-text shell execution for utilities (`git`, `find`, `awk`, `sed`) that do not wrap a specialized pentest tool.

@@ -109,6 +109,8 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
   const [showArchived, setShowArchived] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadVersion = useRef(0)
+  const loadController = useRef<AbortController | null>(null)
 
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => {
     try {
@@ -126,15 +128,19 @@ export function SessionRail({ open, onToggle, activeSessionID, refreshKey, onSel
   }, [])
 
   const load = useCallback(() => {
+    loadController.current?.abort()
     const controller = new AbortController()
+    loadController.current = controller
+    const version = ++loadVersion.current
     setLoading(true)
     fetchJSON<SessionSummary[]>('/api/v1/sessions', { signal: controller.signal })
       .then(rows => {
+        if (version !== loadVersion.current || controller.signal.aborted) return
         setSessions(rows ?? [])
         setError(false)
       })
-      .catch(err => { if (err?.name !== 'AbortError') setError(true) })
-      .finally(() => setLoading(false))
+      .catch(err => { if (version === loadVersion.current && err?.name !== 'AbortError') setError(true) })
+      .finally(() => { if (version === loadVersion.current) setLoading(false) })
     return () => controller.abort()
   }, [])
 

@@ -1,8 +1,6 @@
 # Browser and web research
 
-Release status: implemented/deployed, with unresolved browser WebSocket-policy,
-log-isolation and full-desktop agent QC gaps. See [QC handoff](web-research-qc.md).
-Do not treat this delivery as a verified full-production-compatibility release.
+Release status: Production-hardened with in-sandbox HTTP/CONNECT/WebSocket connection proxy (`browser_proxy.go`), generation-based log buffer isolation, fail-closed state management, and edge-cases verification (`qa/edge_cases_qc.py`, `qa/web_search_toggle_qc.py`). See [QC verification](web-research-qc.md).
 
 Research executes in `sandbox-mcp` as UID 1000. Neither the host nor the
 orchestrator performs research HTTP or DNS. All external connections traverse
@@ -17,12 +15,14 @@ permit that resolver IP as well as approved destinations; no host DNS fallback
 or policy bypass is used. Chromium preferences are documented by the
 [Chromium resolver preference definitions](https://chromium.googlesource.com/chromium/src/+/5977f0b3b658787f95f42d1390d3f6129b0f12c9/chrome/common/pref_names.h).
 
-## Setup
+## Setup & Operator Control
 
-Sandbox configuration: `YUMMI_WEB_SEARCH_ENABLED=true`,
+Web research is disabled by default. Operators can toggle it at runtime:
+- **Interactive UI Toggle**: Click the globe button (`btn-web-search`) directly in the chat composer bar. When active, it pulses with phosphor-teal (`aria-pressed="true"`). If disabled or write fails, it rolls back gracefully and research tools immediately fail closed.
+- **REST API Control**: `GET /api/v1/system/web-search` queries the state; `POST /api/v1/system/web-search` updates state atomically (`{"enabled": true|false}`) via `/tmp/yummi_web_search_state`.
+- **Environment Configuration**: Set `YUMMI_WEB_SEARCH_ENABLED=true`,
 `YUMMI_WEB_SEARCH_MODEL=minimax/minimax-m2.1`, and
-`YUMMI_WEB_SEARCH_API_KEY` containing an OpenRouter credential. Disabled is the
-default. Credentials are never arguments, output or provider error bodies.
+`YUMMI_WEB_SEARCH_API_KEY` with an OpenRouter credential. Credentials are never arguments, output, or provider error bodies.
 Prefer a dedicated restricted research key: a key in sandbox environment can
 be read by other commands running with the same sandbox user's authority.
 

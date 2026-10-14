@@ -96,6 +96,48 @@ func NewStore(db *sql.DB) (*Store, error) {
 	return s, nil
 }
 
+// ReplaceModelPlan accepts intent changes, never model-authored execution
+// history. Recorded progress is immutable to the model, even if omitted or
+// renamed in its replacement list. This does not judge goal completion.
+func (s *Store) ReplaceModelPlan(id string, proposed []PlanStep) error {
+	return s.Update(id, func(task *Task) {
+		recorded := make(map[string]PlanStep, len(task.Plan))
+		for _, step := range task.Plan {
+			if step.Command != "" || step.Status == StepDone || step.Status == StepFailed || step.Status == StepRunning {
+				recorded[step.ID] = step
+			}
+		}
+		seen := make(map[string]bool, len(proposed))
+		next := make([]PlanStep, 0, len(proposed)+len(recorded))
+		for i, step := range proposed {
+			if step.ID == "" {
+				step.ID = fmt.Sprintf("s%d", i+1)
+			}
+			if seen[step.ID] {
+				continue
+			}
+			seen[step.ID] = true
+			if prior, ok := recorded[step.ID]; ok {
+				next = append(next, prior)
+				continue
+			}
+			status := StepPending
+			// Skipping is a model decision, not a claim that execution happened.
+			if step.Status == StepSkipped {
+				status = StepSkipped
+			}
+			next = append(next, PlanStep{ID: step.ID, Description: step.Description, Status: status})
+		}
+		for _, prior := range task.Plan {
+			if _, ok := recorded[prior.ID]; ok && !seen[prior.ID] {
+				next = append(next, prior)
+				seen[prior.ID] = true
+			}
+		}
+		task.Plan = next
+	})
+}
+
 // Create registers a new top-level task in the planning state.
 func (s *Store) Create(sessionID, goal string, stepBudget int) (Task, error) {
 	return s.create(sessionID, goal, stepBudget, "")

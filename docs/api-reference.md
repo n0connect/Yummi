@@ -213,6 +213,8 @@ The full HTTP REST and WebSocket interface exposed by the `orchestrator` service
 |---|---|---|
 | `GET` | `/api/v1/system/status` | Aggregated health status across Docker, Gateway, Sandbox, and LLM. |
 | `GET` | `/api/v1/system/health-metrics` | Ring-buffer latency and error rate metrics. |
+| `GET` | `/api/v1/system/web-search` | Get sandbox web research state (`{"enabled": bool}`). |
+| `POST` | `/api/v1/system/web-search` | Toggle sandbox web research state (`{"enabled": bool}`). Fails closed on error. |
 | `GET` | `/api/v1/system/logs` | Server-Sent Events (SSE) stream of internal debug logs. |
 | `GET` | `/api/v1/llm/status` | Ollama connection and resilient circuit-breaker state. |
 | `GET` | `/healthz` | Unauthenticated readiness and liveness container probe. |

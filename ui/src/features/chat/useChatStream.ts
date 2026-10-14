@@ -12,6 +12,7 @@ type WsEvent = EventMeta & (
   | { type: 'agent.activity'; data: ActivityEvent }
   | { type: 'skill.status'; event: string; data: PendingSkill }
   | { type: 'chat.stream'; event: string; data: ChatStreamEvent }
+  | { type: 'session.changed'; data: { id: string } }
 )
 
 export type EventConnectionState = 'connecting' | 'live' | 'recovering' | 'stale'
@@ -38,13 +39,14 @@ type Options = {
   // reconnects are healed by ordered replay and do not force a REST refresh.
   onReconnect?: () => void
   onConnectionState?: (state: EventConnectionState) => void
+  onSessionsChanged?: () => void
 }
 
 /**
  * Opens a single /ws/events WebSocket and dispatches execution.status and
  * task.status events to the provided callbacks. Reconnects on close.
  */
-export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, onActivity, onSkillEvent, onChatStream, onReconnect, onConnectionState }: Options): void {
+export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, onActivity, onSkillEvent, onChatStream, onReconnect, onConnectionState, onSessionsChanged }: Options): void {
   // Keep refs so the effect only opens once, but callbacks are always current.
   const onExecutionRef    = useRef(onExecution)
   const onTaskRef         = useRef(onTask)
@@ -54,6 +56,7 @@ export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, 
   const onChatStreamRef   = useRef(onChatStream)
   const onReconnectRef    = useRef(onReconnect)
   const onConnectionStateRef = useRef(onConnectionState)
+  const onSessionsChangedRef = useRef(onSessionsChanged)
   onExecutionRef.current    = onExecution
   onTaskRef.current         = onTask
   onGatewayRulesRef.current = onGatewayRules
@@ -62,6 +65,7 @@ export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, 
   onChatStreamRef.current   = onChatStream
   onReconnectRef.current    = onReconnect
   onConnectionStateRef.current = onConnectionState
+  onSessionsChangedRef.current = onSessionsChanged
 
   useEffect(() => {
     let retryTimer: number | undefined
@@ -95,6 +99,7 @@ export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, 
               onReconnectRef.current?.()
             }
             onConnectionStateRef.current?.('live')
+            onSessionsChangedRef.current?.()
           } else if (msg.type === 'execution.status' && msg.data) {
             onExecutionRef.current?.(msg.data as ExecutionRecord)
           } else if (msg.type === 'task.status' && msg.data) {
@@ -107,6 +112,8 @@ export function useChatStream({ sessionID, onExecution, onTask, onGatewayRules, 
             onSkillEventRef.current?.(msg.data, msg.event)
           } else if (msg.type === 'chat.stream' && msg.data) {
             onChatStreamRef.current?.(msg.data)
+          } else if (msg.type === 'session.changed' && msg.data) {
+            onSessionsChangedRef.current?.()
           }
         } catch {
           // ignore malformed payloads

@@ -23,8 +23,9 @@ ui/src/
 |-- pages/          One directory per tab: chat/, terminal/, desktop/, trace/, logs/, gateway/, health/, agent-terminals/
 |-- features/       One directory per data concern:
 |                   |-- assistant/    Chat panel, multiline auto-expanding input with file drag-and-drop,
-|                   |                 message rendering (TextMessage, ExecutionMessage, TaskSummaryMessage
-|                   |                 with CTF/pentest flag highlighting and copy button), proposal bar
+|                   |                 web-search operator toggle button (btn-web-search), message rendering
+|                   |                 (TextMessage, ExecutionMessage, TaskSummaryMessage with CTF/pentest flag
+|                   |                 highlighting and copy button, ResearchSources cited cards), proposal bar
 |                   |-- chat/         Chat/event stream hook (useChatStream — WS, jittered backoff)
 |                   |-- desktop/      Desktop panel — on-demand click-to-activate noVNC/websockify canvas & status
 |                   |-- operator/     Operator Trust Rail & Briefing panel

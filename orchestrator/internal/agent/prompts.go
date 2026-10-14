@@ -172,7 +172,8 @@ func ParsePlan(raw string) ([]PlanStep, error) {
 		return nil, errors.New("plan parse: no steps")
 	}
 	for i := range out.Steps {
-		out.Steps[i].Status = StepPending
+		// A model plan describes intent; execution fields belong to the runner.
+		out.Steps[i] = PlanStep{ID: out.Steps[i].ID, Description: out.Steps[i].Description, Status: StepPending}
 		if out.Steps[i].ID == "" {
 			out.Steps[i].ID = fmt.Sprintf("s%d", i+1)
 		}

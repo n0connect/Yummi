@@ -18,15 +18,19 @@ This page assumes you've already completed [Installation](installation.md) - a w
 
 ## Three Go modules — the mistake almost everyone makes once <a id="two-go-modules"></a>
 
-This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root, `orchestrator/go.mod`, and `sandbox-mcp/go.mod` are **three independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator and sandbox-mcp test is silently skipped, not failed, so there's no error to tip you off. If you're touching anything under `orchestrator/` or `sandbox-mcp/`, you must `cd` into that module (or prefix each command with `cd <module> &&`) first:
+This is worth repeating from [Architecture](architecture.md#build-ecosystems) because it causes real confusion the first time: `go.mod` at the repo root, `orchestrator/go.mod`, and `sandbox-mcp/go.mod` are **three independent Go modules**. Running `go test ./...` from the repo root only ever exercises the CLI module — every orchestrator and sandbox-mcp test is silently skipped, not failed, so there's no error to tip you off.
+
+> [!IMPORTANT]
+> **Mandatory sandbox execution placement**: Never run `go test` directly inside `sandbox-mcp` on the developer host machine. Live sandbox-MCP tests launch real tools, tmux sessions, and headless Chromium, which require Linux Docker, UID 1000, and the container runtime. Always use `make _test-sandbox-mcp` to build `sandbox-mcp/Dockerfile.test` and run real tests inside an isolated Kali container.
 
 ```bash
 # WRONG — silently skips every orchestrator_test.go and sandbox-mcp test
 go test ./...
 
 # RIGHT
-cd orchestrator && go test ./...
-cd sandbox-mcp && go test ./...
+go test ./...                     # CLI (root module)
+cd orchestrator && go test ./... # Orchestrator unit tests
+make _test-sandbox-mcp            # Sandbox-MCP tests (inside isolated Kali container)
 ```
 
 `make test` (and its granular pieces below) already get this right — it's specifically ad-hoc `go test`/`go build`/`go vet` invocations outside the Makefile where this bites people.
@@ -76,6 +80,9 @@ go test ./internal/cli -run TestParseTopLevelOptionsDefaultUI
 
 # gateway (Rust) — cargo test takes a name filter, not a fully-qualified path
 cd gateway && cargo test test_allow_in_scope
+
+# sandbox-mcp module — executes inside isolated Kali container
+make _test-sandbox-mcp
 ```
 
 Table-driven Go tests are common (for example `validator_test.go`), with map-backed stores or in-memory SQLite where appropriate. Scripted clients and local test servers isolate external/nondeterministic boundaries such as Ollama, HTTP, and gateway IPC; integration/live tests retain the real execution path. `ui/src/test/setup.ts` only supplies missing jsdom browser APIs (`scrollIntoView`, `ResizeObserver`). Use `-race` for concurrency-sensitive Go packages such as the graph, gate, and execution store.

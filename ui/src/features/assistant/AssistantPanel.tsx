@@ -39,6 +39,7 @@ import {
   LIVE_OUTPUT_CAP
 } from './MessageRenderers'
 import { MiniSandboxPreview } from './MiniSandboxPreview'
+import { TaskTracker } from '../tasks/TaskTracker'
 
 // ≈4 chars per token (BPE average — same estimate ContextBar.tsx already
 // uses for its overall-usage display; this is a per-turn size, not exact,
@@ -181,6 +182,13 @@ export function AssistantPanel({
   // scanner. Unlike a banner-only warning, these records cannot be fed back to
   // the conductor until the operator explicitly releases them.
   const [threatHolds, setThreatHolds] = useState<ExecutionRecord[]>([])
+  const operatorActionLocks = useRef(new Set<string>())
+  const [operatorBusy, setOperatorBusy] = useState<Record<string, boolean>>({})
+  const [operatorError, setOperatorError] = useState<string | null>(null)
+  useEffect(() => {
+    setOperatorError(null)
+    setOperatorBusy({})
+  }, [sessionID])
   // liveOutputs accumulates each running execution's streamed output chunks
   // (WS "execution.output" events — see execution.Store.publishOutputChunk
   // server-side), keyed by execution id, so ExecutionMessage can render a
@@ -205,6 +213,8 @@ export function AssistantPanel({
   const [historyLoading, setHistoryLoading] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const followMessages = useRef(true)
+  const [unseenMessages, setUnseenMessages] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
@@ -463,8 +473,17 @@ export function AssistantPanel({
   }, [messages, sessionID])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (followMessages.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    } else {
+      setUnseenMessages(true)
+    }
   }, [messages, activeTask, streamingText])
+
+  useEffect(() => {
+    followMessages.current = true
+    setUnseenMessages(false)
+  }, [sessionID])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -1014,7 +1033,7 @@ export function AssistantPanel({
     resyncExecutionHolds(sessionIDRef.current)
   }, [resyncActiveTask, resyncExecutionHolds])
 
-  useChatStream({ sessionID, onExecution, onTask, onActivity, onChatStream, onReconnect })
+  useChatStream({ sessionID, onExecution, onTask, onActivity, onChatStream, onReconnect, onSessionsChanged })
 
   // ── Task actions ───────────────────────────────────────────────────────────
 
@@ -1044,6 +1063,7 @@ export function AssistantPanel({
         })
       } catch {
         appendMessage({ role: 'system', content: t('assistant.taskResumeFailed') })
+        throw new Error('Task resume rejected')
       }
     },
     [appendMessage]
@@ -1065,6 +1085,7 @@ export function AssistantPanel({
       } catch {
         if (sessionIDRef.current !== sid) return
         appendMessage({ role: 'system', content: t('assistant.approvalSendFailed') })
+        throw new Error('Task approval rejected')
       }
     },
     [appendMessage, sessionID]
@@ -1082,6 +1103,7 @@ export function AssistantPanel({
       } catch {
         if (sessionIDRef.current !== sid) return
         appendMessage({ role: 'system', content: t('assistant.autoApproveToggleFailed') })
+        throw new Error('Task auto-approve rejected')
       }
     },
     [appendMessage, sessionID]
@@ -1089,10 +1111,8 @@ export function AssistantPanel({
 
   const resolveEgress = useCallback(
     async (rec: ExecutionRecord, approved: boolean) => {
-      // Optimistically drop the card; the resulting completed/failed event will
-      // append the final result (or onExecution re-adds it if the call fails).
+      // Keep the decision visible until the server acknowledges it.
       const sid = sessionID // the conversation this hold belongs to
-      setEgressHolds((prev) => prev.filter((r) => r.id !== rec.id))
       try {
         await fetchJSON(`/api/v1/executions/${rec.id}/resolve-egress`, {
           method: 'POST',
@@ -1100,6 +1120,7 @@ export function AssistantPanel({
           body: JSON.stringify({ approved })
         })
         if (sessionIDRef.current !== sid) return
+        setEgressHolds((prev) => prev.filter((r) => r.id !== rec.id))
         appendMessage({
           role: 'system',
           content: approved
@@ -1113,6 +1134,7 @@ export function AssistantPanel({
           content: t('assistant.egressDecisionFailed')
         })
         setEgressHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec]) // restore
+        throw new Error('Egress decision rejected')
       }
     },
     [appendMessage, sessionID]
@@ -1123,7 +1145,6 @@ export function AssistantPanel({
       // The terminal event emitted by the API is the source of truth for the
       // final card and (only on approval) the subsequent LLM feedback.
       const sid = sessionID // the conversation this hold belongs to
-      setThreatHolds((prev) => prev.filter((r) => r.id !== rec.id))
       try {
         await fetchJSON(`/api/v1/executions/${rec.id}/resolve-threat`, {
           method: 'POST',
@@ -1131,6 +1152,7 @@ export function AssistantPanel({
           body: JSON.stringify({ approved })
         })
         if (sessionIDRef.current !== sid) return
+        setThreatHolds((prev) => prev.filter((r) => r.id !== rec.id))
         appendMessage({
           role: 'system',
           content: approved
@@ -1144,6 +1166,7 @@ export function AssistantPanel({
           content: t('assistant.threatDecisionFailed')
         })
         setThreatHolds((prev) => [...prev.filter((r) => r.id !== rec.id), rec])
+        throw new Error('Threat decision rejected')
       }
     },
     [appendMessage, sessionID]
@@ -1435,7 +1458,7 @@ export function AssistantPanel({
 
   const handleSend = async () => {
     if (isLoading) return
-    if (proposals.length > 0) {
+    if (proposals.length > 0 && !input.trim() && attachedFiles.length === 0) {
       await approveProposal(proposals[selectedIdx])
       return
     }
@@ -1468,12 +1491,13 @@ export function AssistantPanel({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'Escape' && proposals.length > 0) {
       e.preventDefault()
       setProposals([])
       return
     }
-    if (proposals.length > 0) {
+    if (proposals.length > 0 && !input.trim()) {
       if (e.key === 'ArrowUp') {
         e.preventDefault()
         setSelectedIdx((i) => (i > 0 ? i - 1 : proposals.length - 1))
@@ -1514,6 +1538,32 @@ export function AssistantPanel({
   }
 
   // ── Derived state ──────────────────────────────────────────────────────────
+
+  const pendingTasks = Array.from(new Map([
+    ...Object.values(taskSnapshots),
+    ...(activeTask ? [activeTask] : [])
+  ].map(task => [task.id, task])).values()).filter(task =>
+    task.session_id === sessionID && (task.status === 'paused' ||
+      (task.status === 'awaiting_approval' && task.pending_proposal_id)))
+  const actionCount = pendingTasks.length + egressHolds.length + threatHolds.length + proposals.length
+  const performOperatorAction = async (key: string, action: () => Promise<void>) => {
+    const sid = sessionID
+    const lock = `${sid}:${key}`
+    if (operatorActionLocks.current.has(lock)) return
+    operatorActionLocks.current.add(lock)
+    setOperatorBusy(prev => ({ ...prev, [lock]: true }))
+    setOperatorError(null)
+    try {
+      await action()
+    } catch (error) {
+      if (sessionIDRef.current === sid) setOperatorError(t('assistant.operatorActionFailed'))
+      throw error
+    } finally {
+      operatorActionLocks.current.delete(lock)
+      if (sessionIDRef.current === sid) setOperatorBusy(prev => ({ ...prev, [lock]: false }))
+    }
+  }
+  const actionBusy = (key: string) => Boolean(operatorBusy[`${sessionID}:${key}`])
 
   const taskRunning = activeTask !== null && !TERMINAL.has(activeTask.status)
   // Narrower than taskRunning on purpose: 'paused' is non-terminal (the task
@@ -1571,7 +1621,12 @@ export function AssistantPanel({
       <MiniSandboxPreview />
       <div className="panel-header">
         <span className="panel-header-title">{t('statusBar.nav.agent')}</span>
-        {taskRunning && !taskPaused && (
+        {actionCount > 0 && (
+          <span className="running-indicator operator-required" role="status">
+            {t('assistant.operatorActions')} ({actionCount})
+          </span>
+        )}
+        {taskRunning && !taskPaused && actionCount === 0 && (
           <span className="running-indicator" role="status" aria-live="polite">
             <span className="loading-dot pulse" aria-hidden="true">●</span> {t('assistant.taskRunningIndicator')}
           </span>
@@ -1644,6 +1699,11 @@ export function AssistantPanel({
           aria-label={t('assistant.messagesLogAriaLabel')}
           aria-live="polite"
           aria-relevant="additions"
+          onScroll={event => {
+            const list = event.currentTarget
+            followMessages.current = list.scrollHeight - list.scrollTop - list.clientHeight < 64
+            if (followMessages.current) setUnseenMessages(false)
+          }}
         >
           {isFreshWorkspace ? (
             <EmptyWorkspace onUsePrompt={useStarterPrompt} onLaunchTarget={(goal) => void sendChat(goal)} />
@@ -1656,6 +1716,8 @@ export function AssistantPanel({
                   <TaskCardMessage
                     key={msg.id}
                     task={displayTask}
+                    showOperatorControls={false}
+                    compact
                     activities={taskActivities[msg.taskID]}
                     onClose={() => {
                       setTaskSnapshots((prev) => {
@@ -1722,6 +1784,37 @@ export function AssistantPanel({
           <div ref={messagesEndRef} />
         </div>
 
+        {unseenMessages && <button type="button" className="chat-follow-latest" onClick={() => {
+          followMessages.current = true
+          setUnseenMessages(false)
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+        }}>{t('assistant.followLatest')}</button>}
+
+        <section className="operator-actions-dock" aria-label={t('assistant.operatorActions')} hidden={actionCount === 0 && !operatorError}>
+          {actionCount > 1 && <header className="operator-actions-header" role="status" aria-live="polite">
+            <strong>{t('assistant.operatorActions')} <span className="operator-actions-count">{actionCount}</span></strong>
+          </header>}
+          {operatorError && <div className="operator-actions-error" role="alert">
+            <span>{operatorError}</span>
+            <button type="button" className="small-button" onClick={() => setOperatorError(null)} aria-label={t('common.close')}>×</button>
+          </div>}
+          <div className="operator-actions-list">
+          {pendingTasks.map(task => (
+            <TaskTracker
+              key={`${task.id}:${task.pending_proposal_id ?? task.question ?? task.status}`}
+              liveTask={task}
+              attentionOnly
+              busy={actionBusy(task.id)}
+              onClose={() => {}}
+              onApprove={(pid, approved) => performOperatorAction(task.id, () => approveTaskGate(task.id, pid, approved))}
+              onToggleAutoApprove={enable => performOperatorAction(task.id, () => toggleTaskAutoApprove(task.id, enable))}
+              onResume={message => void performOperatorAction(task.id, () => resumeTask(task.id, message)).catch(() => {})}
+              onStop={() => void performOperatorAction(task.id, async () => {
+                await fetchJSON(`/api/v1/tasks/${task.id}/stop`, { method: 'POST' })
+              }).catch(() => {})}
+            />
+          ))}
+
         {/* Egress approval holds (gateway Ask mode) — an operator-blocking
             approval gate, so this is genuinely urgent: assertive, not polite. */}
         {egressHolds.length > 0 && (
@@ -1740,13 +1833,15 @@ export function AssistantPanel({
                 <div className="egress-actions">
                   <button
                     className="btn-approve"
-                    onClick={() => void resolveEgress(rec, true)}
+                    disabled={actionBusy(rec.id)}
+                    onClick={() => void performOperatorAction(rec.id, () => resolveEgress(rec, true)).catch(() => {})}
                   >
                     {t('assistant.allow')}
                   </button>
                   <button
                     className="btn-reject"
-                    onClick={() => void resolveEgress(rec, false)}
+                    disabled={actionBusy(rec.id)}
+                    onClick={() => void performOperatorAction(rec.id, () => resolveEgress(rec, false)).catch(() => {})}
                     title={t('common.reject')}
                   >
                     {t('assistant.deny')}
@@ -1784,13 +1879,15 @@ export function AssistantPanel({
                 <div className="threat-actions">
                   <button
                     className="btn-approve"
-                    onClick={() => void resolveThreat(rec, true)}
+                    disabled={actionBusy(rec.id)}
+                    onClick={() => void performOperatorAction(rec.id, () => resolveThreat(rec, true)).catch(() => {})}
                   >
                     {t('assistant.forwardToAgent')}
                   </button>
                   <button
                     className="btn-threat-reject"
-                    onClick={() => void resolveThreat(rec, false)}
+                    disabled={actionBusy(rec.id)}
+                    onClick={() => void performOperatorAction(rec.id, () => resolveThreat(rec, false)).catch(() => {})}
                     title={t('assistant.keepFromAgent')}
                   >
                     {t('assistant.keepFromAgent')}
@@ -1826,7 +1923,6 @@ export function AssistantPanel({
                   aria-selected={idx === selectedIdx}
                   className={`proposal-card ${idx === selectedIdx ? 'selected' : ''}`}
                   onClick={() => setSelectedIdx(idx)}
-                  onDoubleClick={() => void approveProposal(p)}
                 >
                   <div className="proposal-main">
                     <code className="proposal-command">$ {p.command}</code>
@@ -1884,6 +1980,9 @@ export function AssistantPanel({
             </div>
           </div>
         )}
+
+          </div>
+        </section>
 
         {/* Input + attachments + stop/send button */}
         <div className="chat-input-area">

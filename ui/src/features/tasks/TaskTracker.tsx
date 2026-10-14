@@ -167,12 +167,12 @@ function ApprovalGate({
 }: {
   risk?: string
   command?: string
-  onApprove: (approved: boolean) => void
+  onApprove: (approved: boolean) => void | Promise<void>
   // Present only for the task's own (non-nested) gate — a sub-task shares
   // its parent's AutoApproveNonCritical flag server-side (same Task field
   // semantics apply to any task ID), but offering a second, separate toggle
   // per sub-task in the UI would just be confusing without adding capability.
-  onApproveAndAutoApprove?: () => void
+  onApproveAndAutoApprove?: () => void | Promise<void>
   nested?: boolean
 }): JSX.Element {
   return (
@@ -184,14 +184,14 @@ function ApprovalGate({
       </div>
       <code className="tt-gate-cmd">$ {command}</code>
       <div className="tt-actions">
-        <button className="tt-btn tt-btn-approve" onClick={() => onApprove(true)}>
+        <button className="tt-btn tt-btn-approve" onClick={() => void Promise.resolve(onApprove(true)).catch(() => {})}>
           {t('taskTracker.approveAndRun')}
         </button>
-        <button className="tt-btn tt-btn-deny" onClick={() => onApprove(false)}>
+        <button className="tt-btn tt-btn-deny" onClick={() => void Promise.resolve(onApprove(false)).catch(() => {})}>
           {t('taskTracker.deny')}
         </button>
         {onApproveAndAutoApprove && (
-          <button className="tt-btn tt-btn-auto" onClick={onApproveAndAutoApprove}>
+          <button className="tt-btn tt-btn-auto" onClick={() => void Promise.resolve(onApproveAndAutoApprove()).catch(() => {})}>
             {t('taskTracker.approveAndAutoApprove')}
           </button>
         )}
@@ -203,7 +203,7 @@ function ApprovalGate({
 type Props = {
   liveTask: AgentTask
   onClose: () => void
-  onApprove: (proposalID: string, approved: boolean) => void
+  onApprove: (proposalID: string, approved: boolean) => void | Promise<void>
   onStop: () => void
   // Resumes a task paused at the ask_operator node, carrying the operator's
   // free-text answer (POST /api/v1/tasks/{id}/start — see tasks.go). An
@@ -225,7 +225,11 @@ type Props = {
   // Omitted entirely (rather than a no-op) when the caller can't wire it, so
   // ApprovalGate's third button and the header badge/toggle both just don't
   // render instead of doing nothing on click.
-  onToggleAutoApprove?: (enable: boolean) => void
+  onToggleAutoApprove?: (enable: boolean) => void | Promise<void>
+  showOperatorControls?: boolean
+  attentionOnly?: boolean
+  compact?: boolean
+  busy?: boolean
 }
 
 export function TaskTracker({
@@ -237,7 +241,11 @@ export function TaskTracker({
   activities = [],
   subTasks = [],
   onApproveSub,
-  onToggleAutoApprove
+  onToggleAutoApprove,
+  showOperatorControls = true,
+  attentionOnly = false,
+  compact = false,
+  busy = false
 }: Props): JSX.Element {
   const [replyText, setReplyText] = useState('')
   const pct =
@@ -270,8 +278,8 @@ export function TaskTracker({
     (task.finding_records?.length ?? 0) > 0 || unmatchedFindings.length > 0
 
   return (
-    <div className={`tt-card tt-status-${task.status}`}>
-      <header className="tt-header">
+    <div className={`tt-card tt-status-${task.status} ${attentionOnly ? 'tt-attention-card' : ''}`} aria-busy={busy}>
+      {!attentionOnly && <header className="tt-header">
         <div className="tt-header-main">
           <span className={`tt-pill tt-pill-${task.status}`} role="status" aria-live="polite">
             {!terminal && <span className="tt-pulse" aria-hidden="true">●</span>}
@@ -286,13 +294,13 @@ export function TaskTracker({
             ✕
           </button>
         )}
-      </header>
+      </header>}
 
       {/* Auto-approve-non-critical status — only shown once it's actually on,
           since the toggle already appears as a button on the gate itself the
           first time it's relevant; this is purely "it's on, here's how to
           turn it off" for the rest of the task's run. */}
-      {!terminal && task.auto_approve_non_critical && onToggleAutoApprove && (
+      {!attentionOnly && !terminal && task.auto_approve_non_critical && onToggleAutoApprove && (
         <div className="tt-auto-approve-badge">
           <span>{t('taskTracker.autoApproveOnBadge')}</span>
           <button className="tt-btn tt-btn-link" onClick={() => onToggleAutoApprove(false)}>
@@ -302,31 +310,41 @@ export function TaskTracker({
       )}
 
       {/* Progress bar */}
-      <div className="tt-progress">
+      {!attentionOnly && <div className="tt-progress">
         <div className="tt-progress-bar" style={{ width: `${pct}%` }} />
         <span className="tt-progress-label">
           {task.steps_used}/{task.step_budget} {t('taskTracker.stepsUsedSuffix')}
         </span>
-      </div>
+      </div>}
 
       {/* Plan timeline */}
-      {task.plan && task.plan.length > 0 && <PlanTimeline plan={task.plan} />}
+      {!attentionOnly && (compact ? (
+        <details className="tt-history-details">
+          <summary>{t('taskTracker.liveFeedTitle')}</summary>
+          {task.plan && task.plan.length > 0 && <PlanTimeline plan={task.plan} />}
+          <LiveActivityFeed activities={activities} />
+          <SubTaskTree tasks={subTasks} />
+        </details>
+      ) : <>
+        {task.plan && task.plan.length > 0 && <PlanTimeline plan={task.plan} />}
+        <LiveActivityFeed activities={activities} />
+        <SubTaskTree tasks={subTasks} />
+      </>)}
 
-      <LiveActivityFeed activities={activities} />
-
-      <SubTaskTree tasks={subTasks} />
+      <fieldset className="tt-operator-controls" disabled={busy}>
 
       {/* Awaiting approval — inline gate */}
-      {task.status === 'awaiting_approval' && task.pending_proposal_id && (
+      {showOperatorControls && task.status === 'awaiting_approval' && task.pending_proposal_id && (
         <ApprovalGate
           risk={task.pending_risk}
           command={task.pending_command}
           onApprove={(approved) => onApprove(task.pending_proposal_id!, approved)}
           onApproveAndAutoApprove={
             onToggleAutoApprove
-              ? () => {
-                  onApprove(task.pending_proposal_id!, true)
-                  onToggleAutoApprove(true)
+              ? async () => {
+                  const decision = onApprove(task.pending_proposal_id!, true)
+                  if (decision) await decision
+                  await onToggleAutoApprove(true)
                 }
               : undefined
           }
@@ -336,7 +354,7 @@ export function TaskTracker({
       {/* Every concurrently-delegated sub-agent's own pending approval,
           nested under the parent it was delegated from — see the
           Props.subTasks doc comment above. */}
-      {subTasks
+      {showOperatorControls && subTasks
         .filter((sub) => sub.status === 'awaiting_approval' && sub.pending_proposal_id)
         .map((sub) => (
           <ApprovalGate
@@ -353,7 +371,7 @@ export function TaskTracker({
           without this the ask_operator node was a dead end — the task sat in
           "paused" forever no matter what the operator typed into the main
           chat box, which is a different, unrelated conversation channel). */}
-      {task.status === 'paused' && (
+      {showOperatorControls && task.status === 'paused' && (
         <div className="tt-paused" role="alert">
           {task.question && (
             <p className="tt-question">
@@ -422,9 +440,10 @@ export function TaskTracker({
           </div>
         </div>
       )}
+      </fieldset>
 
       {/* Running / awaiting — stop control */}
-      {(task.status === 'running' ||
+      {showOperatorControls && !attentionOnly && (task.status === 'running' ||
         task.status === 'awaiting_approval' ||
         task.status === 'planning') && (
         <div className="tt-actions tt-actions-end">
@@ -435,7 +454,7 @@ export function TaskTracker({
       )}
 
       {/* Terminal — summary + findings */}
-      {terminal && (
+      {!attentionOnly && terminal && (
         <div className="tt-summary">
           {task.summary && (
             <p className="tt-summary-text">{sanitizeOperatorText(task.summary)}</p>

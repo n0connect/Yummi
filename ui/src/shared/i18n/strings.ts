@@ -5,6 +5,10 @@
 // `Record<keyof typeof en, string>` so a translation missing a key that `en`
 // has (or vice versa) is a compile error, not a silent runtime fallback.
 const en = {
+  'assistant.operatorActions': 'Your action is needed',
+  'assistant.followLatest': 'New activity — jump to latest',
+  'assistant.operatorActionsHint': 'Decide here to continue. Nothing runs without the required approval.',
+  'assistant.operatorActionFailed': 'The decision could not be saved. Review the request and try again.',
   'research.sources': 'Research sources',
   'research.untrusted': 'External source evidence — verify important claims against the original source.',
   'research.copyUrl': 'Copy URL',
@@ -581,6 +585,10 @@ const en = {
 }
 
 const tr = {
+  'assistant.operatorActions': 'İşlem yapmanız gerekiyor',
+  'assistant.followLatest': 'Yeni etkinlik — son mesaja git',
+  'assistant.operatorActionsHint': 'Devam etmek için buradan karar verin. Gereken onay olmadan işlem çalışmaz.',
+  'assistant.operatorActionFailed': 'Karar kaydedilemedi. İsteği kontrol edip tekrar deneyin.',
   'research.sources': 'Araştırma kaynakları',
   'research.untrusted': 'Dış kaynak kanıtı — önemli iddiaları özgün kaynak üzerinden doğrulayın.',
   'research.copyUrl': 'URL kopyala',

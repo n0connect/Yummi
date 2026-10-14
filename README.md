@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/n0connect/yummi/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/n0connect/yummi/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-brightgreen?style=flat-square" /></a>
-  <a href="CHANGELOG.md"><img alt="Version" src="https://img.shields.io/badge/version-v1.0.1b-brightgreen?style=flat-square" /></a>
+  <a href="CHANGELOG.md"><img alt="Version" src="https://img.shields.io/badge/version-v1.1.0-brightgreen?style=flat-square" /></a>
   <a href="docs/installation.md"><img alt="Go" src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=flat-square" /></a>
   <a href="gateway/Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square" /></a>
   <a href="ui/package.json"><img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square" /></a>
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-Yummi translates natural language into verified security workflows while enforcing strict operator authority and fail-closed network control. An autonomous agent drives a hardened Kali Linux workbench equipped with 54 native pentest tools, 99 battle-tested offensive skills, and 52 specialist sub-agents, while an independent Rust gateway enforces packet-level policy outside the model's reach.
+Yummi translates natural language into verified security workflows while enforcing strict operator authority and fail-closed network control. An autonomous agent drives a hardened Kali Linux workbench equipped with 58 native MCP tools, 99 battle-tested offensive skills, and 52 specialist sub-agents, while an independent Rust gateway enforces packet-level policy outside the model's reach.
 </p>
 
 <p align="center">
@@ -44,8 +44,10 @@ Yummi translates natural language into verified security workflows while enforci
 
 ### Offensive Arsenal & Pwnbox Environment
 - **Unified Kali Sandbox (`yummi-pwnbox`)** — Single hardened container running as an unprivileged user (`UID 1000`). Shares operator Bash (`tmux`), graphical desktop (`noVNC`/XFCE), and agent execution.
-- **54 Native MCP Tools** — Four-tier tool strategy: 6 typed core tools (Nmap, WhatWeb, cURL, Gobuster, ffuf, Nikto), 39 cataloged offensive utilities, 2 Go recon pipelines, and 7 persistent tmux terminal tools.
-- **Persistent Tmux Terminal Verbs** — Full session lifecycle (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`) for long-running listeners, background tunnels, reverse shells, and interactive prompts.
+- **58 Native MCP Tools** — Six-tier tool strategy: 6 typed core tools (Nmap, WhatWeb, cURL, Gobuster, ffuf, Nikto), 32 cataloged offensive utilities, 2 Go recon pipelines, 7 persistent tmux terminal tools, 9 full-capability browser automation tools, and 2 sandboxed web research tools.
+- **Full-Capability Browser Automation** — Native Chromium automation via Rod with compact accessibility tree snapshots (`@eN` refs including semantic content elements `li`, `td`, `th`, `blockquote`, `code`), multi-tab lifecycle, session cookie isolation, and in-sandbox connection proxy for HTTP/S and WS/WSS enforcing gateway hostname policy.
+- **Controlled Sandboxed Web Research** — Privacy-first research tools (`web_search`, `web_fetch`) with OpenRouter/Exa cited sources, direct HTTPS plaintext extraction/pagination/find, RFC 1918/metadata IP rejection, operator-controlled UI toggle button (`btn-web-search`), and prompt-injection defense (`UNTRUSTED_WEB_CONTENT`).
+- **Persistent Tmux Terminal Verbs** — Full session lifecycle (`term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close`) for long-running listeners, background tunnels, reverse shells, and interactive prompts.
 - **Active Directory & Network Pivoting** — Pre-staged Kerberos (`krb5-user`, `kerbrute`), Impacket, NetExec, Nishang, Metasploit Framework, OpenVPN lab profiles (`/dev/net/tun`), and an automatic reverse shell generator (`revshell`).
 
 ### Autonomous Reasoning & Specialized Agents
@@ -94,7 +96,7 @@ Yummi translates natural language into verified security workflows while enforci
 Five runtime components collaborate in a fail-closed architecture:
 1. **orchestrator (Go)** — AI conductor, agentic state machine (Graph / Eino), execution store, and REST/WebSocket API.
 2. **gateway (Rust)** — Fail-closed `nftables` policy engine, IP/hostname scope evaluator, and tamper-evident SHA-256 audit log.
-3. **sandbox (Yummi Pwnbox / Kali Linux)** — Hardened offensive workbench running 54 pentest and terminal MCP tools, Metasploit, Nishang, tmux shell, and XFCE/noVNC desktop.
+3. **sandbox (Yummi Pwnbox / Kali Linux)** — Hardened offensive workbench running 58 pentest, browser, and terminal MCP tools, Metasploit, Nishang, tmux shell, and XFCE/noVNC desktop.
 4. **docker-proxy** — Restricts orchestrator access strictly to container exec/inspect operations; blocks host daemon mutations.
 5. **ui (React 18 + Vite)** — Modern, web-only operator surface served via nginx on port 3000.
 
