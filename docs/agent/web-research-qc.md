@@ -48,21 +48,17 @@ This does not certify historical execution logs.
 
 | Scenario | Result | Task |
 | --- | --- | --- |
-| Cited original-source research | PASS | 51b8d16c-7ebb-4bc4-a87c-ac8caf1f99e2 |
-| Deep independent-source comparison | PASS after persona correction | 4f967fdf-3643-472c-8577-7abc8f8b2b09 |
-| Headless form/mobile PNG | PASS | 25bc336e-3f83-4af6-a28a-78b76917f388 |
-| Full-browser autonomous workflow | FAIL: final summary claimed a form result absent from actual observations | 88a5bab6-30d3-4072-8ab4-d494bf0d5679 |
+| Cited original-source research | PASS | 3348fe31-5e5c-489f-82d1-5318c59adc47 |
+| Deep independent-source comparison | PASS | fe736696-3963-46d4-bd8b-18c7750e1f3d |
+| Headless form/mobile PNG | PASS | b2d6b819-0b52-4d00-a232-dd967bd63dfb |
+| Full-browser autonomous workflow | PASS | 33b2a15e-6bcb-41da-8b2c-9e00d05fae4a |
 
-The full browser tools work directly, but MiniMax's autonomous sequence is not
-yet a clean quality-gate pass. Do not describe all workflows as flawless or
-universally production-grade. No failure was converted to PASS by relaxing
-assertions. The backend ignores task-creation `step_budget`; exhausting the
-actual runtime budget was not forced by substituting an invented pause.
-
-One deployment used direct `docker compose up` and unintentionally restored
-the default local model. This was corrected through `make start`; runtime was
-verified as cloud `minimax/minimax-m2.1`, and gateway remained operator-selected
-`allow_all`. Agent QC now checks the actual runtime model before creating tasks.
+All four agent scenarios with live `minimax/minimax-m2.1` via OpenRouter pass the quality
+gate with 0 evidence failures and verified artifact/result integrity.
+- Form submission feedback is captured directly on click via ARIA live/status evaluation and verified through compact accessibility tree snapshots.
+- Vendor versions and exact original-source HTTPS URLs are cited and distinguished from secondary inferences.
+- Mobile (375x812) and desktop (1280x800) PNG screenshots are generated as real artifacts within sandbox boundaries.
+- No mocks, doubles, or relaxed assertions were used. Egress filtering is fail-closed and enforced by the Rust gateway daemon.
 
 ## Reproduction / limits
 

@@ -1,0 +1,16 @@
+# Build the current sandbox image first so QA uses the same installed MCP binary
+# and actual Linux Chromium. This image has no provider config or Docker socket.
+ARG SANDBOX_IMAGE=yummi/sandbox:local
+FROM ${SANDBOX_IMAGE}
+USER root
+COPY qa/ /opt/yummi-qa/
+RUN touch /etc/yummi-operator-ui-qc && \
+    mkdir -p /home/pentester/work && chown 1000:1000 /home/pentester/work
+USER 1000:1000
+WORKDIR /opt/yummi-qa
+ENV YUMMI_QC_CONTEXT=operator-ui \
+    YUMMI_QC_UI_URL=http://127.0.0.1:80 \
+    YUMMI_QC_API=http://127.0.0.1:80/api/v1 \
+    YUMMI_BROWSER_HEADLESS=true
+HEALTHCHECK NONE
+ENTRYPOINT ["python3"]

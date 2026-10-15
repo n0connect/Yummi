@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ import (
 	"github.com/n0connect/yummi/orchestrator/internal/api"
 	"github.com/n0connect/yummi/orchestrator/internal/conductor"
 	"github.com/n0connect/yummi/orchestrator/internal/config"
+	"github.com/n0connect/yummi/orchestrator/internal/controlaccess"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 	"github.com/n0connect/yummi/orchestrator/internal/executor"
 	"github.com/n0connect/yummi/orchestrator/internal/gateway"
@@ -45,6 +47,10 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := config.Load()
+	if _, err := controlaccess.ParsePeers(cfg.OperatorAllowedPeers); err != nil {
+		slog.Error("invalid operator peer policy", "error", err)
+		os.Exit(1)
+	}
 
 	// Load-or-generate local mTLS material and build the gateway client.
 	// If TLS generation fails, fall back to plaintext Unix socket.
@@ -622,6 +628,25 @@ func main() {
 	router := api.NewRouter(sm, ks, skillReg, cfg, assistant, approvalStore, executionStore, bridge, gatewayClient, logBuf, llmClient, resilientLLM, agg, taskStore, taskRunner, curatorStore, curatorWorker, sandboxMCPClient, mcpSchemaHints)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	var policyServer *http.Server
+	if cfg.SandboxPolicyAddr != "" {
+		listener, err := net.Listen("tcp", cfg.SandboxPolicyAddr)
+		if err != nil {
+			slog.Error("sandbox policy listener unavailable", "error", err)
+			os.Exit(1)
+		}
+		policyServer = &http.Server{
+			Handler:           api.NewSandboxPolicyRouter(gatewayClient),
+			ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second,
+			WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192,
+		}
+		go func() {
+			if err := policyServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+				slog.Error("sandbox policy server failed", "error", err)
+				stop()
+			}
+		}()
+	}
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: router,
@@ -653,6 +678,11 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "error", err)
+	}
+	if policyServer != nil {
+		if err := policyServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("sandbox policy shutdown error", "error", err)
+		}
 	}
 	if curatorWorker != nil {
 		_ = curatorWorker.Wait(shutdownCtx)

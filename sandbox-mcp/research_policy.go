@@ -26,7 +26,7 @@ func getGatewayHostnamePolicy(ctx context.Context) (allow []string, block []stri
 		Allow  []string `json:"allow"`
 		Block  []string `json:"block"`
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://172.20.0.3:9080/api/v1/gateway/hostname-policy", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://172.20.0.3:9081/v1/hostname-policy", nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -137,13 +137,19 @@ func newResearchHTTPClient() *http.Client {
 			return nil, err
 		}
 		ips, err := resolveResearchIPs(ctx, host)
-		if err != nil || len(ips) == 0 || len(ips) > 16 {
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 || len(ips) > 8 {
 			return nil, fmt.Errorf("research DNS resolution failed")
 		}
 		for _, ip := range ips {
 			if !publicResearchIP(ip) {
 				return nil, fmt.Errorf("research DNS returned a non-public address")
 			}
+		}
+		if err := requireResearchEgress(ctx, host, ips); err != nil {
+			return nil, err
 		}
 		for _, ip := range ips {
 			conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
@@ -168,6 +174,9 @@ func newResearchHTTPClient() *http.Client {
 func resolveResearchIPs(ctx context.Context, host string) ([]netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip}, nil
+	}
+	if err := requireResearchEgress(ctx, "1.1.1.1", []netip.Addr{netip.MustParseAddr("1.1.1.1")}); err != nil {
+		return nil, err
 	}
 	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", "1.1.1.1:443")

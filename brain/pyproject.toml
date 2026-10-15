@@ -2,7 +2,7 @@
 name = "yummi-brain"
 version = "0.1.0"
 description = "Frontier-model agent brain (LangGraph) driving Yummi's fail-closed pentest substrate via MCP."
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "langgraph>=0.6.6",
     "langgraph-checkpoint-sqlite>=2.0.0",

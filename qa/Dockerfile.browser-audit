@@ -1,0 +1,4 @@
+# Compatibility alias for the audit commands in docs/agent/audit-2026-10-15.md.
+# Regressions now live in sandbox-mcp/browser_audit_test.go and run as part of
+# make _test-sandbox-mcp; build that image first. No separate test compilation.
+FROM yummi/sandbox-mcp-test:local

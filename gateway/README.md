@@ -90,12 +90,34 @@ The orchestrator communicates with gateway over a Unix domain socket (`/run/yumm
 ## Egress Modes
 
 The gateway enforces a 4-way master switch over the `nftables` FORWARD chain:
-- **`block_all`** (`block`): Default state. Complete airgap — unconditionally drops all outbound egress from the sandbox container, ignoring active allow rules.
+- **`block_all`** (`block`): Default state. Drops all outbound egress from the sandbox container, including DNS and packets on established connections, ignoring active allow rules.
 - **`block_all_except_rules`** (`block_except_rules`, `rules_only`): Default-drop, but permits destinations explicitly matched by active temporary allow rules or configured CIDRs.
 - **`allow_all`** (`allow`): Blanket allows outbound sandbox traffic to public destinations not explicitly blocked.
 - **`ask_every_time`** (`ask`): Prompts the operator for interactive authorization on each new destination IP/hostname.
 
 Egress mode resets to **`block_all`** on every gateway daemon restart (fail-closed by design).
+UDP/53 DNS resolution is an explicit exception in the three other modes, after
+configured destination blocks. Every sandbox-sourced packet rechecks current
+scope, so approval expiry or removal also blocks established outbound flows.
+Other containers' traffic and return traffic keep their source-based pass-through.
+
+### Real kernel regression
+
+The ignored Rust integration test uses the production controller and real Linux
+nftables/conntrack with three routed network namespaces (sandbox, destination,
+and unrelated container), once for IPv4 and once for IPv6:
+
+```sh
+docker build -f gateway/Dockerfile.kernel-test -t yummi/gateway-kernel-test:local .
+docker run --rm --pull never --network none --privileged yummi/gateway-kernel-test:local
+```
+
+The disposable container needs privilege for network namespace mounts. It has no
+host mounts, Docker socket, published ports or external network. Never run this
+test binary on a live gateway. Checks include log-burst exhaustion, DNS lockdown,
+established TCP revocation, explicit deny precedence, unrelated source traffic,
+approval survival across mode changes, and kernel TTL expiry/removal of live flows.
+Regular `cargo test` does not run the privileged test.
 
 ---
 

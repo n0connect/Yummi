@@ -28,7 +28,7 @@ var wsUpgrader = websocket.Upgrader{
 // two never drift. An unparseable origin is treated as not-localhost (deny).
 func isLocalhostOrigin(origin string) bool {
 	u, err := url.Parse(origin)
-	if err != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 	switch u.Hostname() {

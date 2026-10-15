@@ -1,25 +1,19 @@
 """Real external session CRUD -> live deployed sidebar, without page reload."""
 import json
-import os
 import pathlib
-import socketserver
-import threading
 import time
 import urllib.request
 
 from browser_research_qc import BASE, MCP, api
-from research_ui_qc import UIForwarder
+from operator_context import UI_URL, require_operator_ui
 
 
 def main():
-    assert os.geteuid() == 1000 and pathlib.Path('/.dockerenv').is_file()
-    server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), UIForwarder)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    require_operator_ui()
     client = MCP()
     sid = None
     try:
-        client.tool('browser_open', {'url': 'http://127.0.0.1:' + str(server.server_address[1]), 'headless': True})
+        client.tool('browser_open', {'url': UI_URL, 'headless': True})
         client.tool('browser_eval', {'script': 'localStorage.setItem("yummi:chat:railOpen", "1"); setTimeout(() => location.reload(), 100); true'})
         client.tool('browser_interact', {'action': 'wait', 'duration': 2})
         origin = client.tool('browser_eval', {'script': 'performance.timeOrigin'})
@@ -54,8 +48,6 @@ def main():
             with urllib.request.urlopen(urllib.request.Request(BASE + '/sessions/' + sid, method='DELETE')):
                 pass
         client.close()
-        server.shutdown()
-        server.server_close()
 
 
 if __name__ == '__main__':

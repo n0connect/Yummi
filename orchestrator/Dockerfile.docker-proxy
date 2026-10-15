@@ -1,0 +1,12 @@
+FROM golang:1.27.2-bookworm AS build
+WORKDIR /build
+COPY orchestrator/go.mod orchestrator/go.sum ./
+COPY orchestrator/internal/controlaccess ./internal/controlaccess
+COPY orchestrator/internal/dockerproxy ./internal/dockerproxy
+COPY orchestrator/cmd/docker-proxy ./cmd/docker-proxy
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/yummi-docker-proxy ./cmd/docker-proxy
+
+FROM alpine:3.23
+COPY --from=build /out/yummi-docker-proxy /usr/local/bin/yummi-docker-proxy
+EXPOSE 2375
+ENTRYPOINT ["/usr/local/bin/yummi-docker-proxy"]

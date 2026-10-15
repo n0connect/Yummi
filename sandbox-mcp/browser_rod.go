@@ -535,17 +535,42 @@ func (d *RodDriver) Open(ctx context.Context, p OpenParams) (*PageInfo, error) {
 			return false
 		})()
 	}
+	// Subscribe before navigation so requests started by the document are tracked.
+	// WaitIdle waits for browser CPU idleness, not pending HTTP requests.
+	navCtx, cancelNavigation := context.WithCancel(ctx)
+	defer cancelNavigation()
+	var waitNetwork func()
+	if p.WaitUntil == "networkidle" {
+		waitNetwork = page.Context(navCtx).WaitRequestIdle(500*time.Millisecond, nil, nil,
+			[]proto.NetworkResourceType{proto.NetworkResourceTypeWebSocket, proto.NetworkResourceTypeEventSource})
+	}
 	if err := page.Context(ctx).Navigate(p.URL); err != nil {
 		return nil, fmt.Errorf("navigate to %s: %w", p.URL, err)
 	}
 
+	var waitErr error
 	switch p.WaitUntil {
 	case "networkidle":
-		_ = page.Context(ctx).WaitIdle(2 * time.Second)
+		waitNetwork()
+		waitErr = ctx.Err()
 	case "domcontentloaded":
-		_ = page.Context(ctx).WaitDOMStable(1*time.Second, 0.1)
+		waitErr = page.Context(ctx).WaitDOMStable(1*time.Second, 0.1)
 	default:
-		_ = page.Context(ctx).WaitLoad()
+		waitErr = page.Context(ctx).WaitLoad()
+	}
+	if waitErr != nil {
+		return nil, fmt.Errorf("wait for page: %w", waitErr)
+	}
+	// Keep navigation, settling, and snapshot atomic with respect to other tools.
+	waitMs := min(max(p.WaitMs, 0), 10000)
+	if waitMs > 0 {
+		timer := time.NewTimer(time.Duration(waitMs) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("wait for page settling: %w", ctx.Err())
+		}
 	}
 
 	info, _ := page.Info()
@@ -556,7 +581,10 @@ func (d *RodDriver) Open(ctx context.Context, p OpenParams) (*PageInfo, error) {
 		currentURL = info.URL
 	}
 
-	snap, _ := d.generateSnapshotLocked(ctx, true, true, 4, "")
+	snap, err := d.generateSnapshotLocked(ctx, true, true, 4, "")
+	if err != nil {
+		return nil, fmt.Errorf("initial snapshot: %w", err)
+	}
 
 	return &PageInfo{
 		URL:             currentURL,
@@ -606,6 +634,7 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 
 			const tag = node.tagName ? node.tagName.toUpperCase() : '';
 			const role = (node.getAttribute && node.getAttribute('role') || '').toLowerCase();
+			const isLive = node.getAttribute && ['polite', 'assertive'].includes((node.getAttribute('aria-live') || '').toLowerCase());
 			const isClickable = node.hasAttribute && (node.hasAttribute('onclick') || node.hasAttribute('tabindex'));
 			const isInteractive = interactiveTags.has(tag) || interactiveRoles.has(role) || isClickable;
 
@@ -635,9 +664,9 @@ func (d *RodDriver) generateSnapshotLocked(ctx context.Context, interactiveOnly,
 				elements.push(elInfo);
 				idx++;
 				if (elements.length >= 100) return;
-			} else if (!interactiveOnly) {
+			} else if (!interactiveOnly || role === 'status' || role === 'alert' || isLive) {
 				const isHeading = /^H[1-6]$/.test(tag);
-				const isContent = isHeading || tag === 'P' || tag === 'PRE' || tag === 'LI' || tag === 'TD' || tag === 'TH' || tag === 'BLOCKQUOTE' || tag === 'CODE' || contentRoles.has(role);
+				const isContent = isHeading || tag === 'P' || tag === 'PRE' || tag === 'LI' || tag === 'TD' || tag === 'TH' || tag === 'BLOCKQUOTE' || tag === 'CODE' || contentRoles.has(role) || isLive;
 				if (isContent) {
 					const text = (node.innerText || node.textContent || '').trim();
 					if (text) {
@@ -930,6 +959,20 @@ func (d *RodDriver) resolveElement(ctx context.Context, ref, selector string) (*
 	return nil, fmt.Errorf("element %q not found or reference is stale; please run browser_snapshot to refresh refs", ref)
 }
 
+// Status observations are bounded and exclude hidden, empty, and disabled live regions.
+const visibleBrowserStatusJS = `() => {
+ const texts = [];
+ for (const el of document.querySelectorAll('[role="status"], [role="alert"], [aria-live="polite"], [aria-live="assertive"]')) {
+  if (el.closest('[hidden], [aria-hidden="true"]')) continue;
+  const style = getComputedStyle(el), rect = el.getBoundingClientRect();
+  if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0 || rect.width <= 0 || rect.height <= 0) continue;
+  const text = (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 240);
+  if (text && !texts.includes(text)) texts.push(text);
+  if (texts.length >= 100) break;
+ }
+ return texts;
+}`
+
 // Interact performs an action against an element, viewport, or coordinates.
 func (d *RodDriver) Interact(ctx context.Context, p InteractParams) (*InteractResult, error) {
 	d.mu.Lock()
@@ -963,6 +1006,11 @@ func (d *RodDriver) Interact(ctx context.Context, p InteractParams) (*InteractRe
 		if err != nil {
 			return nil, err
 		}
+		beforeStatus, _ := page.Eval(visibleBrowserStatusJS)
+		var previous []string
+		if beforeStatus != nil {
+			_ = beforeStatus.Value.Unmarshal(&previous)
+		}
 		_ = el.Timeout(2 * time.Second).ScrollIntoView()
 		if err := el.Timeout(2*time.Second).Click(proto.InputMouseButtonLeft, 1); err != nil {
 			if _, evalErr := el.Timeout(2 * time.Second).Eval(`() => this.click()`); evalErr != nil {
@@ -970,6 +1018,47 @@ func (d *RodDriver) Interact(ctx context.Context, p InteractParams) (*InteractRe
 			}
 		}
 		res.Message = "clicked " + res.Target
+		statusCtx, cancelStatus := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancelStatus()
+		for statusCtx.Err() == nil {
+			value, statusErr := page.Context(statusCtx).Eval(visibleBrowserStatusJS)
+			if statusErr != nil {
+				break
+			}
+			var current []string
+			if value != nil {
+				_ = value.Value.Unmarshal(&current)
+			}
+			var changed []string
+			for _, text := range current {
+				found := false
+				for _, old := range previous {
+					if text == old {
+						found = true
+						break
+					}
+				}
+				if !found {
+					changed = append(changed, text)
+					if len(changed) == 5 {
+						break
+					}
+				}
+			}
+			if len(changed) > 0 {
+				res.Message += fmt.Sprintf(" (status: %q)", strings.Join(changed, " | "))
+				break
+			}
+			timer := time.NewTimer(25 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-statusCtx.Done():
+			}
+			timer.Stop()
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 
 	case "dblclick":
 		el, err := d.resolveElement(ctx, p.Ref, p.Selector)

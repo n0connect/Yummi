@@ -43,6 +43,7 @@ type BrowserDriver interface {
 type OpenParams struct {
 	URL       string            `json:"url"`
 	WaitUntil string            `json:"wait_until,omitempty"`
+	WaitMs    int               `json:"wait_ms,omitempty"`
 	Session   string            `json:"session,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	Headless  *bool             `json:"headless,omitempty"`

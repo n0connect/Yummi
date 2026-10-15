@@ -379,6 +379,9 @@ func (e *Executor) processMCP(ctx context.Context, rec execution.Record) (string
 		if err != nil {
 			return nil, fmt.Errorf("mcp call failed: %w", err)
 		}
+		if approval := researchApproval(rec.MCPTool, callResult); approval != nil {
+			return nil, *approval
+		}
 		return mcpResultToSandboxResult(rec.Command, callResult, time.Since(start)), nil
 	}
 

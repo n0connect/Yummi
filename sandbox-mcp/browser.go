@@ -33,6 +33,7 @@ type browserOpenArgs struct {
 	Target    string            `json:"target,omitempty" jsonschema:"alias for url"`
 	URI       string            `json:"uri,omitempty" jsonschema:"alias for url"`
 	WaitUntil string            `json:"wait_until,omitempty" jsonschema:"optional wait strategy: load (default), networkidle (for SPAs), domcontentloaded"`
+	WaitMs    int               `json:"wait_ms,omitempty" jsonschema:"optional additional wait in milliseconds after page load (0-10000); useful for SPAs that animate content in after the load event"`
 	Session   string            `json:"session,omitempty" jsonschema:"optional isolated session label (default: default)"`
 	Headers   map[string]string `json:"headers,omitempty" jsonschema:"optional custom HTTP request headers (e.g. Authorization: Bearer <token>, X-Forwarded-For: 127.0.0.1)"`
 	Headless  *bool             `json:"headless,omitempty" jsonschema:"optional headless override: true for background headless, false for visual desktop display"`
@@ -52,11 +53,19 @@ func browserOpenHandler(ctx context.Context, _ *mcp.CallToolRequest, args browse
 	if err := rejectIfFlagLike("url", u); err != nil {
 		return errResult(err.Error())
 	}
+	waitMs := args.WaitMs
+	if waitMs < 0 {
+		waitMs = 0
+	}
+	if waitMs > 10000 {
+		waitMs = 10000
+	}
 
 	driver := globalBrowser.getDriver()
 	info, err := driver.Open(ctx, OpenParams{
 		URL:       u,
 		WaitUntil: args.WaitUntil,
+		WaitMs:    waitMs,
 		Session:   args.Session,
 		Headers:   args.Headers,
 		Headless:  args.Headless,

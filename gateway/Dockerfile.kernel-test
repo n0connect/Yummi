@@ -1,0 +1,17 @@
+# Run: docker build -f gateway/Dockerfile.kernel-test -t yummi/gateway-kernel-test:local .
+# docker run --rm --pull never --network none --privileged yummi/gateway-kernel-test:local
+# Privileged is needed for disposable ip-netns mounts; no host mounts, sockets,
+# ports or external networks are attached. Never run the binary on a live stack.
+FROM rust:1.86-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libsqlite3-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY gateway/Cargo.toml gateway/Cargo.lock ./
+COPY gateway/src ./src
+COPY gateway/tests ./tests
+COPY gateway/config ./config
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/build/target cargo clean -p yummi-gateway && cargo test --test kernel_egress --no-run && mkdir /kernel-test && find target/debug/deps -maxdepth 1 -type f -executable -name 'kernel_egress-*' -exec cp {} /kernel-test/test \;
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends nftables iproute2 python3 procps && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /kernel-test/test /opt/kernel-test/test
+ENV YUMMI_DISPOSABLE_KERNEL_TEST=1
+ENTRYPOINT ["/opt/kernel-test/test", "--ignored", "--nocapture", "--test-threads=1"]

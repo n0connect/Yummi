@@ -1,34 +1,26 @@
 """Real deployed UI and tmux connections, sandbox only, no doubles."""
 import argparse
 import json
-import os
-import pathlib
-import socketserver
-import subprocess
-import threading
 import time
 
 from browser_research_qc import MCP
-from research_ui_qc import UIForwarder
+from operator_context import UI_URL, require_operator_ui, sandbox_python
 
 
 def clients():
-    result = subprocess.run(['tmux', 'list-clients', '-t', 'operator', '-F', '#{client_pid}'], capture_output=True, text=True)
-    return set(result.stdout.split())
+    output = sandbox_python("import subprocess; p=subprocess.run(['tmux','list-clients','-t','operator','-F','#{client_pid}'],capture_output=True,text=True); print(p.stdout,end='')")
+    return set(output.split())
 
 
 def main():
-    assert os.geteuid() == 1000 and pathlib.Path('/.dockerenv').is_file()
+    require_operator_ui()
     parser = argparse.ArgumentParser()
     parser.add_argument('--terminal', action='store_true')
     parser.add_argument('--errors', action='store_true')
     args = parser.parse_args()
-    server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), UIForwarder)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     client = MCP()
     try:
-        client.tool('browser_open', {'url': 'http://127.0.0.1:' + str(server.server_address[1]) + '/trace', 'headless': True})
+        client.tool('browser_open', {'url': UI_URL + '/trace', 'headless': True})
         client.tool('browser_interact', {'action': 'wait', 'duration': 2})
         if args.errors:
             client.tool('browser_eval', {'script': 'sessionStorage.setItem("yummi:chat:sessionId", "invalid/session"); setTimeout(() => location.reload(), 100); true'})
@@ -37,7 +29,7 @@ def main():
             assert result['error'] and result['cards'] >= 10 and result['busy'] == 'false', result
         elif args.terminal:
             before = clients()
-            shell_pid = subprocess.check_output(['tmux', 'display-message', '-p', '-t', 'operator', '#{pane_pid}']).decode().strip()
+            shell_pid = sandbox_python("import subprocess; print(subprocess.check_output(['tmux','display-message','-p','-t','operator','#{pane_pid}']).decode(),end='')").strip()
             client.tool('browser_eval', {'script': "document.querySelector('a[href=\"/terminal\"]').click(); true"})
             client.tool('browser_interact', {'action': 'wait', 'duration': 2})
             assert clients() - before, 'Bash never attached to real operator tmux'
@@ -48,7 +40,7 @@ def main():
             client.tool('browser_eval', {'script': "document.querySelector('a[href=\"/trace\"]').click(); true"})
             client.tool('browser_interact', {'action': 'wait', 'duration': 4})
             assert not (clients() - before), 'Unmounted Bash reattached a ghost terminal client'
-            assert subprocess.check_output(['tmux', 'display-message', '-p', '-t', 'operator', '#{pane_pid}']).decode().strip() == shell_pid, 'Persistent operator shell was destroyed'
+            assert sandbox_python("import subprocess; print(subprocess.check_output(['tmux','display-message','-p','-t','operator','#{pane_pid}']).decode(),end='')").strip() == shell_pid, 'Persistent operator shell was destroyed'
         else:
             for width, height in [(1280, 800), (375, 812)]:
                 client.tool('browser_interact', {'action': 'set_viewport', 'width': width, 'height': height})
@@ -61,8 +53,6 @@ def main():
         print(json.dumps({'status': 'passed', 'case': 'trace-load-errors' if args.errors else 'terminal-cleanup-and-briefing' if args.terminal else 'trace-card-layout'}), flush=True)
     finally:
         client.close()
-        server.shutdown()
-        server.server_close()
 
 
 if __name__ == '__main__':

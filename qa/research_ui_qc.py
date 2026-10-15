@@ -1,48 +1,22 @@
-"""Inspect the real deployed UI using Chromium inside the sandbox, no doubles."""
+"""Inspect deployed UI with real Chromium in the disposable operator QA image."""
 import argparse
 import json
 import pathlib
-import select
-import socket
-import socketserver
-import threading
 import time
 
 from browser_research_qc import MCP
+from operator_context import UI_URL, require_operator_ui
 
-
-class UIForwarder(socketserver.BaseRequestHandler):
-    """Byte-for-byte real UI forwarding; keeps WS Origin sandbox-loopback."""
-    def handle(self):
-        with socket.create_connection(("172.20.0.4", 80), timeout=5) as upstream:
-            peers = [self.request, upstream]
-            while True:
-                ready, _, _ = select.select(peers, [], [], 30)
-                if not ready:
-                    return
-                for source in ready:
-                    try:
-                        data = source.recv(65536)
-                    except OSError:
-                        return
-                    if not data:
-                        return
-                    try:
-                        (upstream if source is self.request else self.request).sendall(data)
-                    except OSError:
-                        return
 
 
 def main():
+    require_operator_ui()
     parser = argparse.ArgumentParser()
     parser.add_argument("session_id")
     args = parser.parse_args()
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), UIForwarder)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     client = MCP()
     try:
-        client.tool("browser_open", {"url": "http://127.0.0.1:" + str(server.server_address[1]) + "/", "headless": True, "session": "ui-qc"})
+        client.tool("browser_open", {"url": UI_URL + "/", "headless": True, "session": "ui-qc"})
         client.tool("browser_interact", {"action": "wait", "duration": 1})
         client.tool("browser_eval", {"script": "sessionStorage.setItem('yummi:chat:sessionId', " + json.dumps(args.session_id) + ")"})
         # browser_open intentionally creates a new tab; sessionStorage is
@@ -71,8 +45,6 @@ def main():
         print(json.dumps({"status": "passed", "source_cards": len(cards)}))
     finally:
         client.close()
-        server.shutdown()
-        server.server_close()
 
 
 if __name__ == "__main__":

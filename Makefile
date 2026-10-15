@@ -159,7 +159,7 @@ endef
 	lab-target-up lab-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
 	app \
-	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain \
+	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain _test-qc \
 	docker-build docker-orchestrator docker-ui \
 	_container-ensure _ollama-ensure \
 	_check-brain-deps brain-install brain-run brain-mcp
@@ -488,7 +488,7 @@ start: _runtime-deps _ollama-ensure
 	if [ "$$(echo $(BUILD))" = "1" ]; then \
 		need_build=1; \
 	else \
-		for img in yummi/gateway:local yummi/sandbox:local yummi/orchestrator:local yummi/ui:local; do \
+		for img in yummi/gateway:local yummi/sandbox:local yummi/orchestrator:local yummi/ui:local yummi/docker-proxy:local; do \
 			if ! $(CONTAINER_ENGINE) image inspect "$$img" >/dev/null 2>&1; then \
 				need_build=1; break; \
 			fi; \
@@ -496,7 +496,7 @@ start: _runtime-deps _ollama-ensure
 	fi; \
 	if [ "$$need_build" = "1" ]; then \
 		$(call log_info,$(CONTAINER_ENGINE) compose,Building images (BUILD=1 or missing images)...); \
-		set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }; \
+		set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }; \
 		$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.); \
 	else \
 		$(call log_pass,$(CONTAINER_ENGINE) compose,Images already present — skipping build (use BUILD=1 or 'make rebase' to rebuild).); \
@@ -534,7 +534,7 @@ rebase: _check-deps _container-ensure _ollama-ensure
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Stopping containers (image cache untouched)...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) down --remove-orphans 2>&1 | sed 's/^/  /' || true
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Rebuilding images (Docker layer cache reused)...)
-	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
+	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
 	@$(call log_pass,$(CONTAINER_ENGINE) compose,Images built successfully.)
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services in background...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
@@ -576,7 +576,7 @@ force-restart: _check-deps _container-ensure
 	@-killall -9 yummi yummi-orchestrator 2>/dev/null || true
 	@$(MAKE) _ollama-ensure
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Building images...)
-	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
+	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to build images.); exit 1; }
 	@$(call log_info,$(CONTAINER_ENGINE) compose,Bringing up all services...)
 	@set -o pipefail; $(COMPOSE) $(COMPOSE_FILES) up -d gateway sandbox orchestrator yummi-ui docker-proxy 2>&1 | sed 's/^/  /' || { $(call log_error,$(CONTAINER_ENGINE) compose,Failed to start services.); exit 1; }
 	@$(call log_pass,force-restart,Services forcibly restarted successfully.)
@@ -601,9 +601,14 @@ close:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ## test    Run all test suites (CLI + orchestrator + gateway + UI)
-test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain
+test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain _test-qc
 	@$(call log_section,All Tests Passed)
 	@$(call log_pass,test,All suites completed successfully.)
+
+## _test-qc  Strict evidence checker over archived real task/execution records; no tools or providers
+_test-qc:
+	@$(call log_info,test,Checking archived browser and research QC evidence...)
+	@PYTHONPATH=qa python3 -m unittest discover -s qa -p 'test_qc_evidence.py' -v
 
 ## test-agent-live  End-to-end agentic loop against the REAL model + sandbox container
 test-agent-live: _check-deps _container-ensure
@@ -856,7 +861,7 @@ _ollama-ensure:
 docker-build: _check-deps _container-ensure ## Build all container images (gateway + sandbox + orchestrator + ui). CONTAINER_ENGINE=docker|podman
 	@$(call log_section,Docker Build)
 	@$(call log_info,$(CONTAINER_ENGINE),Building gateway sandbox orchestrator yummi-ui...)
-	@$(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui || { $(call log_error,$(CONTAINER_ENGINE),Build failed.); exit 1; }
+	@$(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui docker-proxy || { $(call log_error,$(CONTAINER_ENGINE),Build failed.); exit 1; }
 	@$(call log_pass,$(CONTAINER_ENGINE),Images built successfully.)
 
 docker-orchestrator: _check-deps _container-ensure ## Build orchestrator image. CONTAINER_ENGINE=docker|podman

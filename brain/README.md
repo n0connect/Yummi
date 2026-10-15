@@ -44,4 +44,8 @@ uv sync
 cp .env.example .env   # fill in YUMMI_BRAIN_MODEL_API_KEY
 ```
 
+Python 3.14 is selected by `.python-version`; the package supports Python 3.11–3.14.
+The upper bound excludes Python 3.15 until native dependencies support it.
+`uv sync` and every `make brain-*` target use this project selection.
+
 Requires orchestrator + gateway + sandbox running (`make start`).

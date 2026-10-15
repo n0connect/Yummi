@@ -406,11 +406,11 @@ impl NftablesController {
     ///
     /// FORWARD chain design:
     ///   1. Pass non-sandbox traffic immediately (other containers untouched).
-    ///   2. Allow established/related return traffic.
+    ///   2. Allow established/related reply traffic outside hard lockdown.
     ///   3. Block list (highest priority explicit denies).
     ///   4. Static allow list (from config) + dynamic `allowed_targets` set.
-    ///   5. Allow DNS (UDP 53) for resolution.
-    ///   6. Rate-limited log + DROP for everything else.
+    ///   5. Allow DNS (UDP 53) for resolution outside hard lockdown.
+    ///   6. Rate-limited log, then unconditional DROP for everything else.
     #[cfg(test)]
     pub(crate) fn build_ruleset(&self) -> String {
         self.build_ruleset_for(*self.egress_mode.read().unwrap())
@@ -458,7 +458,14 @@ impl NftablesController {
         if let Some(ttl) = self.ttl_normalize {
             if !self.sandbox_ip.is_empty() {
                 if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                    s.push_str(&format!("    ip saddr {ip} ip ttl set {ttl}\n"));
+                    match ip {
+                        std::net::IpAddr::V4(_) => {
+                            s.push_str(&format!("    ip saddr {ip} ip ttl set {ttl}\n"))
+                        }
+                        std::net::IpAddr::V6(_) => {
+                            s.push_str(&format!("    ip6 saddr {ip} ip6 hoplimit set {ttl}\n"))
+                        }
+                    }
                 }
             }
         }
@@ -466,14 +473,23 @@ impl NftablesController {
         // Pass through traffic NOT originating from sandbox (other containers, host).
         if !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                s.push_str(&format!("    ip saddr != {ip} accept\n"));
+                let family = if ip.is_ipv6() { "ip6" } else { "ip" };
+                s.push_str(&format!("    {family} saddr != {ip} accept\n"));
             } else {
                 tracing::warn!(sandbox_ip = %self.sandbox_ip, "invalid sandbox_ip — applying rules to ALL forwarded traffic");
             }
         }
 
-        // Allow return traffic for sandbox-initiated connections.
-        s.push_str("    ct state established,related accept\n");
+        // With a sandbox identity, the non-sandbox source rule above already
+        // passes return traffic. Never give sandbox-sourced packets a conntrack
+        // bypass: every packet must re-evaluate current scope, including replies
+        // on inbound-initiated flows. This makes blocks, expiry and revocation
+        // effective for established flows too.
+        // When filtering all forwarded traffic, allow only conntrack replies
+        // outside hard lockdown so permitted outbound connections can return.
+        if mode != EgressMode::BlockAll && self.sandbox_ip.parse::<std::net::IpAddr>().is_err() {
+            s.push_str("    ct direction reply ct state established,related accept\n");
+        }
 
         // Block rules — re-validate each CIDR to prevent injection.
         for cidr in &self.block_cidrs {
@@ -489,38 +505,8 @@ impl NftablesController {
             }
         }
 
-        // Block mode is the default and means "deny by default" — but, like
-        // Ask mode, it still honors an EXPLICIT allow: the static config
-        // allow list and the dynamic @allowed_targets set (populated by
-        // AddTemporaryRule/AddManualRule) are emitted in every mode except
-        // Allow (which is already a kernel-level blanket accept, so emitting
-        // these too would be redundant). This mirrors policy::PolicyEngine's
-        // check_egress, whose own doc comment explains why: an operator who
-        // explicitly scopes a target via the GATEWAY tab must be able to
-        // reach it without ALSO flipping the separate egress-mode switch —
-        // confirmed live, a temporary rule the gateway had genuinely
-        // accepted and installed was still unreachable because this
-        // function alone skipped emitting its accept line while in Block.
-        //
-        // This used to be stricter — Block omitted both lists entirely, so
-        // switching INTO Block mid-session was a hard instant kill-switch
-        // that revoked every previously-opened target, static or dynamic, no
-        // exceptions. That is still true for anything NOT covered by an
-        // explicit rule (there is no blanket accept in Block mode — compare
-        // the Allow-only `ip saddr {ip} accept` below), and for the
-        // always-blocked floor and the config block list (checked earlier,
-        // above, and unaffected by this). What changed is narrower: a
-        // specific target an operator has explicitly allowed now stays
-        // explicitly allowed in Block mode too, exactly as it already does
-        // in Ask mode. An operator who wants a true no-exceptions lockdown
-        // removes or lets expire the specific rules first (GATEWAY tab), or
-        // the config's static allow list.
-        // BlockExceptRules and Ask modes honor explicit allow rules: the static
-        // config allow list and the dynamic @allowed_targets set (populated by
-        // AddTemporaryRule/AddManualRule).
-        // BlockAll mode is a hard kill-switch / lockdown: it omits all allow
-        // rules, dropping all sandbox outbound traffic.
-        // AllowAll mode uses a blanket-accept rule below.
+        // Rules-only and Ask honor static and unexpired dynamic approvals.
+        // BlockAll emits neither approval rules nor DNS/conntrack exceptions.
         if mode == EgressMode::BlockExceptRules || mode == EgressMode::Ask {
             for cidr in &self.allow_cidrs {
                 if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
@@ -540,8 +526,11 @@ impl NftablesController {
             s.push_str("    ip6 daddr @allowed_targets_v6 accept\n");
         }
 
-        // DNS is always permitted so sandbox can resolve target hostnames.
-        s.push_str("    udp dport 53 accept\n");
+        // DNS is the explicit resolution exception in non-lockdown modes;
+        // it remains behind the destination block list. BlockAll blocks DNS.
+        if mode != EgressMode::BlockAll {
+            s.push_str("    udp dport 53 accept\n");
+        }
 
         // Egress mode = AllowAll: blanket-accept all remaining sandbox-originated
         // egress. Sits AFTER the block rules (so explicit denies + the
@@ -549,12 +538,14 @@ impl NftablesController {
         // which is preserved.
         if mode == EgressMode::AllowAll && !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                s.push_str(&format!("    ip saddr {ip} accept\n"));
+                let family = if ip.is_ipv6() { "ip6" } else { "ip" };
+                s.push_str(&format!("    {family} saddr {ip} accept\n"));
             }
         }
 
-        // Rate-limited log + drop for everything else.
-        s.push_str("    limit rate 5/minute log prefix \"yummi_gateway_drop: \" drop\n");
+        // Logging may be limited; the final deny must match every packet.
+        s.push_str("    limit rate 5/minute log prefix \"yummi_gateway_drop: \"\n");
+        s.push_str("    counter drop\n");
 
         s.push_str("  }\n\n");
 
@@ -565,7 +556,8 @@ impl NftablesController {
         s.push_str("    type nat hook postrouting priority 100;\n");
         if !self.sandbox_ip.is_empty() {
             if let Ok(ip) = self.sandbox_ip.parse::<std::net::IpAddr>() {
-                s.push_str(&format!("    ip saddr {ip} masquerade\n"));
+                let family = if ip.is_ipv6() { "ip6" } else { "ip" };
+                s.push_str(&format!("    {family} saddr {ip} masquerade\n"));
             }
         }
         s.push_str("  }\n");
@@ -781,9 +773,15 @@ mod tests {
     }
 
     #[test]
-    fn test_ruleset_dns_always_allowed() {
+    fn test_ruleset_dns_is_blocked_during_lockdown() {
         let ctrl = NftablesController::new(&test_config());
-        assert!(ctrl.build_ruleset().contains("udp dport 53 accept"));
+        assert!(!ctrl.build_ruleset().contains("udp dport 53 accept"));
+        assert!(!ctrl
+            .build_ruleset()
+            .contains("ct state established,related accept"));
+        assert!(ctrl
+            .build_ruleset_for(EgressMode::Ask)
+            .contains("udp dport 53 accept"));
     }
 
     #[test]
@@ -927,7 +925,7 @@ mod tests {
             "BlockAll mode must not emit a blanket accept-all line:\n{ruleset}"
         );
         assert!(ruleset.contains("ip daddr 127.0.0.0/8 drop"));
-        assert!(ruleset.contains("udp dport 53 accept"));
+        assert!(!ruleset.contains("udp dport 53 accept"));
     }
 
     #[test]

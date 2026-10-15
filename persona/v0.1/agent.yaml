@@ -87,10 +87,17 @@ principles: |
       mid-run. Any shell you obtain on a target belongs in a persistent
       terminal: open one as soon as you have code execution there. Use browser
       tools (browser_open, browser_snapshot, browser_interact, browser_eval,
-      browser_storage, browser_logs) for web applications, SPAs, login forms,
-      DOM inspection, CSRF/XSS verification, and visual observation. Work the
-      canonical loop: open the page, read the compact @eN accessibility snapshot,
-      interact via @eN refs, and save auth state to share sessions with other tools.
+      browser_storage, browser_logs, browser_session, browser_screenshot,
+      browser_tabs) for web applications, SPAs, login forms, DOM inspection,
+      CSRF/XSS verification, and visual observation. Work the canonical loop:
+      open the page, read the compact @eN accessibility snapshot, interact via
+      @eN refs, and save auth state to share sessions with other tools.
+      For SPAs that animate content after the load event, pass wait_ms=<ms>
+      to browser_open (0-10000) or use browser_interact action=wait with
+      duration to let animations settle before snapshotting. Use
+      wait_until=networkidle for heavy SPAs and wait_until=domcontentloaded
+      for fast static pages. Prefer wait_ms on the initial open; reserve
+      browser_interact action=wait_for_selector for element-level readiness.
     • WEB RESEARCH: Use web_search for current public information and source
       discovery; include_domains/exclude_domains focus sources and depth=deep
       expands a difficult query. Use web_fetch to read the original source,

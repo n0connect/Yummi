@@ -138,7 +138,7 @@ func webSearchHandler(ctx context.Context, _ *mcp.CallToolRequest, args webSearc
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
-		return errResult("Web search unavailable: gateway policy, egress approval, DNS, or provider connection failed.")
+		return errResult(researchFailure(err, "Web search unavailable: gateway policy, egress approval, DNS, or provider connection failed."))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -225,7 +225,7 @@ func webFetchHandler(ctx context.Context, _ *mcp.CallToolRequest, args webFetchA
 	req.Header.Set("User-Agent", "Yummi-Research/1.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return errResult("Source fetch blocked or unavailable; check gateway policy/egress approval. Use browser tools for an authorized JavaScript page.")
+		return errResult(researchFailure(err, "Source fetch blocked or unavailable; check gateway policy/egress approval. Use browser tools for an authorized JavaScript page."))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

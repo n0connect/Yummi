@@ -1,18 +1,15 @@
-"""Real agent pause and deployed UI; run only inside sandbox as UID 1000."""
+"""Real agent pause and UI; explicit disposable operator UI QA context only."""
 import json
 import argparse
-import os
 import pathlib
-import socketserver
-import threading
 import time
 
 from browser_research_qc import MCP, api, assert_qc_model
-from research_ui_qc import UIForwarder
+from operator_context import UI_URL, require_operator_ui
 
 
 def main():
-    assert os.geteuid() == 1000 and pathlib.Path('/.dockerenv').is_file()
+    require_operator_ui()
     assert_qc_model()
     parser = argparse.ArgumentParser()
     parser.add_argument('--budget', action='store_true')
@@ -24,9 +21,6 @@ def main():
     tid = task.get('task', task)['id']
     if args.budget:
         assert task.get('task', task).get('step_budget') == 1, 'Budget QC requires an actually configured one-step runtime; task creation does not accept step_budget'
-    server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), UIForwarder)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     client = MCP()
     try:
         api('/tasks/' + tid + '/start', {})
@@ -46,7 +40,7 @@ def main():
         assert task['status'] in ('paused', 'awaiting_approval'), task
         if args.budget:
             assert task['status'] == 'paused' and task.get('question', '').startswith('Step budget exhausted'), task
-        client.tool('browser_open', {'url': 'http://127.0.0.1:' + str(server.server_address[1]), 'headless': True})
+        client.tool('browser_open', {'url': UI_URL, 'headless': True})
         client.tool('browser_eval', {'script': 'sessionStorage.setItem("yummi:chat:sessionId", ' + json.dumps(sid) + '); setTimeout(() => location.reload(), 100); true'})
         client.tool('browser_interact', {'action': 'wait', 'duration': 2})
         for width, height in [(1280, 800), (375, 812)]:
@@ -80,8 +74,6 @@ def main():
     finally:
         api('/tasks/' + tid + '/stop', {})
         client.close()
-        server.shutdown()
-        server.server_close()
 
 
 if __name__ == '__main__':

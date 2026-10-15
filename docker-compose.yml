@@ -196,6 +196,9 @@ services:
     environment:
       YUMMI_ORCHESTRATOR_HOST: "0.0.0.0"
       YUMMI_ORCHESTRATOR_PORT: "9080"
+      # Only the isolated UI proxy and local health probes are operator peers.
+      YUMMI_OPERATOR_ALLOWED_PEERS: "127.0.0.1/32,::1/128,172.21.0.4/32"
+      YUMMI_SANDBOX_POLICY_ADDR: "172.20.0.3:9081"
       YUMMI_DB_PATH: "/var/lib/yummi/orchestrator/sessions.db"
       YUMMI_GATEWAY_SOCKET: "/run/yummi/gateway.sock"
       YUMMI_SANDBOX_CONTAINER: "yummi-sandbox"
@@ -237,8 +240,6 @@ services:
       # Network scope is configured exclusively via the gateway's own YAML
       # config (scope.allow / scope.block in gateway/config/default.yaml) —
       # the orchestrator no longer reads any scope env vars.
-    ports:
-      - "127.0.0.1:9080:9080"
     # host-gateway resolves host.docker.internal on native Linux Docker Engine
     # (Docker Desktop on macOS/Windows already provides this mapping natively;
     # this entry is a harmless no-op there). Without it, YUMMI_OLLAMA_URL above
@@ -252,6 +253,8 @@ services:
     networks:
       yummi_internal:
         ipv4_address: 172.20.0.3
+      yummi_control:
+        ipv4_address: 172.21.0.3
       yummi_external:
     restart: unless-stopped
     logging: *default-logging
@@ -276,46 +279,31 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── docker-proxy — secure docker API socket filter ──────────────────────────────
-  # orchestrator's only real Docker need is `docker exec`/`docker inspect` into
-  # yummi-sandbox (sandbox.Bridge, internal/sandbox/bridge.go) — never create,
-  # kill, or otherwise manage containers. POST=1 is required for EXEC to work
-  # (creating + starting an exec instance are POST calls), but combined with
-  # CONTAINERS=1 it would ALSO unlock generic container lifecycle control
-  # (start/stop/restart/kill/rename/prune) on every container reachable on this
-  # network unless explicitly denied — ALLOW_START/ALLOW_STOP/ALLOW_RESTARTS
-  # close that gap. Every other resource family is explicitly zeroed so the
-  # allowlist is self-documenting instead of relying on the image's defaults.
+  # ── docker-proxy — sandbox-scoped Docker exec broker ──────────────────────
+  # Neither the sandbox nor the gateway joins this control network. The broker
+  # checks the socket peer, exact container, UID/GID and issued exec IDs; it
+  # never permits container lifecycle or generic Docker API prefix access.
   docker-proxy:
     container_name: yummi-docker-proxy
-    image: tecnativa/docker-socket-proxy:latest
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile.docker-proxy
+    image: yummi/docker-proxy:local
     environment:
-      CONTAINERS: 1
-      EXEC: 1
-      POST: 1
-      ALLOW_START: 0
-      ALLOW_STOP: 0
-      ALLOW_RESTARTS: 0
-      BUILD: 0
-      COMMIT: 0
-      CONFIGS: 0
-      DISTRIBUTION: 0
-      IMAGES: 0
-      NETWORKS: 0
-      NODES: 0
-      PLUGINS: 0
-      SECRETS: 0
-      SERVICES: 0
-      SESSION: 0
-      SWARM: 0
-      SYSTEM: 0
-      TASKS: 0
-      VOLUMES: 0
+      YUMMI_SANDBOX_CONTAINER: "yummi-sandbox"
+      YUMMI_DOCKER_SOCKET: "/var/run/docker.sock"
+      YUMMI_DOCKER_PROXY_ADDR: ":2375"
+      YUMMI_DOCKER_PROXY_PEERS: "172.21.0.3/32,127.0.0.1/32,::1/128"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      yummi_internal:
-        ipv4_address: 172.20.0.5
+      yummi_control:
+        ipv4_address: 172.21.0.5
     restart: unless-stopped
     logging: *default-logging
     deploy:
@@ -327,7 +315,7 @@ services:
         reservations:
           memory: 16m
     healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "2375"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -344,10 +332,11 @@ services:
     image: yummi/ui:local
     ports:
       - "127.0.0.1:3000:80"
+      # Preserve the direct REST URL through the same operator-only ingress.
+      - "127.0.0.1:9080:80"
     networks:
-      yummi_internal:
-        ipv4_address: 172.20.0.4
-      yummi_external:
+      yummi_control:
+        ipv4_address: 172.21.0.4
     restart: unless-stopped
     logging: *default-logging
     deploy:
@@ -376,6 +365,14 @@ volumes:
     name: yummi_orchestrator_data
 
 networks:
+  yummi_control:
+    name: yummi_control
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+          gateway: 172.21.0.1
   yummi_internal:
     name: yummi_internal
     driver: bridge

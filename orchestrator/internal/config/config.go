@@ -11,11 +11,13 @@ import (
 
 // Config holds orchestrator runtime configuration.
 type Config struct {
-	Host             string
-	Port             int
-	DatabasePath     string
-	GatewaySocket    string
-	SandboxContainer string
+	Host                 string
+	Port                 int
+	OperatorAllowedPeers string // exact socket peers; never trust forwarded IP headers
+	SandboxPolicyAddr    string // separate sandbox read-only policy listener, empty disables it
+	DatabasePath         string
+	GatewaySocket        string
+	SandboxContainer     string
 	// SandboxDesktopAddr is host:port for the sandbox container's own
 	// websockify bridge (see docker-compose.yml — the same unified "sandbox"
 	// service the agent execs into also runs the desktop stack) —
@@ -101,32 +103,34 @@ func Load() *Config {
 
 	explicitOllamaModel := strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_MODEL"))
 	cfg := &Config{
-		Host:                envOr("YUMMI_ORCHESTRATOR_HOST", "127.0.0.1"),
-		Port:                port,
-		DatabasePath:        envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
-		GatewaySocket:       envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
-		SandboxContainer:    envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
-		SandboxDesktopAddr:  envOr("YUMMI_SANDBOX_DESKTOP_ADDR", "sandbox:6080"),
-		SandboxExecTimeout:  parseDuration(os.Getenv("YUMMI_SANDBOX_EXEC_TIMEOUT")), // 0 = use sandbox.Bridge's own default
-		PersonaDir:          envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
-		AutoSkillDir:        envOr("YUMMI_AUTO_SKILL_DIR", filepath.Join(home, "skills")),
-		DockerSocket:        envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
-		OllamaURL:           os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
-		OllamaModel:         envOr("YUMMI_OLLAMA_MODEL", "gpt-oss:20b"),
-		OllamaTier:          strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
-		OllamaNumCtx:        parseIntOr(os.Getenv("YUMMI_OLLAMA_NUM_CTX"), 0),
-		OllamaThinking:      parseOptionalBool(os.Getenv("YUMMI_OLLAMA_THINKING")),
-		OllamaFallbackModel: strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
-		OllamaEmbedModel:    envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
-		EinoModelBaseURL:    strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_BASE_URL")),
-		EinoModelName:       strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_NAME")),
-		EinoModelAPIKey:     strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_API_KEY")),
-		EinoProvider:        strings.ToLower(strings.TrimSpace(os.Getenv("YUMMI_EINO_PROVIDER"))),
-		EinoModelNumCtx:     parseIntOr(os.Getenv("YUMMI_EINO_MODEL_NUM_CTX"), 0),
-		EinoModelMaxTokens:  parseIntOr(os.Getenv("YUMMI_EINO_MODEL_MAX_TOKENS"), 0),
-		TLSDir:              envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
-		GatewayTLS:          parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
-		DataRetentionDays:   parseIntOr(os.Getenv("YUMMI_DATA_RETENTION_DAYS"), 0),
+		Host:                 envOr("YUMMI_ORCHESTRATOR_HOST", "127.0.0.1"),
+		Port:                 port,
+		OperatorAllowedPeers: envOr("YUMMI_OPERATOR_ALLOWED_PEERS", "127.0.0.1/32,::1/128"),
+		SandboxPolicyAddr:    strings.TrimSpace(os.Getenv("YUMMI_SANDBOX_POLICY_ADDR")),
+		DatabasePath:         envOr("YUMMI_DB_PATH", filepath.Join(home, "sessions.db")),
+		GatewaySocket:        envOr("YUMMI_GATEWAY_SOCKET", "/run/yummi/gateway.sock"),
+		SandboxContainer:     envOr("YUMMI_SANDBOX_CONTAINER", "yummi-sandbox"),
+		SandboxDesktopAddr:   envOr("YUMMI_SANDBOX_DESKTOP_ADDR", "sandbox:6080"),
+		SandboxExecTimeout:   parseDuration(os.Getenv("YUMMI_SANDBOX_EXEC_TIMEOUT")), // 0 = use sandbox.Bridge's own default
+		PersonaDir:           envOr("YUMMI_PERSONA_DIR", defaultPersonaDir()),
+		AutoSkillDir:         envOr("YUMMI_AUTO_SKILL_DIR", filepath.Join(home, "skills")),
+		DockerSocket:         envOr("YUMMI_DOCKER_SOCKET", defaultDockerSocket()),
+		OllamaURL:            os.Getenv("YUMMI_OLLAMA_URL"), // empty = disabled
+		OllamaModel:          envOr("YUMMI_OLLAMA_MODEL", "gpt-oss:20b"),
+		OllamaTier:           strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_TIER")),
+		OllamaNumCtx:         parseIntOr(os.Getenv("YUMMI_OLLAMA_NUM_CTX"), 0),
+		OllamaThinking:       parseOptionalBool(os.Getenv("YUMMI_OLLAMA_THINKING")),
+		OllamaFallbackModel:  strings.TrimSpace(os.Getenv("YUMMI_OLLAMA_FALLBACK_MODEL")),
+		OllamaEmbedModel:     envOr("YUMMI_OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+		EinoModelBaseURL:     strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_BASE_URL")),
+		EinoModelName:        strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_NAME")),
+		EinoModelAPIKey:      strings.TrimSpace(os.Getenv("YUMMI_EINO_MODEL_API_KEY")),
+		EinoProvider:         strings.ToLower(strings.TrimSpace(os.Getenv("YUMMI_EINO_PROVIDER"))),
+		EinoModelNumCtx:      parseIntOr(os.Getenv("YUMMI_EINO_MODEL_NUM_CTX"), 0),
+		EinoModelMaxTokens:   parseIntOr(os.Getenv("YUMMI_EINO_MODEL_MAX_TOKENS"), 0),
+		TLSDir:               envOr("YUMMI_TLS_DIR", filepath.Join(home, "tls")),
+		GatewayTLS:           parseBool(os.Getenv("YUMMI_GATEWAY_TLS")),
+		DataRetentionDays:    parseIntOr(os.Getenv("YUMMI_DATA_RETENTION_DAYS"), 0),
 	}
 
 	// A directly configured model is the most specific choice. Otherwise an

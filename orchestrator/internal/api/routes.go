@@ -34,6 +34,11 @@ func NewRouter(sm *session.Manager, ks *knowledge.Store, skillReg *skill.Registr
 	r.Use(middleware.RequestID)
 	r.Use(LoggingMiddleware)
 	r.Use(middleware.Recoverer)
+	peers := cfg.OperatorAllowedPeers
+	if peers == "" {
+		peers = "127.0.0.1/32,::1/128"
+	}
+	r.Use(OperatorAccess(peers))
 	r.Use(TimeoutUnlessWebSocket(cfg.RequestTimeout()))
 	r.Use(CORSMiddleware)
 
