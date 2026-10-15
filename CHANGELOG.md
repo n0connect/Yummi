@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/n0connect/Yummi/compare/v1.1.1...v1.1.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* **security:** enforce fail-closed boundaries, isolate docker proxy, and fix browser behaviors ([f725410](https://github.com/n0connect/Yummi/commit/f72541004ed9650ace83a13c04afa04fdbde2f9a))
+
 ## [Unreleased]
 
 ## [1.1.1b](https://github.com/n0connect/Yummi/compare/v1.1.0...v1.1.1b) (2026-10-14)
