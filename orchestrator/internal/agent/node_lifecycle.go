@@ -58,12 +58,17 @@ func retryNode(ctx context.Context, s *GraphState) (string, error) {
 // StatusRunning and (verdict, "", nil, true) is returned for the caller to
 // interpret (approved vs denied) itself, since that handling differs between
 // the two callers.
-func awaitGateVerdict(ctx context.Context, s *GraphState, cmdLabel string, p conductor.Proposal, timeoutMsg string) (verdict Verdict, edge string, err error, ok bool) {
+func awaitGateVerdict(ctx context.Context, s *GraphState, kind, cmdLabel string, p conductor.Proposal, timeoutMsg string) (verdict Verdict, edge string, err error, ok bool) {
 	verdictCh := s.gate.Request(s.taskID, p.ID, cmdLabel, p.RiskLevel)
 	if terr := s.store.Transition(s.taskID, StatusAwaitingApproval, func(t *Task) {
 		t.PendingProposalID = p.ID
 		t.PendingCommand = cmdLabel
 		t.PendingRisk = p.RiskLevel
+		t.PendingApprovalKind = kind
+		t.SetPendingMCP("", nil)
+		if kind == "command" {
+			t.SetPendingMCP(s.pendingAct.Tool, s.pendingAct.Args)
+		}
 	}); terr != nil {
 		return Verdict{}, "", terr, false
 	}
@@ -92,15 +97,16 @@ func awaitGateVerdict(ctx context.Context, s *GraphState, cmdLabel string, p con
 	}
 }
 
-// approvalNode blocks on the operator gate for medium+ risk commands.
+// approvalNode blocks on the operator gate selected by command approval policy.
 func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 	p := s.pendingProposal
+	action := s.pendingAct
 	task, ok := s.store.Get(s.taskID)
 	if !ok {
 		return "", ErrTaskNotFound
 	}
 
-	v, edge, err, gotVerdict := awaitGateVerdict(ctx, s, p.Command, p, "Approval timed out for: "+p.Command)
+	v, edge, err, gotVerdict := awaitGateVerdict(ctx, s, "command", p.Command, p, "Approval timed out for: "+p.Command)
 	if !gotVerdict {
 		return edge, err
 	}
@@ -117,6 +123,9 @@ func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 	}
 	// Execute the approved command and observe it like any other.
 	s.pendingCommand = p.Command
+	if action.Tool != "" {
+		return runMCPAction(ctx, s, task, action, p)
+	}
 	result, err := s.exec.Run(ctx, task.SessionID, p.Command)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -125,7 +134,9 @@ func approvalNode(ctx context.Context, s *GraphState) (string, error) {
 		return "", fmt.Errorf("exec (post-approval): %w", err)
 	}
 	s.executedCmds = append(s.executedCmds, p.Command)
-	_ = observeResult(s, result)
+	if edge := observeResult(s, result); edge == edgeThreatHold {
+		return edge, nil
+	}
 	return edgeApproved, nil
 }
 

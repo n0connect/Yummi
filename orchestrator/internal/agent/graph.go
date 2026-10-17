@@ -115,9 +115,12 @@ var graphEdges = map[string]map[string]string{
 		// edgeRetryAgain → s.retryCtx.Caller (handled dynamically in Execute)
 	},
 	nodeApproval: {
-		edgeApproved: nodeStep,
-		edgeDenied:   nodeStep,
-		edgeGiveUp:   nodeAsk,
+		edgeApproved:   nodeStep,
+		edgeDenied:     nodeStep,
+		edgeGiveUp:     nodeAsk,
+		edgeOK:         nodeStep,
+		edgeIsError:    nodeStep,
+		edgeThreatHold: nodeThreatHold,
 	},
 	nodeThreatHold: {
 		edgeApproved: nodeStep,

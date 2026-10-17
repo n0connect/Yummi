@@ -15,20 +15,9 @@ import urllib.request
 from qc_evidence import (REQUIRED, artifact_metadata, completed_records,
                          https_source, missing_tools, verify_case)
 
+from qc_authorization import pending_failure, pending_identity
+
 BASE = os.environ.get("YUMMI_QC_API", "http://127.0.0.1:9080/api/v1")
-
-
-def displayed_tool(command):
-    parts = command.split()
-    if not parts:
-        return ""
-    if parts[0] != "browser" or len(parts) < 2:
-        return parts[0]
-    if parts[1] in {"open", "snapshot", "screenshot", "eval", "storage", "tabs", "logs"}:
-        return "browser_" + parts[1]
-    if parts[1] in {"fill", "click", "press", "set_viewport", "wait", "type", "scroll"}:
-        return "browser_interact"
-    return ""
 
 
 
@@ -156,25 +145,28 @@ def agent_case(name, goal, required):
     deadline = time.monotonic() + 600
     approvals = []
     rejected = []
-    allowed = set(required)
-    if name.startswith("browser-"):
-        allowed.update({"browser_tabs", "browser_logs"})
     while time.monotonic() < deadline:
         task = api("/tasks/" + tid)
         task = task.get("task", task)
         if task["status"] == "awaiting_approval":
             command = task.get("pending_command", "")
-            tool = displayed_tool(command)
-            # Operator authorized these real QC scenarios, not arbitrary shell
-            # commands or a change to the system-wide approval/egress mode.
-            if tool not in allowed:
-                rejected.append({"command": command, "risk": task.get("pending_risk")})
-                api("/tasks/" + tid + "/stop", {})
-                task = api("/tasks/" + tid)
+            prior = api('/sessions/' + sid + '/executions?limit=100')
+            prior = prior.get('executions', []) if isinstance(prior, dict) else prior
+            refusal = pending_failure(name, task, prior, tid, sid)
+            authorized_identity = pending_identity(task)
+            if not refusal:
+                fresh = api('/tasks/' + tid)
+                fresh = fresh.get('task', fresh)
+                refusal = pending_failure(name, fresh, prior, tid, sid, authorized_identity)
+                task = fresh
+            if refusal:
+                rejected.append({'command': command, 'reason': refusal, 'risk': task.get('pending_risk')})
+                api('/tasks/' + tid + '/stop', {})
+                task = api('/tasks/' + tid)
                 break
             api("/tasks/" + tid + "/approve", {
                 "proposal_id": task["pending_proposal_id"], "approved": True,
-                "reason": "Operator-authorized browser/research QC; expected typed tool only."})
+                "reason": "Operator-authorized QC; exact structured tool, case arguments and prior evidence verified."})
             approvals.append({"command": command, "risk": task.get("pending_risk")})
             time.sleep(1)
             continue
@@ -264,7 +256,7 @@ def main():
         if not args.direct_only:
             cases = [
                 ("cited-search-original", "Quality check: make ONE web_search call for CVE-2024-6387 with include_domains=[openssh.com] and max_results=3. Then use web_fetch on https://www.openssh.com/security.html with find='July 1, 2024' and max_chars=3000; if a release citation is needed, fetch https://www.openssh.com/txt/release-9.8 with max_chars=3000. In the final summary report the affected versions, fixed release and exact original source URLs starting with https://, distinguishing vendor evidence from inference. No scanning, shell commands or further search calls. Finish after these sources are verified.", ["web_search", "web_fetch"]),
-                ("deep-multi-source", "Quality check: make ONE web_search call with depth=deep max_results=3 include_domains=[openssh.com,qualys.com] for CVE-2024-6387. Then web_fetch https://www.qualys.com/2024/07/01/cve-2024-6387/regresshion.txt with max_chars=6000 and https://www.openssh.com/security.html with find='July 1, 2024' max_chars=3000. Give a short comparison citing the exact fetched original HTTPS URLs starting with https:// and clearly identifying the affected versions and the fixed release (fixed/patch/upgrade in 9.8p1), then finish. No additional search, shell commands or scanning.", ["web_search", "web_fetch"]),
+                ("deep-multi-source", "Quality check: make ONE web_search call with depth=deep max_results=3 include_domains=[openssh.com,qualys.com] for CVE-2024-6387. Then web_fetch https://www.qualys.com/2024/07/01/cve-2024-6387/regresshion.txt with max_chars=6000 and https://www.openssh.com/security.html with find='July 1, 2024' max_chars=3000, plus https://www.openssh.com/txt/release-9.8 with max_chars=3000 for the explicit fixed-release evidence. Give a short comparison citing the exact fetched original HTTPS URLs starting with https:// and clearly identifying the affected versions and the fixed release (fixed/patch/upgrade in 9.8p1), then finish. No additional search, shell commands or scanning.", ["web_search", "web_fetch"]),
                 ("browser-headless", "Execute this browser API quality check in order, one action after seeing the preceding result. Only authorized app: http://127.0.0.1:18888/browser-qa.html. 1. browser_session action=reset. 2. browser_open url=http://127.0.0.1:18888/browser-qa.html headless=true session=quality. 3. browser_snapshot. 4. browser_interact action=fill selector=#query value=OpenSSH. 5. browser_interact action=click selector=#submit (first click #submit to submit the form). 6. browser_snapshot interactive_only=false (take this snapshot immediately after click to observe the resulting Research: OpenSSH). 7. browser_interact action=set_viewport width=375 height=812. 8. browser_screenshot output_file=/home/pentester/work/quality-mobile.png full_page=false. 9. browser_session action=status. Then finish alone with actual mode, observed form result and PNG dimensions. Do not substitute shell commands, extra navigation or extra research for any listed API call.", ["browser_session", "browser_open", "browser_snapshot", "browser_interact", "browser_screenshot"]),
                 ("browser-full", "Execute this browser API quality check in order, one action after seeing the preceding result. Only authorized app: http://127.0.0.1:18888/browser-qa.html. 1. browser_session action=reset. 2. browser_open url=http://127.0.0.1:18888/browser-qa.html headless=false session=desktop-quality. 3. browser_snapshot. 4. browser_interact action=fill selector=#query value=OpenSSH. 5. browser_interact action=click selector=#submit (first click #submit to submit the form). 6. browser_snapshot interactive_only=false (take this snapshot immediately after click to observe the resulting Research: OpenSSH). 7. browser_interact action=set_viewport width=1280 height=800. 8. browser_session action=status. 9. browser_screenshot output_file=/home/pentester/work/quality-desktop.png full_page=false. Then finish alone with actual headless flag, form result and screenshot path. No shell commands, external navigation, scanning or other work.", ["browser_session", "browser_open", "browser_snapshot", "browser_interact", "browser_screenshot"]),
             ]

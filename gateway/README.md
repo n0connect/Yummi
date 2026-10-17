@@ -90,16 +90,19 @@ The orchestrator communicates with gateway over a Unix domain socket (`/run/yumm
 ## Egress Modes
 
 The gateway enforces a 4-way master switch over the `nftables` FORWARD chain:
-- **`block_all`** (`block`): Default state. Drops all outbound egress from the sandbox container, including DNS and packets on established connections, ignoring active allow rules.
+- **`block_all`** (`block`): Default state. Drops gateway-forwarded sandbox egress, including DNS and packets on established connections, ignoring active allow rules.
 - **`block_all_except_rules`** (`block_except_rules`, `rules_only`): Default-drop, but permits destinations explicitly matched by active temporary allow rules or configured CIDRs.
 - **`allow_all`** (`allow`): Blanket allows outbound sandbox traffic to public destinations not explicitly blocked.
 - **`ask_every_time`** (`ask`): Prompts the operator for interactive authorization on each new destination IP/hostname.
 
 Egress mode resets to **`block_all`** on every gateway daemon restart (fail-closed by design).
 UDP/53 DNS resolution is an explicit exception in the three other modes, after
-configured destination blocks. Every sandbox-sourced packet rechecks current
-scope, so approval expiry or removal also blocks established outbound flows.
-Other containers' traffic and return traffic keep their source-based pass-through.
+configured destination blocks. Every forwarded sandbox-sourced packet rechecks
+current scope. In rules-only/ask mode, approval expiry/removal blocks established
+flows that depended on that approval and have no other matching allow; `allow_all`
+does not require temporary approvals. Local and same-subnet traffic, including
+read-only policy requests, does not traverse this FORWARD chain. Other containers'
+traffic and return traffic keep their source-based pass-through.
 
 ### Real kernel regression
 

@@ -12,6 +12,8 @@ func TestExecCreateRejectsPrivilegeAndAmbiguousFields(t *testing.T) {
 	for _, body := range []string{
 		`{}`, `{"User":"root","Cmd":["id"]}`, `{"User":"1000","Cmd":["id"]}`,
 		`{"User":"1000:1000","Privileged":true,"Cmd":["id"]}`,
+		`{"User":"1000:1000","Detach":true,"Cmd":["id"]}`,
+		`{"User":"1000:1000","Detach":"false","Cmd":["id"]}`,
 		`{"User":"1000:1000","Cmd":["id"],"HostConfig":{"Privileged":true}}`,
 		`{"User":"1000:1000","User":"root","Cmd":["id"]}`,
 		`{"User":"1000:1000","user":"root","Cmd":["id"]}`,
@@ -23,7 +25,7 @@ func TestExecCreateRejectsPrivilegeAndAmbiguousFields(t *testing.T) {
 			}
 		})
 	}
-	valid := `{"AttachStdin":true,"AttachStdout":true,"AttachStderr":true,"ConsoleSize":[24,80],"DetachKeys":"","Env":["TERM=xterm"],"Cmd":["/bin/sh","-c","id"],"Tty":true,"WorkingDir":"/tmp","User":"1000:1000","Privileged":false}`
+	valid := `{"Detach":false,"AttachStdin":true,"AttachStdout":true,"AttachStderr":true,"ConsoleSize":[24,80],"DetachKeys":"","Env":["TERM=xterm"],"Cmd":["/bin/sh","-c","id"],"Tty":true,"WorkingDir":"/tmp","User":"1000:1000","Privileged":false}`
 	if _, err := validateCreate([]byte(valid)); err != nil {
 		t.Fatal(err)
 	}

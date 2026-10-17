@@ -19,7 +19,13 @@ This page maps `orchestrator/` packages by **architectural boundary** — what e
 
 ## Entry Point <a id="entry-point"></a>
 
-`cmd/orchestrator/main.go` wires all packages into the Chi router (`internal/api/routes.go`) and starts the HTTP and WebSocket listeners. Dependencies are instantiated explicitly without reflection or magic containers.
+`cmd/orchestrator/main.go` wires the operator router and the separate read-only
+sandbox policy listener. Compose publishes neither listener directly: host
+loopback ports 3000/9080 go through UI nginx on the UI-only ingress bridge.
+The main API uses exact socket-peer authorization on internal control;
+`172.20.0.3:9081` exposes policy checks without operator routes. See
+[network topology](../architecture.md#network-topology). Dependencies are
+instantiated explicitly without reflection or magic containers.
 
 ---
 

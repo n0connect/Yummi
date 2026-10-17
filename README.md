@@ -169,11 +169,56 @@ Running `make conf` writes your settings to `.yummi.conf` so subsequent commands
 
 ```bash
 make build   # Builds CLI + orchestrator + gateway binaries AND UI (dist)
-make test    # Runs all test suites (Go root, Go orchestrator, Go sandbox-mcp, Rust gateway, UI)
+make test    # CLI, orchestrator, gateway, UI, Docker sandbox-MCP, Brain and QC tests
 make lint    # Runs golangci-lint across all three Go modules
 ```
 
 > **Note:** The repository consists of **three separate Go modules** (root CLI, `orchestrator/`, and `sandbox-mcp/`). When running ad-hoc `go test` commands, prefix with the module path (e.g. `cd orchestrator && go test ./...`). See **[docs/development.md](docs/development.md)**.
+
+### Isolated security regressions
+
+Run from the repository root. These optional targets build missing prerequisites
+and create disposable environments without restarting the live Compose stack.
+The Kali tool base `yummi/sandbox:local` is reused when present; MCP binaries and
+tests are rebuilt from current source. Rebuild the tool base explicitly with
+`docker compose build sandbox` when changing its installed tools:
+
+```bash
+make test-gateway-kernel        # Real routed IPv4/IPv6 nftables + conntrack
+make test-research-integration  # Real installed MCP + gateway approval/retry
+make test-control-boundary     # Disposable operator/API/broker/UI topology
+make test-security-boundaries  # All three above
+```
+
+The control-boundary target requires a local Docker Unix-socket context and free
+172.21/22/23.0.0/24 networks. It refuses overlap with existing networks and never
+stops those resources. Only its disposable constrained broker mounts the Docker
+socket; host ports are temporary loopback ports, not live 3000/9080.
+
+Equivalent kernel/research Docker commands (first build the local Kali test image
+with `make _test-sandbox-mcp` for research):
+
+```bash
+# Real routed IPv4/IPv6 nftables + conntrack; privilege is for ip-netns mounts.
+docker build -f gateway/Dockerfile.kernel-test -t yummi/gateway-kernel-test:local .
+docker run --rm --pull never --network none --privileged yummi/gateway-kernel-test:local
+
+# Real MCP -> policy API -> gateway -> execution approval/retry.
+docker build -f qa/Dockerfile.research-integration -t yummi/research-integration:local .
+docker run --rm --pull never --network none --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID yummi/research-integration:local
+```
+
+The kernel runner has no host mounts or Docker socket. The research runner uses
+the source-built installed MCP binary as UID/GID1000 with empty groups and zero
+effective/permitted/ambient capabilities; gateway and operator executor use UID0.
+It includes the genuine Docker CLI for existing error-path tests, without a daemon
+socket. Append `-test.v -test.timeout=90s` to run the full executor test binary;
+the two existing tests requiring a real Docker daemon/sandbox image skip there.
+The default six research integration scenarios prove approval/denial/retry and
+fail-closed policy behavior. Network is disabled: expected postapproval transport
+failure does not establish successful external fetching or paid-model research.
+See [the audit addendum](docs/agent/audit-2026-10-15.md) and
+[corrected historical QC results](docs/agent/web-research-qc.md).
 
 ---
 

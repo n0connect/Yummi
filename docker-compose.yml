@@ -337,6 +337,10 @@ services:
     networks:
       yummi_control:
         ipv4_address: 172.21.0.4
+      # A dedicated UI-only bridge is required for published host ports;
+      # Docker does not publish ports on an internal-only network.
+      yummi_ingress:
+        ipv4_address: 172.22.0.4
     restart: unless-stopped
     logging: *default-logging
     deploy:
@@ -365,6 +369,15 @@ volumes:
     name: yummi_orchestrator_data
 
 networks:
+  # Only the UI joins ingress. The operator API and Docker broker remain
+  # on the separate internal control network.
+  yummi_ingress:
+    name: yummi_ingress
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+          gateway: 172.22.0.1
   yummi_control:
     name: yummi_control
     driver: bridge

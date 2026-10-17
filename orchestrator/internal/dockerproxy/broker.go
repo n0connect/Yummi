@@ -328,47 +328,17 @@ func replaceBody(r *http.Request, value any) {
 	r.Header.Set("Content-Type", "application/json")
 }
 
-// Reject duplicate, unknown, and differently cased keys before typed decoding.
-// Re-encoding typed data prevents any Docker parser disagreement at the boundary.
+// Keep the body bound even for direct validation calls.
 func strictObject(data []byte, out any, allowed ...string) error {
 	if len(data) > maxBody {
 		return errors.New("request too large")
 	}
-	keys := make(map[string]bool, len(allowed))
-	for _, key := range allowed {
-		keys[key] = true
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	token, err := decoder.Token()
-	if err != nil || token != json.Delim('{') {
-		return errors.New("JSON object required")
-	}
-	seen := make(map[string]bool)
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		key, ok := token.(string)
-		if !ok || !keys[key] || seen[key] {
-			return errors.New("unknown or duplicate field")
-		}
-		seen[key] = true
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return err
-		}
-	}
-	if _, err := decoder.Token(); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return errors.New("trailing JSON")
-	}
-	return json.Unmarshal(data, out)
+	return controlaccess.DecodeObject(data, out, allowed...)
 }
 
 type createRequest struct {
+	// Debian Docker CLI includes Detach in exec-create, even for attached exec.
+	Detach       bool
 	AttachStdin  bool
 	AttachStdout bool
 	AttachStderr bool
@@ -384,10 +354,10 @@ type createRequest struct {
 
 func validateCreate(data []byte) (createRequest, error) {
 	var cfg createRequest
-	if err := strictObject(data, &cfg, "AttachStdin", "AttachStdout", "AttachStderr", "ConsoleSize", "DetachKeys", "Env", "Cmd", "Tty", "WorkingDir", "User", "Privileged"); err != nil {
+	if err := strictObject(data, &cfg, "Detach", "AttachStdin", "AttachStdout", "AttachStderr", "ConsoleSize", "DetachKeys", "Env", "Cmd", "Tty", "WorkingDir", "User", "Privileged"); err != nil {
 		return cfg, err
 	}
-	if cfg.User != "1000:1000" || cfg.Privileged || len(cfg.Cmd) == 0 || cfg.Cmd[0] == "" {
+	if cfg.User != "1000:1000" || cfg.Privileged || cfg.Detach || len(cfg.Cmd) == 0 || cfg.Cmd[0] == "" {
 		return cfg, errors.New("only non-root sandbox execution is permitted")
 	}
 	return cfg, nil

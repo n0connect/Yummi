@@ -1,0 +1,36 @@
+# Build from repository root:
+# docker build -f qa/Dockerfile.research-integration -t yummi/research-integration:local .
+# docker run --rm --pull never --network none --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID yummi/research-integration:local
+# No host mounts, Docker socket, provider credentials or external network.
+# The operator test/gateway run UID0; installed MCP child is UID/GID1000,
+# with empty supplementary groups and zero effective/permitted/ambient caps.
+FROM rust:1.86-slim-bookworm AS gatewaybuild
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libsqlite3-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /gateway
+COPY gateway/Cargo.toml gateway/Cargo.lock ./
+COPY gateway/src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/gateway/target cargo clean -p yummi-gateway && cargo build --release && cp target/release/yummi-gateway /tmp/yummi-gateway
+
+FROM golang:1.27.2-bookworm AS testbuild
+WORKDIR /orchestrator
+COPY orchestrator/ ./
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go test -c -o /out/research-integration.test ./internal/executor
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go test -c -o /out/agent-approval-integration.test ./internal/agent
+WORKDIR /sandbox-mcp
+COPY sandbox-mcp/ ./
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -o /out/yummi-sandbox-mcp .
+
+FROM docker:27-cli AS dockercli
+
+FROM yummi/sandbox-mcp-test:local
+USER root
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=gatewaybuild /tmp/yummi-gateway /usr/local/bin/yummi-gateway
+COPY --from=testbuild /out/research-integration.test /usr/local/bin/research-integration.test
+COPY --from=testbuild /out/agent-approval-integration.test /usr/local/bin/agent-approval-integration.test
+COPY --from=testbuild /out/yummi-sandbox-mcp /usr/local/bin/yummi-sandbox-mcp
+COPY gateway/config/default.yaml /etc/yummi/research-gateway.yaml
+COPY qa/research-integration-entrypoint.sh /usr/local/bin/research-integration-entrypoint
+RUN chmod 0755 /usr/local/bin/research-integration-entrypoint /usr/local/bin/yummi-sandbox-mcp
+ENV YUMMI_RESEARCH_INTEGRATION=1
+ENTRYPOINT ["/usr/local/bin/research-integration-entrypoint"]

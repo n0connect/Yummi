@@ -156,10 +156,11 @@ endef
 	build start rebase stop clean force-restart close \
 	_check-deps _check-network-mode _build-cli _build-ui _build-orchestrator _build-gateway _build-sandbox-mcp \
 	test test-agent-live test-agent-eval test-agent-benchmark bench-target-up bench-target-down \
+	test-security-boundaries test-gateway-kernel test-research-integration test-control-boundary \
 	lab-target-up lab-target-down \
 	lint vuln doctor install dev dev-ui dev-orchestrator \
 	app \
-	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain _test-qc \
+	_test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _sandbox-test-base _test-brain _test-qc \
 	docker-build docker-orchestrator docker-ui \
 	_container-ensure _ollama-ensure \
 	_check-brain-deps brain-install brain-run brain-mcp
@@ -600,7 +601,7 @@ close:
 #  DEVELOPER COMMANDS  (granular, fast feedback loops)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## test    Run all test suites (CLI + orchestrator + gateway + UI)
+## test    Run all module suites, isolated sandbox tests and archived QC regressions
 test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sandbox-mcp _test-brain _test-qc
 	@$(call log_section,All Tests Passed)
 	@$(call log_pass,test,All suites completed successfully.)
@@ -609,6 +610,27 @@ test: _check-deps _test-cli _test-orchestrator _test-gateway _test-ui _test-sand
 _test-qc:
 	@$(call log_info,test,Checking archived browser and research QC evidence...)
 	@PYTHONPATH=qa python3 -m unittest discover -s qa -p 'test_qc_evidence.py' -v
+
+## test-security-boundaries  Real disposable Linux packet, research and operator boundary checks
+test-security-boundaries: test-gateway-kernel test-research-integration test-control-boundary
+
+## test-gateway-kernel  Real nftables IPv4/IPv6 tests in a networkless disposable container
+test-gateway-kernel: _runtime-deps
+	@$(CONTAINER_ENGINE) build -f gateway/Dockerfile.kernel-test -t yummi/gateway-kernel-test:local .
+	@$(CONTAINER_ENGINE) run --rm --pull never --network none --privileged yummi/gateway-kernel-test:local
+
+## test-research-integration  Installed UID1000 MCP, real gateway and execution approval/retry path
+test-research-integration: _test-sandbox-mcp
+	@$(CONTAINER_ENGINE) build -f qa/Dockerfile.research-integration -t yummi/research-integration:local .
+	@$(CONTAINER_ENGINE) run --rm --pull never --network none --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID yummi/research-integration:local
+
+## test-control-boundary  Build current images and verify a disposable operator/control stack
+test-control-boundary: _runtime-deps _test-sandbox-mcp
+	@test "$(CONTAINER_ENGINE)" = docker || { printf 'Control-boundary runner requires a local Docker Unix-socket context.\n'; exit 1; }
+	@$(COMPOSE) $(COMPOSE_FILES) build orchestrator yummi-ui docker-proxy
+	@report_path=$$(mktemp "$${TMPDIR:-/tmp}/yummi-control-boundary.XXXXXX"); \
+		python3 qa/control_boundary_qc.py --output "$$report_path"; result=$$?; \
+		printf 'Control-boundary report: %s\n' "$$report_path"; exit $$result
 
 ## test-agent-live  End-to-end agentic loop against the REAL model + sandbox container
 test-agent-live: _check-deps _container-ensure
@@ -793,7 +815,13 @@ _test-gateway:
 	@set -o pipefail; cd $(GATEWAY_DIR) && cargo test 2>&1 | sed 's/^/  /' || { $(call log_error,test,Gateway tests failed.); exit 1; }
 	@$(call log_pass,test,Gateway tests passed.)
 
-_test-sandbox-mcp:
+_sandbox-test-base: _runtime-deps
+	@# Reuse the installed tool environment. Dockerfile.test always compiles and
+	@# installs the current MCP binary/tests; rebuilding rolling Kali is separate.
+	@$(CONTAINER_ENGINE) image inspect yummi/sandbox:local >/dev/null 2>&1 || \
+		$(CONTAINER_ENGINE) build -f sandbox/Dockerfile -t yummi/sandbox:local .
+
+_test-sandbox-mcp: _sandbox-test-base
 	@$(call log_info,test,Running sandbox-mcp tests inside isolated Kali Docker container...)
 	@$(CONTAINER_ENGINE) build -f sandbox-mcp/Dockerfile.test -t yummi/sandbox-mcp-test:local .
 	@$(CONTAINER_ENGINE) run --rm --pull never --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev --tmpfs /home/pentester:rw,nosuid,nodev,mode=1777 yummi/sandbox-mcp-test:local -test.v -test.timeout=5m

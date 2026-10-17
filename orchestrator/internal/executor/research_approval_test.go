@@ -20,6 +20,13 @@ func TestResearchApprovalBoundary(t *testing.T) {
 		{"web_fetch", `{"kind":"egress_approval_required","target":"https://example.com","ips":["1.1.1.1"]}`, true, false},
 		{"web_fetch", valid + `{}`, true, false},
 		{"web_fetch", `{"kind":"egress_approval_required","target":"example.com","ips":["172.20.0.3"]}`, true, false},
+		{"web_fetch", `{"kind":"egress_approval_required","target":"example.com","ips":["100.64.0.1"]}`, true, false},
+		{"web_fetch", `{"kind":"egress_approval_required","target":"example.com","ips":["192.0.2.1"]}`, true, false},
+		{"web_fetch", `{"kind":"egress_approval_required","target":"example.com","ips":["198.18.0.1"]}`, true, false},
+		{"web_fetch", `{"kind":"egress_approval_required","target":"example.com","ips":["64:ff9b::7f00:1"]}`, true, false},
+		{"web_fetch", `{"kind":"egress_approval_required","target":"example.com","ips":["2001:db8::1"]}`, true, false},
+		{"web_fetch", `{"kind":"ignored","kind":"egress_approval_required","target":"example.com","ips":["1.1.1.1"]}`, true, false},
+		{"web_fetch", `{"Kind":"egress_approval_required","target":"example.com","ips":["1.1.1.1"]}`, true, false},
 	} {
 		r := &mcp.CallToolResult{IsError: tc.isError, Content: []mcp.Content{&mcp.TextContent{Text: tc.text}}}
 		got := researchApproval(tc.tool, r)

@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"slices"
 	"time"
 )
@@ -151,9 +152,12 @@ type Task struct {
 	// Pending* describe the command the task is blocked on while
 	// awaiting_approval. They are ephemeral (not persisted) and exist so the
 	// task.status ws event is self-sufficient for the UI's approve action.
-	PendingProposalID string `json:"pending_proposal_id,omitempty"`
-	PendingCommand    string `json:"pending_command,omitempty"`
-	PendingRisk       string `json:"pending_risk,omitempty"`
+	PendingProposalID   string `json:"pending_proposal_id,omitempty"`
+	PendingCommand      string `json:"pending_command,omitempty"`
+	PendingRisk         string `json:"pending_risk,omitempty"`
+	PendingApprovalKind string `json:"pending_approval_kind,omitempty"`
+	PendingMCPTool      string `json:"pending_mcp_tool,omitempty"`
+	PendingMCPArgs      string `json:"pending_mcp_args,omitempty"`
 
 	// AutoApproveNonCritical is an operator-set, per-task override: when
 	// true, a proposal whose risk is anything other than high/critical
@@ -193,4 +197,19 @@ type Task struct {
 
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
+}
+
+// SetPendingMCP publishes immutable structured arguments alongside the display
+// label. Automated operator clients must validate these, never infer authority
+// from a human-readable command. Serialization failure leaves no typed grant.
+func (t *Task) SetPendingMCP(tool string, args map[string]any) {
+	t.PendingMCPTool, t.PendingMCPArgs = "", ""
+	if tool == "" {
+		return
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return
+	}
+	t.PendingMCPTool, t.PendingMCPArgs = tool, string(data)
 }

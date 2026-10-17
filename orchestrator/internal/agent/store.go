@@ -253,6 +253,10 @@ func (s *Store) Transition(id string, to TaskStatus, mutate func(*Task)) error {
 		mutate(&t)
 	}
 	t.Status = to
+	if to != StatusAwaitingApproval {
+		t.PendingMCPTool, t.PendingMCPArgs = "", ""
+		t.PendingApprovalKind = ""
+	}
 	t.UpdatedAt = time.Now().Unix()
 	if err := s.persist(t); err != nil {
 		s.mu.Unlock()
@@ -380,6 +384,8 @@ func (s *Store) recoverInterrupted() error {
 					"The orchestrator restarted. An in-flight action may not have completed; verify state before repeating side effects.")
 			}
 			t.PendingProposalID, t.PendingCommand, t.PendingRisk = "", "", ""
+			t.PendingMCPTool, t.PendingMCPArgs = "", ""
+			t.PendingApprovalKind = ""
 			t.UpdatedAt = time.Now().Unix()
 			if err := s.persist(t); err != nil {
 				return err

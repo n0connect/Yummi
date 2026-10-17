@@ -1,14 +1,12 @@
 package executor
 
 import (
-	"bytes"
-	"encoding/json"
-	"io"
 	"net/netip"
 	"regexp"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/n0connect/yummi/orchestrator/internal/controlaccess"
 	"github.com/n0connect/yummi/orchestrator/internal/execution"
 )
 
@@ -30,9 +28,7 @@ func researchApproval(tool string, result *mcp.CallToolResult) *execution.Egress
 		Target string   `json:"target"`
 		IPs    []string `json:"ips"`
 	}
-	dec := json.NewDecoder(bytes.NewBufferString(content.Text))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&report) != nil || dec.Decode(new(any)) != io.EOF || report.Kind != "egress_approval_required" || len(report.IPs) == 0 || len(report.IPs) > 8 {
+	if controlaccess.DecodeObject([]byte(content.Text), &report, "kind", "target", "ips") != nil || report.Kind != "egress_approval_required" || len(report.IPs) == 0 || len(report.IPs) > 8 {
 		return nil
 	}
 	targetIP, targetErr := netip.ParseAddr(report.Target)
@@ -42,7 +38,7 @@ func researchApproval(tool string, result *mcp.CallToolResult) *execution.Egress
 	seen := map[netip.Addr]bool{}
 	for _, raw := range report.IPs {
 		ip, err := netip.ParseAddr(raw)
-		if err != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.Zone() != "" {
+		if err != nil || !publicResearchApprovalIP(ip) {
 			return nil
 		}
 		if targetErr == nil && ip.Unmap() != targetIP.Unmap() {
@@ -54,4 +50,32 @@ func researchApproval(tool string, result *mcp.CallToolResult) *execution.Egress
 		seen[ip.Unmap()] = true
 	}
 	return &execution.EgressApprovalRequiredError{Target: report.Target, IPs: report.IPs}
+}
+
+// Match the independently enforced sandbox research address boundary. In
+// particular, global-unicast alone includes documentation, shared and NAT64
+// ranges, which must never become an operator-approved research destination.
+func publicResearchApprovalIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if ip.Zone() != "" || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	for _, prefix := range researchReservedPrefixes {
+		if prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+var researchReservedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("64:ff9b::/96"),
 }

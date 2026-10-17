@@ -87,7 +87,7 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 Two strictly segregated control channels reach the Kali sandbox:
 
 1. **Execution Channel (Control Plane)**:
-   - The Go `orchestrator` issues command executions into the sandbox via `docker exec` (strictly proxied by `docker-proxy`).
+   - The Go `orchestrator` issues command executions via the constrained `docker-proxy` broker on internal control `172.21.0.0/24`. The broker accepts the exact orchestrator peer, the configured sandbox container and UID/GID `1000:1000`; it tracks issued exec IDs and rejects lifecycle/other-container operations. Sandbox and gateway do not join this network.
    - Every command executes as an unprivileged user (`UID 1000:1000`), with an isolated subshell environment (`/bin/bash -lc`), a 10-minute timeout ceiling, and a 1 MiB output buffer limit.
 2. **Network Channel (Data Plane)**:
    - The Rust `gateway` manages Linux kernel `FORWARD` rules in the `nftables` subsystem.
@@ -168,18 +168,47 @@ Yummi includes a dedicated offensive security and bug bounty substrate:
 ## Network Topology & Routing <a id="network-topology"></a>
 
 ```text
-yummi_internal (172.20.0.0/24, internal: true, no default Docker gateway)
-  |-- gateway         172.20.0.2   (Default gateway & router for sandbox)
-  |-- orchestrator    172.20.0.3
-  |-- ui              172.20.0.4
-  |-- docker-proxy    172.20.0.5
-  \-- sandbox         172.20.0.10  (Only attached to yummi_internal)
+yummi_internal (172.20.0.0/24, internal: true)
+  |-- gateway         172.20.0.2   (Sandbox's routed egress)
+  |-- orchestrator    172.20.0.3   (Read-only policy listener :9081)
+  \-- sandbox         172.20.0.10  (Only attached to this network)
 
-yummi_external (Bridge driver with external network connectivity)
-  |-- gateway         (NAT router subject to nftables FORWARD rules)
-  |-- orchestrator    (Reaches LLM API endpoints)
-  \-- ui              (Exposed on host port 3000)
+yummi_control (172.21.0.0/24, internal: true)
+  |-- orchestrator    172.21.0.3   (Main API :9080, exact peer authorization)
+  |-- ui              172.21.0.4   (Trusted operator proxy)
+  \-- docker-proxy    172.21.0.5   (Constrained Docker broker)
+
+yummi_ingress (172.22.0.0/24, normal bridge)
+  \-- ui              172.22.0.4   (Only UI joins; bridge gateway .1)
+
+yummi_external (Normal bridge): gateway and orchestrator only
+Host 127.0.0.1:3000 and :9080 -> UI nginx :80 -> orchestrator :9080
+No orchestrator host port is published.
 ```
+
+The main API binds `0.0.0.0:9080` inside the container. Peer authorization
+restricts operator requests to loopback and UI `172.21.0.4/32`, using the
+socket address rather than caller-supplied forwarded headers. The private
+`:9081` router exposes hostname policy and literal-IP egress decisions only;
+it cannot approve commands, change modes or add rules.
+
+nginx additionally checks local Host names and exact configured source peers.
+In isolated OrbStack published-port checks, the host arrived as
+`172.22.0.1`; the allow rule covers that exact address. The control bridge stays
+internal; the separate UI-only normal ingress bridge makes loopback publishing
+work without placing sandbox or broker on ingress.
+
+`block_all` denies gateway-forwarded sandbox egress, including DNS and established
+connections. The other modes retain an explicit gateway-routed UDP/53 resolution
+exception after destination blocks. Every forwarded sandbox packet rechecks current
+scope. In rules-only/ask mode, expiry/removal also blocks established flows that
+depended on that approval and have no other matching allow. `allow_all` does not
+require temporary approvals. Local and same-subnet traffic, including read-only
+policy requests, does not traverse the gateway FORWARD chain.
+
+These are source topology and isolated-test results. The original live stack
+was not rebuilt/recreated during the 15–16 October remediation; its running
+network membership and mode do not establish deployment of these changes.
 
 ---
 

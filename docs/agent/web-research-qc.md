@@ -1,4 +1,4 @@
-# Browser / web research QC — 2026-10-14
+# Browser / web research QC — 2026-10-14, corrected 2026-10-16
 
 Commands, builds, provider calls and Chromium in this follow-up ran through
 Docker. No host browser or new mocks/replacement transports were used.
@@ -22,7 +22,14 @@ This does not certify historical execution logs.
   The open sidebar refreshes without page reload and rejects stale responses.
   Reading history no longer forces the viewport to the latest message.
 
-## Verified in this follow-up
+## Historical direct checks reported on 2026-10-14
+
+The following direct checks were reported in that follow-up. They are not new
+16 October runs and do not validate the four agent scenarios below. The
+independent audit subsequently found firewall, browser-wait and evidence-gate
+defects; see [the preserved audit and remediation addendum](audit-2026-10-15.md).
+The original live gateway was in `allow_all`; a healthy service alone did not
+prove restricted egress.
 
 - Complete sandbox-MCP suite: PASS in networkless Kali, real Chromium/tmux/tools.
 - Orchestrator API, conductor, execution, agent/Eino, sandbox-MCP client and
@@ -46,28 +53,62 @@ This does not certify historical execution logs.
 
 ## MiniMax/OpenRouter agent evidence
 
-| Scenario | Result | Task |
+| Scenario | Corrected result | Task / evidence limit |
 | --- | --- | --- |
-| Cited original-source research | PASS | 3348fe31-5e5c-489f-82d1-5318c59adc47 |
-| Deep independent-source comparison | PASS | fe736696-3963-46d4-bd8b-18c7750e1f3d |
-| Headless form/mobile PNG | PASS | b2d6b819-0b52-4d00-a232-dd967bd63dfb |
-| Full-browser autonomous workflow | PASS | 33b2a15e-6bcb-41da-8b2c-9e00d05fae4a |
+| Cited original-source research | PASS for the inspected record | `3348fe31-5e5c-489f-82d1-5318c59adc47`: actual search/vendor fetches and full HTTPS citations were present. |
+| Deep independent-source comparison | FAIL | `fe736696-3963-46d4-bd8b-18c7750e1f3d`: final citations omitted `https://` and the required explicit fixed-release source evidence was missing. |
+| Headless form/mobile PNG | UNVERIFIED under the strict artifact gate | `b2d6b819-0b52-4d00-a232-dd967bd63dfb`: historical action order and 375×812 dimensions were observed, but no original task-completion task/execution/hash observation binds the legacy PNG. |
+| Full-browser autonomous workflow | FAIL | `33b2a15e-6bcb-41da-8b2c-9e00d05fae4a`: final snapshot/PNG preceded submit click; the final summary contradicted execution order. Its legacy artifact is also unverified. |
 
-All four agent scenarios with live `minimax/minimax-m2.1` via OpenRouter pass the quality
-gate with 0 evidence failures and verified artifact/result integrity.
-- Form submission feedback is captured directly on click via ARIA live/status evaluation and verified through compact accessibility tree snapshots.
-- Vendor versions and exact original-source HTTPS URLs are cited and distinguished from secondary inferences.
-- Mobile (375x812) and desktop (1280x800) PNG screenshots are generated as real artifacts within sandbox boundaries.
-- No mocks, doubles, or relaxed assertions were used. Egress filtering is fail-closed and enforced by the Rust gateway daemon.
+The previous claim that all four passed with zero evidence failures is withdrawn.
+A screenshot's dimensions and a task marked completed cannot establish ordered
+interaction or artifact provenance. The strict checker requires task/session
+binding, successful tool records, fill → resolved submit click → result snapshot
+→ screenshot order, exact HTTPS sources, and an original task-completion artifact
+observation. That observation records bytes/hash/dimensions at task completion;
+it is not cryptographic attestation of the original capture instant. Release-clause
+checks are a bounded language heuristic, not semantic proof. Auditing does not
+invent missing observations or relabel old records as new runs.
+
+## Isolated remediation verification — 2026-10-15/16
+
+- Real Linux nftables regressions passed for IPv4 and IPv6: logging burst
+  exhaustion cannot bypass DROP; `block_all` stops gateway-forwarded DNS and
+  established TCP. Approvals survive mode changes; in rules-only/ask mode,
+  expiry/removal revokes established traffic that depended on those approvals
+  and has no other matching allow. Local/private policy traffic remains reachable.
+- The four actual Chromium audit regressions cover fresh post-wait snapshots,
+  real request-idle waiting, ARIA live DIV content and current visible click status.
+  Their fixes were verified in isolated networkless Kali, not a host browser.
+- The real research approval harness passed all six subcases with the installed
+  sandbox MCP child running UID/GID1000 and no effective/permitted/ambient caps.
+  Literal-IP fetch and hostname DoH each hold on pinned `1.1.1.1`; the operator
+  installs an actual gateway rule and the execution retries without a second hold.
+  Denial, `block_all`, malformed policy inputs, absent mutator routes and unavailable
+  policy/gateway fail closed. No provider credentials or replacement transports
+  are supplied. Postapproval fetch/DNS fails because runtime is `--network none`;
+  this is not a successful external fetch or paid-model research run.
+- Disposable control-boundary checks passed operator host REST/WebSocket ingress,
+  sandbox rejection from operator/UI/broker paths, actual UID1000 execution through
+  the constrained broker, and real operator Chromium sidebar/toggle checks.
+
+The original live containers were not rebuilt, recreated or restarted for these
+isolated checks. The corrected source and passing isolated tests do not certify
+that the original running stack has the new topology or enforcement. No new paid
+agent scenario replaced the historical records above.
 
 ## Reproduction / limits
 
-Run the drivers in `qa/` inside the running sandbox as UID 1000:
-`browser_research_qc.py`, `edge_cases_qc.py`, `web_search_toggle_qc.py`,
-`operator_actions_qc.py` and `session_live_qc.py`. Keep direct and agent
-reports separate in sandbox `/home/pentester/work/`. Start through
-`make start` so saved provider/model configuration is exported.
+Follow [qa/README.md](../../qa/README.md) for the role-specific driver commands.
+Research/browser tools run as UID1000 inside the sandbox. Operator UI checks run
+in the explicit Docker operator-QA image sharing the disposable UI network
+namespace; they do not run in the sandbox or use a host browser. Keep direct and
+agent reports separate. Fresh paid-model agent scenarios require an intentionally
+rebuilt deployment and operator-selected provider configuration; no such new run
+was performed for this remediation.
 
+For local isolated regression targets and equivalent Docker commands, see
+[the project README](../../README.md#isolated-security-regressions).
 The sandbox HTTP/CONNECT/WebSocket proxy checks hostname policy before
 connecting; gateway nftables is the packet-level authority. CDP notifications
 are observations, not enforcement. The networkless regression covers an

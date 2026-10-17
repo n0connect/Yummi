@@ -16,7 +16,7 @@ func threatHoldNode(ctx context.Context, s *GraphState) (string, error) {
 	}
 
 	cmdLabel := "[THREAT_HOLD] " + s.pendingCommand
-	v, edge, err, gotVerdict := awaitGateVerdict(ctx, s, cmdLabel, p, "Threat scan approval timed out for command: "+s.pendingCommand)
+	v, edge, err, gotVerdict := awaitGateVerdict(ctx, s, "threat", cmdLabel, p, "Threat scan approval timed out for command: "+s.pendingCommand)
 	if !gotVerdict {
 		return edge, err
 	}

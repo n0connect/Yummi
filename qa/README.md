@@ -18,23 +18,42 @@
   `missing_tools` values are never trusted. Audit accepts trusted local reports,
   not arbitrary adversarial report manifests.
 
+Automatic approvals require authoritative `pending_approval_kind=command`,
+`pending_mcp_tool`, JSON `pending_mcp_args` and a proposal ID from the task API.
+The task/session/proposal and exact structured arguments are rechecked immediately
+before approval. Display commands grant no authority. Threat holds, missing or
+changed metadata, extra navigation, tab/log/script actions and any deviation
+from the case's exact source/app/ref/viewport/artifact constraints stop the case.
+Actual prior executions are replayed through the same constraints. The UI action
+helper's optional budget case authorizes only one read-only session-status call.
+
 Use a new output path on every invocation: existing reports are never
 overwritten. Each new browser task has a unique session directory
 `/home/pentester/work/qc/{session_id}/screenshot.png`; the session must contain
 exactly that one task. Execution storage has no task-ID column, so the checker
 also requires matching session IDs, `agent_task` mode and task lifetime bounds.
-Every PNG manifest binds its SHA-256, dimensions, size, nanosecond mtime and
-screenshot execution ID to that task/session. The screenshot must be the only
+Each task-completion PNG observation binds its SHA-256, decoded pixel hash,
+dimensions, size, nanosecond mtime and screenshot execution ID to that task/session. The screenshot must be the only
 capture, occur after the real form-result snapshot, and have an mtime within its
-execution interval. Later runs cannot reuse this path. A missing historical
-manifest remains unverified; auditing cannot mint one.
+execution interval. Later runs cannot reuse this path. This is an observation at
+task completion, not a cryptographic attestation of the original capture instant. A missing historical observation remains unverified;
+auditing cannot mint one. The inspector strictly decodes non-interlaced 8-bit
+RGB/RGBA Chromium PNGs, validates every chunk CRC, IHDR/IDAT/IEND structure,
+zlib completion, scanline filters and decoded pixel bounds. Unsupported formats
+and corrupt/truncated files fail verification. File size is capped at 32 MiB
+and decoded scanlines at 64 MiB.
 
 Browser evidence requires actual app navigation, a resolved query fill and submit
 click, an explicit post-click result snapshot, then a screenshot. `browser_eval`
 or arbitrary shell output invalidates the controlled workflow. Browser mode must
 come from the real sandbox session status, and both mobile and desktop PNG
 sizes are checked. Research requires exact HTTPS citations for successfully
-fetched original documents plus affected/fixed evidence. Search citations alone
+fetched original documents plus affected/fixed evidence. A bounded clause heuristic
+requires explicit affected 8.5–9.7 and fixed 9.8 associations in the summary,
+plus an explicit original-source fixed-release statement. This is not a semantic
+proof of arbitrary prose; uncertain wording fails for review. The deep case also
+fetches the vendor release notes instead of treating a vulnerable-version upper
+bound alone as an explicit fixed-release statement. Search citations alone
 cannot stand in for independent original-source fetches.
 
 Run the offline checker regression using archived **real** task records:

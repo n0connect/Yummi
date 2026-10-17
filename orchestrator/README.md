@@ -16,7 +16,22 @@ cd orchestrator && go run ./cmd/orchestrator      # local (gateway socket + sand
 make _build-orchestrator && ./bin/yummi-orchestrator
 ```
 
-Native default listen: `127.0.0.1:9080`. Compose overrides the container bind address to `0.0.0.0:9080` and publishes it only on host loopback (`127.0.0.1:9080`).
+Native default listen: `127.0.0.1:9080`. Compose binds the main API to
+`0.0.0.0:9080` inside the container and publishes no orchestrator port.
+`OperatorAccess` checks the actual socket peer: only loopback and the exact
+UI control address `172.21.0.4/32` are operator peers in Compose; spoofed
+forwarded headers confer no authority. Host loopback ports `3000` and `9080`
+both terminate at UI nginx, which proxies API/WebSocket traffic over the
+internal control network.
+
+The orchestrator joins private `172.20.0.0/24` at `.3`, internal control
+`172.21.0.0/24` at `.3`, and external egress. Sandbox policy reads use the
+separate `172.20.0.3:9081` listener: hostname policy and literal-IP egress
+checks only, with no mutation/approval/session routes. The constrained Docker
+broker is control-only at `172.21.0.5`; the UI is `.4`. Only the UI joins the
+normal `172.22.0.0/24` ingress bridge. Isolated OrbStack requests through the
+published ports appeared to nginx as exactly `172.22.0.1`, not an arbitrary
+trusted subnet. See [network topology](../docs/architecture.md#network-topology).
 
 ---
 

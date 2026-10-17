@@ -6,6 +6,7 @@ import time
 
 from browser_research_qc import MCP, api, assert_qc_model
 from operator_context import UI_URL, require_operator_ui
+from qc_authorization import pending_failure, pending_identity
 
 
 def main():
@@ -17,7 +18,7 @@ def main():
     session = api('/sessions', {'name': 'Operator action dock QC'})
     sid = session['id']
     task = api('/tasks', {'session_id': sid,
-                         'goal': 'Only use browser tools on http://127.0.0.1:18888/browser-qa.html. Open the page, snapshot, fill #query with OpenSSH, click #submit, snapshot interactive_only=false, set viewport 375x812, take screenshot, report the actual result. Execute one tool at a time. No shell or external navigation.'})
+                         'goal': 'Only call browser_session action=status once. Do not execute any other tool, command or navigation. Then report the actual session status and finish.'})
     tid = task.get('task', task)['id']
     if args.budget:
         assert task.get('task', task).get('step_budget') == 1, 'Budget QC requires an actually configured one-step runtime; task creation does not accept step_budget'
@@ -28,9 +29,17 @@ def main():
         while time.monotonic() < deadline:
             task = api('/tasks/' + tid)
             if args.budget and task['status'] == 'awaiting_approval':
-                assert task.get('pending_command', '').startswith(('browser ', 'browser_session')), task
+                prior = api('/sessions/' + sid + '/executions?limit=100')
+                prior = prior.get('executions', []) if isinstance(prior, dict) else prior
+                refusal = pending_failure('operator-status', task, prior, tid, sid)
+                assert not refusal, refusal
+                fresh = api('/tasks/' + tid)
+                fresh = fresh.get('task', fresh)
+                refusal = pending_failure('operator-status', fresh, prior, tid, sid, pending_identity(task))
+                assert not refusal, refusal
+                task = fresh
                 api('/tasks/' + tid + '/approve', {'proposal_id': task['pending_proposal_id'], 'approved': True,
-                    'reason': 'Authorized actual browser QC to reach the real step-budget pause.'})
+                    'reason': 'Exact structured read-only session status QC to reach the real step-budget pause.'})
                 time.sleep(1)
                 continue
             if task['status'] in ('paused', 'awaiting_approval'):

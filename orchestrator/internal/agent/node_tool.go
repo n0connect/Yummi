@@ -42,6 +42,22 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		}
 	}
 
+	// Freeze the normalized structured call before it becomes an operator
+	// proposal. The display, pending metadata and execution must agree even
+	// if the caller later reuses its original argument map.
+	if action.Tool != "" {
+		encoded, err := json.Marshal(action.Args)
+		if err != nil {
+			return s.blockCommand(Wrap("COMMAND_BLOCKED", "MCP arguments must be valid JSON."))
+		}
+		var frozen map[string]any
+		if err := json.Unmarshal(encoded, &frozen); err != nil {
+			return s.blockCommand(Wrap("COMMAND_BLOCKED", "MCP arguments must be a JSON object."))
+		}
+		action.Args = frozen
+	}
+	s.pendingAct = action
+
 	// An [MCP_TOOL] action carries a tool name, not a shell command — synthesize
 	// a human-readable display string so the validator, stuck/duplicate/thrash
 	// windows, and the approval UI all have something to show, exactly the role
@@ -136,43 +152,8 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 		return edgeRequiresApproval, nil
 	}
 
-	// [MCP_TOOL] dispatch: no ExecHandle/long-running-consult support (yet) —
-	// StoreMCPExecer.RunMCPTool is a single bounded blocking call, matching
-	// exactly how the Eino backend's own runToolPipeline already handles
-	// every cataloged pentest tool and terminal verb (see its own comment on
-	// "wait timeout" as a recoverable TOOL_TIMEOUT rather than a live
-	// consult). Parity with that existing precedent, not a new gap.
 	if action.Tool != "" {
-		if s.cfg.MCPExec == nil {
-			return s.blockCommand(Wrap("COMMAND_BLOCKED",
-				"MCP_TOOL is not available on this deployment (no MCPExec configured). Use RUN_COMMAND instead."))
-		}
-		s.executedCmds = append(s.executedCmds, p.Command)
-		result, execErr := s.cfg.MCPExec.RunMCPTool(execution.ContextWithRationale(ctx, p.Rationale), task.SessionID, action.Tool, action.Args, p.Command)
-		if execErr != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			if strings.Contains(execErr.Error(), "wait timeout") {
-				s.consecutiveFailures++
-				body := p.Command + "\n" + execErr.Error() + "\nNarrow the scope or switch approach — this tool ran too long and was not allowed to keep going."
-				return s.failStep("TOOL_FAILED", body, "tool timeout"), nil
-			}
-			return "", fmt.Errorf("mcp exec: %w", execErr)
-		}
-		// Enrich a failed call with the tool's real field names — a raw
-		// JSON-schema rejection ("unexpected additional properties [\"name\"]")
-		// names what was WRONG but never what's RIGHT, and the model has no
-		// catalog-wide schema dump (deliberately, see MCPCatalog) to fall back
-		// on. Live-observed need: jinx-20b guessed term_open took "name"; the
-		// real field is "label". Without this, that guess is a dead end
-		// instead of a one-step correction.
-		if result.IsError {
-			if hint := s.cfg.MCPSchemaHints[action.Tool]; hint != "" {
-				result.Content = strings.TrimRight(result.Content, "\n") + "\nValid fields for " + action.Tool + ": " + hint
-			}
-		}
-		return observeResult(s, result), nil
+		return runMCPAction(ctx, s, task, action, p)
 	}
 
 	// Supervised execution: wait up to SoftTimeout, then consult on long-running.
@@ -206,6 +187,41 @@ func toolNode(ctx context.Context, s *GraphState) (string, error) {
 				p.Command, s.cfg.SoftTimeout.Seconds())
 		}
 		return edgeLongRunning, nil
+	}
+	return observeResult(s, result), nil
+}
+
+// runMCPAction is shared by automatic and operator-approved dispatch. A
+// human-readable approval label is never executable shell syntax.
+func runMCPAction(ctx context.Context, s *GraphState, task Task, action Action, p conductor.Proposal) (string, error) {
+	if s.cfg.MCPExec == nil {
+		return s.blockCommand(Wrap("COMMAND_BLOCKED",
+			"MCP_TOOL is not available on this deployment (no MCPExec configured). Use RUN_COMMAND instead."))
+	}
+	s.executedCmds = append(s.executedCmds, p.Command)
+	result, execErr := s.cfg.MCPExec.RunMCPTool(execution.ContextWithRationale(ctx, p.Rationale), task.SessionID, action.Tool, action.Args, p.Command)
+	if execErr != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if strings.Contains(execErr.Error(), "wait timeout") {
+			s.consecutiveFailures++
+			body := p.Command + "\n" + execErr.Error() + "\nNarrow the scope or switch approach — this tool ran too long and was not allowed to keep going."
+			return s.failStep("TOOL_FAILED", body, "tool timeout"), nil
+		}
+		return "", fmt.Errorf("mcp exec: %w", execErr)
+	}
+	// Enrich a failed call with the tool's real field names — a raw
+	// JSON-schema rejection ("unexpected additional properties [\"name\"]")
+	// names what was WRONG but never what's RIGHT, and the model has no
+	// catalog-wide schema dump (deliberately, see MCPCatalog) to fall back
+	// on. Live-observed need: jinx-20b guessed term_open took "name"; the
+	// real field is "label". Without this, that guess is a dead end
+	// instead of a one-step correction.
+	if result.IsError {
+		if hint := s.cfg.MCPSchemaHints[action.Tool]; hint != "" {
+			result.Content = strings.TrimRight(result.Content, "\n") + "\nValid fields for " + action.Tool + ": " + hint
+		}
 	}
 	return observeResult(s, result), nil
 }

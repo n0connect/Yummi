@@ -16,11 +16,21 @@ The entries, in order, are:
 These are archived observations, not a claim about the current runtime. Tests
 must retain the failures: deep lacks exact HTTPS summary citations; full has
 its last snapshot and screenshot before submit. Headless has valid action order
-and mode evidence, but its historical fixed-path PNG has no capture-time hash
-manifest and therefore cannot pass the new artifact-integrity gate. The cited
+and mode evidence, but its historical fixed-path PNG has no original task-completion hash
+observation and therefore cannot pass the new artifact-integrity gate. The cited
 research case satisfies the source/summary checks.
 
 No mock provider, browser, resolver, transport or invented execution record is
 used by `qa/test_qc_evidence.py`. Evidence-removal checks retain only unchanged
 records from this archive. Historical artifact manifests must never be created
 retroactively to convert these records to PASS.
+
+`browser_research_mobile.png` is the existing 375×812 Chromium screenshot read
+from `/home/pentester/work/quality-mobile.png` in the original sandbox on
+2026-10-16, using a read-only UID1000 Docker exec. SHA-256:
+`1fc00cb5367cbea8df852009cac061ea31de54ea3d5b7cae0addfdee8e0eeaf2`.
+It is a decoder test input, not a retroactive provenance/mtime manifest for the
+historical task. Corruption/truncation tests derive invalid files from these
+actual bytes; they introduce no provider, resolver, transport or tool-output
+replacement. Reversed-summary and malformed approval-input tests are explicitly
+invalid derivatives of the archived task/call inputs, not new historical claims.

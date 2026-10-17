@@ -1,16 +1,14 @@
 """Strict, read-only checks over real persisted QC task/execution evidence.
 
 This checks consistency of trusted API records, not authenticity of a report supplied
-by an untrusted party. Historical screenshots without a capture manifest remain
+by an untrusted party. Historical screenshots without an original task-completion artifact observation remain
 unverified; an audit never creates a missing manifest retroactively.
 """
-import hashlib
 import json
 import pathlib
 import os
 import subprocess
 import re
-import struct
 import urllib.parse
 
 REQUIRED = {
@@ -19,6 +17,8 @@ REQUIRED = {
     'browser-headless': {'browser_session', 'browser_open', 'browser_snapshot', 'browser_interact', 'browser_screenshot'},
     'browser-full': {'browser_session', 'browser_open', 'browser_snapshot', 'browser_interact', 'browser_screenshot'},
 }
+from qc_png import inspect_png_file
+
 APP = 'http://127.0.0.1:18888/browser-qa.html'
 
 
@@ -74,17 +74,12 @@ def artifact_metadata(task, record):
     else:
         # Operator controller reads sandbox artifact metadata through the narrow
         # UID1000 Docker path. No host research or browser execution occurs.
-        script = """import hashlib,json,pathlib,struct,sys
-p=pathlib.Path(sys.argv[1])
-if p.is_symlink() or not p.is_file(): raise ValueError('Not a regular PNG')
-b=p.read_bytes(); s=p.stat()
-if len(b)<33 or b[:8]!=bytes([137,80,78,71,13,10,26,10]) or b[12:16]!=b'IHDR': raise ValueError('Invalid PNG')
-w,h=struct.unpack('>II',b[16:24])
-print(json.dumps(dict(sha256=hashlib.sha256(b).hexdigest(),size=len(b),width=w,height=h,mtime_ns=s.st_mtime_ns)))
-"""
-        process = subprocess.run(['docker', 'exec', '--user', '1000:1000',
+        # Send the same reviewed stdlib decoder over stdin to the installed
+        # sandbox Python. No source HTTP parsing or browser runs on this host.
+        validator = pathlib.Path(__file__).with_name('qc_png.py').read_text()
+        process = subprocess.run(['docker', 'exec', '-i', '--user', '1000:1000',
                                   os.environ.get('YUMMI_SANDBOX_CONTAINER', 'yummi-sandbox'),
-                                  'python3', '-c', script, str(path)],
+                                  'python3', '-', str(path)], input=validator,
                                  capture_output=True, text=True, timeout=30, check=True)
         info = json.loads(process.stdout)
     if not record['created_at'] <= info['mtime_ns'] / 1e9 < record['updated_at'] + 1:
@@ -94,15 +89,55 @@ print(json.dumps(dict(sha256=hashlib.sha256(b).hexdigest(),size=len(b),width=w,h
 
 
 def local_artifact_info(path):
-    if path.is_symlink() or not path.is_file():
-        raise ValueError('Not a regular PNG')
-    raw = path.read_bytes()
-    if len(raw) < 33 or raw[:8] != b'\x89PNG\r\n\x1a\n' or raw[12:16] != b'IHDR':
-        raise ValueError('Screenshot is not a PNG with an IHDR')
-    stat = path.stat()
-    width, height = struct.unpack('>II', raw[16:24])
-    return dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw),
-                width=width, height=height, mtime_ns=stat.st_mtime_ns)
+    return inspect_png_file(path)
+
+
+def claim_clauses(text):
+    """Bounded English/Turkish release-label heuristic, not semantic proof.
+
+    Recognizes explicit labels/clauses; uncertain prose fails review. Decimal
+    points are retained and a standalone heading labels only its next clause.
+    """
+    text = re.sub(r'[*#`]', '', text)
+    heading = ''
+    for fragment in re.split(r'\n+|;|(?<!\d)\.(?=\s|$)', text):
+        fragment = fragment.strip(' -\t')
+        if not fragment:
+            continue
+        if fragment.endswith(':') and not re.search(r'\b\d+\.\d+', fragment):
+            heading = fragment
+            continue
+        clause = (heading + ' ' + fragment).strip()
+        heading = ''
+        # Keep different release roles separate even in one sentence.
+        markers = list(re.finditer(r'\b(?:affected|affects?|vulnerable|etkilenen|fixed|fix(?:ed)?\s+release|patch(?:ed)?|upgrade(?:d)?|düzelt\w*)\b', clause, re.I))
+        for index, marker in enumerate(markers):
+            end = markers[index + 1].start() if index + 1 < len(markers) else len(clause)
+            prefix = clause[max(0, marker.start() - 30):marker.start()]
+            if re.search(r'\b(?:not|never|isn.t|wasn.t|değil)\s+(?:yet\s+)?$', prefix, re.I):
+                continue
+            yield marker.group().lower(), clause[marker.end():end]
+
+
+def release_claim_failures(summary):
+    affected = fixed = False
+    for role, claim in claim_clauses(summary):
+        versions = set(re.findall(r'(?<![\d.])(8\.5|9\.7|9\.8)(?:p1)?(?![0-9A-Za-z]|\.\d)', claim))
+        if role.startswith(('affected', 'affect', 'vulnerable', 'etkilenen')):
+            affected |= versions == {'8.5', '9.7'} and bool(re.search(r'8\.5(?:p1)?[^;\n]{0,60}(?:through|to|and|[-–—]|ile)[^;\n]{0,30}9\.7(?:p1)?', claim, re.I))
+        elif role.startswith(('fix', 'patch', 'upgrade', 'düzelt')):
+            fixed |= versions == {'9.8'}
+    return [] if affected and fixed else ['Summary release clauses must associate affected 8.5–9.7 and fixed 9.8; uncertain prose requires review']
+
+
+def fetched_release_failures(fetches):
+    excerpts = [excerpt for _, _, excerpt in fetches]
+    affected = any(re.search(r'8\.5p1[^;\n]{0,60}(?:through|to|and|[-–—])[^;\n]{0,30}9\.7p1', excerpt, re.I) for excerpt in excerpts)
+    fixed = any((re.search(r'OpenSSH\s+9\.8(?:p1)?\s+was released', excerpt, re.I)
+                 and re.search(r'This release contains fixes', excerpt, re.I))
+                or re.search(r'\b(?:fixed|patched|upgraded)\s+(?:release\s+)?(?:in|to|by|with)\s+(?:OpenSSH\s+)?9\.8(?:p1)?\b', excerpt, re.I)
+                for excerpt in excerpts)
+    return [] if affected and fixed else ['Fetched excerpts lack explicit affected-range/fixed-release evidence; fetch the original release notes']
 
 
 def verify_case(name, task, records, artifacts=None):
@@ -131,8 +166,7 @@ def verify_case(name, task, records, artifacts=None):
                                    for r in searches):
             failures.append('Requested search filters/depth missing')
         summary = task.get('summary', '')
-        if not all(v in summary for v in ('8.5', '9.7', '9.8')) or not re.search(r'affect|vulnerab|etkilenen', summary, re.I) or not re.search(r'fix|patch|upgrade|düzelt', summary, re.I):
-            failures.append('Summary must distinguish affected 8.5–9.7 and fixed 9.8 releases')
+        failures.extend(release_claim_failures(summary))
         fetches = []
         citations = set(re.findall(r'https://[^\s<>"\[\]()]+', summary))
         for r in completed:
@@ -153,12 +187,10 @@ def verify_case(name, task, records, artifacts=None):
             failures.append('Actual original OpenSSH HTTPS fetch missing')
         if name == 'deep-multi-source' and not any(https_source(u, ('qualys.com',)) for _, u, _ in fetches):
             failures.append('Actual independent original Qualys HTTPS fetch missing')
-        excerpts = ' '.join(x for _, _, x in fetches)
-        if not all(v in excerpts for v in ('8.5p1', '9.7p1', '9.8')):
-            failures.append('Fetched excerpts lack affected/fixed release evidence')
+        failures.extend(fetched_release_failures(fetches))
         return failures
 
-    if any(r.get('mcp_tool') == 'browser_eval' or r.get('mcp_tool') not in REQUIRED[name] | {'browser_tabs', 'browser_logs'} for r in bound):
+    if any(r.get('mcp_tool') == 'browser_eval' or r.get('mcp_tool') not in REQUIRED[name] for r in bound):
         failures.append('Unexpected tool/DOM evaluation invalidates browser workflow evidence')
     expected = name == 'browser-headless'
     dimensions = (375, 812) if expected else (1280, 800)
@@ -167,6 +199,8 @@ def verify_case(name, task, records, artifacts=None):
              and 'HTTP status: 200' in r.get('output', '')]
     if len([r for r in bound if r.get('mcp_tool') == 'browser_open']) != 1:
         failures.append('Browser workflow requires exactly one navigation')
+    if any(r.get('mcp_tool') == 'browser_session' and args(r).get('action') not in {'reset', 'status'} for r in bound):
+        failures.append('Unexpected browser session mutation invalidates controlled workflow')
     resets = [r for r in completed if r.get('mcp_tool') == 'browser_session' and args(r).get('action') == 'reset']
     if len(resets) != 1 or not opens or resets[0]['updated_at'] >= opens[0]['created_at']:
         failures.append('Actual session reset before app navigation missing')
@@ -213,7 +247,7 @@ def verify_case(name, task, records, artifacts=None):
         failures.append('Exactly one screenshot execution required; later captures must not overwrite evidence')
     manifests = artifacts or []
     if not manifests:
-        failures.append('Capture-time artifact hash/task/execution manifest missing; legacy PNG is unverified')
+        failures.append('Task-completion artifact hash/task/execution observation missing; legacy PNG is unverified')
     verified = False
     for r in shots:
         try:

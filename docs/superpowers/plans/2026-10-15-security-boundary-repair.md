@@ -13,8 +13,10 @@ provider or host research execution path is introduced.
    sandbox, UID/GID 1000, nonprivileged exec instances issued by that broker.
 3. Operator API: explicit trusted peer boundary (loopback and the UI proxy),
    strict browser origin checks, no trust in forwarded IP headers. UI only on
-   the control network, published loopback ports preserve existing operator
-   URLs. A separate sandbox listener serves only bounded, read-only hostname
+   the control network plus a dedicated UI-only ingress bridge; published
+   loopback ports preserve existing operator URLs. The normal ingress bridge
+   is required for Docker/OrbStack host-port publication; control stays internal.
+   A separate sandbox listener serves only bounded, read-only hostname
    and egress decisions; no operator mutations or session data.
 4. Research: DNS and HTTP stay in sandbox. The read-only decision endpoint
    returns gateway verdicts; an MCP error preserves a typed approval request.

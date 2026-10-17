@@ -74,12 +74,20 @@ Operators control external egress via a 4-way master switch (`EgressMode`):
 
 | Mode | Wire Values / Aliases | Behavior | Operational Use Case |
 |---|---|---|---|
-| **`block_all`** (Default) | `block_all`, `block` | Denies all outbound traffic unconditionally, ignoring active allow rules. Fail-closed. | Complete airgap; offline analysis and local tooling where zero egress is tolerated. |
+| **`block_all`** (Default) | `block_all`, `block` | Denies gateway-forwarded sandbox egress, including DNS and established connections, ignoring active allow rules. Fail-closed. | Routed egress lockdown; local tooling and private policy reads remain available. |
 | **`block_all_except_rules`** | `block_all_except_rules`, `rules_only` | Denies outbound traffic by default, but permits destinations explicitly matched by configured scope or active temporary allow rules. | Strict assessment scopes with explicit CIDR and host authorizations. |
 | **`allow_all`** | `allow_all`, `allow` | Permits outbound traffic to all public destinations not explicitly blocked. | Broad reconnaissance and public targets without pre-resolving individual IPs. |
 | **`ask_every_time`** | `ask_every_time`, `ask` | Holds new destination requests in `awaiting_egress_approval` until interactive operator confirmation. | Controlled testing requiring per-target visibility and manual sign-off. |
 
 > [!IMPORTANT]
+> UDP/53 remains a gateway-routed resolution exception in the other modes, after
+> configured destination blocks. It is not an exception in `block_all`. Forwarded
+> sandbox packets recheck current scope. In rules-only/ask mode, expiry/removal
+> revokes established flows that depended on that approval and have no other
+> matching allow. `allow_all` does not require temporary approvals. Local and
+> same-subnet traffic, including read-only policy requests, remains outside the
+> gateway FORWARD-chain boundary.
+
 > Egress mode resets to **`block_all`** on every gateway daemon restart (fail-closed by design).
 > Egress mode is independent of Agent Approval Mode:
 > - **Egress Mode (Gateway)** controls packet-layer network reachability.
@@ -189,7 +197,13 @@ To prevent untrusted or hallucinating models from forging tool execution receipt
 
 Container execution is constrained through multiple isolation layers:
 - Non-root user execution (`UID 1000`, `pentester`).
-- `docker-proxy` restriction allowing only container exec and inspect calls.
+- A constrained Docker broker on the internal control network; it permits only
+  the configured sandbox, UID/GID `1000:1000` and issued exec IDs. Sandbox cannot
+  reach this broker. General Docker container/exec prefix access is not granted.
+- Operator API socket-peer authorization and a separate read-only sandbox
+  policy listener. Published host loopback ports terminate at UI nginx on a
+  UI-only ingress bridge; the orchestrator has no published port. See
+  [network topology](architecture.md#network-topology).
 - Linux capability bounds (`NET_RAW` for raw packet tools, minimal file capabilities).
 
 ### Unified Sandbox Architecture <a id="unified-sandbox"></a>
@@ -201,7 +215,9 @@ The sandbox runs as a unified Kali container serving three operator interfaces:
 
 **Design Considerations**:
 - **Writable Root Filesystem**: Required to support XFCE desktop state, browser profiles, and security tool configurations with zero environment drift between agent and operator.
-- **Localhost-Bound Access**: The noVNC bridge binds strictly to localhost (`127.0.0.1:9080`), validates WebSocket `Origin` headers, and avoids publishing raw VNC ports to the host interface.
+- **Localhost-Published Access**: Host loopback ports 3000/9080 terminate at UI nginx,
+  which forwards the authorized desktop WebSocket to the orchestrator. The
+  orchestrator validates `Origin` and socket peers; raw VNC ports are not published.
 
 ---
 

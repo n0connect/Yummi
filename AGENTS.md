@@ -194,29 +194,43 @@ UI → POST /api/v1/chat → conductor detects start_task intent
 ```
 `graph.Execute` drives the node walk: `step` asks the LLM for the next action, routes to `tool` (run a command), `consult`/`retry` (recover), `approval` (risk gate), `summarize` (context compaction), or the terminal `finish`/`ask`. Each `step` re-renders full task state (plan, observations, findings) into the prompt — it never relies on conversation history, to avoid context loss on small models like qwen3:8b.
 
-**Approval flow** (medium+ risk, in both the single-command and agent-loop paths):
+**Approval flow:** single-command proposals gate on risk; agent tasks in
+`ask_permission` gate every command unless the operator's per-task override
+applies. Destructive command floors always gate, including in `auto` mode.
 ```
-risk ≥ medium → gate.Request() blocks the loop goroutine
+agent command requires approval → gate.Request() blocks the loop goroutine
   → task/proposal status → awaiting_approval
   → WS pushes pending_command + pending_risk
   → operator: POST /api/v1/tasks/{id}/approve (agent) or /api/v1/chat/approve (single command)
   → gate.Resolve(verdict) → loop resumes
 ```
 The gate is a plain Go channel; proposals separately expire via a 20-minute TTL purger in `ApprovalStore`.
+Tasks also expose ephemeral `pending_approval_kind` (`command` or `threat`),
+`pending_mcp_tool` and JSON-encoded `pending_mcp_args`. Automated operator clients
+must validate exact structured arguments and proposal identity; display labels
+are not executable authority. Graph MCP arguments are frozen before approval,
+and approval dispatches through `MCPExec`, preserving output threat quarantine.
 
 **Gateway management API/UI:** the React UI has a GATEWAY tab (between LOGS and HEALTH) showing gateway status, active rules, and the audit log, and letting operators add/remove temporary rules. Backed by orchestrator REST endpoints: `GET /api/v1/gateway/rules`, `POST /api/v1/gateway/rules` (body `{network, ttl_secs, reason}`), `DELETE /api/v1/gateway/rules/{id}`, `GET /api/v1/gateway/audit?limit=N`, `GET /api/v1/gateway/fingerprint`. A `gateway.status` event type is broadcast over the existing `/ws/events` WebSocket. Gateway's `PolicyRule` carries a `source: config|agent|manual` tag, and rule add/remove events are recorded in gateway's tamper-evident SHA-256 audit chain (previously it logged only network connection decisions).
 
 **Egress mode (operator-controlled, gateway-enforced):** a runtime 4-way master switch above the per-IP scope list, set from the GATEWAY tab. Values:
-- `block_all` (alias `block`, default, fail-closed — completely drops all outbound egress unconditionally, ignoring active allow rules).
+- `block_all` (alias `block`, default, fail-closed — drops all gateway-forwarded sandbox egress, including established connections and DNS, ignoring active allow rules).
 - `block_all_except_rules` (alias `block_except_rules`, `rules_only` — strict scope: drops outbound traffic by default, but permits destinations explicitly matched by active allow rules or configured scope).
 - `allow_all` (alias `allow` — FORWARD chain blanket-accepts sandbox egress to public destinations; hostnames like `google.com` work without per-IP resolution).
 - `ask_every_time` (alias `ask` — each new external destination needs interactive operator approval).
+
+UDP/53 is a gateway-routed resolution exception in the other three modes,
+after configured destination blocks. Gateway-forwarded sandbox packets recheck
+current scope. In rules-only/ask mode, expiry/removal revokes established flows
+that depended on that approval and have no other matching allow. `allow_all`
+does not require temporary approvals. Local and same-subnet traffic, including
+the read-only policy listener, is outside this gateway FORWARD-chain boundary.
 
 IPC `set_egress_mode`/`get_egress_mode`; REST `GET/POST /api/v1/gateway/egress-mode`. `CheckScope` returns a `verdict` (`allow|block|needs_approval`) computed from the mode (a non-IP/hostname target is decided by the mode via `check_egress_unresolved`, no longer an "invalid IP" error). The orchestrator's `executor.RunScopedCommand` routes on the verdict: allow→run, block→`ErrOutOfScope`, needs_approval→`ErrEgressApprovalRequired`. **Mode does NOT persist across gateway restarts — it resets to `block_all` (fail-closed).** **Orthogonal to the agent approval mode:** the agent's `auto`/`ask_permission` governs whether a *command* needs operator sign-off; egress mode governs whether *external network access* is permitted. Two independent axes. See `docs/superpowers/specs/2026-06-22-gateway-egress-mode-design.md`. The interactive per-destination approval round-trip for `ask` mode is fully implemented: a `needs_approval` verdict holds the execution in `execution.StatusAwaitingEgressApproval`; `POST /api/v1/executions/{id}/resolve-egress` → `execution.Store.ResolveEgress` → `executor.UnlockEgressTarget` (opens the gateway allow rule for the resolved target) → the execution is requeued (`StatusQueued`) and retried automatically. See `orchestrator/internal/api/handlers_execution.go`'s `HandleResolveEgress` for the wiring.
 
 ### gateway (Rust trust boundary)
 
-- **Fail-closed by default**: nftables DROP-all rules are installed before the IPC socket even opens. sandbox has zero connectivity until an explicit Allow rule lands.
+- **Fail-closed by default**: nftables DROP-all rules are installed before the IPC socket opens. Startup `block_all` ignores even active allow rules; outbound access requires an explicit operator mode change, plus applicable scope/approval in restricted modes.
 - `policy/` — `PolicyEngine` (`RwLock<HashMap<RuleKey, Rule>>` with TTL expiry); Block rules always beat Allow rules. When the allow-list is **empty**, `evaluate()` decides via the operator's `policy.default_allow` config: `false` (the default, in `config/default.yaml`) → **deny-all / fail-closed** (`"default_deny"`); `true` → observe-only, allow everything not blocked (`"default_allow"`). `PolicyEngine::with_default_allow` threads the config in; the bare `new()` defaults to the secure `false`. (This config field used to be parsed but ignored — `evaluate()` hardcoded allow-all when the list was empty, a silent fail-open.)
 - `ipc/` — Unix domain socket, length-prefixed JSON framing (`[4-byte BE length][JSON body]`); request types (see `gateway/src/ipc/protocol.rs` and the Go client `orchestrator/internal/gateway/client.go`): `check_scope`, `check_hostname`, `get_hostname_policy`, `get_status`, `ping`, `add_temporary_rule`, `remove_rule`, `set_egress_mode`/`get_egress_mode`.
 - **Hostname policy** (`policy/hostname.rs`, config `scope.hostname_allow`/`scope.hostname_block`): name-level scope the gateway can't enforce at the packet layer (it sees only IPs), so the orchestrator consults `check_hostname` *before* it resolves a name. Verdict precedence: a `hostname_block` glob match → `block` (hard deny, wins even in `allow` egress mode); else a non-empty `hostname_allow` is a whitelist (no match → `block`); else → `neutral` (defer to the IP-egress flow). `*.example.com` matches the apex `example.com` AND any subdomain at any depth; a pattern with no `*` is exact. `executor.RunScopedCommand` calls `pc.CheckHostname(host)` for hostname targets and rejects a `block` with `ErrOutOfScope` before resolving. A name-level block is recorded in the audit chain (`reason: hostname_blocked`); view the patterns at `GET /api/v1/gateway/hostname-policy`. Lists are config-level (not runtime-editable).
@@ -228,17 +242,30 @@ IPC `set_egress_mode`/`get_egress_mode`; REST `GET/POST /api/v1/gateway/egress-m
 
 ### sandbox
 
-Writable root filesystem (unified desktop environment), container hostname `yummi-pwnbox`, agent commands run as `1000:1000`, `NET_RAW`/`NET_ADMIN` plus the minimal `CHOWN`/`FOWNER`/`DAC_OVERRIDE`/`SETUID`/`SETGID` set the entrypoint needs for one-time filesystem prep + privilege-drop, `no-new-privileges:false`. DNS is set to **Cloudflare (1.1.1.1 / 1.0.0.1)** — the same resolver the orchestrator uses (`internal/dnsresolve`), so both agree on a name's IP before the gateway opens a rule; DNS queries still egress through the gateway (udp/53 is accepted in the FORWARD chain) but resolution is not the trust boundary, the connection to the resolved IP is. Default route is via gateway (`172.20.0.2`). Entrypoint sets up routing, creates `/dev/net/tun` (VPN-ready: `openvpn` is installed; `mknod c 10 200` is done as root before the privilege drop — `NET_ADMIN`, already required for `ip route` and `nftables`, is sufficient), then brings up the XFCE/VNC desktop and `exec`s `websockify` as the container's foreground/liveness process; agent and operator commands are a separate fresh `docker exec` each, independent of that process tree. Full offensive operations arsenal: `metasploit-framework` (`msfconsole`, `msfvenom`), `nishang` (PowerShell offensive framework), `kerbrute` (rapid Kerberos enum/spray); `krb5-user` (`kinit`/`klist`/`kdestroy`) for native Kerberos ticket management; `revshell` CLI (`/usr/local/bin/revshell [PORT]`) that auto-detects `tun0`/`eth0` and prints copy-paste payloads for 8+ shell flavors; wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$MEDIUM_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`) exported from `.bashrc` for both operator and agent.
+Writable root filesystem (unified desktop environment), container hostname `yummi-pwnbox`, agent commands run as `1000:1000`, `NET_RAW`/`NET_ADMIN` plus the minimal `CHOWN`/`FOWNER`/`DAC_OVERRIDE`/`SETUID`/`SETGID` set the entrypoint needs for one-time filesystem prep + privilege-drop, `no-new-privileges:false`. DNS is set to **Cloudflare (1.1.1.1 / 1.0.0.1)** — the same resolver the orchestrator uses (`internal/dnsresolve`), so both agree on a name's IP before the gateway opens a rule; DNS queries still egress through the gateway (UDP/53 is an explicit exception in non-lockdown modes, after destination blocks; `block_all` denies DNS too) but resolution is not the trust boundary, the connection to the resolved IP is. Default route is via gateway (`172.20.0.2`). Entrypoint sets up routing, creates `/dev/net/tun` (VPN-ready: `openvpn` is installed; `mknod c 10 200` is done as root before the privilege drop — `NET_ADMIN`, already required for `ip route` and `nftables`, is sufficient), then brings up the XFCE/VNC desktop and `exec`s `websockify` as the container's foreground/liveness process; agent and operator commands are a separate fresh `docker exec` each, independent of that process tree. Full offensive operations arsenal: `metasploit-framework` (`msfconsole`, `msfvenom`), `nishang` (PowerShell offensive framework), `kerbrute` (rapid Kerberos enum/spray); `krb5-user` (`kinit`/`klist`/`kdestroy`) for native Kerberos ticket management; `revshell` CLI (`/usr/local/bin/revshell [PORT]`) that auto-detects `tun0`/`eth0` and prints copy-paste payloads for 8+ shell flavors; wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$MEDIUM_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`) exported from `.bashrc` for both operator and agent.
 
 
 ### Network topology
 
 ```
-yummi_internal (172.20.0.0/24): sandbox .10, gateway .2 (also DNS), orchestrator .3, ui .4
-yummi_external: gateway, orchestrator, ui only — sandbox is intentionally absent,
-                its only path out is through gateway's nftables rules.
-Host ports: 3000 → ui nginx, 9080 → orchestrator API (localhost only)
+yummi_internal (172.20.0.0/24, internal): sandbox .10, gateway .2, orchestrator .3
+  Sandbox policy reads: 172.20.0.3:9081, no operator or rule-mutation routes.
+yummi_control (172.21.0.0/24, internal): orchestrator .3, UI .4, Docker broker .5
+  Sandbox and gateway are absent. Broker permits only the configured sandbox,
+  UID/GID 1000:1000 and broker-issued exec IDs; no general Docker API.
+yummi_ingress (172.22.0.0/24, normal bridge): UI .4 only, bridge gateway .1
+yummi_external: gateway and orchestrator only; sandbox egress routes via gateway.
+Host loopback ports 3000 and 9080 → UI nginx :80 → orchestrator :9080.
+The orchestrator has no published port.
 ```
+
+The main API still binds `0.0.0.0:9080` inside its container, but
+`OperatorAccess` accepts only exact configured peers (Compose: loopback and
+UI `172.21.0.4/32`), using the socket peer rather than forwarded headers.
+The separate policy listener exposes only hostname-policy and literal-IP egress
+checks. nginx accepts the configured loopback/bridge-gateway peers and local
+Host names, then proxies over control. Isolated OrbStack checks observed host
+requests arriving as exactly `172.22.0.1`; do not widen this to a subnet.
 
 ## Configuration (orchestrator env vars)
 
