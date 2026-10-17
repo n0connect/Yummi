@@ -34,3 +34,13 @@ historical task. Corruption/truncation tests derive invalid files from these
 actual bytes; they introduce no provider, resolver, transport or tool-output
 replacement. Reversed-summary and malformed approval-input tests are explicitly
 invalid derivatives of the archived task/call inputs, not new historical claims.
+
+# Additional live record — 2026-10-17
+
+`research_deep_live_2026-10-17.json` archives the actual completed deep-research
+task `c62a4b5e-ae8b-4353-89a7-294a0736177a` and its four execution records from
+the deployed stack. It reproduces a citation-tokenizer false negative: exact
+fetched HTTPS URLs were followed by prose colons. The record was not edited to
+make it pass. Corrupted summary derivatives test scheme removal and changed URL
+paths without replacing provider or execution output. Earlier historical cases
+retain their original statuses.

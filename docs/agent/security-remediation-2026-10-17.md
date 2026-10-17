@@ -6,6 +6,11 @@ records the additional compatibility and approval fixes and their verification
 limits. Source changes and isolated verification do not establish deployment to
 the original live stack.
 
+**Later live update:** the five-service stack has since been replaced and
+verified. See [the live deployment report](live-deployment-2026-10-17.md) for
+preserved data, running image IDs, successful checks and the two remaining
+strict browser-agent failures. The isolated results below retain their scope.
+
 ## Follow-up fixes
 
 - Keep `yummi_control` internal. Add a normal, UI-only ingress bridge so Docker
@@ -81,11 +86,12 @@ absent. With explicit operator approval, OrbStack was then started and the final
 tests above completed using existing images. No broad cache/data pruning was
 performed. The earlier environment failures are not counted as test passes.
 
-The original live services automatically started when OrbStack opened; they were
+At the end of the isolated run, the original live services automatically started when OrbStack opened; they were
 not rebuilt, recreated or reconfigured. They still include the old unrestricted
 `tecnativa/docker-socket-proxy` container and original orchestrator/UI image IDs.
-The corrected source is therefore **not deployed to that live stack**. Fresh
-deployment and external research require separate verification.
+The corrected source was **not deployed to that live stack at that point**.
+The subsequent authorized deployment and external research verification are
+recorded in [the live report](live-deployment-2026-10-17.md).
 
 ## Reproduction
 

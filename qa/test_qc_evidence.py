@@ -28,6 +28,20 @@ class ArchivedEvidenceChecks(unittest.TestCase):
         self.assertEqual([], missing_tools('cited-search-original', case['task'], case['records']))
         self.assertEqual([], verify_case('cited-search-original', case['task'], case['records']))
 
+    def test_live_deep_task_retains_exact_colon_delimited_citations(self):
+        case = json.loads((pathlib.Path(__file__).parent / 'testdata/research_deep_live_2026-10-17.json').read_text())
+        self.assertEqual([], verify_case('deep-multi-source', case['task'], case['records']))
+
+    def test_live_citation_punctuation_does_not_accept_changed_urls(self):
+        case = json.loads((pathlib.Path(__file__).parent / 'testdata/research_deep_live_2026-10-17.json').read_text())
+        for corrupt in (lambda s: s.replace('https://', ''),
+                        lambda s: s.replace('regresshion.txt:', 'regresshion.txt?:').replace('security.html:', 'security.html?:').replace('release-9.8:', 'release-9.8?:'),
+                        lambda s: s.replace('regresshion.txt:', 'regresshion.txt.unrelated:').replace('security.html:', 'security.html.unrelated:').replace('release-9.8:', 'release-9.8.unrelated:')):
+            task = copy.deepcopy(case['task'])
+            task['summary'] = corrupt(task['summary'])
+            failures = verify_case('deep-multi-source', task, case['records'])
+            self.assertEqual(3, sum('Exact HTTPS fetched source citation missing' in failure for failure in failures))
+
     def test_reversed_release_claims_are_invalid_summary_input(self):
         case = self.cases[0]
         task = copy.deepcopy(case['task'])

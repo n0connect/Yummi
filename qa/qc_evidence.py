@@ -168,7 +168,14 @@ def verify_case(name, task, records, artifacts=None):
         summary = task.get('summary', '')
         failures.extend(release_claim_failures(summary))
         fetches = []
-        citations = set(re.findall(r'https://[^\s<>"\[\]()]+', summary))
+        citations = set()
+        for citation in re.findall(r'https://[^\s<>"\[\]()]+', summary):
+            citations.add(citation)
+            # Prose commonly follows an exact URL with a colon or sentence
+            # punctuation. Preserve the literal URL too; never normalize its
+            # scheme, host, query contents or non-punctuation path suffix.
+            if '?' not in citation and '#' not in citation:
+                citations.add(citation.rstrip('.,;:!'))
         for r in completed:
             report = object_value(r.get('output'))
             requested = args(r).get('url', '')
