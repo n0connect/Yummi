@@ -2,6 +2,15 @@
 
 > Historical release/commit history. For current behavior and commands, use the [documentation index](docs/README.md).
 
+## [1.1.2](https://github.com/n0connect/Yummi/compare/v1.1.1...v1.1.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **qa:** recognize exact source citations with prose punctuation ([0806454](https://github.com/n0connect/Yummi/commit/08064540c5278f23fc149b6bd9a6cae613fa780a))
+* **security:** bind MCP approvals and verify control boundaries ([05b8ab6](https://github.com/n0connect/Yummi/commit/05b8ab6ff62a77fc5c362e10004ceb7a869cdc9f))
+* **security:** enforce fail-closed boundaries, isolate docker proxy, and fix browser behaviors ([f725410](https://github.com/n0connect/Yummi/commit/f72541004ed9650ace83a13c04afa04fdbde2f9a))
+
 ## [Unreleased]
 
 ## [1.1.1b](https://github.com/n0connect/Yummi/compare/v1.1.0...v1.1.1b) (2026-10-14)
