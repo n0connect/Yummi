@@ -4,7 +4,7 @@
 
 Yummi's security architecture enforces defense-in-depth against both external network compromise and untrusted model behaviors (e.g. prompt injection, data exfiltration payloads, and unintended command generation).
 
-This document specifies the guarantees, implementation mechanisms, and operational boundaries across the three core defense layers: Network, Content, and Audit.
+This document specifies the guarantees, implementation mechanisms, and operational boundaries across network policy, content review, audit logging, and execution provenance.
 
 ## Table of Contents
 
@@ -34,7 +34,7 @@ This document specifies the guarantees, implementation mechanisms, and operation
 
 ## The Core Invariant: Fail-Closed Policy <a id="fail-closed"></a>
 
-For every routing and execution decision: **Any missing, malformed, or unrecognized policy verdict results in an immediate DENY.**
+For gateway-mediated execution checks, missing, malformed, or unknown verdicts block execution. At startup, the gateway installs `block_all` before exposing IPC. This applies to gateway-forwarded sandbox egress; local and same-subnet connections are outside that packet boundary.
 
 The runtime enforces this contract through four synchronized controls:
 1. **Firewall Priority**: Gateway installs kernel DROP-all `nftables` rules before binding its control socket.
@@ -43,7 +43,7 @@ The runtime enforces this contract through four synchronized controls:
 4. **Defensive API Decoders**: The Go orchestrator maps unknown verdict responses to hard execution blocks.
 
 > [!NOTE]
-> Process crashes retain previously committed kernel `nftables` rules until the container namespace is destroyed or reinitialized. Startup re-establishes the default fail-closed state.
+> Process crashes retain the last committed kernel `nftables` rules while the network namespace survives. A crash does not automatically replace scoped allows or `allow_all` with DROP-all. Kernel TTLs still expire, but static and blanket permissions can remain until restart or explicit lockdown. Startup re-establishes `block_all`; namespace removal or administrative `--cleanup` removes this enforcement.
 
 ---
 
@@ -54,17 +54,19 @@ The runtime enforces this contract through four synchronized controls:
 Gateway initializes in strict sequential order:
 1. Load scope and rule configuration (`config/default.yaml`).
 2. Program kernel `FORWARD` and NAT rules in `nftables` for the sandbox IP (`172.20.0.10`).
-3. Spawn background TTL expiration and observer workers.
+3. Open the audit store, construct policy, and spawn TTL cleanup, firewall reconciliation, observer, IPC, and watchdog tasks.
 4. Bind and listen on Unix domain socket (`/run/yummi/gateway.sock`).
 
-This sequence guarantees no execution request can arrive before network isolation is established.
+The IPC listener opens only after the initial kernel rules have committed. Every 15 seconds, a reconciliation worker rebuilds the expected kernel state. If repair fails it switches policy to `block_all` and attempts kernel lockdown; a failed kernel repair is surfaced as inconsistent enforcement, not a claim that existing traffic was blocked.
 
 ### Unconditional Address Floor <a id="always-blocked-floor"></a>
 
-Prior to consulting allow or block rules, `is_always_blocked()` unconditionally rejects:
+In policy/API checks, `is_always_blocked()` rejects these address classes before mode/rule evaluation:
 - IPv4/IPv6 loopback addresses (`127.0.0.0/8`, `::1`).
 - Link-local addresses (`169.254.0.0/16`, `fe80::/10`), including cloud instance metadata endpoints (`169.254.169.254`).
 - Multicast and unspecified ranges (`224.0.0.0/4`, `0.0.0.0`, `::`).
+
+This is an API/policy floor, not an automatically generated nftables floor. The packet controller renders configured `scope.block` CIDRs; it does not copy every class above into kernel DROP rules. Arbitrary tool traffic in a permissive mode must therefore be evaluated against the actual configured kernel rules, not just an API verdict.
 
 Private RFC 1918 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) are populated in `scope.block` by default, but remain configurable for internal engagements.
 
@@ -75,8 +77,8 @@ Operators control external egress via a 4-way master switch (`EgressMode`):
 | Mode | Wire Values / Aliases | Behavior | Operational Use Case |
 |---|---|---|---|
 | **`block_all`** (Default) | `block_all`, `block` | Denies gateway-forwarded sandbox egress, including DNS and established connections, ignoring active allow rules. Fail-closed. | Routed egress lockdown; local tooling and private policy reads remain available. |
-| **`block_all_except_rules`** | `block_all_except_rules`, `rules_only` | Denies outbound traffic by default, but permits destinations explicitly matched by configured scope or active temporary allow rules. | Strict assessment scopes with explicit CIDR and host authorizations. |
-| **`allow_all`** | `allow_all`, `allow` | Permits outbound traffic to all public destinations not explicitly blocked. | Broad reconnaissance and public targets without pre-resolving individual IPs. |
+| **`block_all_except_rules`** | `block_all_except_rules`, `block_except_rules`, `rules_only` | Denies outbound traffic by default, but permits destinations explicitly matched by configured scope or active temporary allow rules. | Strict assessment scopes with explicit CIDR and host authorizations. |
+| **`allow_all`** | `allow_all`, `allow` | Permits remaining routed destinations after configured packet blocks. | Broad connectivity without per-IP temporary allows; configured blocks still apply. |
 | **`ask_every_time`** | `ask_every_time`, `ask` | Holds new destination requests in `awaiting_egress_approval` until interactive operator confirmation. | Controlled testing requiring per-target visibility and manual sign-off. |
 
 > [!IMPORTANT]
@@ -97,25 +99,37 @@ Operators control external egress via a 4-way master switch (`EgressMode`):
 
 ### Pre-Resolution Hostname Policy <a id="hostname-policy"></a>
 
-Because packet filters operate on IP headers, domain-level restrictions (`scope.hostname_allow`, `scope.hostname_block`) are enforced by the orchestrator prior to DNS resolution:
+Because packet filters operate on IP headers, hostname restrictions
+(`scope.hostname_allow`, `scope.hostname_block`) are checked separately by the
+orchestrator before resolving command targets and by sandbox research/browser
+connection guards before opening non-loopback destinations:
 
 ```text
-Decision Precedence:
-1. Glob match in hostname_block  -> BLOCK (Denies connection; overrides Allow egress mode)
-2. Non-empty hostname_allow      -> Must match glob (Whitelist), else BLOCK
-3. Default                       -> NEUTRAL (Defers decision to IP egress mode)
+1. hostname_block match -> BLOCK (including allow_all mode)
+2. Non-empty hostname_allow -> require a matching pattern, otherwise BLOCK
+3. Otherwise -> NEUTRAL (defer to IP policy)
 ```
 
-Wildcards (`*.example.com`) cover both apex domains and arbitrary subdomains. Evaluated domain blocks are recorded in the tamper-evident audit log.
+`*.example.com` matches the apex and arbitrary subdomains. Operator REST routes
+`GET/POST/DELETE /api/v1/gateway/hostname-policy` expose/read/edit the lists;
+changes are in memory and reset to YAML on restart. IPC `check_hostname` decisions
+are audited; the sandbox's local matching of the read-only policy list does not
+itself append a decision to the gateway audit log. Arbitrary shell tools using
+literal IPs, alternate name resolution, or secondary connections do not acquire
+universal hostname enforcement from these application checks.
 
 ### In-Sandbox Browser & WebSocket Proxy <a id="browser-proxy"></a>
 
-While external packet filtering is enforced at the network perimeter by the gateway firewall, headless browser instances (`rod` / Chromium) execute complex multi-tab navigation, redirections, and WebSockets inside the sandbox container. To prevent unauthorized in-page redirects, iframe escapes, or direct WebSocket bypasses:
-- Sandboxed Chromium runs with `--proxy-server=http://127.0.0.1:18080`.
-- The in-sandbox proxy (`browser_proxy.go`) intercepts all outbound HTTP/HTTPS `CONNECT` tunnels and plain HTTP requests.
-- Before opening an upstream connection, the proxy consults `pc.CheckHostname(targetHost)` against the gateway hostname policy.
-- WebSocket handshakes (`Upgrade: websocket`) undergo explicit hostname verification before connection establishment.
-- If a target is blocked or out-of-scope, the proxy immediately terminates the request with `HTTP 403 Forbidden` and audits the attempt.
+Managed Chromium (`sandbox-mcp/browser_rod.go`) uses a sandbox-local HTTP proxy
+bound to `127.0.0.1` on an ephemeral port, supplied through `--proxy-server`.
+The proxy checks non-loopback hostnames against the read-only policy endpoint
+before DNS/dial. It supports plain HTTP, HTTPS CONNECT, and WebSocket upgrades;
+policy denial/unavailability returns 403 and connection failures return 502.
+Localhost/loopback destinations are deliberately permitted for local browser
+fixtures and services. Gateway remains responsible for routed IP traffic.
+
+This guard applies to managed Chromium. It is not a global interception proxy
+for Firefox, arbitrary commands, or every protocol used by tools.
 
 ### Rule Provenance and Precedence <a id="rule-sources"></a>
 
@@ -124,7 +138,7 @@ Policy rules carry provenance metadata:
 - `Agent`: Opened dynamically by the executor for approved commands (bounded by TTL).
 - `Manual`: Added directly by the operator via the Gateway UI console.
 
-Precedence rules prevent agent-generated rules from overriding configured block rules. Manual rules can carve out specific subnets from broader blocks only if they specify a more specific prefix.
+Precedence rules prevent agent-generated rules from overriding configured block rules. Manual rules can carve out specific subnets from broader blocks in policy evaluation when the manual prefix is at least as specific as the most specific matching block. This never overrides the policy address-class floor. The current packet rules place configured block DROP rules before dynamic allows, so such a manual policy override does not override that kernel block; reaching the destination requires changing the configured block and rebuilding/restarting gateway.
 
 ---
 
@@ -134,13 +148,13 @@ Precedence rules prevent agent-generated rules from overriding configured block 
 
 Network firewalls cannot prevent indirect prompt injection or payload smuggling embedded within legitimate tool output (e.g. malicious HTML comments, simulated system messages, C2 instructions, or invisible Unicode sequences).
 
-`orchestrator/internal/security/threatscan` provides content-layer inspection on all data entering the system from external sources before it reaches model context.
+`orchestrator/internal/security/threatscan` inspects supported tool-feedback, delegation, memory, and skill ingestion paths. It is a pattern-based filter, not a guarantee that every external datum or novel instruction will be detected.
 
 ### Three Inspection Scopes <a id="threatscan-scopes"></a>
 
 | Scope | Patterns Detected | Enforcement Target | Policy Action on Match |
 |---|---|---|---|
-| **`all`** | Common prompt injection, hidden HTML comments/tags, secret exfiltration pipes. | Baseline text checks. | Warning / Logged. |
+| **`all`** | Common prompt injection, hidden HTML comments/tags, secret exfiltration pipes. | Baseline text checks. | Returns matches; the caller chooses the response. |
 | **`context`** | Role-hijacking phrasing, C2 framework terminology (Cobalt Strike, Sliver, etc.), prompt injection. | Command stdout/stderr and sub-agent summaries. | Pauses task at `threat_hold` node; awaits operator review. |
 | **`strict`** | Backdoor signatures (`authorized_keys`), credentials, agent configuration overrides. | Persistent memory writes (`REMEMBER`) and skill YAMLs. | Hard block; rejects write. |
 
@@ -150,19 +164,20 @@ Network firewalls cannot prevent indirect prompt injection or payload smuggling 
 ### Enforcement Points in Execution Pipeline <a id="threatscan-call-sites"></a>
 
 1. **Tool Observations**: Output from sandbox commands is scanned (`ScopeContext`) before insertion into the graph observation history.
-2. **Chat Command Feedback**: Output from ad-hoc chat executions is scanned at the execution store chokepoint before returning to the conductor.
+2. **Chat Command Feedback**: Single-command results pass execution-store threat review before the typed feedback path can return them to the conductor.
 3. **Memory Ingestion**: `REMEMBER` writes pass through `ScopeStrict` validation before persisting to SQLite.
 4. **Sub-Agent Summaries**: Delegation results are scanned before merging into parent task context.
 5. **Skill Registry**: YAML playbook definitions are verified with `ScopeStrict` during load time.
-6. **Untrusted Web Research Containment**: Data retrieved via `web_search` and `web_fetch` is parsed, stripped of active scripts/styles, bounded in size, and tagged with `UNTRUSTED_WEB_CONTENT` headers before being supplied to the conductor. It is treated as untrusted observational input and is prohibited from automatic permanent memory ingestion.
+6. **Untrusted Web Research Containment**: Data retrieved via `web_search` and `web_fetch` is parsed, stripped of active scripts/styles, bounded in size, and returned as bounded JSON with a `UNTRUSTED_WEB_CONTENT` notice. Retrieval itself does not insert content into permanent memory; model-authored memory writes are a separate, strictly scanned path.
 
 ### Untrusted Web Research Containment <a id="web-research-containment"></a>
 
 External web search results and fetched HTML pages represent uncontrolled, third-party content subject to prompt injection, malicious instructions, or data exfiltration attempts. Yummi protects the model and system through:
 - **Strict Sandbox Localization**: `web_search` and `web_fetch` execute solely within the sandbox container under the gateway egress policy. The host orchestrator never initiates direct web queries.
-- **Structural Text Transformation**: Raw HTML is converted to clean text (removing `<script>`, `<style>`, inline iframes, and hidden CSS tags) and truncated to safe byte bounds.
-- **Untrusted Content Envelope**: Ingested snippets are enclosed in an explicit `UNTRUSTED_WEB_CONTENT / PROMPT_INJECTION_RISK` wrapper so the model evaluates facts without adopting injected persona instructions.
-- **No Automatic Memory Insertion**: External web content is never written directly to long-term memory (`REMEMBER` / SQLite knowledge base).
+- **Structural Text Transformation**: Fetched HTML is converted to bounded plain text with active/non-content elements removed. This is text extraction, not full browser rendering or a guarantee that CSS-hidden or malicious text disappears.
+- **Untrusted Content Envelope**: Research JSON carries an explicit `UNTRUSTED_WEB_CONTENT` notice instructing the model to treat source text as evidence rather than instructions.
+- **No Automatic Memory Insertion**: Search/fetch handlers do not write to long-term memory. A later model-authored `REMEMBER` action remains a distinct threat-scanned write; this does not guarantee semantic exclusion of all web-derived facts.
+- **Provider Disclosure**: `web_search` sends queries to the configured OpenRouter/Exa service. Sandbox placement constrains execution and egress; it does not make cloud search local or anonymous. Provider credentials/model are sandbox configuration, never tool arguments.
 - **Operator Toggle Control**: Web search capability is gated by an operator-controlled switch in the UI (`GET/POST /api/v1/system/web-search`); when toggled off, search tools are disabled and rejected.
 
 ### Single-Command Result Review <a id="threatscan-single-command"></a>
@@ -173,13 +188,15 @@ When single-command execution output triggers a threat pattern, status moves to 
 
 ## Layer 3: Tamper-Evident Audit Logging <a id="layer-audit"></a>
 
-All scope queries, rule modifications, and egress policy changes are logged to SQLite in WAL mode (`gateway/src/audit/`).
+`allow_all` policy verdicts bypass configured IP block evaluation after the address floor, while the kernel still applies configured block CIDRs. A reported API `allow` therefore does not guarantee packet reachability.
 
-Each log record includes a cryptographic SHA-256 hash that incorporates the hash of the preceding entry:
+Gateway IPC scope checks, hostname decisions, rule changes, and egress-mode changes attempt to append events to SQLite in WAL mode (`gateway/src/audit/`). Observer socket diagnostics may add records too. This is not a complete packet capture: forwarded packets do not create an audit row for every connection or packet, and audit-write failures are logged without necessarily rolling back a successful policy change.
+
+The chain hashes timestamp, source IP, destination IP, decision, reason, and previous hash (not every database column):
 
 $$\text{Hash}_n = \text{SHA256}(\text{Record}_n \mathbin{\Vert} \text{Hash}_{n-1})$$
 
-Any modification, deletion, or insertion of historical log entries invalidates the forward hash chain, providing verifiable audit integrity.
+Verification detects changes to hashed fields and breaks in the retained chain. It does not authenticate the database against a privileged writer who can recompute the chain, prove that a deleted suffix existed without an external checkpoint, or cover unhashed columns such as ports/protocol.
 
 ---
 
@@ -204,7 +221,7 @@ Container execution is constrained through multiple isolation layers:
   policy listener. Published host loopback ports terminate at UI nginx on a
   UI-only ingress bridge; the orchestrator has no published port. See
   [network topology](architecture.md#network-topology).
-- Linux capability bounds (`NET_RAW` for raw packet tools, minimal file capabilities).
+- A bounded capability set, including `NET_RAW`, `NET_ADMIN`, and filesystem/privilege-drop capabilities. Selected binaries have file capabilities, and `no-new-privileges` is explicitly false. UID 1000 alone does not make this a hardened boundary against malicious privileged tools.
 
 ### Unified Sandbox Architecture <a id="unified-sandbox"></a>
 
@@ -224,7 +241,7 @@ The sandbox runs as a unified Kali container serving three operator interfaces:
 ## Fingerprint Minimization <a id="fingerprint-masking"></a>
 
 Optional network controls reduce sandbox fingerprinting during sensitive engagements:
-- **`ttl_normalize`**: Rewrites outbound packet IP TTL to a standard value (e.g., 64) to neutralize OS fingerprinting tools (`nmap -O`, `p0f`).
+- **`ttl_normalize`**: Rewrites outbound IPv4 TTL (or IPv6 hop limit for an IPv6 sandbox source) to a configured value (e.g., 64), reducing one fingerprint signal. It does not neutralize the many other signals used by `nmap -O` or `p0f`.
 - **`mac_randomization`**: Generates a pseudo-random locally-administered MAC address on the gateway egress interface at startup.
 
 *Non-Goal*: Layer 7 HTTP header anonymization is explicitly excluded to preserve gateway simplicity and fail-closed auditability.
@@ -242,7 +259,10 @@ The gateway watchdog monitors resource limits and process health:
 
 ## Explicit Limitations and Residual Risks <a id="honest-limits"></a>
 
-- **Container Root Boundary**: While agent commands run as UID 1000, container capabilities (`NET_ADMIN`) exist at the container level. Sandbox root compromise could theoretically modify container routing tables.
-- **Single-Operator Trust Model**: Desktop and terminal WebSocket endpoints rely on loopback binding and origin checks. Deployments accessible over shared networks must provide external authentication.
+- **Container/Capability Boundary**: Root compromise and tools with file-granted `NET_ADMIN` can affect sandbox networking; the source-IP-based gateway filter is not a boundary against every routing, spoofing, or container-escape attack. Same-subnet traffic and the mounted host workspace also remain available independently of external egress mode.
+- **Single-Operator Trust Model**: Host loopback publication, exact socket-peer/Host authorization, and origin checks protect the operator routes. There is no multi-user authentication/RBAC layer. VNC is passwordless on the private sandbox network; raw VNC is not host-published. Shared-network exposure requires a separately designed access boundary.
 - **Dynamic CDN Resolution Window**: If a target domain resolves to different IP addresses across short TTL windows, rapid re-resolution could require re-approval in `ask` mode.
 - **Pattern-Based Threat Scanning**: Content scanning mitigates structured injection patterns; it does not guarantee detection of novel semantic jailbreaks. Human review remains authoritative.
+
+- **Model Data Placement**: The default model path uses local Ollama. Explicit `YUMMI_EINO_MODEL_BASE_URL` overrides move conductor and agent inference to that compatible endpoint (for both graph and Eino); optional `brain/` has its own provider configuration. Remote inference sends configured context to that provider. Gateway sandbox rules do not constrain orchestrator-originated model traffic.
+- **Approval Modes**: `ask_permission` gates each command unless the per-task low/medium-risk override applies. `auto` skips ordinary command gates even for high/critical risk; detected destructive patterns force a gate in both modes. Single-command proposals have their separate risk-based approval path.

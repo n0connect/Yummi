@@ -1,212 +1,80 @@
 [Back to Project README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
 
-# The Agent Graph — Nodes & Edges
+# Agent graph: nodes and edges
 
-The agent's task loop is implemented as an explicit graph state machine in `orchestrator/internal/agent/graph.go`, not a procedural `while` loop with nested branching. This page details each state node, the complete transition table, loop prevention heuristics, and verification oracles.
+`orchestrator/internal/agent/graph.go` defines node names, handlers and `graphEdges`. `Execute` calls a handler and follows its returned edge. `finish` and `ask` are terminal nodes. Eino has its own native tool-calling loop; this routing table describes the graph backend.
 
----
+## Nodes <a id="the-nodes"></a>
 
-## Table of Contents
-
-- [Why a Graph and Not a Loop](#why-a-graph)
-- [The 11 State Machine Nodes](#the-nodes)
-- [Complete Routing Table](#routing-table)
-- [Execution Trace of a Real Turn](#one-turn)
-- [Stuck, Thrash, and Duplicate Detection](#stuck-detection)
-- [The Premature-Finish Guard](#premature-finish)
-- [Dynamic Step Budget Scaling](#step-budget)
-- [Failure Escalation Strategy](#failure-escalation)
-- [Context Compaction & Windowing](#summarize-detail)
-- [State Checkpointing & Crash Recovery](#checkpointing)
-- [Finding Verification & Exploit Oracles](#finding-verification)
-- [Content-Layer Threat Quarantining](#content-defense)
-
----
-
-## Why a Graph and Not a Loop <a id="why-a-graph"></a>
-
-Control flow in `Execute()` (`graph.go`) is governed by an immutable transition table:
-
-```go
-var graphEdges = map[string]map[string]string{
-    nodeStep: {
-        edgeContextFull: nodeSummarize,
-        edgeBudgetOut:   nodeFinish,
-        edgeRunCommand:  nodeTool,
-        edgeFinish:      nodeFinish,
-        edgeAskOperator: nodeAsk,
-        edgeUpdatePlan:  nodeStep,
-        edgeSendFull:    nodeStep,
-        edgeStopTask:    nodeFinish,
-        edgeHandoff:     nodeHandoff,
-        edgeRemember:    nodeRemember,
-        edgeLLMError:    nodeRetry,
-    },
-    // ... complete transition map per node
-}
-```
-
-Every node implements `func(ctx, *GraphState) (nextEdge string, err error)` and returns an edge name. The routing table maps `(currentNode, edge) -> nextNode`, decoupling node logic from global graph topology.
-
----
-
-## The 11 State Machine Nodes <a id="the-nodes"></a>
-
-| Node | File | Purpose |
+| Node | Handler file | Responsibility |
 |---|---|---|
-| **`step`** | `node_step.go` | Core reasoning node — renders task state (plan, observations, findings, skills, memory) into a fresh prompt and queries the LLM. |
-| **`tool`** | `node_tool.go` | Validates command arguments, checks for duplicates, and executes via `executor.RunScopedCommand`. |
-| **`consult`** | `node_consult.go` | Intermediate check-in with the LLM when facing ambiguous states (long-running commands, repetition). |
-| **`retry`** | `node_lifecycle.go` | Exponential backoff and retry following LLM network or transport errors. |
-| **`summarize`** | `node_lifecycle.go` | Compresses observation history into an authoritative running summary under token pressure. |
-| **`approval`** | `node_lifecycle.go` | Blocks the task goroutine until operator grants approval (in `ask_permission` mode or for high-risk commands). |
-| **`threat_hold`** | `node_threat.go` | Content-layer quarantine node — pauses execution when tool output trips prompt-injection patterns. |
-| **`finish`** | `node_lifecycle.go` | Terminal node. Finalizes task state, generates server-recorded evidence digest, and returns summary. |
-| **`ask`** | `node_lifecycle.go` | Terminal pause node. Halts execution and presents a question to the operator. |
-| **`handoff`** | `node_handoff.go` | Delegates subtasks concurrently to specialist sub-agents (depth-1 bounded). |
-| **`remember`** | `node_remember.go` | Saves a structured memory entry to `knowledge.Store` via the `[REMEMBER]` tag. |
+| `step` | `node_step.go` | Render current state, query the model and parse a control action. |
+| `tool` | `node_tool.go` | Validate, apply command approval policy and dispatch shell/MCP calls. |
+| `consult` | `node_consult.go` | Decide whether to continue, abort or change course after a long-running/repeated action. |
+| `retry` | `node_lifecycle.go` | Retry model errors using the stored caller and retry policy. |
+| `summarize` | `node_lifecycle.go` | Compact observations with the model under context pressure. |
+| `approval` | `node_lifecycle.go` | Wait for a command verdict, then dispatch the frozen approved action. |
+| `threat_hold` | `node_threat.go` | Quarantine suspect output until the operator accepts, redacts or discards it. |
+| `finish` | `node_lifecycle.go` | Record terminal outcome and summary with an execution evidence digest. |
+| `ask` | `node_lifecycle.go` | Pause the task with an operator question. |
+| `handoff` | `node_handoff.go` | Run bounded specialist work and return its observations. |
+| `remember` | `node_remember.go` | Save/update or forget a session note through shared `ApplyNote`. |
+| `skill_view` | `node_skill.go` | Load one full playbook by exact name from the skill index. |
 
----
-
-## Complete Routing Table <a id="routing-table"></a>
-
-```text
-step        -> context_full   -> summarize
-            -> budget_out     -> finish
-            -> run_command    -> tool
-            -> finish         -> finish
-            -> ask_operator   -> ask
-            -> update_plan    -> step
-            -> send_full      -> step
-            -> stop_task      -> finish
-            -> handoff        -> handoff
-            -> remember       -> remember
-            -> llm_error      -> retry
-
-tool        -> ok / is_error       -> step
-            -> requires_approval   -> approval
-            -> stuck / long_running -> consult
-            -> threat_hold         -> threat_hold
-
-consult     -> continue / change_goal / ok / is_error -> step
-            -> abort                                   -> step
-            -> stop_task                                -> finish
-            -> give_up                                   -> ask
-            -> llm_error                                  -> retry
-            -> long_running                                -> consult (self-loop)
-
-retry       -> give_up        -> ask
-            -> retry_again    -> (dynamic: returns to caller node)
-
-approval    -> approved / denied -> step
-            -> give_up            -> ask
-
-threat_hold -> approved / denied -> step
-            -> give_up            -> ask
-
-summarize   -> done -> step
-
-handoff     -> ok -> step
-
-remember    -> ok -> step
-```
-
-`finish` and `ask` contain no outgoing transitions in `graphEdges`, terminating graph execution cleanly.
-
----
-
-## Execution Trace of a Real Turn <a id="one-turn"></a>
+## Routing <a id="routing-table"></a>
 
 ```text
-step     -> LLM returns [TOOL] nmap -sV 10.0.0.5 -> edge run_command -> tool
-tool     -> Risk evaluated (Medium)               -> edge requires_approval -> approval
-approval -> Operator clicks "Approve"             -> Executes inline -> edge approved -> step
-step     -> LLM returns [TOOL] nikto -h 10.0.0.5  -> edge run_command -> tool
-tool     -> Command completes with output         -> edge ok -> step
-step     -> LLM returns [FINISH] + [FINDING]      -> edge finish -> finish
+step -> context_full: summarize; budget_out/finish/stop_task: finish
+        run_command: tool; ask_operator: ask; update_plan/send_full: step
+        handoff: handoff; remember: remember; skill_view: skill_view; llm_error: retry
+
+tool -> ok/is_error: step; requires_approval: approval
+        stuck/long_running: consult; threat_hold: threat_hold
+
+consult -> continue/abort/change_goal/ok/is_error: step
+           stop_task: finish; give_up: ask; llm_error: retry; long_running: consult
+
+retry -> give_up: ask; retry: saved caller (dynamic)
+approval -> approved/denied/ok/is_error: step; give_up: ask; threat_hold: threat_hold
+threat_hold -> approved/denied: step; give_up: ask
+summarize -> done: step
+handoff/remember/skill_view -> ok: step
 ```
 
----
+`RUN_COMMAND` and `MCP_TOOL` both route through `tool`. Approval does not turn an MCP action into shell text: the pending arguments are copied/frozen and approved dispatch uses the same MCP executor and threat-output processing as automatic dispatch.
 
-## Stuck, Thrash, and Duplicate Detection <a id="stuck-detection"></a>
+## Approval behavior
 
-To prevent small local models from looping unproductive commands, `graph.go` monitors a sliding window (`stuckWindowSize = 6`) over normalized command hashes:
-- **Exact-Repeat Detection (`isStuck`)**: Flags if the identical command hash appears >=3 times or in strict A->B->A->B alternation.
-- **Tool-Thrash Detection (`toolThrash`, threshold 4)**: Catches semantic repetition across differing flags (e.g. `ps -ef`, `ps aux`, `ps -e` in rapid succession).
-- Both signals route execution to `consult` for model reconsideration before escalating to the operator.
+`ask_permission` gates every command unless the per-task override applies. That override skips only commands below high severity with no `ForceApprovalReason`. In `auto`, structural destructive floors still gate; a high risk label alone does not. Single-command conductor proposals use a separate risk-based approval policy. Gateway egress approval is another lifecycle, handled by the execution store and executor.
 
----
+## Loop guards and budgets <a id="stuck-detection"></a>
 
-## The Premature-Finish Guard <a id="premature-finish"></a>
+The recent command window has six entries. `isStuck` detects three equal hashes or an A→B→A→B pattern; `toolThrash` detects four uses of the same first command token. Exact repeat and duplicate checks provide observations for reconsideration rather than evidence of success.
 
-When a multi-part goal produces multiple plan steps, models occasionally attempt to terminate after completing only the first item. If `FINISH` is received while uncompleted steps remain in the plan and step budget exists, the graph bounces the turn with an `[INCOMPLETE_GOALS]` notice back to `step`. This guard fires at most once per task to prevent deadlock.
+<a id="failure-escalation"></a>
 
----
+Consecutive command failures escalate at `MaxConsecutiveFailures` (default three) to `[REPEATED_FAILURE]`; at twice that threshold `step` pauses for the operator. A successful command clears the failure streak.
 
-## Dynamic Step Budget Scaling <a id="step-budget"></a>
+`ScaledStepBudget(configured, numParts)` leaves the configured budget unchanged below two detected goal parts. Otherwise it returns `max(configured, min(80, 6 + 12*numParts))`. This is a reasoning/action budget, not a guarantee of that many successful commands. Eino counts actual model turns and has a separate bounded operator extension flow.
 
-Rather than enforcing an arbitrary static limit (e.g., 15 steps), `ScaledStepBudget` dynamically scales available iterations based on goal complexity:
+## Finishing and plan ownership <a id="premature-finish"></a>
 
-$$\text{Budget} = \min\left(80, \, 6 + 12 \times \text{num\_detected\_parts}\right)$$
+Production graph states give a premature `FINISH` one reconsideration when plan items remain pending/running and at least two budget units remain. The model can ultimately finish with unfinished items; terminal status therefore does not prove full goal coverage. A terminal plan also has convergence handling in `node_step.go`.
 
-A 5-part reconnaissance and assessment workflow receives 66 steps, allowing sufficient runway for deep enumeration without premature budget exhaustion.
+Model plan updates go through `Store.ReplaceModelPlan`: future intentions can be pending or skipped, but execution statuses, command/results, errors and counters are server-owned. See [execution provenance](execution-provenance.md).
 
----
+## Compaction and recovery <a id="summarize-detail"></a>
 
-## Failure Escalation Strategy <a id="failure-escalation"></a>
+`summarizeInput` bounds the input sent to the summarizer to 8,000 bytes, prioritizing the first observation and recent tail. Even the first observation can be bounded when large. The model is asked for a factual summary of at most 400 words; this is an instruction, not deterministic preservation. On success the summary replaces the in-memory observation list; a failed summarization keeps observations and resets the token counter.
 
-- Consecutive failures are tracked per task (`consecutiveFailures`).
-- The first two failures emit standard `[TOOL_FAILED]` tags with error outputs.
-- At the third consecutive failure (`failureLimit = 3`), the system emits a high-priority `[REPEATED_FAILURE]` directive compelling the model to change tactics, consult `--help`, or adjust its plan.
+`saveCheckpoint` records the current graph position, bounded recent observations, summary, retry state, commands and failure count in the task store. On restart, the runner restores recoverable tasks at a safe `step` boundary; it does not blindly replay the interrupted tool call. This is recovery support, not an exactly-once transaction across an external tool and SQLite.
 
----
+## Findings and threat output <a id="finding-verification"></a>
 
-## Context Compaction & Windowing <a id="summarize-detail"></a>
+`verifyFindingDetail` checks a finding's cited evidence against the just-returned output, or a successful plan step's bounded stored result. Matching tolerates case, surrounding quotes and whitespace normalization. A match earns `verified`; missing evidence or a matching miss remains `candidate`; citing an unsuccessful step is `unsupported`.
 
-When context length approaches token thresholds, `summarizeNode` engages:
-1. **Head Preservation**: The first observation (containing initial target discovery and port maps) is strictly preserved.
-2. **Tail Preservation**: The most recent observations are preserved intact.
-3. **Middle Compression**: Intermediate verbose output is replaced with `[...older observations summarized...]` and compacted by an LLM call into a <=400-word factual digest.
+`ClassifyOracleKind` then assigns a heuristic label such as `tool_evidence`, `active_poc`, `dom_execution`, `oob_interaction` or `differential`. It does not independently reproduce the exploit, observe browser execution or operate an OOB callback service. `EvaluateActiveProof` is a separate deterministic helper over supplied strings. These labels cannot justify a stronger claim than the captured evidence.
 
----
+Tool output is ANSI-stripped before model observations. Successful output that trips threat patterns enters `threat_hold`. The operator may accept raw output, supply redacted text in the verdict reason, or deny it. Command and threat approvals carry distinct metadata.
 
-## State Checkpointing & Crash Recovery <a id="checkpointing"></a>
-
-`saveCheckpoint()` serializes node state, plan step progress, observation digests, and failure counters into SQLite on every transition. Upon service restart:
-- In-flight tasks are restored to the nearest safe `step` boundary.
-- Replay of dangerous uncommitted tool calls is avoided.
-- Child sub-agent tasks are reconciled by the parent task runner.
-
----
-
-## Finding Verification & Exploit Oracles <a id="finding-verification"></a>
-
-Yummi enforces server-side verification before elevating a candidate vulnerability to `verified`:
-
-```text
-Candidate Finding Emitted by Model
-              |
-              v
-   verifyFindingDetail()
-              |
-              +---> 1. OracleActivePoC: Validates SQLi error patterns, RCE output, SSRF metadata
-              |
-              +---> 2. OracleDOMExecution: Regex validation of XSS sinks (<script>, onerror=)
-              |
-              +---> 3. OracleOOBInteraction: Confirms DNS/HTTP interaction tokens (Interactsh)
-              |
-              +---> 4. OracleDifferential: Status code / content length / timing divergence
-              |
-              v
-   Server-Side Verdict: [verified] (oracle confirmed) or [candidate] (unproven claim)
-```
-
-Findings cannot be asserted into `verified` status by the model narrative alone; deterministic evidence must exist in captured output streams.
-
----
-
-## Content-Layer Threat Quarantining <a id="content-defense"></a>
-
-- Output from every tool invocation is ANSI-stripped (`threatscan.StripANSI`).
-- If tool output trips prompt-injection or exfiltration signatures (`ScopeContext`), execution diverts to `threat_hold`.
-- The operator reviews the suspect output in the UI and decides whether to sanitize, redact, or discard it before it can influence model context.
+Source: `graph.go`, `node_step.go`, `node_tool.go`, `node_lifecycle.go`, `node_threat.go`, `verdict.go`, `oracle.go`, `prompts.go` and `store.go` under `orchestrator/internal/agent`.

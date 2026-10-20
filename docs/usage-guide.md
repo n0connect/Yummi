@@ -38,30 +38,23 @@ make conf
 ```
 
 Then start the stack:
+
 ```bash
-make start
+make start             # builds missing images
+make start BUILD=1     # rebuild after source/config/language changes
 ```
-The interface opens at `http://localhost:3000`. Every engagement is scoped to a **Session** that tracks conversation history, target scope, the hierarchical asset matrix, structured findings, and background tasks. Language (`YUMMI_LANG`), backend selection, and cloud model keys configured in `make conf` persist across sessions in `.yummi.conf`.
+Open `http://localhost:3000` after the services are healthy. Every engagement is scoped to a **Session** that tracks conversation history, target scope, the hierarchical asset matrix, structured findings, and background tasks. Language (`YUMMI_LANG`) and model settings persist in `.yummi.conf`; API keys are plaintext in that gitignored file. The current wizard selects `eino`; Graph can be selected with `make start YUMMI_AGENT_BACKEND=graph`. An explicit `YUMMI_EINO_MODEL_BASE_URL` changes the conductor and graph loop as well as Eino. See [Installation](installation.md) for precedence and endpoint configuration.
 
 ---
 
 ## Target-First Offensive Launcher <a id="target-launcher"></a>
 
-```text
-+-----------------------------------------------------------------------------+
-|                          TARGET-FIRST LAUNCHER                              |
-|                                                                             |
-|   Target Input: [ https://api.example.com ]                                 |
-|                                                                             |
-|   [ Quick Recon ]          [ Web Pentest ]         [ API Audit ]            |
-|   - subfinder, amass       - katana, whatweb       - arjun, ffuf            |
-|   - dnsx, httpx, alterx    - nuclei, sqlmap        - graphql_cop, jwt_tool  |
-+-----------------------------------------------------------------------------+
-```
+Enter a domain, URL, or IP, choose a mode, then Start. The launcher sends a composed goal to the same agent/chat flow:
 
-1. **Reconnaissance**: Subdomain discovery (`subfinder`, `amass`), DNS resolution (`dnsx`), URL scraping (`gau`), live web probing (`httpx`).
-2. **Web Application Assessment**: Crawler mapping (`katana`), fingerprinting (`whatweb`, `wafw00f`), XSS testing (`dalfox`), SQL injection checks (`sqlmap`), CMS assessment (`wpscan`), template scans (`nuclei`).
-3. **API & Logic Testing**: Parameter discovery (`arjun`), GraphQL security (`graphql_cop`), JWT auditing (`jwt_tool`), client-side secret mining (`jsluice`).
+- **Bug Bounty Recon**: Requests subdomain discovery, permutation/resolution/live probing, takeover checks, and triage.
+- **Web Pentest**: Requests stack/WAF fingerprinting, crawling, JavaScript secret review, parameter/XSS checks, API authorization checks, and vulnerability scanning.
+
+The launcher selects a goal, not a fixed executable pipeline. Tool selection and completion depend on the model, available tools, approvals, and evidence. Gateway scope remains the execution authority.
 
 ---
 
@@ -69,42 +62,46 @@ The interface opens at `http://localhost:3000`. Every engagement is scoped to a 
 
 ### 1. Agent <a id="tab-agent"></a>
 Direct Yummi using natural language or initiate autonomous red-team tasks:
+
 - **Interactive Chat Input**: Bounded auto-expanding multiline input supporting copy-paste, clean file drag-and-drop, and keyboard shortcuts (Shift+Enter for newline, Enter to send).
-- **Operator-Controlled Web Search Toggle**: Dedicated toggle button (`btn-web-search`, globe icon) located in the chat composer bar. Controls whether the agent can execute external research lookups (`web_search`, `web_fetch`). When enabled, the button turns active with phosphor-teal glow (`aria-pressed="true"`); when disabled, research tools immediately fail closed. Includes busy locking (`aria-busy`) and optimistic rollbacks on persistence errors.
-- **Cited Research Source Cards**: Live and historical research actions render interactive source cards (`ResearchSources.tsx`) showing source URLs, page titles, retrieved timestamps, SHA-256 hashes, and security notices (`UNTRUSTED_WEB_CONTENT`). Excerpts are safely escaped to protect operator context from untrusted remote text.
+- **Operator-Controlled Web Search Toggle**: Dedicated toggle button (`btn-web-search`, globe icon) located in the chat composer bar. Controls sandbox research lookups (`web_search`, `web_fetch`). Research also requires configured sandbox provider/model credentials and gateway authorization. Disabling the setting prevents subsequent research calls; it does not roll back work already in progress. See [Web Research](agent/web-research.md) for configuration and enforcement.
+- **Cited Research Source Cards**: Live and historical research actions render interactive source cards (`ResearchSources.tsx`) showing the source metadata returned by the tools, including URLs, titles, retrieval times, hashes where available, and security notices. Excerpts are safely escaped to protect operator context from untrusted remote text.
 - **Full Browser Automation**: Directs native Chromium inside the sandbox using token-efficient accessibility trees (`@eN` refs including semantic content elements `li`, `td`, `th`, `blockquote`, `code`). The agent can fill forms, click buttons, evaluate JavaScript for DOM XSS, capture screenshots with Set-of-Marks visual overlays, and manage multi-tab workflows.
 - **Single Command Proposals**: Narrow queries ("run nmap on 10.0.0.5") yield structured proposals with risk ratings.
 - **Autonomous Multi-Step Tasks**: Broad goals trigger the state machine graph, generating structured plans and executing steps.
 - **Command Rationale Surfacing**: Each command row in the execution timeline surfaces the model's explicit rationale explaining why this command was chosen right now.
 - **Persistent Task Summary Cards**: High-visibility terminal completion cards rendering status pills (`✓ COMPLETED`, `✕ FAILED`, `◼ STOPPED`), steps used/budget metrics, executive summary prose, and structured findings with automatic CTF/pentest flag highlighting, 1-click copy interaction, CVE tagging, and direct `Trace ›` navigation. Complete parity across live streaming, page refresh, and session reload.
 - **Approval Toggle**:
-  - `auto`: Executes non-critical steps autonomously.
+  - `auto`: Runs task commands without per-command approval except the mandatory destructive-command floor. Egress and threat holds remain independent.
   - `ask_permission`: Pauses at every command for explicit operator confirmation.
-  - Per-task override: Specific tasks can be granted auto-approval via the UI toggle without switching the global mode.
+  - Per-task override: Skips `ask_permission` command gates only below high/critical risk; mandatory destructive-command gates remain.
 
 ![Agent tab mid-task: the model narrates each step in plain language above the command it dispatches, with live status pills on every row](assets/screenshots/usage-guide/agent-tab.png)
 
 ### 2. Terminals (Agent Tmux Sessions) <a id="tab-terminals"></a>
 Live viewer for persistent background tmux sessions opened and managed by the agent:
-- Lists all active agent terminals (`term_list`) with session IDs, running commands, and process status.
-- Watch-only terminal monitor allowing operators to follow live terminal output, inspect interactive CLI sessions (`msfconsole`, `gdb`, `sqlmap`), review background reverse shells, or verify listener logs without interrupting the agent (`term_read`, `term_wait`, `term_keys`, `term_close`).
+
+- Lists agent tmux sessions with IDs/labels, window metadata, size, and creation time.
+- Polls captured terminal output without accepting operator keystrokes. Operators can end a session using a two-click close confirmation; the agent retains control through its terminal tools.
 - Output matched against suspicious patterns is flagged with security advisory notices.
 
 ![Terminals tab: a reverse shell the agent caught itself, visible to the operator in real time as it browses the filesystem and reads a captured flag — already escalated to root](assets/screenshots/usage-guide/terminals-tab.png)
 
 ### 3. Trace <a id="tab-trace"></a>
 Observability, intelligence, and asset management cockpit:
+
 - **Activity Timeline**: Sequential events (plans, commands with rationale, results, sub-agent handoffs, findings).
 - **Attack Surface Management (ASM) (`AssetTreePanel`)**: Interactive tree indexing domains, subdomains, IPs, ports, endpoints, query parameters, secrets, and cloud buckets.
 - **Findings Matrix (`FindingsPanel`)**: Severity-aware, filterable verified vulnerabilities with proof-of-concept evidence.
 - **Program Scope Rules (`ScopeRulesPanel`)**: Manage bug-bounty in-scope (`include`) and out-of-scope (`exclude`) wildcard patterns, with a live interactive hostname classifier.
-- **Proxy Traffic Bridge (`ProxyBridgePanel`)**: Live ingestion and injection of HTTP flows from Burp Suite, Caido, or Mitmproxy.
+- **Proxy Traffic Bridge (`ProxyBridgePanel`)**: Passive ingestion of submitted HTTP flow metadata. External tools must explicitly send flows to the API.
 - **Report Export (`ReportExportModal`)**: Export findings to HackerOne, Bugcrowd VRT, Executive Summary, or JSON.
 - **Tactics**: Target-scrubbed procedural memories applied to the current session.
 - **Pending Skills**: Quarantine queue for curator-drafted skills awaiting operator sign-off.
 
 ### 4. Bash <a id="tab-bash"></a>
 Interactive PTY web terminal directly into the Kali container (`yummi-pwnbox`) over `/ws/terminal`:
+
 - Backed by `tmux` so session state persists across reconnections.
 - Operates in the exact same container environment as the AI agent (`UID 1000:1000`).
 - Features a tactical ASCII greeting banner, live network IP & VPN indicators (`myip`, `ports`), reverse shell generator (`revshell [PORT]`), and wordlist shortcut variables (`$ROCKYOU`, `$COMMON_TXT`, `$BIG_TXT`, `$USERNAMES`, `$PASSWORDS_TOP`).
@@ -113,7 +110,8 @@ Interactive PTY web terminal directly into the Kali container (`yummi-pwnbox`) o
 
 ### 5. Desktop <a id="tab-desktop"></a>
 Graphical Kali XFCE desktop streamed over noVNC (`/ws/desktop`):
-- **On-Demand Activation**: Rendered with a click-to-activate eye icon placeholder. The desktop stream stays dormant until activated by the operator, saving significant memory/VRAM and automatically deactivating when switching tabs.
+
+- **On-Demand Activation**: Rendered with a click-to-activate eye icon placeholder. The desktop stream stays dormant until activated by the operator, avoiding background VNC streaming/rendering and disconnecting on tab changes. The sandbox XFCE/VNC process tree itself stays running.
 - Pre-installed with **Metasploit Console**, **Burp Suite**, **Wireshark**, and **Firefox**.
 - Desktop & home folder shortcuts for **PayloadsAllTheThings**, **SecLists**, **Nishang**, **Wordlists**, **ExploitDB**, and **Workspace**.
 - Shares the sandbox filesystem and network namespace with the agent.
@@ -126,14 +124,15 @@ Live Server-Sent Events (SSE) stream of internal orchestrator debug logs.
 
 ### 7. Gateway <a id="tab-gateway"></a>
 Operator control panel for the fail-closed network trust boundary:
-- **Active Rules**: Live `nftables` FORWARD rules with TTL expiration and manual rule additions/deletions.
+
+- **Active Rules**: Gateway policy rules with TTL expiration and manual rule additions/deletions. Kernel enforcement status is shown separately.
 - **Audit Chain**: Cryptographic SHA-256 tamper-evident log of all scope and routing decisions.
 - **4-Way Egress Mode Switch**: Runtime master switch:
-  - `block_all` (Drop All Egress): Complete airgap; drops all outbound traffic unconditionally.
+  - `block_all` (Drop All Egress): Drops gateway-forwarded sandbox egress, including DNS and established flows. Local/same-subnet traffic remains outside this boundary.
   - `block_all_except_rules` (Strict Scope): Default-drop, permits traffic matching active rules or configured scope.
-  - `allow_all` (Blanket Allow): Permits outbound traffic to all public destinations not blocked.
+  - `allow_all` (Blanket Allow): Permits forwarded traffic subject to configured destination blocks and unconditional address restrictions. Execution also enforces hostname policy.
   - `ask_every_time` (Interactive Authorization): Holds each new destination for operator sign-off.
-  - *Resets to `block_all` on gateway restart.*
+  - *Resets to `block_all` on gateway restart.* In other modes, gateway-routed UDP/53 has a DNS exception after destination blocks. Rule expiry/removal revokes established flows dependent on that rule in restricted modes. Command approval alone does not grant egress.
 
 ![Gateway tab: kernel enforcement status, the 4-way egress mode switch, hostname policy, and the active nftables rules table — the operator's one view of the trust boundary](assets/screenshots/usage-guide/gateway-tab.png)
 
@@ -168,23 +167,23 @@ curl -s "http://localhost:9080/api/v1/sessions/<session_id>/assets?format=tree" 
 
 ## Program Scope Rules & Bug Bounty Bookkeeping <a id="scope-rules-usage"></a>
 
-Program Scope Rules let you mirror a program's published scope policy into the session. This is knowledge-layer bookkeeping: it auto-classifies discovered assets as in-scope or out-of-scope, and automatically filters out-of-scope findings from generated reports (submitting out-of-scope findings to a bug bounty platform is a policy violation).
+Program Scope Rules mirror a program's scope policy as session knowledge. They classify discovered host assets and add scope warnings/classification to Markdown reports. They do not enforce gateway scope or remove out-of-scope findings from exports. Review findings before submission; the JSON export contains the stored report data.
 
 ```bash
 # Add an include (in-scope) rule
-curl -X POST http://localhost:9080/api/v1/sessions/<session_id>/scope-rules \
+curl -X POST "http://localhost:9080/api/v1/sessions/<session_id>/scope-rules" \
   -H "Content-Type: application/json" \
   -d '{"pattern": "*.example.com", "kind": "include", "note": "Primary web assets"}'
 
 # Add an exclude (out-of-scope) rule
-curl -X POST http://localhost:9080/api/v1/sessions/<session_id>/scope-rules \
+curl -X POST "http://localhost:9080/api/v1/sessions/<session_id>/scope-rules" \
   -H "Content-Type: application/json" \
   -d '{"pattern": "admin.example.com", "kind": "exclude", "note": "Explicitly out of scope"}'
 
 # Test a target with the live classifier
-curl -X POST http://localhost:9080/api/v1/sessions/<session_id>/scope-rules/classify \
+curl -X POST "http://localhost:9080/api/v1/sessions/<session_id>/scope-rules/classify" \
   -H "Content-Type: application/json" \
-  -d '{"target": "api.example.com"}'
+  -d '{"hostname": "api.example.com"}'
 ```
 
 In the UI, the **TRACE** tab provides a dedicated **Program Scope Rules** panel where operators can view, add, delete, and live-test scope rules.
@@ -213,7 +212,7 @@ curl -s "http://localhost:9080/api/v1/sessions/<session_id>/report?format=json"
 
 ## Proxy Traffic Bridge (Burp / Caido / Mitmproxy) <a id="proxy-usage"></a>
 
-Forward intercepted HTTP traffic directly into Yummi's Knowledge Graph:
+Submit an intercepted flow to Yummi's Knowledge Store. Replace `<session_id>` with an existing session ID in all examples. Port 9080 enters the same loopback nginx operator proxy as port 3000. This API ingests data; it does not install a proxy CA, configure interception, or automatically connect Burp/Caido/Mitmproxy:
 
 ```bash
 curl -X POST http://localhost:9080/api/v1/proxy/inject \
@@ -226,7 +225,7 @@ curl -X POST http://localhost:9080/api/v1/proxy/inject \
     "response_body": "{\"token\": \"eyJ...\"}"
   }'
 ```
-Discovered hosts, endpoints, and query parameters are automatically mapped into the ASM asset tree.
+The handler maps the submitted URL host, method/path, and URL query parameter names into ASM assets. Submitted response bodies are not currently parsed into secrets or findings.
 
 ---
 
@@ -240,34 +239,34 @@ make lab-target-down   # Stops and removes the lab container
 ```
 
 The lab container features:
-1. **Foothold (Unauthenticated RCE)**: Apache HTTP Server 2.4.49 (CVE-2021-41773 / CVE-2021-42013) path traversal in `/cgi-bin/` with `mod_cgid` enabled, executing arbitrary commands as `www-data`. Flag 1: `/home/user.txt`.
+
+1. **Foothold (Unauthenticated RCE)**: Apache HTTP Server 2.4.49 (CVE-2021-41773) path traversal in `/cgi-bin/` with `mod_cgid` enabled, executing commands as `daemon` (UID 1). Flag 1: `/home/user.txt`.
 2. **Privilege Escalation**: Misconfigured SUID binary `/usr/local/bin/python3-suid` allowing root escalation. Flag 2: `/root/root.txt`.
-3. **Gateway Enforcement**: Runs on RFC 5737 TEST-NET-2 (`198.51.100.0/24`), requiring genuine gateway egress approval or an explicit allow rule just like any real external engagement target.
+3. **Gateway Enforcement**: Runs on RFC 5737 TEST-NET-2 (`198.51.100.0/24`), requiring a non-lockdown gateway mode. In restricted modes, the target also needs matching scope/approval; an allow rule alone has no effect in `block_all`. See the [lab README](../lab-target/README.md) for topology and limitations.
 
 ---
 
 ## Approval Flows & Decision Moments <a id="approval-flows"></a>
 
-```text
-+-----------------------------------------------------------------------------+
-|                          OPERATOR APPROVAL FLOWS                            |
-|                                                                             |
-|   1. Command Risk Gate   -> Gated in `ask_permission` or if risk >= Medium  |
-|   2. Egress Approval     -> Gated when Gateway is in `ask` mode             |
-|   3. Threat-Scan Hold    -> Gated if command output matches threat patterns |
-|   4. Skill Quarantine    -> Gated before drafted skills become active       |
-+-----------------------------------------------------------------------------+
-```
+- **Single-command proposals:** medium/high/critical risk sets `requires_approval`.
+- **Task command gate:** `ask_permission` pauses each command unless its per-task override applies; `auto` still gates known destructive command forms.
+- **Egress approval:** `ask_every_time` holds new destinations until operator authorization; `block_all` blocks them outright.
+- **Threat hold:** flagged output is quarantined pending the operator's decision before model feedback.
+- **Skill quarantine:** curator drafts require operator approval before becoming active skills.
+
+Approve the exact pending command/tool arguments and proposal identity. Risk labels and display text alone are not executable authority.
 
 ---
 
 ## CLI Reference <a id="the-cli"></a>
 
 ```bash
-./bin/yummi            # Launches web UI in default browser
-./bin/yummi --start     # Starts all docker services
-./bin/yummi --stop      # Stops docker services
+./bin/yummi            # Preflight/readiness checks, opens web UI in app-style browser window
+./bin/yummi --start     # Starts configured sandbox service using docker compose
+./bin/yummi --stop      # Stops configured sandbox service
 ./bin/yummi --status    # Displays runtime status
 ./bin/yummi --doctor    # Runs dev & environment diagnostic checks
 ./bin/yummi --version   # Displays build metadata
 ```
+
+Use `make start`/`make stop` for the complete five-service stack. CLI lifecycle commands use Docker and `~/.yummi/config.yaml`; they do not read Make's `.yummi.conf`. The launcher can spawn a local orchestrator if its probe fails, but does not replace full-stack startup. `make doctor` may invoke a fallback script that changes gateway mode temporarily; see [diagnostics](installation.md#verifying).

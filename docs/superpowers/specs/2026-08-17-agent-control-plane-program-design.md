@@ -1,5 +1,7 @@
 # Agent Control Plane Program Design
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 ## Goal
 
 Make Yummi's operator surface, agent runtimes, and Rust gateway behave as one

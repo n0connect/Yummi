@@ -2,12 +2,10 @@
 #
 # You normally do NOT write this file by hand: run `make conf` for an
 # interactive setup that persists your choices to a gitignored `.yummi.conf`
-# (masked entry for any API key). It's deliberately short — container engine
-# and UI language are auto-detected, and picking a model is ONE question
-# (local: just a model name, cloud: just an API key). This example documents
-# every field that file CAN hold, including the ones `make conf`'s simple
-# path never asks about, so you can see the full set at a glance — or copy
-# it to `.yummi.conf` and edit directly if you prefer.
+# (masked entry for API keys). It detects/selects an engine, asks UI language
+# and model settings, and optionally configures Brain. This example covers
+# common settings; docs/configuration.md distinguishes native defaults,
+# Make exports and settings actually forwarded into Compose containers.
 #
 #   cp .yummi.conf.example .yummi.conf
 #
@@ -29,7 +27,7 @@ CONTAINER_ENGINE=docker
 # insecure-bridge — compatibility workaround that restores ordinary bridge
 #                   egress; weakens the fail-closed topology. What `make conf`
 #                   pairs with podman (podman's own networking needs it) or
-#                   Docker Desktop if picked manually. Only use this with
+#                   Docker Desktop when detected or selected. Only use this with
 #                   docker if you understand the trade-off (docs/installation.md).
 YUMMI_NETWORK_MODE=secure
 
@@ -40,11 +38,9 @@ YUMMI_NETWORK_MODE=secure
 YUMMI_LANG=en
 
 # ── Agentic engine ──────────────────────────────────────────────────────────
-# graph — tag-protocol state machine. eino — native tool-calling ReAct loop,
-# with full cataloged-tool and terminal-session parity with graph as of
-# 2026-10-07. `make conf` always sets eino now, for both the local and cloud
-# model paths — there's no longer a meaningful reason to pick graph over it
-# on a fresh setup. Runtime-only either way: change it without rebuilding.
+# graph — tag-protocol state machine. eino — native tool-calling ReAct loop.
+# The wizard writes eino; unconfigured Make/Compose defaults to graph.
+# Changing the runtime backend needs container recreation, not a UI rebuild.
 YUMMI_AGENT_BACKEND=eino
 
 # ── Model: pick ONE of the three shapes below ───────────────────────────────
@@ -52,14 +48,9 @@ YUMMI_AGENT_BACKEND=eino
 # only a model name; Cloud/Custom asks only (plus a model name with a sane
 # default) an API key — everything else in this section is filled in for you.
 
-# 1) Local (Ollama) — just a model tag. A 20B-class model (the Ollama default
-#    below) is fine for trying the chat/UI flow, but is NOT reliable for
-#    autonomous multi-step tasks (confirmed: it can lose track of the target,
-#    invent tool syntax, or fabricate an entire fake exploit run with zero
-#    real tool calls). For real autonomous use this needs to be 120B+ — e.g.
-#    gpt-oss:120b, which `make conf` offers as its own default. See
-#    orchestrator/internal/conductor/tier.go's DefaultTierRegistry doc
-#    comment for the full writeup.
+# 1) Local (Ollama). The raw default below is gpt-oss:20b; the wizard's
+# blank local-model answer chooses gpt-oss:120b. Historical lab results in
+# tier.go describe specific runs, not a universal model-size capability floor.
 YUMMI_OLLAMA_MODEL=gpt-oss:20b
 # Optional: override the context window for a custom model tag (default: the
 # resolved tier's own value). Not asked by `make conf`'s simple path — hand-edit
@@ -68,8 +59,7 @@ YUMMI_OLLAMA_MODEL=gpt-oss:20b
 
 # 2) Cloud (OpenRouter/OpenAI) — just an API key. `make conf`'s Cloud choice
 #    fills in the base URL/provider below for you and defaults the model name
-#    to deepseek/deepseek-chat-v3.1 (confirmed working end to end against a
-#    real multi-stage exploit chain) unless you type a different one.
+#    to deepseek/deepseek-chat-v3.1 (a wizard default, not a capability guarantee) unless you type a different one.
 #YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1
 #YUMMI_EINO_MODEL_NAME=deepseek/deepseek-chat-v3.1
 #YUMMI_EINO_MODEL_API_KEY=
@@ -91,3 +81,10 @@ YUMMI_OLLAMA_MODEL=gpt-oss:20b
 #YUMMI_BRAIN_MODEL_BASE_URL=https://openrouter.ai/api/v1
 #YUMMI_BRAIN_MODEL_NAME=deepseek/deepseek-chat-v3.1
 #YUMMI_BRAIN_MODEL_API_KEY=      # your key — stored only in the gitignored .yummi.conf
+
+# ── Optional sandbox web research ───────────────────────────────────────────
+# Forwarded only into sandbox; provider HTTP/DNS/parsing stays there.
+# An enabled toggle does not grant gateway egress. Never put keys in tool args.
+#YUMMI_WEB_SEARCH_ENABLED=false
+#YUMMI_WEB_SEARCH_MODEL=
+#YUMMI_WEB_SEARCH_API_KEY=

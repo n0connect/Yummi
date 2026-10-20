@@ -1,6 +1,6 @@
 # Browser and web research
 
-Release status: Production-hardened with in-sandbox HTTP/CONNECT/WebSocket connection proxy (`browser_proxy.go`), generation-based log buffer isolation, fail-closed state management, and edge-cases verification (`qa/edge_cases_qc.py`, `qa/web_search_toggle_qc.py`). See [QC verification](web-research-qc.md).
+Current implementation: sandbox-only search/fetch, a browser HTTP/CONNECT/WebSocket proxy, bounded evidence and independent command/egress/threat approvals. Source behavior is described below; [dated QC](web-research-qc.md) and the [17 October deployment snapshot](live-deployment-2026-10-17.md) record what was actually checked and its limits.
 
 Research executes in `sandbox-mcp` as UID 1000. Neither the host nor the
 orchestrator performs research HTTP or DNS. All external connections traverse
@@ -9,8 +9,7 @@ only; sandbox tools cannot edit gateway rules. Existing gateway hostname and
 packet policy apply; the tools never open egress automatically.
 
 Research DNS and the agent Chromium profile use Cloudflare DNS-over-HTTPS at
-`1.1.1.1:443`, entirely inside the sandbox. This environment's UDP/TCP port-53
-queries timed out while real HTTPS/DoH worked. Rules-only deployments must
+`1.1.1.1:443`, entirely inside the sandbox. This is the implemented resolver path; historical port-53 availability observations are not a guarantee about every deployment. Rules-only deployments must
 permit that resolver IP as well as approved destinations; no host DNS fallback
 or policy bypass is used. Chromium preferences are documented by the
 [Chromium resolver preference definitions](https://chromium.googlesource.com/chromium/src/+/5977f0b3b658787f95f42d1390d3f6129b0f12c9/chrome/common/pref_names.h).
@@ -21,21 +20,19 @@ Web research is disabled by default. Operators can toggle it at runtime:
 - **Interactive UI Toggle**: Click the globe button (`btn-web-search`) directly in the chat composer bar. When active, it pulses with phosphor-teal (`aria-pressed="true"`). If disabled or write fails, it rolls back gracefully and research tools immediately fail closed.
 - **REST API Control**: `GET /api/v1/system/web-search` queries the state; `POST /api/v1/system/web-search` updates state atomically (`{"enabled": true|false}`) via `/tmp/yummi_web_search_state`.
 - **Environment Configuration**: Set `YUMMI_WEB_SEARCH_ENABLED=true`,
-`YUMMI_WEB_SEARCH_MODEL=minimax/minimax-m2.1`, and
-`YUMMI_WEB_SEARCH_API_KEY` with an OpenRouter credential. Credentials are never arguments, output, or provider error bodies.
-Prefer a dedicated restricted research key: a key in sandbox environment can
-be read by other commands running with the same sandbox user's authority.
+`YUMMI_WEB_SEARCH_MODEL` to an operator-selected OpenRouter model, and
+`YUMMI_WEB_SEARCH_API_KEY` to its credential in the sandbox service. `web_fetch` needs the enabled state but does not require a search-provider model/key. Credentials are never arguments, output, or provider error bodies.
+A dedicated restricted research key limits exposure: other commands running with the same sandbox user's authority can read sandbox environment credentials. Enabling research is separate from granting egress and does not configure a provider key/model by itself.
 
 Search sends the public query to OpenRouter/Exa and incurs provider charges.
 Only send public information; do not include private engagement data.
 The operator must permit the provider and desired source destinations through
-gateway policy. In block/ask/rules-only mode a denied connection returns an
-actionable error rather than granting access. Research supports public HTTPS,
+gateway policy. In `block_all`, denied connections fail. In `ask_every_time`, sandbox policy checks can return a typed `egress_approval_required` request with pinned IPs; `executor.processMCP` maps this to `awaiting_egress_approval`. Operator approval adds the exact rule and requeues the execution. In rules-only mode destinations need matching permission. None of these paths lets the sandbox change gateway rules. Research supports public HTTPS,
 port 443, and rejects private/link-local/loopback/reserved DNS destinations.
 
 ## Agent tools
 
-- `web_search`: `query`, `max_results` (1–10), `include_domains`,
+- `web_search`: `query` (3–1000 bytes), `max_results` (1–10), `include_domains`,
   `exclude_domains`, and `depth` (`standard` or `deep`). Returns provider
   excerpts with actual citation URLs. No usable citations is an error.
 - `web_fetch`: `url`, `offset`, `max_chars` (256–12000), `find`. Fetches original
@@ -78,7 +75,7 @@ actual source/argument/browser artifacts rather than trusting task status.
 Kali test container, including cookie/storage isolation, context-scoped tabs,
 viewport screenshot dimensions and state-file confinement. Live QC additionally
 requires the rebuilt stack, configured provider and real Minimax agent calls.
-No provider, browser, resolver or Yummi component is mocked in added tests.
+The Docker regressions use real Chromium/tools; provider-backed claims require separate real provider calls. Existing tests elsewhere may use historical fixtures or shims; this is not a repository-wide no-mocks certification.
 
 Primary integration references: [OpenRouter web search annotations and filters](https://openrouter.ai/docs/guides/features/plugins/web-search),
 [Rod browser contexts](https://pkg.go.dev/github.com/go-rod/rod#Browser.Incognito),

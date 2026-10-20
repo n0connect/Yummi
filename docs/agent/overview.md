@@ -1,81 +1,54 @@
 [Back to Project README](../../README.md) · [Docs index](../README.md)
 
-# The Agent — Overview
+# Agent overview
 
-The agent is the autonomous offensive security engine of Yummi. It translates high-level natural language goals ("audit the authentication API and discover hidden parameters") into structured execution plans, tool dispatches, active vulnerability verification, and comprehensive reports.
+Yummi translates goals into plans and sandbox tool calls. The model proposes actions; the orchestrator records execution, the operator controls approvals, and the gateway controls forwarded network traffic. A completed task or a fluent summary alone does not establish that the goal was achieved.
 
----
+## Backends and execution
 
-## Three Agent Engines Behind One Substrate
+`YUMMI_AGENT_BACKEND=graph` selects the Go graph state machine; `eino` selects the Go Eino ADK tool-calling backend. Both implement `TaskRunner`, share the task/knowledge stores and scoped execution substrate, and support specialist delegation. Specialists use the selected backend and have no specialist registry of their own, limiting delegation to one level.
 
-```text
-+-----------------------------------------------------------------------------------+
-|                            AGENT ENGINE ARCHITECTURES                             |
-|                                                                                   |
-|   1. Graph State Machine (Go)        2. Eino ADK Backend (Go)      3. Brain (Py)  |
-|   [YUMMI_AGENT_BACKEND=graph]        [YUMMI_AGENT_BACKEND=eino]    [LangGraph]    |
-|   - 11-node State Machine            - Native Tool Calling         - Multi-Agent  |
-|   - Tag Protocol ([TOOL], [FINISH])  - 58 MCP Tools & Terminals    - Supervisor   |
-|   - Optimized for local 8B models    - Scaled for 14B+ models      - Frontier LLM |
-|        |                                  |                             |         |
-|        +----------------------------------+-----------------------------+         |
-|                                           |                                       |
-|                                           v                                       |
-|                  Shared Scoped Executor & Fail-Closed Gateway                     |
-+-----------------------------------------------------------------------------------+
-```
+The optional [Python brain](../../brain/README.md) is a separate LangGraph client of the operator REST API, not another `YUMMI_AGENT_BACKEND` value. Its operator API authority and lifecycle differ from graph/Eino task execution.
 
-> **"Optimized for"/"Scaled for" above describes architectural intent, not a
-> tested capability floor.** Live-tested (2026-10-07) against a real
-> multi-stage CVE lab: a 20B-class local model was NOT reliably capable of
-> sustained multi-step autonomy on either backend — it lost track of the
-> actual target and needed server-side correction to use its own
-> tool-calling protocol. Both backends' tag/tool-call MECHANISMS worked
-> correctly throughout (confirmed via a real OpenRouter frontier model in
-> the same test, which completed 50+ turns with only one, unrelated,
-> correction needed); the gap is model capability, not architecture. See
-> `orchestrator/internal/conductor/tier.go`'s `DefaultTierRegistry` doc
-> comment for the full comparison and a realistic model recommendation.
->
-> **Recommended OpenRouter model: `minimax/minimax-m2.1`.** Live-tested
-> (2026-10-10) completing the same lab's full chain for real — RCE,
-> reverse-shell terminal, root privesc, both flags — plus memory recall
-> and a sub-agent handoff in the same session, at a fraction of a general
-> frontier model's cost. See `tier.go`'s doc comment for the full writeup.
+Local inference uses Ollama. An explicitly configured OpenAI-compatible base URL (`YUMMI_EINO_MODEL_BASE_URL`) also supplies the conductor and graph model client, despite the `EINO` prefix; Eino uses it for native tool calling. Provider selection alone does not supply an endpoint or credentials. See [configuration reference](../configuration.md).
 
-![The completed task summary from that run: both flags, the CVE, and every step of the chain, rendered automatically from the agent's own trajectory](../assets/screenshots/readme/hero-agent-tab.png)
+The tier registry defaults to `gpt-oss:20b` for `standard` and `gpt-oss:120b` for `expert`; an explicit model overrides the preset. These are configuration defaults, not guarantees about model competence. Historical lab observations in `conductor/tier.go` do not establish a universal parameter-count floor or current provider recommendation.
 
----
+Graph actions use the closed vocabulary in `agent/protocol.go`, including `[RUN_COMMAND]`, `[MCP_TOOL]`, `[HANDOFF]`, `[REMEMBER]`, `[SKILL_VIEW]`, `[FINISH]` and `[ASK_OPERATOR]`. Eino exposes native tools instead. The sandbox tool schemas come from MCP discovery; use the installed server's `tools/list`, rather than a fixed count in documentation.
 
-## Core System Architecture Principles
+Graph/Eino shell and MCP calls enqueue into `execution.Store`. The executor either runs a scoped shell through `sandbox.Bridge` or dispatches to the installed sandbox MCP server through a persistent Docker exec transport. Both run as UID/GID `1000:1000`. Agent code does not spawn host processes. The separate operator `/sandbox/exec` endpoint reuses the scoped shell path directly; it is not an agent task or an execution-store enqueue.
 
-1. **Explicit Graph State Machine**: Control flow lives in an explicit data structure (`graphEdges`) rather than nested procedural loops, providing deterministic routing across step, tool execution, operator consultation, retry, and finish nodes.
-2. **Strict Tag Protocol**: For local models, interaction is governed by closed-vocabulary control tags (`[TOOL]`, `[HANDOFF]`, `[REMEMBER]`, `[FINDING]`, `[FINISH]`, `[ASK]`), ensuring reliable parsing turn to turn.
-3. **Model-Agnostic Core**: Designed to operate with local models via Ollama (`gpt-oss:20b`, `gpt-oss:120b`, `qwen3`) or cloud reasoning models via OpenRouter without code changes.
-4. **Persistent Terminal Sessions**: First-class tmux session lifecycle tools (`term_*`) allow autonomous background listeners, reverse shells, and interactive tool driving.
-5. **Full-Capability Browser Automation**: Headless and headful Chromium automation driven by Rod, utilizing compact `@eN` accessibility tree snapshots with non-interactive content support (`li`, `td`, `th`, `blockquote`, `code`), multi-tab lifecycle, session cookie isolation, and in-sandbox connection proxy for HTTP/S and WS/WSS enforcing gateway hostname policy.
-6. **Controlled Web Research**: Sandboxed research tools (`web_search`, `web_fetch`) with cited sources from OpenRouter/Exa, direct HTTPS plaintext extraction/pagination, RFC 1918/metadata IP rejection, operator-controlled UI toggle button (`btn-web-search`), and prompt-injection defense (`UNTRUSTED_WEB_CONTENT`).
-7. **Active Verification Exploit Oracles**: Findings require concrete proof (`OracleActivePoC`, `OracleDOMExecution`, `OracleOOBInteraction`, `OracleDifferential`) before being accepted as valid.
-8. **Attack Surface Management (ASM) & Program Scope**: Discovered infrastructure is structured into a hierarchical asset graph (Domain -> Subdomain -> IP -> Port -> Endpoint -> Parameter), with program scope rules enforcing in-scope and out-of-scope boundaries.
+## Independent approvals
 
----
+Command approval and network permission are independent:
 
-## Agent Subsystem Documentation Index
+- In `ask_permission`, graph/Eino command calls require approval. A per-task `auto-approve` override skips only non-high-severity commands without a forced approval reason.
+- In `auto`, ordinary risk labels do not themselves force a command approval. Structural destructive floors (`ForceApprovalReason`) still require it.
+- Threat output has its own hold with `pending_approval_kind=threat`; approving a command does not authorize its output.
+- Gateway `block_all`, `block_all_except_rules`, `allow_all` and `ask_every_time` determine egress. An execution may wait separately in `awaiting_egress_approval`. Gateway restart resets the mode to `block_all`.
 
-| Subsystem | Scope & Contents | Reference |
-|---|---|---|
-| **Graph & Nodes** | 11 state machine nodes, transition routing table, loop prevention heuristics, and plan checkpointing. | [Graph & Nodes](graph-and-nodes.md) |
-| **Tag Protocol** | Closed agent-LLM tag vocabulary, robust token parsers, and prompt construction. | [Tag Protocol](tag-protocol.md) |
-| **Memory & Knowledge Store** | Factual targets, findings, target-scrubbed procedural tactics, persistent context, ASM asset tree, and program scope rules. | [Memory & Knowledge](memory-and-knowledge.md) |
-| **Skills & Sub-Agents** | 99 declarative offensive playbooks and 52 specialist sub-agents with depth-1 delegation bounding. | [Skills & Sub-agents](skills-and-subagents.md) |
-| **Browser Automation** | Native Chromium automation, 9 browser tools, compact `@eN` accessibility trees, session cookie isolation, and in-sandbox proxy. | [Browser Automation](browser-automation.md) |
-| **Controlled Web Research** | Sandboxed `web_search`/`web_fetch` tools, OpenRouter/Exa citations, operator UI toggle, and prompt-injection defense. | [Web Research](web-research.md) · [Web Research QC](web-research-qc.md) |
-| **Sandbox Execution & MCP** | The 58 sandbox MCP tools across 6 tiers, persistent tmux sessions, direct argv execution, and network gating. | [Sandbox Execution](sandbox-execution.md) |
-| **Sandbox Confinement** | Sandbox security boundaries, network isolation, UID 1000, caps, and fail-closed enforcement. | [Sandbox Confinement](sandbox-confinement.md) |
-| **Quality & Evaluation** | Assertion-bearing golden test fixtures, persona boundary assertions, and live benchmark harnesses. | [Quality & Evaluation](quality-and-evaluation.md) |
+Automated approval clients must verify task/session/proposal identity and exact `pending_mcp_tool`/`pending_mcp_args`; display command text is not executable authority.
 
----
+## Operator events and evidence
 
-## Architectural Invariant: Single Execution Path
+The initial chat POST starts a task and returns its identity; it does not wait for the final report. The UI follows `task.status`, `execution.status` and `agent.activity` envelopes on `/ws/events` and loads persisted state/history. Envelope `event` identifies lifecycle subtypes such as `execution.running` and `execution.completed`.
 
-`orchestrator/internal/agent` contains **zero** calls to `os/exec` or process spawning functions. Every command requested by any agent engine enqueues into `execution.Store`, passes through `executor.RunScopedCommand`, checks gateway `nftables` policy over IPC, and executes inside the Kali sandbox as an unprivileged user (`UID 1000:1000`).
+Shell executions support incremental `execution.output` chunks as well as running heartbeats. Output chunks are live-only; lifecycle replay is bounded and scoped by a process epoch and monotonically increasing sequence. Clients must resync from REST after an epoch change or replay gap. MCP calls generally return their completed result rather than shell output chunks.
+
+Finding verdicts check whether quoted evidence is traceable to successful tool output. Oracle labels and active-proof helpers use bounded heuristics, not independent proof of exploitation. See [quality and evaluation](quality-and-evaluation.md) and [execution provenance](execution-provenance.md).
+
+## References
+
+| Area | Reference |
+|---|---|
+| Graph nodes, recovery and loop guards | [Graph & Nodes](graph-and-nodes.md) |
+| Control tags and parsing | [Tag protocol](tag-protocol.md) |
+| Notes, tactics and asset records | [Memory & Knowledge](memory-and-knowledge.md) |
+| Playbook selection and delegation | [Skills & Sub-agents](skills-and-subagents.md) |
+| Chromium sessions and networking | [Browser automation](browser-automation.md) |
+| Public search/fetch and evidence limits | [Web research](web-research.md) |
+| Docker execution and MCP discovery | [Sandbox execution](sandbox-execution.md) |
+| Runtime placement | [Sandbox confinement](sandbox-confinement.md) |
+| Dated verification evidence | [QC history](web-research-qc.md) · [17 October deployment snapshot](live-deployment-2026-10-17.md) |
+
+Source: `orchestrator/internal/agent/task_runner.go`, `graph.go`, `node_tool.go`, `eino/pentest_tools.go`, `orchestrator/cmd/orchestrator/main.go`, `internal/api/event_hub.go` and `handlers_system.go`.

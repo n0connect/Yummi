@@ -1,5 +1,7 @@
 # Browser / web research QC — 2026-10-14, corrected 2026-10-16
 
+> Historical QC record, preserved with its corrections. The subsequent rebuilt deployment and fresh external/agent checks are recorded in the [17 October snapshot](live-deployment-2026-10-17.md). The isolated-only statements below describe the earlier checks, not the later deployment or current runtime state.
+
 Commands, builds, provider calls and Chromium in this follow-up ran through
 Docker. No host browser or new mocks/replacement transports were used.
 This does not certify historical execution logs.

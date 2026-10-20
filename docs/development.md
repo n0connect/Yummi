@@ -2,7 +2,7 @@
 
 # Development
 
-This page assumes you've already completed [Installation](installation.md) - a working Go >= 1.25 toolchain with a C compiler, Rust via rustup, and Node 20/22. It covers the fast, granular workflows for iterating on one piece of Yummi without rebuilding everything.
+This page assumes you've already completed [Installation](installation.md) - a working Go >= 1.27.2 toolchain with a C compiler, Rust/Cargo, and Node 22. It covers the fast, granular workflows for iterating on one piece of Yummi without rebuilding everything.
 
 ## Table of contents
 
@@ -11,7 +11,7 @@ This page assumes you've already completed [Installation](installation.md) - a w
 - [Fast feedback loops per component](#fast-loops)
 - [Running a single test](#single-test)
 - [Linting and vulnerability scanning](#lint-vuln)
-- [Hot-reload dev mode](#hot-reload)
+- [Development bootstrap](#hot-reload)
 - [The dev harnesses (`cmd/test_*`)](#dev-harnesses)
 
 ---
@@ -29,7 +29,7 @@ go test ./...
 
 # RIGHT
 go test ./...                     # CLI (root module)
-cd orchestrator && go test ./... # Orchestrator unit tests
+(cd orchestrator && go test ./...) # Orchestrator unit tests
 make _test-sandbox-mcp            # Sandbox-MCP tests (inside isolated Kali container)
 ```
 
@@ -43,7 +43,7 @@ make _test-sandbox-mcp            # Sandbox-MCP tests (inside isolated Kali cont
 make rebase
 ```
 
-The habitual `make stop && make close && make clean && make build && make start` wastes real time: `make build` compiles native binaries to `./bin` and `ui/dist` that the Docker images never consume at all, and neither `clean` nor `close` touch Docker's own build cache, images, or volumes. `make rebase` is exactly `down`, `build`, `up` — Docker's own layer cache does the real work (the `go mod download`/`npm install` layers are skipped when `go.sum`/`package-lock.json` haven't changed), so a source-only change rebuilds in seconds instead of minutes. It never prunes Docker's cache/images/volumes and never touches Ollama — reach for `make clean` or `docker system prune` when you actually need a from-scratch rebuild.
+The habitual `make stop && make close && make clean && make build && make start` wastes real time: `make build` compiles native binaries to `./bin` and `ui/dist` that the Docker images never consume at all, and neither `clean` nor `close` touch Docker's own build cache, images, or volumes. `make rebase` checks dependencies and ensures the model backend, then runs `down`, `build`, `up` — Docker's own layer cache does the real work (the `go mod download`/`npm install` layers are skipped when `go.sum`/`package-lock.json` haven't changed), so unchanged dependency layers can be reused. It retains Docker cache/images/volumes and may start Ollama or pull the selected model. For source edits without taking the stack down first, use `make start BUILD=1`; ordinary `make start` skips builds when all five local images exist. `make clean` removes native outputs, repository `*.db` files, and brain virtualenv/checkpoints; it does not clear Docker caches or volumes.
 
 ---
 
@@ -57,7 +57,7 @@ make _build-ui            # just ui/dist via vite build
 ```
 
 ```bash
-make dev-orchestrator      # cd orchestrator && go run ./cmd/orchestrator — no Docker, no sandbox
+make dev-orchestrator      # local Go API; does not start supporting containers
 make dev-ui                # cd ui && npm run dev — Vite HMR dev server on :3000
 ```
 
@@ -71,21 +71,21 @@ make dev-ui                # cd ui && npm run dev — Vite HMR dev server on :30
 
 ```bash
 # orchestrator module — must cd or prefix, it's a separate go.mod (see above)
-cd orchestrator && go test ./internal/agent -run TestRunnerE2E_ApprovalGate
-cd orchestrator && go test ./internal/conductor -run TestValidatorApprovalRequired
-cd orchestrator && go test -race ./...
+(cd orchestrator && go test ./internal/agent -run '^TestRunnerE2E_ApprovalGate$')
+(cd orchestrator && go test ./internal/conductor -run '^TestValidatorApprovalRequired$')
+(cd orchestrator && go test -race ./...)
 
 # root module
-go test ./internal/cli -run TestParseTopLevelOptionsDefaultUI
+go test ./internal/cli -run '^TestParseTopLevelOptionsDefaultUI$'
 
-# gateway (Rust) — cargo test takes a name filter, not a fully-qualified path
-cd gateway && cargo test test_allow_in_scope
+# gateway (Rust) — substring filter matches the checked-in test
+(cd gateway && cargo test test_allow_in_scope)
 
 # sandbox-mcp module — executes inside isolated Kali container
 make _test-sandbox-mcp
 ```
 
-Table-driven Go tests are common (for example `validator_test.go`), with map-backed stores or in-memory SQLite where appropriate. Scripted clients and local test servers isolate external/nondeterministic boundaries such as Ollama, HTTP, and gateway IPC; integration/live tests retain the real execution path. `ui/src/test/setup.ts` only supplies missing jsdom browser APIs (`scrollIntoView`, `ResizeObserver`). Use `-race` for concurrency-sensitive Go packages such as the graph, gate, and execution store.
+Use real components and in-memory SQLite where appropriate. New tests must not introduce mock components, fake providers, injected resolvers, or replacement transports. Existing unit suites also contain scripted/local-server fixtures; their presence is not permission to add new replacements for the real execution boundary. `ui/src/test/setup.ts` only supplies missing jsdom browser APIs (`scrollIntoView`, `ResizeObserver`). Use `-race` for concurrency-sensitive Go packages such as the graph, gate, and execution store.
 
 `make test-agent-live` deserves a special mention: it enables the real-model/real-sandbox test with `LIVE_TEST_MODEL` (default `qwen3:8b`). Start the stack first; missing Ollama, model, or sandbox dependencies are test failures once `YUMMI_LIVE=1` is enabled by the Make target:
 
@@ -108,13 +108,13 @@ make vuln    # govulncheck — supply-chain scan, all three Go modules
 
 ---
 
-## Hot-reload dev mode <a id="hot-reload"></a>
+## Development bootstrap <a id="hot-reload"></a>
 
 ```bash
 make dev
 ```
 
-Runs `scripts/dev.sh`, which bootstraps (`scripts/install.sh`) and brings up just the `sandbox` container in the background — intended to be paired with `make dev-orchestrator` (running the Go server directly on your host with fast recompiles) rather than the full `make start` stack, since you want the sandbox real but the orchestrator itself iterating quickly outside a rebuild-the-image loop.
+Runs `scripts/dev.sh`: the installer, followed by `docker compose up -d sandbox`. Both scripts hardcode Docker, so they do not honor `CONTAINER_ENGINE=podman` or Make's insecure-bridge overlay. It does not run a watcher, Vite, the orchestrator, gateway, or broker. Prefer the full stack plus `make dev-ui` or explicitly configured `make dev-orchestrator` for development requiring those services. The Compose UI already occupies port 3000 (and proxies port 9080); stop the conflicting service before binding a host dev server to either port.
 
 ---
 
@@ -138,13 +138,13 @@ go run ./cmd/test_openai_backend  # scripted multi-part-goal scenarios against t
 go run ./cmd/context_probe -listen :8899 -target http://localhost:1234
 ```
 
-Point `YUMMI_EINO_MODEL_BASE_URL` (or the harness's own model-base-URL flag) at the probe's `-listen` address instead of the real server, and it logs every `/chat/completions` turn — message/tool counts, the **server's own** `usage.prompt_tokens`/`completion_tokens`/`total_tokens` (not an estimate), `finish_reason`, and whether `tool_calls` fired — the only way to actually measure context growth turn-by-turn in a long Eino session instead of guessing whether it's building up. `-dump-dir` additionally saves each turn's full raw request/response JSON, useful for inspecting a turn whose content came back empty or malformed.
+Point `YUMMI_EINO_MODEL_BASE_URL` (or the harness's own model-base-URL flag) at the probe's `-listen` address instead of the real server, and it logs every `/chat/completions` turn — message/tool counts, the **server's own** `usage.prompt_tokens`/`completion_tokens`/`total_tokens` (not an estimate), `finish_reason`, and whether `tool_calls` fired for observing reported context growth turn by turn. `-dump-dir` additionally saves each turn's full raw request/response JSON, useful for inspecting a turn whose content came back empty or malformed.
 
 All five compile to `orchestrator/test_agent`, `orchestrator/test_engine`, `orchestrator/test_loop`, `orchestrator/test_openai_backend`, `orchestrator/context_probe` if built in place — already covered by `.gitignore`, so building one locally won't accidentally get committed.
 
 ## Agent quality gates
 
-`go test ./...` includes two model-independent quality contracts: `TestPersonaGoldenFixtures` reads every checked-in `persona/v0.1/golden_tests/*.yaml`, and offline tests exercise `EvaluateTaskQuality`. The evaluator rejects cosmetic completion, repeated *executions* (blocked proposals are tracked separately), failed plans, empty summaries, missing evidence digests, unsupported finding claims, wrong command families, and scenario-specific failure markers. The live suite loads the same skill registry and runs as the same UID `1000:1000` as the production sandbox bridge. The full metric contract and scenario list live in [Agent Quality & Evaluation](agent/quality-and-evaluation.md). For real-model regression testing against the sandbox, run:
+`make _test-orchestrator` includes two model-independent quality contracts: `TestPersonaGoldenFixtures` reads every checked-in `persona/v0.1/golden_tests/*.yaml`, and offline tests exercise `EvaluateTaskQuality`. The evaluator rejects cosmetic completion, repeated *executions* (blocked proposals are tracked separately), failed plans, empty summaries, missing evidence digests, unsupported finding claims, wrong command families, and scenario-specific failure markers. The live suite loads the same skill registry and runs as the same UID `1000:1000` as the production sandbox bridge. The full metric contract and scenario list live in [Agent Quality & Evaluation](agent/quality-and-evaluation.md). For real-model regression testing against the sandbox, run:
 
 ```bash
 make test-agent-eval LIVE_TEST_MODEL=qwen3:14b
@@ -153,3 +153,18 @@ make test-agent-eval LIVE_TEST_MODEL=qwen3:14b
 To reproduce one failing scenario while iterating, set `YUMMI_EVAL_CASE` to its ID, for example `E5-largest`.
 
 The live suite is assertion-bearing: plan failure, non-termination, missing successful work, command repetition, or threshold violations fail the test after the transcript is printed.
+
+## Complete suites and boundary verification
+
+`make test` includes root Go, orchestrator Go, gateway Rust, UI Vitest, Docker-contained sandbox-MCP, optional brain tests, and archived QC evidence checks. Brain tests skip when uv is absent; when installed they run `uv sync` and pytest. The QC suite needs Python 3. `make test` is not a live-model or packet-boundary proof.
+
+```bash
+make test
+make test-security-boundaries
+```
+
+The second target runs disposable gateway kernel, research integration, and operator/control checks. It requires a running Docker daemon; kernel checks use a privileged networkless container, research checks use real installed UID-1000 sandbox MCP and gateway components, and control checks create an isolated stack through the local Docker Unix socket. These targets build images and create containers; run them deliberately.
+
+Sandbox-MCP builds and tests belong in Docker. Use `make _test-sandbox-mcp` (networkless test container, no host mounts) or `make docker-build` for runtime images. The current aggregate `make build` also invokes a host `_build-sandbox-mcp`, which conflicts with that placement rule; use the individual CLI/orchestrator/gateway/UI native targets above instead.
+
+`make lint` covers Go only. CI additionally runs gateway Clippy and the UI lint/build jobs; inspect `.github/workflows/ci.yml` for the actual matrix.

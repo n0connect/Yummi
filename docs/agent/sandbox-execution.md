@@ -1,194 +1,61 @@
 [Back to Project README](../../README.md) · [Docs index](../README.md) · [Agent overview](overview.md)
 
-# Sandbox Execution & MCP Tooling
+# Sandbox execution and MCP tooling
 
-This document traces the scoped execution pipeline used by agent tasks, approved chat proposals, direct API calls, and the persistent `sandbox-mcp` server inside the Kali container.
+Graph/Eino task commands and approved chat proposals enter `execution.Store`; the executor selects shell execution or a structured MCP call. Agent code never executes a process on the developer machine. The operator `/api/v1/sandbox/exec` endpoint directly uses the same scoped shell executor without creating an agent task or execution-store record.
 
----
-
-## Table of Contents
-
-- [The Single Execution Pipeline](#pipeline)
-- [Execution Flow & Gateway Trust Boundary](#execution-flow)
-- [The 58 Sandbox MCP Tools](#mcp-tools)
-  - [Tier 1: Individually-Typed Tools](#tier-1)
-  - [Tier 2: Cataloged Pentest Tools](#tier-2)
-  - [Tier 3: Concurrency & Pure-Go Utilities](#tier-3)
-  - [Tier 4: Persistent Terminal Sessions (tmux)](#tier-4)
-  - [Tier 5: Full-Capability Browser Automation](#tier-5)
-  - [Tier 6: Sandboxed Web Research & Intelligence Tools](#tier-6)
-  - [Fallback: Free-Text Command Execution](#fallback)
-- [Target Scope Resolution & Local Tool Exemption](#scope-resolution)
-- [Argv Execution Safety vs Shell Execution](#argv-safety)
-- [Container Execution Constraints](#container-constraints)
-
----
-
-## The Single Execution Pipeline <a id="pipeline"></a>
-
-Core Invariant: **`orchestrator/internal/agent` contains zero calls to `os/exec`. All commands flow through `execution.Store.Enqueue()` and are executed via `executor.RunScopedCommand()`.**
+## Execution pipeline <a id="pipeline"></a>
 
 ```text
-+-----------------------------------------------------------------------------+
-|                         SINGLE EXECUTION PIPELINE                           |
-|                                                                             |
-|   Agent (Graph / Eino) / Chat / API                                         |
-|       |                                                                     |
-|       v                                                                     |
-|   execution.Store.Enqueue()                                                 |
-|       |                                                                     |
-|       v                                                                     |
-|   executor.ProcessFunc                                                      |
-|       |                                                                     |
-|       +---> executor.RunScopedCommand()                                     |
-|               |                                                             |
-|               |-- 1. Extract targets (IP / Hostname)                        |
-|               |-- 2. gateway.CheckHostname() (Pre-resolution policy)        |
-|               |-- 3. gateway.CheckEgress()   (IP routing policy)            |
-|               |-- 4. gateway.AddTemporaryRule() (If verdict == allow)       |
-|               |-- 5. sandbox.Bridge.Exec() / sandboxmcp.Client.CallTool()   |
-|                       |                                                     |
-|                       v                                                     |
-|               Kali Sandbox Container (UID 1000 pentester user)              |
-+-----------------------------------------------------------------------------+
+Graph / Eino / approved chat proposal
+  -> execution.Store.Enqueue
+  -> executor.ProcessFunc
+     -> shell: RunScopedCommandStream -> sandbox.Bridge.ExecStream
+     -> MCP: processMCP -> sandboxmcp.Client.CallTool
+  -> Docker broker -> sandbox UID/GID 1000:1000
 ```
 
----
+The shell bridge invokes `/bin/bash -lc` inside the configured sandbox. The MCP client opens a persistent `docker exec -i --user 1000:1000 ... /usr/local/bin/yummi-sandbox-mcp` transport. Its lifetime outlasts individual call contexts and it closes at orchestrator shutdown. The constrained broker permits only the configured sandbox and user; it is not a general Docker API.
 
-## Execution Flow & Gateway Trust Boundary <a id="execution-flow"></a>
+## Gateway decisions <a id="execution-flow"></a>
 
-```text
-Orchestrator                      Gateway Daemon                     Kali Sandbox
-     |                                  |                                  |
-     |--- 1. CheckHostname(host) ------>|                                  |
-     |<-- 2. Verdict ("allow"/"block") -|                                  |
-     |                                  |                                  |
-     |--- 3. CheckEgress(resolved_ip) ->|                                  |
-     |<-- 4. Verdict ("allow"/"block") -|                                  |
-     |                                  |                                  |
-     |--- 5. AddTemporaryRule(ip/32) -->|                                  |
-     |<-- 6. Rule Added (Expires 1h) ---| (nftables FORWARD open)          |
-     |                                  |                                  |
-     |--- 7. docker exec / MCP Call -------------------------------------->|
-     |                                  |                                  | (Runs tool)
-     |<-- 8. Execution Result (Stdout, Stderr, ExitCode) ------------------|
-```
+For shell targets, `scope.ExtractTargets` feeds hostname-policy checks and IP resolution, then gateway egress checks. All extracted targets must be allowed before temporary rules are opened. A block returns `ErrOutOfScope`; a `needs_approval` verdict holds the execution in `awaiting_egress_approval`. Operator resolution installs the approved rule and requeues the execution. Gateway availability fails closed where a network decision is required.
 
----
+For MCP, `sandboxmcp/catalog.go` supplies the target field and display rendering. A target-bearing call goes through `runScopedTarget`; other calls dispatch directly into sandbox-MCP. **No target field does not mean no network activity.** Terminal commands, in-page browser actions, file-driven tools and research may initiate connections without an orchestrator-extracted target. The gateway's packet policy remains authoritative for forwarded egress; the browser proxy and research client also apply their sandbox policy checks. Local/same-subnet traffic is outside that FORWARD boundary.
 
-## The 58 Sandbox MCP Tools <a id="mcp-tools"></a>
+Research `web_search`/`web_fetch` return typed pinned-IP approval requests from their sandbox policy client. `processMCP` translates these into the same execution egress hold. Research tools never mutate gateway rules themselves.
 
-`sandbox-mcp` is a standalone Go MCP server compiled directly into `/usr/local/bin/yummi-sandbox-mcp` inside the Kali container and accessed via persistent stdio over `docker exec -i`.
+## Discover the installed tools <a id="mcp-tools"></a>
 
-### Tier 1: Six Individually-Typed Tools <a id="tier-1"></a>
-These tools expose explicit JSON schema parameters directly to the LLM's native function-calling interface:
+Use MCP `tools/list` through the installed sandbox transport for current names, input schemas and descriptions. `sandbox-mcp/tools.go:registerTools` registers typed wrappers, the extended tool catalog, consolidation/passive recon utilities, terminals, browsers and research. A hardcoded tool count can drift from both source and the running image.
 
-1. **`nmap_scan`**: Network host discovery, port scanning, service detection, and OS fingerprinting.
-2. **`whatweb_scan`**: Web application technology, CMS, server, and framework fingerprinting.
-3. **`curl_probe`**: HTTP/S request inspection, header extraction, custom methods, and body payloads.
-4. **`gobuster_dir`**: High-speed web directory and file brute-forcing with wordlists.
-5. **`ffuf_fuzz`**: High-performance HTTP fuzzing for directories, parameters, and virtual hosts.
-6. **`nikto_scan`**: Web server vulnerability scanning, misconfiguration detection, and default files.
+| Family | Examples / reference |
+|---|---|
+| Typed wrappers | `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan` |
+| Extended pentest wrappers | `sandbox-mcp/tools_extended.go`; names such as `sqlmap_scan`, `nuclei_scan`, `httpx_probe` |
+| Utilities | `consolidate_hosts` merges host lists; `passive_recon_batch` invokes configured recon binaries concurrently |
+| Persistent tmux | `term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close` |
+| Chromium | [Browser automation](browser-automation.md) |
+| Public research | `web_search`, `web_fetch`; [configuration and limits](web-research.md) |
 
-### Tier 2: 32 Cataloged Pentest Tools <a id="tier-2"></a>
-Dispatched dynamically via `search_pentest_tools` and `run_pentest_tool`:
+`search_pentest_tools` and `run_pentest_tool` are Eino-side discovery/dispatch tools, not names to assume the sandbox MCP server registers. Eino can also wrap discovered schemas natively. Its `run_command` fallback is orchestrator-side and still dispatches to the sandbox.
 
-- **Web & Bug Bounty**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `arjun_scan`, `corsy_scan`, `graphql_cop_scan`, `jsluice_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`.
-- **Reconnaissance & OSINT**: `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `dnsrecon_scan`, `naabu_scan`, `tlsx_scan`, `subzy_scan`, `cloud_enum_scan`, `whois_query`.
-- **Authentication & Database**: `sqlmap_scan`, `jwt_tool_inspect`, `hydra_bruteforce`, `medusa_bruteforce`.
-- **Infrastructure & Network**: `masscan_scan`, `sslscan_probe`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`.
-- **Binary Triage & Secret Scanning**: `checksec_audit`, `radare2_disasm`, `gitleaks_scan`.
+## Persistent terminals <a id="tier-4"></a>
 
-### Tier 3: Concurrency & Pure-Go Utilities <a id="tier-3"></a>
-1. **`consolidate_hosts`**: Merges, deduplicates, and validates multiple host lists without shell pipes.
-2. **`passive_recon_batch`**: Concurrently triggers `subfinder`, `amass`, `theHarvester`, and `gau` in parallel.
+`term_open` creates a sandbox tmux session and returns an `id`. Pass that `id` to subsequent calls. `term_run` defaults to waiting for completion; `wait=false` returns after starting a listener or other long-running command. `term_read` reads screen/scrollback; `term_wait` waits for a pattern or idle interval; `term_keys` sends text/keys; `term_close` kills the selected session. Discover the exact schema and timeout bounds before automating them.
 
-### Tier 4: Persistent Terminal Sessions (tmux) <a id="tier-4"></a>
-First-class persistent terminal verbs backed by `tmux` inside the sandbox, solving the long-running command challenge (listeners, VPNs, reverse shells, interactive prompts) without stalling agent reasoning:
+Terminal-session tools share the execution approval path, but their target-free catalog entry is not a network exemption. Running `term_run` can initiate arbitrary sandbox traffic subject to gateway packet policy.
 
-1. **`term_open`**: Opens a new persistent tmux session with configurable columns/rows and returns a session ID.
-2. **`term_run`**: Types a command into a session. `wait=true` (default) blocks for exit code and output; `wait=false` fires and returns immediately for background processes (e.g. `nc -lvnp 4444`, `openvpn`, `python3 -m http.server`).
-3. **`term_read`**: Reads current screen contents or scrollback history of an active session.
-4. **`term_wait`**: Blocks until output matches a pattern (e.g., `"password:"`, `"Connection received"`) or an idle timeout expires.
-5. **`term_keys`**: Sends raw keystrokes or tmux keys (`C-c`, `Enter`, navigation) to answer interactive prompts or interrupt processes.
-6. **`term_list`**: Lists all active persistent terminal sessions with labels and dimensions.
-7. **`term_close`**: Terminates and kills a session cleanly.
+## Argument and output boundaries <a id="argv-safety"></a>
 
-### Tier 5: Full-Capability Browser Automation <a id="tier-5"></a>
-Detailed in [Browser Automation](browser-automation.md). 9 dedicated tools driving headful X11 Chromium with anti-bot stealth, compact `@eN` accessibility snapshots, and in-sandbox connection proxying:
-1. **`browser_open`**: Navigate to URL with Gateway scope check and return initial snapshot.
-2. **`browser_snapshot`**: Generate compact accessibility element tree (`@eN` refs including semantic content elements `li`, `td`, `th`, `blockquote`, `code`).
-3. **`browser_interact`**: Click, fill, type, select, upload, scroll, press keys via refs.
-4. **`browser_eval`**: Execute JavaScript in page context for DOM XSS and client-side audits.
-5. **`browser_screenshot`**: Full-page or viewport capture with optional Set-of-Marks labels.
-6. **`browser_storage`**: Inspect/save/load cookies and localStorage for CLI tool chaining.
-7. **`browser_tabs`**: Multi-tab management for SSO/OAuth testing and popup workflows.
-8. **`browser_logs`**: Capture console and network errors, auto-dismissing JS dialogs.
-9. **`browser_session`**: Isolated session profiles, security roles (`admin` vs `victim`), and context resets.
+Typed pentest wrappers build direct argv slices, avoiding shell interpretation of argument metacharacters. The generic shell bridge and terminal command tools intentionally interpret shell commands; tool-specific languages and flags still have their own semantics. A display command is an audit label, not a safe substitute for the actual structured arguments.
 
-### Tier 6: Sandboxed Web Research & Intelligence Tools <a id="tier-6"></a>
-Detailed in [Web Research](web-research.md). 2 dedicated tools executing purely within the sandbox, backed by OpenRouter/Exa and direct HTTPS plaintext extraction:
-1. **`web_search`**: Privacy-first search with cited sources via OpenRouter/Exa entirely inside the sandbox. Supports domain inclusions/exclusions and standard/deep modes.
-2. **`web_fetch`**: Read, find, and paginate original public HTTPS sources into cited plain text. Operates strictly on port 443, enforces body and redirect bounds, and tags all outputs with `UNTRUSTED_WEB_CONTENT` to prevent prompt injection.
+Shell execution defaults to a ten-minute bridge timeout (`YUMMI_SANDBOX_EXEC_TIMEOUT`) and caps captured stdout/stderr at 1 MiB per stream. Typed MCP tools have their own command/time limits; persistent sessions have separate lifecycles. Shell execution can publish incremental `execution.output` chunks plus elapsed-time heartbeats. Completed bounded output remains in the execution record; chunks are live-only and are not replayed on reconnect.
 
-### Fallback: Free-Text Command Execution <a id="fallback"></a>
-- **`run_command`**: Free-text shell execution for utilities (`git`, `find`, `awk`, `sed`) that do not wrap a specialized pentest tool.
+## Runtime and workbench <a id="container-constraints"></a>
 
----
+Sandbox-MCP requires Linux Docker, UID 1000, the Docker marker and the installed sandbox binary before startup, process capture, tmux or browser launch. Chromium discovery is restricted to `/usr/bin/chromium`; no developer browser fallback is permitted. Run tests/builds using [Docker confinement](sandbox-confinement.md), including `make _test-sandbox-mcp`; never run its Go tests on the host.
 
-## Target Scope Resolution & Local Tool Exemption <a id="scope-resolution"></a>
+The unified sandbox provides XFCE/noVNC, tmux, installed engagement tools, a writable workbench and `/workspace` mounts. `/etc/yummi/pwnbox.md` is the on-box inventory and usage reference; source is `sandbox/pwnbox.md`. Wordlist environment variables come from `/etc/profile.d/yummi-pwnbox.sh` for login shells. Exact tools and mounted assets depend on the built image and Compose configuration.
 
-```text
-MCP Tool Call Received
-          |
-          v
-   NeedsTarget(tool)?
-     |-- NO  (e.g., checksec_audit, radare2_disasm, gitleaks_scan, jwt_tool_inspect,
-     |             consolidate_hosts, term_open, term_run, term_read,
-     |             term_wait, term_keys, term_list, term_close)
-     |     \-- Executes immediately (No external network scope required, purely local)
-     |
-     \-- YES (e.g., nmap_scan, httpx_probe, nuclei_scan, arjun_scan, feroxbuster_scan)
-           \-- Extracts target argument -> gateway.CheckHostname & CheckEgress -> Opens nftables rule
-```
-
----
-
-## Argv Execution Safety vs Shell Execution <a id="argv-safety"></a>
-
-Inside `sandbox-mcp`, tool handlers execute binaries directly using parameter argv slices:
-```go
-exec.Command("nmap", "-sV", target) // Direct kernel execve, zero shell metacharacter injection
-```
-
-Unlike shell execution (`/bin/bash -lc "..."`), direct argv invocation guarantees that argument strings cannot break out of command boundaries via semicolons, pipes, or command substitution operators (`&&`, `||`, `;`, `$()`).
-
----
-
-## Container Execution Constraints & Workbench Assets <a id="container-constraints"></a>
-
-- **Non-Root Execution**: Runs strictly as UID 1000 (`pentester`). Capabilities (`NET_RAW`, `NET_ADMIN`) are granted selectively via `setcap` on specific binaries (`nmap`, `masscan`, `ping`, `hping3`, `fping`, `dumpcap`).
-- **Execution Timeout**: Hard default ceiling of 10 minutes (`YUMMI_SANDBOX_EXEC_TIMEOUT`).
-- **Output Buffering**: Stdout and Stderr are capped at 1 MiB per stream to prevent memory exhaustion.
-- **Fail-Closed Default Route**: Sandbox container network routing directs all egress through the gateway daemon (`172.20.0.2`).
-- **Pre-Baked Arsenal \& Wordlists**:
-  - **Environment Identity (Yummi Pwnbox)**: Hostname `yummi-pwnbox`, customized dark tactical shell theme, interactive greeting banner, and custom desktop wallpaper branding (`YUMMI PWNBOX: Autonomous AI Offensive Operations & Tactical Range`).
-  - **Exploitation \& Frameworks**: Full `metasploit-framework` (`msfconsole`, `msfvenom`, meterpreter multi-handlers, auxiliary scanners) with XFCE desktop launcher and `/usr/share/metasploit-framework` symlinks.
-  - **Network \& Diagnostics**: `iputils-ping` (`ping`), `hping3`, `fping`, `telnet`, `tshark`, `tcpdump`, `procps` (`ps`, `top`), `ipcalc`, `sshpass`.
-  - **Active Directory \& Lateral Movement**: `impacket-scripts` (secretsdump, psexec, wmiexec, etc.), `smbmap`, `smbclient`, `responder`, `netexec` (`nxc`), `kerbrute` (rapid Kerberos user enumeration & spraying).
-  - **Windows Post-Exploitation**: `nishang` (PowerShell offensive framework symlinked into `/home/pentester/nishang` and Desktop), `powersploit`, `mimikatz`.
-  - **Kerberos Ticket Management** (`krb5-user`): `kinit`, `klist`, `kdestroy` for native TGT acquisition, Pass-the-Ticket, PKINIT, and Kerberoasting/AS-REP Roasting workflows alongside `certipy`, `impacket`, and `netexec`.
-  - **Lab VPN Connectivity** (`openvpn`): Connect to HackTheBox, TryHackMe, Proving Grounds, or client lab networks via a `.ovpn` file. `entrypoint.sh` creates `/dev/net/tun` at startup (requires `NET_ADMIN`). Agent usage: `term_run(session, "openvpn --config /workspace/lab.ovpn", wait=false)` → `term_wait(session, "Initialization Sequence Completed")` → `tun0` is then available as the reachable VPN interface.
-  - **Reverse Shell Generator** (`revshell`): `/usr/local/bin/revshell [PORT]` — auto-detects LHOST from `tun0` (VPN) or `eth0`, outputs copy-paste payloads for Bash, Python3, Netcat (both flavors), Socat (plain + TTY-upgrade), PHP, Perl, Ruby, and PowerShell, plus ready listener one-liners (`rlnc`, `penelope`). Eliminates mid-engagement web lookups to revshells.com.
-  - **Wordlist Shortcut Variables**: Exported in `.bashrc` for both operator terminal and agent shell — short tokens, zero path typos:
-    - `$ROCKYOU` → `/usr/share/wordlists/rockyou.txt`
-    - `$COMMON_TXT` → `/usr/share/seclists/Discovery/Web-Content/common.txt`
-    - `$BIG_TXT` → `/usr/share/seclists/Discovery/Web-Content/big.txt`
-    - `$MEDIUM_TXT` → `/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt`
-    - `$USERNAMES` → `/usr/share/seclists/Usernames/top-usernames-shortlist.txt`
-    - `$PASSWORDS_TOP` → `/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt`
-  - **Pivoting \& Tunnels**: `chisel`, `socat`, `proxychains4`, `ligolo-ng`.
-  - **Password \& Hash Cracking**: `john` (John the Ripper), `hashcat`, `crunch`.
-  - **Exploits \& Webshells**: Full `exploitdb` archive with `searchsploit`, plus standard webshells (`/usr/share/webshells`).
-  - **Wordlists**: Full SecLists (`/usr/share/seclists`), system wordlists with uncompressed `rockyou.txt` (`/usr/share/wordlists/rockyou.txt`), and host-mounted wordlists/payloads symlinked directly into `/home/pentester/`.
-
+Source: `orchestrator/internal/executor/executor.go`, `internal/sandbox/bridge.go`, `internal/sandboxmcp/client.go`, `catalog.go`, `sandbox-mcp/tools.go`, `capture.go`, `terminal.go` and `confinement.go`.

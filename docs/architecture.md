@@ -2,7 +2,7 @@
 
 # System Architecture
 
-Yummi operates across **five runtime components** organized within **three build ecosystems** (Go, Rust, and Node/React), with an optional Python LangGraph multi-agent runtime. This document details component responsibilities, process isolation, network boundaries, execution pipelines, and data flows.
+Yummi operates across **five runtime components** organized within **Go, Rust, and Node/React build ecosystems**, with an optional Python LangGraph runtime. This document details component responsibilities, process isolation, network boundaries, execution pipelines, and data flows.
 
 Core Invariant: **The LLM proposes actions; deterministic software controls approval, target validation, command execution, and network policy.**
 
@@ -67,7 +67,7 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 |   | yummi-gateway (Rust)          |   |  |   | sandbox (Hardened Kali Linux)  |   |
 |   |                               |   |  |   | UID 1000 (pentester user)      |   |
 |   | - nftables FORWARD Rules      |   |  |   |                                |   |
-|   | - Fail-Closed DROP Policy     |   |  |   | - 58 Native MCP & Pentest Tools|   |
+|   | - Fail-Closed DROP Policy     |   |  |   | - Sandbox MCP & Pentest Tools |   |
 |   | - Hostname / IP Scope Engine  |   |  |   | - tmux Terminal Sessions       |   |
 |   | - SHA-256 Audit Hash Chain    |   |  |   | - Browser & Desktop (noVNC)    |   |
 |   +---------------+---------------+   |  |   +----------------+---------------+   |
@@ -84,23 +84,23 @@ Core Invariant: **The LLM proposes actions; deterministic software controls appr
 
 ## Control Plane & Execution Channels <a id="control-channels"></a>
 
-Two strictly segregated control channels reach the Kali sandbox:
+Two separate channels control execution and routed traffic:
 
 1. **Execution Channel (Control Plane)**:
    - The Go `orchestrator` issues command executions via the constrained `docker-proxy` broker on internal control `172.21.0.0/24`. The broker accepts the exact orchestrator peer, the configured sandbox container and UID/GID `1000:1000`; it tracks issued exec IDs and rejects lifecycle/other-container operations. Sandbox and gateway do not join this network.
-   - Every command executes as an unprivileged user (`UID 1000:1000`), with an isolated subshell environment (`/bin/bash -lc`), a 10-minute timeout ceiling, and a 1 MiB output buffer limit.
+   - One-shot shell commands execute as user (`UID 1000:1000`), in a fresh shell sharing the container filesystem and process namespace (`/bin/bash -lc`), a configurable timeout (10 minutes by default), and separate 1 MiB stdout/stderr capture limits. Persistent MCP terminal sessions have their own lifecycle and are not limited to that one-shot shell timeout.
 2. **Network Channel (Data Plane)**:
    - The Rust `gateway` manages Linux kernel `FORWARD` rules in the `nftables` subsystem.
    - The sandbox has zero direct external interfaces; its default gateway routes strictly through the gateway daemon (`172.20.0.2`).
-   - If the gateway daemon crashes or shuts down, the kernel `DROP` rules persist, guaranteeing a fail-closed boundary.
+   - If the gateway daemon crashes or shuts down, the last committed kernel rules persist while its network namespace survives. Existing permissions, including `allow_all`, can therefore remain; a restart installs `block_all` before reopening IPC.
 
 | Component | Language / Runtime | Primary Responsibility | Isolation & Enforcement Boundary |
 |---|---|---|---|
-| **orchestrator** | Go (`CGO_ENABLED=1`) | AI Conductor, Graph / Eino state machine, REST/WebSocket API, execution pipeline, ASM, and reporting engine. | Cannot open raw network sockets to target networks or modify firewall rules. |
+| **orchestrator** | Go (`CGO_ENABLED=1`) | AI Conductor, Graph state machine / Eino ReAct loop, REST/WebSocket API, execution pipeline, ASM, and reporting engine. | Drops all container capabilities and cannot modify gateway firewall rules directly. It joins the external bridge for model connectivity; the sandbox firewall does not constrain orchestrator-originated traffic. |
 | **gateway** | Rust binary (`yummi-gateway`) | Installs fail-closed `nftables` FORWARD rules, evaluates egress scope, logs tamper-evident audit trail. | Isolated from LLM logic and direct command execution; manages network filter only. |
-| **sandbox** | Kali Linux container (`yummi-pwnbox`) | Unified offensive operations workbench (58 MCP, browser, and terminal tools, Metasploit, Nishang, Kerbrute, OpenVPN), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | No default internet route; egress is restricted to the gateway proxy container. |
-| **docker-proxy** | `tecnativa/docker-socket-proxy` | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; container lifecycle mutations are blocked. |
-| **ui** | React 18 + TypeScript (nginx) | Web operator interface; proxies `/api` and `/ws` to orchestrator. | Connects strictly to orchestrator; no direct access to gateway or sandbox. |
+| **sandbox** | Kali Linux container (`yummi-pwnbox`) | Unified offensive operations workbench (MCP, browser, and terminal tools, Metasploit, Nishang, Kerbrute, OpenVPN), operator Bash (`tmux`), and graphical Desktop (`noVNC`/XFCE). | Default route points to gateway; off-subnet traffic crosses its FORWARD policy. Local/same-subnet traffic does not. |
+| **docker-proxy** | Go broker (`orchestrator/cmd/docker-proxy`) | Filters Docker API requests from orchestrator to host daemon. | Restricts API access to container exec and inspect; container lifecycle mutations are blocked. |
+| **ui** | React 18 + TypeScript (nginx) | Web operator interface; proxies `/api` and `/ws` to orchestrator. | Joins control and UI-only ingress bridges; proxies operator requests to orchestrator. It does not join the sandbox network. |
 
 ---
 
@@ -126,42 +126,26 @@ Yummi includes a dedicated offensive security and bug bounty substrate:
 +-----------------------------------------------------------------------------------+
 ```
 
-### Key Subsystems:
-- **58 Sandbox-Resident MCP Tools (`sandbox-mcp`) across 6 Tiers**:
-  - **Tier 1 (6 Typed Tools)**: `nmap_scan`, `whatweb_scan`, `curl_probe`, `gobuster_dir`, `ffuf_fuzz`, `nikto_scan`.
-  - **Tier 2 (32 Cataloged Pentest Tools)**: `httpx_probe`, `dnsx_resolve`, `alterx_mutate`, `gau_fetch`, `katana_crawl`, `dalfox_scan`, `nuclei_scan`, `wpscan_scan`, `wafw00f_scan`, `sqlmap_scan`, `amass_enum`, `subfinder_enum`, `theharvester_scan`, `dnsenum_scan`, `dnsrecon_scan`, `enum4linux_scan`, `onesixtyone_scan`, `snmpwalk_enum`, `dirb_scan`, `hydra_bruteforce`, `medusa_bruteforce`, `checksec_audit`, `radare2_disasm`, `gitleaks_scan`, `masscan_scan`, `sslscan_probe`, `arjun_scan`, `naabu_scan`, `tlsx_scan`, `cloud_enum_scan`, `jwt_tool_inspect`, `subzy_scan`, `jsluice_scan`, `graphql_cop_scan`, `corsy_scan`, `screenshot_triage`, `feroxbuster_scan`, `commix_scan`, `whois_query`.
-  - **Tier 3 (2 Concurrency Utilities)**: `consolidate_hosts`, `passive_recon_batch`.
-  - **Tier 4 (7 Persistent Terminal Tools)**: `term_open`, `term_run`, `term_read`, `term_wait`, `term_keys`, `term_list`, `term_close` (persistent tmux sessions for background listeners, VPNs, and interactive CLI programs).
-  - **Tier 5 (9 Browser Automation Tools)**: `browser_open`, `browser_snapshot`, `browser_interact`, `browser_eval`, `browser_screenshot`, `browser_storage`, `browser_tabs`, `browser_logs`, `browser_session` (headless and headful X11 Chromium automation with token-efficient accessibility trees).
-  - **Tier 6 (2 Sandboxed Web Research Tools)**: `web_search`, `web_fetch` (privacy-first cited research via OpenRouter/Exa and direct HTTPS plaintext extraction with prompt-injection defense).
-- **In-Sandbox Hostname Connection Proxy (`browser_proxy.go`)**:
-  - Transparently intercepts all browser HTTP/S and WS/WSS connections inside the sandbox, verifying destination hosts against the gateway hostname policy (`check_hostname`) before opening sockets.
-- **Active Verification Exploit Oracles**:
-  - `OracleActivePoC`: Confirms SQL injection errors, command execution, SSRF metadata responses.
-  - `OracleDOMExecution`: Validates XSS and DOM sink execution.
-  - `OracleOOBInteraction`: Confirms out-of-band DNS/HTTP callback markers.
-  - `OracleDifferential`: Evaluates status code, timing, and response body divergence.
+### Key Subsystems
+
+- **Sandbox-resident MCP tools (`sandbox-mcp`)**: typed pentest wrappers, cataloged tools, recon utilities, persistent tmux terminals, Chromium automation, and sandbox-only `web_search` / `web_fetch`. Discover actual schemas through MCP `tools/list`; see [the tool reference](agent/sandbox-execution.md).
+- **In-sandbox browser connection proxy (`sandbox-mcp/browser_proxy.go`)**: Chromium uses an ephemeral loopback HTTP proxy. It checks non-loopback destination hostname policy before DNS/dial, supports CONNECT and WebSocket upgrades, and leaves IP packet enforcement to gateway. This guard applies to managed Chromium, not every arbitrary shell tool.
+- **Verification helpers (`orchestrator/internal/agent/oracle.go`)**: classify supplied output/evidence using response patterns, canary-token matches, HTTP status transitions, and relative response-length differences. The `OracleDOMExecution` label does not itself prove JavaScript ran in a browser, and `OracleOOBInteraction` does not run an independent callback collector. Treat these as evidence heuristics that need review, rather than conclusive exploit verification.
 - **Hierarchical Asset Tree Store**: SQLite-persisted graph indexing domains, subdomains, IPs, ports, endpoints, parameters, and metadata.
-- **Program Scope Rules & Report Gate**: Session-level scope definitions (`program_scope_rules`) with wildcard matching, real-time hostname classification, and automatic filtering of out-of-scope assets from final reports.
+- **Program Scope Rules & Report Gate**: Session-level scope definitions (`program_scope_rules`) classify assets for reporting. They are distinct from gateway packet scope and do not themselves grant or revoke network access.
 - **Multi-Format Report Generator**: Produces HackerOne Markdown, Bugcrowd VRT, Executive Management summaries, and JSON.
 - **Two-Stage Exploitation Lab**: Built-in testbed container (`lab-target`, `198.51.100.10`) with Apache path-traversal RCE (CVE-2021-41773) and local SUID python privesc.
-- **Proxy & Traffic Ingestion Bridge**: Ingests HTTP flows from Burp Suite, Caido, and Mitmproxy into the Knowledge Graph.
+- **Proxy & Traffic Ingestion Bridge**: Accepts normalized flow JSON to create knowledge assets; integrations must supply that JSON explicitly.
 
 ---
 
 ## Process Isolation & Security Boundaries <a id="why-separate-processes"></a>
 
-```text
-+-----------------------------------------------------------------------------------+
-|                               ISOLATION GUARANTEES                                |
-|                                                                                   |
-|   1. LLM Context Compromise -> Isolated in Orchestrator RAM (Cannot change rules) |
-|   2. Sandbox Escape / Tool Exploit -> Contained in Container (Non-root UID 1000)  |
-|   3. Network Scope Enforcement -> Kernel-Level nftables (Rust Gateway)            |
-|   4. Gateway Daemon Termination -> Kernel DROP-All Rules Persist (Fail-Closed)   |
-|   5. Audit Integrity -> SHA-256 Hash Chain per Decision (Tamper-Evident)          |
-+-----------------------------------------------------------------------------------+
-```
+- Model actions pass through the execution store, approval controls, and gateway checks.
+- Tool commands run as UID 1000 in the shared Kali container; file capabilities, root compromise, and escape remain relevant limits.
+- Gateway enforces source-IP-based packet policy on forwarded traffic; it cannot filter same-subnet traffic it never sees.
+- Gateway termination retains the last committed kernel rules while its namespace survives.
+- Audit hashes provide tamper evidence for recorded fields/events, not a complete packet log or an authenticated external ledger.
 
 ---
 
@@ -206,9 +190,8 @@ depended on that approval and have no other matching allow. `allow_all` does not
 require temporary approvals. Local and same-subnet traffic, including read-only
 policy requests, does not traverse the gateway FORWARD chain.
 
-These are source topology and isolated-test results. The original live stack
-was not rebuilt/recreated during the 15–16 October remediation; its running
-network membership and mode do not establish deployment of these changes.
+This describes the checked-in Compose configuration. Source inspection does not
+establish the network membership, image version, or egress mode of a running deployment.
 
 ---
 
@@ -220,13 +203,13 @@ network membership and mode do not establish deployment of these changes.
 Operator / UI                Orchestrator                    Gateway Daemon             Sandbox Container
       |                            |                               |                            |
       |-- 1. POST /chat ---------->|                               |                            |
-      |   "scan 10.0.0.5"          |-- 2. Conductor Proposes Cmd ->|                            |
+      |   "scan 10.0.0.5"          |   2. Conductor proposes locally |                            |
       |<-- 3. Proposal Prompt -----|                               |                            |
       |                            |                               |                            |
       |-- 4. POST /chat/approve -->|                               |                            |
       |                            |-- 5. CheckHostname / Scope -->|                            |
       |                            |<-- 6. Verdict: "allow" -------|                            |
-      |                            |-- 7. AddTemporaryRule ------->| (Opens nftables rule)      |
+      |                            |-- 7. AddTemporaryRule* ------->| (Opens nftables rule)      |
       |                            |                               |                            |
       |                            |-- 8. docker exec (proxied) ------------------------------->|
       |                            |      "nmap -sV 10.0.0.5"      |                            | (Executes command)
@@ -234,17 +217,40 @@ Operator / UI                Orchestrator                    Gateway Daemon     
       |<-- 10. WS /ws/events ------|                               |                            |
 ```
 
+*Temporary rules are opened as needed by the executor; `allow_all` needs no temporary authorization. A blocked verdict fails execution; `needs_approval` holds the record for operator egress approval, then requeues it after authorization.
+
 ### Autonomous Agent Task Execution <a id="flow-agentic-task"></a>
 
 ```text
-State: [step] ---> [tool] ---> [approval] (if risk >= medium) ---> [verify] ---> [step]
-          |           |                                               |
-          |           +-----> [handoff] (concurrent sub-agents)       |
-          |           |                                               v
-          |           +-----> [threat_hold] (if output flagged)    [finish]
-          v
-       [ask] (solicits operator input)
+step -> tool -> approval (when required) -> execute/verify -> step
+  |       |                 |
+  |       +-> consult       +-> threat_hold (flagged output)
+  +-> handoff / remember / skill_view / summarize / retry
+  +-> finish / ask (terminal nodes)
 ```
+
+`verify` is processing performed during tool/result handling, not a graph node.
+In `ask_permission` mode every command gates unless the per-task
+`auto_approve_non_critical` override permits a low/medium-risk command. `auto`
+skips normal command gates; destructive-command floors still require approval.
+Gateway egress approvals are independent. Graph MCP arguments are frozen before
+approval; callers must approve the exact proposal and structured arguments.
+
+### Verification Oracle Pipeline <a id="flow-oracle"></a>
+
+Captured output and model-supplied finding metadata feed the verification helpers.
+The helpers match evidence against output and classify the proof kind; see the
+limitations above and [verification](agent/execution-provenance.md). An evidence label or
+confidence score is not a substitute for reproducing the finding.
+
+### Proxy & Traffic Ingestion Bridge <a id="flow-proxy"></a>
+
+The operator may submit normalized flow JSON through `POST /api/v1/proxy/inject`
+or the TRACE UI. The bridge creates host/endpoint/query-parameter assets from
+the supplied URL/method/status; request and response bodies are not persisted
+by this handler. Status fields such as `ca_installed` are static metadata, not
+a live certificate installation check; the bridge does not automatically attach to a running Burp/Caido instance.
+See [proxy bridge](api-reference.md).
 
 ### Sub-Agent Delegation Fan-Out <a id="flow-delegation"></a>
 
@@ -273,7 +279,7 @@ Parent Agent Task (Top-Level)
 | **Go Module (Sandbox MCP)** | `yummi-sandbox-mcp` | `sandbox-mcp/` | `main.go` |
 | **Rust Crate** | `yummi-gateway` | `gateway/` | `src/main.rs` |
 | **Node / React** | `ui` | `ui/` | `src/main.tsx` |
-| **Python Package** | `yummi-brain` | `brain/` | `src/yummi_brain/cli.py` |
+| **Python Package** | `yummi-brain` | `brain/` | `src/yummi_brain/main.py` |
 
 ---
 

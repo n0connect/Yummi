@@ -32,11 +32,11 @@ Tiers are selected via `YUMMI_OLLAMA_TIER`. The actual model/context/thinking-mo
 
 Only two tiers exist because gpt-oss only ships in two real sizes on Ollama — a third or fourth name would just alias one of these two models under a different label.
 
-**`standard`/20B is a floor for autonomous work, not a recommendation** — live-tested (2026-10-07) against a real CVE lab, it did not reliably track the target or use the agent's tool-calling protocol across a multi-step task, and a separate 20B-class run fabricated an entire fake exploit chain with zero real tool calls. `expert`, an equivalently large local model (120B+), or an OpenRouter override is the realistic floor for sustained autonomy — not a 70B-class or smaller tag; see `tier.go`'s `DefaultTierRegistry` doc comment for the full writeup.
+`standard` is the lightweight configuration default. The source registry documents failed historical autonomous runs with 20B-class models and recommends `expert` for local autonomous use. Those dated lab observations are not a universal parameter-count threshold or a guarantee for any larger/cloud model. Use execution evidence and scenario-specific quality gates to assess the configured model.
 
 Setting `YUMMI_OLLAMA_MODEL` overrides the tier model. Without an explicit model, `YUMMI_OLLAMA_TIER` selects the matching preset.
 
-**`tier_capabilities/*.yaml` is currently reference documentation only** — each file describes that tier's intended strengths/limitations for a human reader, but no Go code reads this directory (verified: `grep -rn tier_capabilities orchestrator --include='*.go'` returns nothing). If you change a tier's actual behavior, edit `tier.go`'s `DefaultTierRegistry()` map directly; update the matching `tier_capabilities/<name>.yaml` afterward to keep the description honest, but know that editing the YAML alone changes nothing at runtime.
+**`tier_capabilities/*.yaml` is currently reference documentation only** — each file describes that tier's intended strengths/limitations for a human reader, but no Go code reads this directory (verify references with `rg tier_capabilities orchestrator -g '*.go'`). If you change a tier's actual behavior, edit `tier.go`'s `DefaultTierRegistry()` map directly; update the matching `tier_capabilities/<name>.yaml` afterward to keep the description honest, but know that editing the YAML alone changes nothing at runtime.
 
 ## Adding a new tier
 
@@ -59,12 +59,12 @@ There is no executable allowlist — the validator gates on risk, not tool ident
 
 These fixtures are load-bearing regression tests. `internal/conductor.TestPersonaGoldenFixtures` reads every YAML file through `EvaluateGoldenFixtures`; the normal orchestrator `go test ./...` job therefore fails when deterministic boundary policy no longer produces the expected intent. Add a fixture whenever a high-confidence safety or missing-target failure is observed.
 
-For example, a fixture-shaped intended behavior looks like:
+For example, an execution request without an explicit target should clarify:
 
 ```yaml
-- input: "scan the target for open ports"
-  expected_intent: "suggest_command"
-  expected_tool: "nmap"
+name: missing_target
+input: "scan the target for open ports"
+expected_intent: "ask_clarification"
 ```
 
 Run them directly with `cd orchestrator && go test ./internal/conductor -run TestPersonaGoldenFixtures`.

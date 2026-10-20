@@ -36,32 +36,22 @@ type Config struct {
 	DockerSocket       string
 	OllamaURL          string
 	OllamaModel        string
-	OllamaTier         string // "lite" | "standard" | "pro" | "expert"; used when no explicit model is set
-	// OllamaNumCtx overrides the context window a custom OllamaModel would
-	// otherwise be silently capped at (Pro tier's fixed 16384) — see
-	// conductor.TierOverrides. 0 = no override, use the resolved tier's own
-	// value. Irrelevant to a named tier (lite/standard/pro/expert), which
-	// already picks a context window on purpose.
+	OllamaTier         string // "standard" | "expert"; selects a model only when no explicit model is set
+	// OllamaNumCtx overrides the resolved profile's context window when positive.
+	// Zero keeps the profile default (currently 32768 for both named tiers).
 	OllamaNumCtx int
-	// OllamaThinking overrides a custom OllamaModel's thinking-mode default
-	// (Pro tier's "false"). nil = no override.
+	// OllamaThinking overrides the resolved profile's thinking setting;
+	// nil keeps the profile default (currently false).
 	OllamaThinking      *bool
 	OllamaFallbackModel string // optional lighter LOCAL model the agent loop degrades to when the primary repeatedly fails (empty = no downgrade, breaker still trips)
 	OllamaEmbedModel    string // local Ollama embedding model for semantic retrieval (separate pull from OllamaModel); SemanticRetrieval degrades to StructuredRetrieval if this model isn't actually pulled
-	// EinoModelBaseURL/EinoModelName/EinoModelNumCtx let the Eino backend's
-	// own ReAct loop run against a DIFFERENT OpenAI-compatible server/model
-	// than the one Ollama/OllamaModel drives — e.g. a local LM Studio, vLLM,
-	// or llama.cpp server instead of Ollama, for a larger/more capable
-	// tool-calling model. The conductor (chat/intent classification) and
-	// this override are independent: conductor always needs a working
-	// Ollama-native client regardless of this setting, since chat/intent
-	// handling never goes through the agent backend. All three are blank/0
-	// by default, in which case cmd/orchestrator/main.go derives the exact
-	// same values it always has (Ollama's own OpenAI-compat endpoint) — this
-	// is purely additive, zero behavior change until an operator sets it.
-	// EinoModelBaseURL must include any path prefix the target server needs
-	// (e.g. "http://localhost:1234/v1") — unlike the Ollama derivation, this
-	// is not assumed to be Ollama, so no "/v1" is auto-appended.
+	// EinoModelBaseURL selects an explicit OpenAI-compatible endpoint for
+	// the conductor/graph chat client as well as Eino's ReAct loop in main.go.
+	// With no override, Eino derives OllamaURL + "/v1" and inherits the
+	// configured model/profile. Hosted endpoints receive model context.
+	// Explicit URLs must contain the server's path prefix; no "/v1" is
+	// automatically appended to an override. Name/key/context configure Eino;
+	// see main.go for the values shared with the conductor and planner.
 	EinoModelBaseURL string
 	EinoModelName    string
 	EinoModelAPIKey  string

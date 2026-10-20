@@ -2,501 +2,200 @@
 
 # Installation & Platform Setup
 
-This guide covers environment prerequisites, container engine compatibility, model tier configuration, and native compilation steps.
+Yummi runs its operator UI, orchestrator, gateway, sandbox, and Docker exec broker as five Compose services. The web UI is the operator surface; the optional CLI opens that UI and provides lifecycle and diagnostic helpers.
 
-## Table of Contents
+## Execution modes <a id="two-ways"></a>
 
-- [Execution Modes](#two-ways)
-- [System Requirements](#requirements)
-  - [The Cgo Requirement](#cgo-requirement)
-  - [Minimum Go Version](#go-version-skew)
-  - [Node.js Runtime Compatibility](#node-version)
-- [Platform Support Matrix](#platform-support)
-  - [Docker Desktop VM Networking Limitation](#docker-desktop-internal-network-bug)
-  - [Podman Compatibility Status](#podman-macos-gaps)
-  - [Engine Selection and Insecure Bridge Workaround](#engine-and-network-mode)
-- [Linux Setup](#linux)
-- [macOS Setup](#macos)
-- [Windows (WSL2) Setup](#windows)
-- [Ollama Configuration and Model Tiers](#ollama-setup)
-  - [Custom Models and Cloud Endpoints](#custom-model)
-- [Pre-Build Configuration Wizard (make conf)](#make-conf)
-- [Running the Full Stack (Docker Compose)](#full-stack)
-- [Building Native Binaries](#native-binaries)
-- [Post-Install Verification](#verifying)
-- [Troubleshooting Reference](#troubleshooting)
-
----
-
-## Execution Modes <a id="two-ways"></a>
-
-Yummi provides two execution modes:
-
-| Mode | Command | Running Components | Capabilities |
-|---|---|---|---|
-| **Full Stack (Production)** | `make start` | All 5 containers: gateway, sandbox, orchestrator, docker-proxy, ui | Full offensive security tools, real `nftables` fail-closed network enforcement, graphical desktop and terminal. |
-| **Local Orchestrator (Development)** | `make dev-orchestrator` | Host Go process only (`:9080`) | Rapid iteration on REST/WS APIs and prompt assembly (no tool execution without container stack). |
-
-For standard operations, proceed directly to [System Requirements](#requirements) and [Running the Full Stack](#full-stack).
-
----
-
-## System Requirements <a id="requirements"></a>
-
-| Tool | Purpose | Minimum Version |
+| Mode | Command | Purpose |
 |---|---|---|
-| **Docker** | Orchestrates the 5-container architecture | Compose v2 (`docker compose`) |
-| **Go** | Builds CLI and host orchestrator | >= 1.25.0 |
-| **Rust** | Builds gateway locally (`make _build-gateway`) | Stable channel, Edition 2021 |
-| **Node.js + npm** | Builds the React SPA | Node 20 or 22 LTS |
-| **C Compiler** (`gcc`, `clang`) | Required for Go SQLite cgo bindings | Standard system C compiler |
-| **Ollama / Cloud Provider** | LLM backend (local or remote API) | Ollama >= 0.3.0 or OpenRouter API key |
-| **curl** | Health checks and installer scripts | Standard |
+| Container stack | `make start` | Runs all five services; UI at `http://localhost:3000`. |
+| Local orchestrator | `make dev-orchestrator` | Runs the Go API on the host for development; supporting containers are still required for tool execution. |
 
-### The Cgo Requirement <a id="cgo-requirement"></a>
+## Requirements <a id="requirements"></a>
 
-The Go orchestrator uses `github.com/mattn/go-sqlite3` for session persistence. Native builds (`make _build-orchestrator` or `go build` inside `orchestrator/`) require `CGO_ENABLED=1` and a functional host C compiler (`cc`/`gcc`/`clang`).
+For container startup, install Git, Make, Bash, a running Linux container engine with Compose v2, and curl. Local inference also needs Ollama and sufficient memory for the selected model. `make start` checks the selected engine and daemon; it does not require host Go, Rust, or npm. Image builds download dependencies and the sandbox toolset.
 
-> [!NOTE]
-> Containerized builds (`make start`, `make docker-build`) compile inside `golang:1.25-bookworm`, which includes the full C toolchain automatically. Host toolchains are only needed for direct host compilation.
+For native development and the broader Make targets:
 
-**Installing C Toolchains:**
-- **macOS**: `xcode-select --install`
-- **Linux (Debian/Ubuntu)**: `sudo apt-get update && sudo apt-get install -y build-essential`
-- **Linux (Fedora/RHEL)**: `sudo dnf groupinstall -y "Development Tools"`
+| Tool | Checked-in requirement or use |
+|---|---|
+| Go | All three `go.mod` files declare **1.27.2**. |
+| C compiler | Native orchestrator builds need SQLite cgo bindings. |
+| Rust/Cargo | Stable toolchain for the Edition 2021 gateway crate; the container builder uses Rust 1.86. |
+| Node.js/npm | Node 22 matches `ui/Dockerfile`; CI uses Node 20. |
+| Python 3 | Archived QC checks (`make _test-qc`). |
+| uv | Optional `brain/` installation and tests; see [brain README](../brain/README.md). |
+| golangci-lint | `make lint`. |
 
-### Minimum Go Version <a id="go-version-skew"></a>
+`make install`, `make rebase`, `make docker-build`, `make test`, and several other developer targets invoke `_check-deps`, which checks for host Go, Cargo, npm, the selected engine, Compose, and curl. This check confirms executable presence, not version compatibility.
 
-The root module (`yummi` CLI) and `orchestrator/` require **Go >= 1.25.0**. Check your installed version:
+### Cgo <a id="cgo-requirement"></a>
 
-```bash
-go version
-```
+The orchestrator uses `github.com/mattn/go-sqlite3`. Native builds require `CGO_ENABLED=1` and a working C compiler. Install Xcode Command Line Tools on macOS (`xcode-select --install`), or the distribution's C build tools on Linux (for Debian/Ubuntu, `sudo apt-get install build-essential`). Container builds supply their own compiler.
 
-### Node.js Runtime Compatibility <a id="node-version"></a>
+### Go version <a id="go-version-skew"></a>
 
-Use **Node 20 or 22 LTS** for UI builds. Certain non-LTS releases (such as Node 26) have known npm filesystem descriptor regressions.
+Check `go version` against `go.mod`, `orchestrator/go.mod`, and `sandbox-mcp/go.mod`. Go may download the required toolchain when `GOTOOLCHAIN=auto`; an older installed binary alone is no guarantee that offline builds work. The Go container builders use `golang:1.27.2-bookworm`.
 
-```bash
-# Recommended using nvm:
-nvm use 22
-```
+### Node version <a id="node-version"></a>
 
----
+Use Node 22 to match the UI container build. The UI package does not declare a separate `engines` minimum. For native UI work, run `cd ui && npm ci` before starting Vite.
 
-## Platform Support Matrix <a id="platform-support"></a>
+## Platform support <a id="platform-support"></a>
 
-| Platform | Full Stack (`make start`) | Native Binaries | Architecture Notes |
-|---|---|---|---|
-| **Linux x86_64** | Supported (Full nftables enforcement) | Supported | Reference production platform. |
-| **Linux ARM64** | Supported (Full nftables enforcement) | Supported | Multi-arch Docker manifests published for all images. |
-| **macOS (Apple Silicon)** | Supported (via OrbStack recommended) | CLI + Orchestrator | Linux VM provides kernel nftables support. See Docker Desktop note below. |
-| **macOS (Intel)** | Supported (via Linux container VM) | CLI + Orchestrator | Requires Linux VM engine for gateway packet filtering. |
-| **Windows 10/11 (WSL2)** | Supported | Partial (CLI cross-compilation) | Runs via Docker Desktop WSL2 Linux backend. |
-| **Windows (Native / non-WSL2)** | Unsupported | Partial (CLI only) | Gateway requires Linux kernel netfilter subsystems. |
-| **Direct Host Gateway (No Docker)** | Unsupported Topology | Compiles | Requires manual routing and namespace configuration. |
+The gateway enforces packets through Linux nftables and needs `NET_ADMIN`. Native Linux Docker Engine provides that kernel directly; macOS and Windows need a Linux container VM (WSL2 on Windows). Building the gateway on macOS does not establish a usable host firewall boundary. Compose builds local images; the release workflow does not currently declare multi-platform image builds, so do not assume published images cover every architecture.
 
-### Docker Desktop VM Networking Limitation <a id="docker-desktop-internal-network-bug"></a>
+### Docker Desktop internal-network limitation <a id="docker-desktop-internal-network-bug"></a>
 
-> [!WARNING]
-> On Docker Desktop for macOS (Apple Silicon), the VM networking layer (`vpnkit`) can drop forwarded traffic originating from containers attached to bridge networks configured with `internal: true`.
->
-> **Symptom**: Sandbox egress commands time out despite valid gateway allow rules.
->
-> **Remediation**:
-> 1. **Recommended**: Switch to [OrbStack](https://orbstack.dev/) on macOS (drop-in Docker engine replacement utilizing Apple Virtualization.framework).
-> 2. **Alternative**: Enable the opt-in `insecure-bridge` mode via `make conf`. Note that this removes the Docker-level `internal: true` constraint.
+Previous project checks on Apple Silicon observed sandbox forwarding failures with Docker Desktop when the source bridge had `internal: true`, despite gateway allow rules. Switching to OrbStack resolved that setup's forwarding failure. This is historical environment evidence, not a guarantee about every engine release. Diagnose the current engine and gateway policy separately; an egress timeout can also be the expected `block_all` policy.
 
-### Podman Compatibility Status <a id="podman-macos-gaps"></a>
+### Podman on macOS <a id="podman-macos-gaps"></a>
 
-On Podman 6 (macOS):
-1. **DNS Resolution**: The default `aardvark-dns` resolver suppresses upstream queries on `internal: true` networks.
-2. **Socket Proxying**: Podman socket emulation does not maintain a persistent connection to `docker-proxy`.
+Previous checks recorded two gaps: upstream DNS forwarding on internal networks, and a host socket mount that left the exec broker returning errors. Those results do not establish compatibility for the current Podman release. The Makefile can select `podman compose`, but `scripts/install.sh`, `scripts/dev.sh`, the CLI, and the doctor script still invoke Docker directly. Selecting Podman in `.yummi.conf` does not rewrite those helpers.
 
-For macOS deployments, **OrbStack** is the recommended engine for zero-configuration compatibility.
-   A workaround exists, but it trades away something else: recreating the network with DNS disabled entirely (`podman network create --disable-dns --internal ...` in place of what `podman compose up` would create on its own) makes the sandbox's own `dns:` config (from `docker-compose.yml`) take effect directly, fixing hostname resolution — confirmed working (`getent hosts scanme.nmap.org` returned a real answer). But disabling the network's DNS plugin also removes **container-name** resolution for everything else on that network, and `orchestrator`'s `DOCKER_HOST: tcp://docker-proxy:2375` depends on resolving `docker-proxy` by name — that specific env var would need to change to `docker-proxy`'s static compose IP (`tcp://172.20.0.5:2375`) to keep working. This is a real, workable fix in principle, but it requires an out-of-band `podman network create` step that plain `docker-compose.yml` has no field to express — it isn't currently a "just run `make start`" experience on Podman.
+### Engine and network mode <a id="engine-and-network-mode"></a>
 
-2. **The `docker-proxy` service's `/var/run/docker.sock` mount doesn't reach a working Docker-API-compatible socket under Podman**, independent of the DNS issue above (reproduces with default, unmodified network settings too). Symptom: `docker-proxy`'s own logs show `503` on every request (`GET /v1.24/containers/yummi-sandbox/json` included), and orchestrator's system status reports `"sandbox":"down","details":"container unreachable"` even though every container is individually healthy. `/var/run/docker.sock` on the host does resolve to Podman's own machine socket (`~/.local/share/containers/podman/machine/podman.sock`) — the symlink exists and is correct — but something in how that gets bind-mounted through Podman's virtualization layer into the `docker-proxy` container doesn't produce a live socket on the other end. **Not resolved** — this needs more investigation than this pass covered, and it means `docker exec` into sandbox (i.e. the agent actually running any command at all) does not currently work on Podman even after fixing the DNS issue above.
+`CONTAINER_ENGINE` defaults to `docker`; `YUMMI_NETWORK_MODE` defaults to `secure`. The optional `insecure-bridge` mode adds `docker-compose.override.insecure-bridge.yml`, removing `internal: true` from `yummi_internal`. This removes an independent containment layer and leaves gateway routing/firewall correctness more exposed.
 
-**Bottom line for Podman on macOS today:** the trust-boundary/network-forwarding architecture this project depends on is sound on Podman — better than on Docker Desktop, in fact, for the exact failure mode described above. But between the DNS-forwarding gap and the docker-proxy socket gap, a plain `make start`/`podman compose up` does not currently give you a fully working agent loop. **OrbStack remains the confirmed, no-workarounds-needed recommendation** for macOS; treat Podman as a promising but not-yet-there option until the docker-proxy socket issue specifically is understood. The Makefile's `insecure-bridge` mode (see [§ Engine selection and the insecure-bridge workaround](#engine-and-network-mode) below) fixes gap #1 (DNS forwarding) if you set `CONTAINER_ENGINE=podman` alongside it, but does **not** fix gap #2 (the docker-proxy socket) — sandbox exec still won't work, so it doesn't get Podman to a fully-working state on its own.
-
-### Engine selection and the insecure-bridge workaround <a id="engine-and-network-mode"></a>
-
-The `Makefile` supports both engines and an explicit, opt-in trade-off for the networking bugs described above, rather than silently picking one behavior.
-
-**Recommended: configure it once with `make conf`.** It asks which of the four setups below you're on, and writes the answer to a gitignored `.yummi.conf` in the repo root, so every later `make build`/`make start`/`make force-restart` picks it up automatically — no flags to remember or repeat:
+`make conf` detects or asks for the engine setup: OrbStack and native Linux Docker choose `secure`; Docker Desktop and Podman choose `insecure-bridge` and require the `_check-network-mode` confirmation. Subsequent startup does not repeat that confirmation. Command-line overrides bypass it; `YUMMI_NETWORK_MODE_CONFIRM=yes` only suppresses the explicit guard when it is invoked.
 
 ```bash
-make conf
-#   1) OrbStack                    recommended — no known trade-offs
-#   2) Docker Desktop
-#   3) Podman
-#   4) Linux native Docker Engine   no VM, no known bug
+make start CONTAINER_ENGINE=docker YUMMI_NETWORK_MODE=secure
 ```
-
-Choosing option 2 or 3 walks you through the same `I UNDERSTAND` trade-off confirmation described below before it writes anything — this is the only place the confirmation is ever asked; `make build`/`make start`/`make rebase`/`make force-restart` afterward just reuse the persisted, already-confirmed choice without re-prompting. Run `make conf` again anytime to change your answer (it overwrites `.yummi.conf`); a command-line flag on any individual `make` invocation (e.g. `make start CONTAINER_ENGINE=podman YUMMI_NETWORK_MODE=insecure-bridge`) still overrides whatever `.yummi.conf` has for that one run, but bypasses the interactive confirmation since it isn't going through `make conf` — use `YUMMI_NETWORK_MODE_CONFIRM=yes` for scripting/CI to make that explicit rather than accidental.
-
-Under the hood, `make conf` is just setting these two variables, which you can also pass directly (useful for CI or a one-off run without persisting anything):
-
-```bash
-make start                                            # CONTAINER_ENGINE=docker (default), YUMMI_NETWORK_MODE=secure (default)
-make start CONTAINER_ENGINE=podman                    # same compose file, run through podman compose instead
-make start YUMMI_NETWORK_MODE=insecure-bridge          # drops yummi_internal's `internal: true` — see below
-make start CONTAINER_ENGINE=podman YUMMI_NETWORK_MODE=insecure-bridge
-```
-
-`YUMMI_NETWORK_MODE=insecure-bridge` loads `docker-compose.override.insecure-bridge.yml` on top of the base compose file, which removes `internal: true` from `yummi_internal` — the flag [Architecture § Network topology](architecture.md#network-topology) describes as making sandbox's network "architecturally absent" of any route out, independent of gateway's own nftables rules. Without it, sandbox's containment depends **entirely** on gateway's nftables staying correct — one fewer of the independent fail-closed layers described in [Security Model § The core invariant](security-model.md#fail-closed), not zero security, but a real and permanent reduction for as long as this mode is used.
-
-Because that's a genuine security trade-off and not a default anyone should hit by accident, `make conf` — when you pick option 2 or 3 — runs it through a guard (`_check-network-mode`) that prints the trade-off in full and requires you to type `I UNDERSTAND` before proceeding. That confirmation fires once, at `make conf` time; `make start`/`make rebase`/`make force-restart` no longer carry `_check-network-mode` as a prerequisite, so they silently reuse whatever mode is already persisted in `.yummi.conf` instead of re-asking on every invocation. Passing `YUMMI_NETWORK_MODE=insecure-bridge` directly on a one-off `make` command line (bypassing `make conf` entirely) skips the prompt too — that's the deliberate scripting/CI path; `YUMMI_NETWORK_MODE_CONFIRM=yes` documents that intent explicitly when you do.
-
-**This exists specifically as a workaround for the engine bugs on this page, not as a supported alternative security posture.** If you're on Docker Desktop, switching to OrbStack fixes the underlying bug with zero trade-offs and is the actually-recommended path — reach for `insecure-bridge` (option 2 in `make conf`) only if you genuinely cannot change engines. If you're on Podman, remember it only closes the DNS gap, not the docker-proxy socket gap, so it isn't sufficient on its own today — `make conf`'s option 3 prints that caveat explicitly.
-
----
 
 ## Linux <a id="linux"></a>
 
-### x86_64 and ARM64
-
-The steps are identical for both architectures — Docker picks the matching image manifest automatically.
+Install a Linux Docker Engine and Compose v2, Make, Bash, curl, and Git using your distribution's supported installation process. Confirm that the daemon is running and your user can access it:
 
 ```bash
+docker info
+docker compose version
 git clone https://github.com/n0connect/yummi.git
 cd yummi
-
-# 1. System build tools (see the cgo callout above — this is required)
-sudo apt-get update && sudo apt-get install -y build-essential curl
-# Fedora/RHEL: sudo dnf groupinstall -y "Development Tools" && sudo dnf install -y curl
-
-# 2. Docker (skip if already installed) — the official convenience script:
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker "$USER"
-# Log out and back in (or `newgrp docker`) for the group change to take effect —
-# skipping this step is the #1 reason `docker compose` fails with a permissions
-# error immediately after a fresh Docker install.
-
-# 3. Go ≥ 1.25 — check your distro's package first, or use the official tarball:
-go version   # if this prints < 1.25, see https://go.dev/dl/
-
-# 4. Rust, via rustup (NOT your distro's `rustc` package — it's commonly older)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-
-# 5. Node 20/22 LTS + npm, via your distro or nvm
-node --version
-
-# 6. Bootstrap Yummi's local state + Ollama + pull the default model
-make install
-
-# 7. Bring the whole stack up
+make conf
 make start
 ```
 
-### Linux-specific networking note
+For local inference, install/start Ollama before startup; `make start` can start an installed Ollama daemon and pull the configured model. Compose reaches host Ollama at `http://host.docker.internal:11434`, with `extra_hosts: host-gateway` supplied for Linux. Ollama must listen on an address reachable from that container; a host-only loopback listener may need reconfiguration. `OLLAMA_URL` changes Make's host-side probe URL; it does not change Compose's fixed `YUMMI_OLLAMA_URL` value.
 
-`docker-compose.yml` sets `YUMMI_OLLAMA_URL: "http://host.docker.internal:11434"` for the orchestrator container, so it can reach an Ollama daemon running directly on your host (outside Docker). `host.docker.internal` is a magic hostname that **Docker Desktop provides automatically on macOS/Windows, but that native Linux Docker Engine does not resolve by default.** This repository's `docker-compose.yml` already adds the fix for you (`extra_hosts: ["host.docker.internal:host-gateway"]` on the orchestrator service, which maps that name to the host's own IP on Linux) — so as of this repository state, **you don't need to do anything extra for this.** If you ever see the orchestrator's logs complaining it cannot reach `host.docker.internal:11434` specifically on a Linux host, check that this `extra_hosts` entry hasn't been removed, and that your Docker Engine is version 20.10 or newer (the `host-gateway` special value requires it).
+For native development, install the toolchains listed above. `make install` creates local state, builds the sandbox using **docker compose**, installs npm dependencies, installs Ollama if absent, and pulls the selected chat model plus an optional embedding model. It performs that Ollama work even if a remote model endpoint is configured. It does not reliably start Ollama before pulling; start the daemon first.
 
-### SELinux Note (Fedora, RHEL, CentOS Stream)
-
-If running on a Linux distribution with SELinux in `enforcing` mode, ensure Docker daemon access to the socket is permitted. If `docker-proxy` logs permission errors mounting `/var/run/docker.sock`, ensure your user belongs to the `docker` group (`sudo usermod -aG docker $USER`) and check SELinux container socket policies.
-
----
+The install script uses `YUMMI_HOME` (default `~/.yummi`) for local files. Compose sandbox mounts instead use `YUMMI_HOST_DATA_DIR` (default `~/.yummi`): `wordlists` and `payloads` read-only, `workspace` writable. Use matching paths when customizing them.
 
 ## macOS <a id="macos"></a>
 
-### Apple Silicon (M1/M2/M3/M4, arm64) and Intel (x86_64)
+Use a Linux container VM. OrbStack is the engine that resolved the project's recorded Docker Desktop forwarding problem; see the caveats above. Start the engine yourself before `make start` and confirm `docker info` succeeds. Then use the Linux clone/config/start steps.
 
-The commands are identical for both; Docker Desktop and Homebrew both handle the architecture difference transparently.
+For native builds, install Xcode Command Line Tools, Go 1.27.2 or a compatible auto-downloading toolchain, Rust/Cargo, and Node 22. Host architecture and available upstream image layers determine whether a build runs natively or needs emulation; no cross-platform success is implied by a macOS build.
 
-```bash
-git clone https://github.com/n0connect/yummi.git
-cd yummi
+## Windows / WSL2 <a id="windows"></a>
 
-# 1. Xcode Command Line Tools (provides `clang`/`cc` — see the cgo callout above)
-xcode-select --install
+Use WSL2 with a Linux distribution and Docker Desktop's WSL integration enabled. Clone into the distribution's Linux filesystem (for example `~/yummi`) and run the Linux commands there. Native Windows is not the full-stack execution environment; the gateway and sandbox need Linux. The CLI is a web launcher/helper, not a native replacement operator client.
 
-# 2. Homebrew, if you don't already have it
-#    (see https://brew.sh for the current one-line installer — not reproduced
-#    here since piping a remote script into your shell is worth reading first)
+## Model setup <a id="ollama-setup"></a>
 
-# 3. Docker Desktop for Mac
-brew install --cask docker
-#    Open Docker.app once from Launchpad/Applications so it finishes its own
-#    first-run setup and starts the background daemon — `docker info` will
-#    hang or error until you've done this at least once.
+Without an endpoint override, the Go conductor and agent use Ollama. The tier registry in `orchestrator/internal/conductor/tier.go` defines:
 
-# 4. Go, Rust, Node
-brew install go rustup-init node@22
-rustup-init -y
-source "$HOME/.cargo/env"
+| Tier | Model | Context | Thinking default |
+|---|---|---|---|
+| `standard` | `gpt-oss:20b` | 32,768 | off |
+| `expert` | `gpt-oss:120b` | 32,768 | off |
 
-# 5. Bootstrap + start
-make install
-make start
-```
+Bare Make/Compose defaults select Standard; the current `make conf` local-model prompt instead defaults to `gpt-oss:120b`. Model availability, memory usage, and task quality depend on the model/server and hardware. The live evaluation model (`LIVE_TEST_MODEL`, default `qwen3:8b`) is independent of the application model.
 
-**Apple Silicon note:** every image this project builds from (`golang`, `rust`, `debian:bookworm-slim`, `kalilinux/kali-rolling`, `node`, `nginx`, `tecnativa/docker-socket-proxy`) publishes an `arm64` manifest, so `docker compose build` on an M-series Mac pulls native arm64 layers — you are not running anything under Rosetta/emulation for this project's own images.
-
-**The nftables question:** a macOS container engine runs gateway inside a Linux VM, so the gateway can use real `nf_tables`; the native macOS binary cannot. Kernel support alone does not prove the whole forwarding path works, which is why the engine-specific availability and socket caveats below still matter.
-
----
-
-## Windows <a id="windows"></a>
-
-**Requires WSL2.** Yummi's full stack is not supported on Windows without it, because gateway needs a genuine Linux kernel and there is no cross-platform fallback (see [Architecture § What is *not* in this repository](architecture.md#not-in-scope) — the old cross-platform network-controller abstraction was intentionally removed from the codebase).
-
-```powershell
-# 1. Enable WSL2 (PowerShell as Administrator, one-time, requires a reboot)
-wsl --install
-
-# 2. Install Docker Desktop for Windows, and in its Settings -> General,
-#    confirm "Use the WSL 2 based engine" is checked (it is the default on
-#    current Docker Desktop releases).
-#    Under Settings -> Resources -> WSL Integration, enable integration with your distro.
-
-# 3. Inside your WSL2 terminal (e.g. Ubuntu):
-#    CRITICAL: Always clone into the native Linux filesystem (~/), NOT /mnt/c/.
-cd ~
-git clone https://github.com/n0connect/yummi.git
-cd yummi
-
-# 4. Follow the Linux instructions verbatim:
-#    build tools, Go, Rust, Node, make install, make start.
-```
-
-> [!WARNING]
-> **WSL2 Filesystem Performance Pitfall**: Do **NOT** clone or run Yummi from `/mnt/c/Users/...` (the Windows host mount). The 9P translation layer severely degrades I/O performance and breaks Linux `inotify` file watchers. Always work in `~/yummi` inside the native WSL2 virtual disk.
-
-Everything after step 3 is identical to the [Linux](#linux) section — from inside a WSL2 shell, you *are* on a real Linux kernel with a real Docker daemon (shared with Docker Desktop), so the same commands apply unchanged.
-
-If you only need the `yummi` CLI (no gateway, no sandbox, no real pentest execution) on native Windows without WSL2, `go build` cross-compiles cleanly:
-```bash
-GOOS=windows GOARCH=amd64 go build -o yummi.exe ./cmd/yummi
-```
-This produces a `.exe` (already accounted for in `.gitignore`) that can open the web UI against an orchestrator running elsewhere, but it cannot run the full stack itself.
-
----
-
-## Ollama setup and choosing a model tier <a id="ollama-setup"></a>
-
-Yummi's conductor has **no rule-based fallback** — if it can't reach Ollama, every chat message gets declined with an explanation, not a degraded-but-functional mode. Getting Ollama right matters more than any other single setup step.
+Use Make command-line assignments for reliable overrides of persisted `.yummi.conf` values:
 
 ```bash
-# macOS
-brew install ollama
-# or the official installer for Linux/macOS:
-curl -fsSL https://ollama.com/install.sh | sh
-```
-`make install` (via `scripts/install.sh`) does this for you automatically if `ollama` isn't already on your `PATH`, and also pulls the default chat model plus a small embedding model used for semantic memory retrieval.
-
-### Picking a tier for your hardware
-
-`YUMMI_OLLAMA_TIER` selects a preset (model + context window + thinking mode) from `orchestrator/internal/conductor/tier.go`. These are the **only two presets that exist** — OpenAI's gpt-oss family only ships in two real sizes on Ollama, unlike the four-rung ladder a single dense model family (e.g. qwen3's 4b/8b/14b/32b) can offer. There's no config file to tune this beyond what's below. If both variables are set, the more specific `YUMMI_OLLAMA_MODEL` override wins.
-
-**`standard`/20B is a floor, not a recommendation, for autonomous work.** Live-tested (2026-10-07) against a real multi-stage CVE lab on both agent backends: a 20B-class local model reliably lost track of the actual target across turns and did not reliably use the agent's own tool-calling protocol without server-side correction. It's fine for chat-style single-command suggestions; it is genuinely not a safe default to expect full, unattended multi-step autonomy from. For that, the floor is `expert` or an equivalently large local model (120B+, not a 70B-class or smaller tag), or point `YUMMI_EINO_MODEL_*` at an OpenRouter/cloud model — a real frontier model tracked an 80+-turn task correctly through a full RCE→reverse-shell→privesc chain in a later live test.
-
-| Tier | Model | Context window | Thinking mode | Approximate download size¹ | Rough RAM/VRAM needed¹ | Good fit for |
-|---|---|---|---|---|---|---|
-| `standard` | `gpt-oss:20b` | 32,768 tokens | off | ~13 GB (MXFP4) | 16 GB+ | The install/Compose default, runs without a dedicated GPU — fine for chat suggestions; **not reliable for sustained autonomous tasks** (see above) |
-| `expert` | `gpt-oss:120b` | 32,768 tokens | off | ~65 GB (MXFP4) | 80 GB GPU, or 64 GB+ Mac with offload | **The realistic recommended tier for autonomous multi-step work if staying fully local** |
-
-¹ *Sizes and RAM figures are approximate, based on Ollama's default MXFP4 quantization for each tag at the time of writing — always let `ollama pull` and your own `ollama ps`/Activity Monitor be the source of truth for your actual hardware, not this table.*
-
-**The install and runtime defaults stay small on purpose, for a fast first run, not as a capability endorsement:** `make install`, `make start`, Compose, and `scripts/doctor.sh` all use `gpt-oss:20b` unless `YUMMI_OLLAMA_MODEL`/`OLLAMA_MODEL` overrides it. If you intend to actually run autonomous multi-step tasks rather than just try the chat flow, raise this before you start — `YUMMI_OLLAMA_TIER=expert`, a larger local model, or an OpenRouter override (see "Cloud & Frontier Models via OpenRouter or OpenAI Endpoints" below). The opt-in live agent test (`make test-agent-live`) still defaults `LIVE_TEST_MODEL` to a smaller qwen3 tag, deliberately independent of this tier registry — see that Makefile target's own comment for why.
-
-Set a tier by exporting the env var before `make start`, or editing `docker-compose.yml`'s `orchestrator.environment.YUMMI_OLLAMA_TIER` directly:
-```bash
-YUMMI_OLLAMA_TIER=expert make start
+make start YUMMI_OLLAMA_MODEL=gpt-oss:120b
+make start YUMMI_OLLAMA_TIER=expert
 ```
 
-**Keep exactly one model loaded at a time.** `scripts/doctor.sh` checks this and warns if it isn't set:
-```bash
-# macOS
-launchctl setenv OLLAMA_MAX_LOADED_MODELS 1 && killall Ollama && open -a Ollama
-# Linux (systemd)
-#   add `Environment=OLLAMA_MAX_LOADED_MODELS=1` to the ollama.service unit, then:
-sudo systemctl restart ollama
-```
-Without this, pulling/using a second model (e.g. the embedding model alongside your chat model) can load both into VRAM simultaneously and contend for the same GPU memory the chat model needs.
+A persisted explicit `YUMMI_OLLAMA_MODEL` wins over tier selection; override or remove that model when changing tiers. `OLLAMA_MODEL` is Make's explicit model override and is exported as `YUMMI_OLLAMA_MODEL`. Plain shell environment assignments can be superseded by values in the included `.yummi.conf`.
 
-### Bringing your own model <a id="custom-model"></a>
+### Custom models and endpoints <a id="custom-model"></a>
 
-The two tiers above are presets for convenience, not a whitelist — **`YUMMI_OLLAMA_MODEL` accepts any Ollama model tag you have pulled (or will pull).** If your hardware can run something bigger or different than `gpt-oss` — a large open-weight MoE model like Kimi K2 or DeepSeek-V3, a Llama 3.1 405B quant, a fine-tune, whatever `ollama pull <tag>` accepts — point Yummi at it directly:
+Any Ollama tag supported by your installed server can be selected. A custom tag receives the Standard tier profile by default. `YUMMI_OLLAMA_NUM_CTX` and `YUMMI_OLLAMA_THINKING` override that profile. Eino inherits the resolved context, with `YUMMI_EINO_MODEL_NUM_CTX` taking precedence for its own calls; supported Ollama-compatible calls receive the context option. Server capabilities still determine which options take effect.
 
 ```bash
-ollama pull <your-model-tag>       # check the exact tag at https://ollama.com/library
-YUMMI_OLLAMA_MODEL=<your-model-tag> make start
+make start YUMMI_AGENT_BACKEND=eino YUMMI_OLLAMA_MODEL=gpt-oss:120b YUMMI_OLLAMA_NUM_CTX=32768
 ```
 
-Or interactively: `make conf` -> model choice -> **Custom** -> type the exact tag. This persists to `.yummi.conf` like every other `make conf` choice, so you don't need to set the env var by hand again.
+An explicit `YUMMI_EINO_MODEL_BASE_URL` replaces Ollama for the **conductor and graph loop as well as Eino**. Set the matching model and API key, and include the endpoint's required path prefix. A local compatible server keeps model calls local; choosing a remote endpoint sends model prompts and observations to that provider. Research-provider configuration is separate and executes inside the gateway-routed sandbox; see [Web Research](agent/web-research.md).
 
-**Two things worth knowing before you do this:**
+```bash
+make start YUMMI_AGENT_BACKEND=eino \
+  YUMMI_EINO_PROVIDER=openai \
+  YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1 \
+  YUMMI_EINO_MODEL_NAME=your-server-model-name
+```
 
-1. **Context window.** A model tag that isn't one of the two named tiers is treated as a **custom tag wrapped under the Standard profile** (`orchestrator/internal/conductor/tier.go`'s `TierRegistry.Resolve`) — 32,768 tokens of context, thinking mode off — regardless of how much context the model itself actually supports. If you're running something with real long-context headroom and want Yummi to use more of it, set:
-   ```bash
-   YUMMI_OLLAMA_NUM_CTX=131072 YUMMI_OLLAMA_MODEL=<your-model-tag> make start
-   ```
-   (or the equivalent prompt in `make conf`'s custom-model step). `YUMMI_OLLAMA_THINKING=true` similarly opts a custom model into thinking-mode request options if it supports one. This only affects the **graph backend** — see the next point.
+`make start` skips its Ollama setup when an endpoint override is present, except when its selected model equals `LIVE_TEST_MODEL`. Embeddings are a separate optional local Ollama feature. The optional Python brain has independent `YUMMI_BRAIN_*` configuration; see [brain README](../brain/README.md).
 
-2. **Backend choice matters more for a custom model than for the gpt-oss tiers.** The **Eino backend** (`YUMMI_AGENT_BACKEND=eino`, or `make conf`'s backend question) doesn't wrap the model in any tier profile at all — no context cap, no thinking-mode toggle from Yummi's side — it just talks to whatever `YUMMI_OLLAMA_MODEL` names via Ollama's OpenAI-compatible endpoint, so a big model's own context window (set via its Modelfile's `PARAMETER num_ctx`, or Ollama's own `OLLAMA_CONTEXT_LENGTH` env var) applies unmodified. Eino was specifically built for larger models with **native, reliable tool-calling** (see [Agent Overview § Two engines](agent/overview.md#two-engines)) — if the model you're bringing supports function-calling well, Eino is very likely the better fit over the graph engine's tag-protocol design, which targets smaller/weaker models that can't be trusted with structured tool-calling output.
-
-3. **Cloud & Frontier Models via OpenRouter or OpenAI Endpoints.** You can point the Eino agent backend directly at OpenRouter or any OpenAI-compatible `/v1/chat/completions` endpoint:
-   ```bash
-   YUMMI_AGENT_BACKEND=eino \
-   YUMMI_EINO_PROVIDER=openrouter \
-   YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1 \
-   YUMMI_EINO_MODEL_NAME=anthropic/claude-3.5-sonnet \
-   YUMMI_EINO_MODEL_API_KEY=sk-or-v1-... \
-   make start
-   ```
-   Or for a local OpenAI-compatible inference server (LM Studio, vLLM, Ollama OpenAI endpoint):
-   ```bash
-   YUMMI_AGENT_BACKEND=eino \
-   YUMMI_EINO_PROVIDER=openai \
-   YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1 \
-   YUMMI_EINO_MODEL_NAME=openai/gpt-oss-20b \
-   YUMMI_EINO_MODEL_NUM_CTX=32768 \
-   make start
-   ```
-
-4. **Multi-Agent Frontier Framework: The LangGraph Brain (`brain/`).** If you want a supervisor + specialist multi-agent architecture running Claude 3.5 Sonnet or GPT-4o through LangGraph over the same fail-closed execution substrate:
-   ```bash
-   make brain-install
-   # Set your API keys in brain/.env (or export YUMMI_BRAIN_MODEL_API_KEY)
-   make brain-run GOAL="Enumerate example.com and report all subdomains, live web endpoints, and potential XSS/SQLi vulnerabilities"
-   ```
-   See [brain/README.md](../brain/README.md) for full details.
-
----
-
-## Pre-Build Configuration Wizard (`make conf`) <a id="make-conf"></a>
-
-Before executing `make build` or `make start`, you should run the interactive setup wizard:
+## Configuration wizard <a id="make-conf"></a>
 
 ```bash
 make conf
 ```
 
-`make conf` asks a structured series of questions and persists your decisions to a machine-local, gitignored file: `.yummi.conf`. All subsequent build and start operations automatically inherit these parameters without needing manual environment variables.
+The wizard writes `.yummi.conf` (gitignored). It detects or asks for engine/network mode, asks for English/Turkish UI language, then local Ollama, OpenRouter, or a custom compatible model endpoint, and optional brain setup. It currently writes `YUMMI_AGENT_BACKEND=eino` for every model choice; select Graph explicitly with `make start YUMMI_AGENT_BACKEND=graph` or edit the configuration. It does not prompt for custom context/thinking overrides.
 
-### Configuration Decisions Handled by `make conf`:
+API keys are masked during entry but saved as plaintext in `.yummi.conf`; keep that file private. It is read by Make, not automatically by arbitrary `go run` or bare Compose commands. `make conf` overwrites the file, so preserve additional manual settings before rerunning it. See [.yummi.conf.example](../.yummi.conf.example) for optional variables.
 
-1. **Container Engine & Network Security Mode**:
-   - `1) OrbStack` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=secure` (recommended on macOS).
-   - `2) Docker Desktop` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=insecure-bridge` (requires typing `I UNDERSTAND` to accept the security trade-off).
-   - `3) Podman` -> `CONTAINER_ENGINE=podman`, `YUMMI_NETWORK_MODE=insecure-bridge`.
-   - `4) Linux native Docker Engine` -> `CONTAINER_ENGINE=docker`, `YUMMI_NETWORK_MODE=secure` (production default).
+UI language is fixed at build time. After changing `YUMMI_LANG`, rebuild and recreate the UI with `make start BUILD=1`; `make docker-ui` only builds its image. Native `_build-ui` is incremental: after a command-line-only language change, remove `ui/dist/index.html` before rebuilding if no source/config timestamp changed.
 
-2. **UI Display Language (`YUMMI_LANG`)**:
-   - `1) English (en)`
-   - `2) Türkçe (tr)`
-   - **CRITICAL**: The UI language is compiled directly into the React/Vite single-page application at **build time**. It cannot be changed at runtime via an in-app toggle. To switch languages later, run `make conf` and rebuild (`make start` or `make docker-ui`).
-
-3. **Agent Backend Engine (`YUMMI_AGENT_BACKEND`)**:
-   - `1) Graph`: 11-node deterministic state machine using the closed tag protocol (`RUN_COMMAND`, `MCP_TOOL`, `FINISH`, `HANDOFF`, etc. — full cataloged-tool and terminal-session parity with Eino as of 2026-10-07). The architecture tolerates small local models (`gpt-oss:20b`, `qwen3:8b`) better than free-form prompting would, but "tolerates" is not "reliable" — live-tested, a 20B-class model still lost the target and needed server-side correction. For autonomous tasks, point this at a large local model (120B+) or a cloud override, not a small one.
-   - `2) Eino Local`: CloudWeGo Eino ReAct loop with native tool-calling — needs a genuinely large model (120B+ local, or cloud) for reliable autonomous use; a small model's native tool-calling is not inherently more trustworthy than Graph's tag protocol.
-   - `3) Eino Cloud (OpenRouter / OpenAI)`: Cloud frontier models with native tool-calling:
-     - Provider selection: OpenRouter (`https://openrouter.ai/api/v1`), OpenAI (`https://api.openai.com/v1`), or Custom base URL.
-     - Model name: e.g., `anthropic/claude-3.5-sonnet`, `deepseek/deepseek-chat`, `openai/gpt-4o`.
-     - API Key: Hidden input during typing; securely written to `.yummi.conf` (never tracked by git).
-
-4. **Local Intent & Conductor Model (`YUMMI_OLLAMA_MODEL`)**:
-   - The conversational conductor and intent classifier always run on local Ollama for zero API cost:
-     - `1) Standard`: `gpt-oss:20b` (Default, runs comfortably on 16 GB+ RAM).
-     - `2) Expert`: `gpt-oss:120b` (High capability, requires 64 GB+ RAM or 80 GB VRAM).
-     - `3) Custom`: Any pulled Ollama model tag with optional custom context length (`YUMMI_OLLAMA_NUM_CTX`, e.g., 131072).
-
-5. **LangGraph Multi-Agent Brain Setup (`brain/`)**:
-   - Optional Python supervisor + specialist multi-agent topology driving the same Kali sandbox and gateway via MCP. Prompts for provider, model name, and API key.
-
-### Persisted Configuration File (`.yummi.conf`)
-
-`make conf` writes out variables in standard shell format:
-```bash
-CONTAINER_ENGINE=docker
-YUMMI_NETWORK_MODE=secure
-YUMMI_LANG=en
-YUMMI_AGENT_BACKEND=eino
-YUMMI_OLLAMA_MODEL=gpt-oss:20b
-YUMMI_EINO_MODEL_BASE_URL=https://openrouter.ai/api/v1
-YUMMI_EINO_MODEL_NAME=anthropic/claude-3.5-sonnet
-YUMMI_EINO_MODEL_API_KEY=sk-or-v1-...
-YUMMI_EINO_PROVIDER=openrouter
-```
-
----
-
-## Running the full stack (Docker Compose) <a id="full-stack"></a>
+## Full stack <a id="full-stack"></a>
 
 ```bash
-make start
+make start             # builds if any required local image is absent
+make start BUILD=1     # rebuilds all five images from source, then starts
+make app               # alias of start
 ```
 
-This one command: runs the dependency check, ensures Ollama is running and the model is pulled, **rebuilds every Docker image from current source** (never silently reuses a stale image), brings the stack up in dependency order (each service's `depends_on: condition: service_healthy` enforces this): `gateway` and `docker-proxy` start immediately in parallel (neither depends on anything); `sandbox` waits for `gateway` to report healthy; `orchestrator` waits for **all three** of `gateway`, `sandbox`, and `docker-proxy` to be healthy before it starts; `ui` waits for `orchestrator`. This is the one command for the normal local workflow. First run takes longer — it's building 4 images from scratch (`docker-proxy` is a pre-built image, pulled rather than built), including a full Kali package install for sandbox.
+When all five local images already exist, ordinary `make start` **skips image builds**. Use `BUILD=1` after source changes. `make rebase` also rebuilds, after taking the Compose stack down, and retains image cache and data volumes.
+
+Gateway, sandbox, and broker have no startup dependencies on one another. Orchestrator waits for all three to be healthy; `yummi-ui` waits for orchestrator. Health checks confirm service liveness, not packet-policy correctness.
+
+Host loopback ports **3000 and 9080 both enter UI nginx**. nginx proxies API/WebSocket requests to the operator API on the isolated control network. The orchestrator publishes no host port. Sandbox can access only the separate read-only policy listener on `172.20.0.3:9081`; it cannot use the operator API or Docker broker. See [network topology](architecture.md#network-topology).
 
 ```bash
-make app                  # alias for 'start' — kept for anyone with the old habit memorized
+make stop    # stops five runtime services; containers remain
+make close   # Compose down, then kills local Ollama/model/Yummi processes
 ```
 
-Once it's up:
-- Web UI: **http://localhost:3000** — this is the only operator surface; `./bin/yummi` (no flags) just opens this same URL in an app-style browser window for convenience
-- Orchestrator API: **http://127.0.0.1:9080** (bound to localhost only — not reachable from other machines on your network by design)
+`make close` affects host model processes too. Gateway restart resets egress to `block_all`; an allow rule alone does not override lockdown. Select the appropriate mode in GATEWAY before authorized external work. Same-subnet traffic lies outside this forwarded-egress boundary.
+
+## Native binaries <a id="native-binaries"></a>
+
+For host CLI/API/UI/gateway development, build the component you need:
 
 ```bash
-make stop     # docker compose stop — containers remain, fast to resume
-make close    # stop everything AND stop Ollama, to free RAM/VRAM when you're done for the day
+make _build-cli
+make _build-orchestrator
+make _build-gateway
+make _build-ui
 ```
 
----
+`make build` currently also invokes a **host sandbox-MCP compilation** through `_build-sandbox-mcp`. That implementation conflicts with the repository's mandatory Docker placement for sandbox-MCP builds. Use `make docker-build` to build the runtime images, and `make _test-sandbox-mcp` for its build/test cycle; do not run the sandbox MCP binary or tests on the host. Native outputs are not inputs to the runtime Docker builds.
 
-## Building native binaries <a id="native-binaries"></a>
+## Verification and diagnostics <a id="verifying"></a>
 
-Only needed if you're developing the CLI or orchestrator outside Docker, or want a standalone `yummi` binary:
+Read-only initial checks:
 
 ```bash
-make build
-```
-Builds, in order: `_build-cli` (-> `./bin/yummi`), `_build-ui` (-> `ui/dist`), `_build-orchestrator` (-> `./bin/yummi-orchestrator`), `_build-gateway` (-> `gateway/target/release/yummi-gateway`).
-
-Or individually, for a faster feedback loop while you're only touching one piece:
-```bash
-make _build-cli           # just the CLI binary
-make _build-orchestrator  # just the orchestrator (needs the cgo toolchain — see above)
-make _build-gateway       # just the gateway (needs rustup's cargo, not a distro rustc)
-make _build-ui            # just the UI (npm ci + vite build)
+docker compose ps
+curl -fsS http://127.0.0.1:9080/healthz
+curl -fsS http://127.0.0.1:9080/api/v1/system/status
+curl -fsS http://127.0.0.1:9080/api/v1/gateway/egress-mode
 ```
 
----
+`make doctor` first runs `./bin/yummi --doctor`; **any failure**, including a missing binary, invokes `scripts/doctor.sh`. The CLI checks Docker/Compose, daemon, architecture, and local state directories. The fallback script adds model checks and a live forwarding canary: when the stack is reachable, it temporarily switches egress to `allow`, adds a temporary `1.1.1.1/32` rule, and runs sandbox curl, then attempts to remove the rule and restore the prior mode. It is therefore a state-changing diagnostic, and restoration is best-effort. Neither result alone proves the full security boundary. Explicit disposable checks are available with `make test-security-boundaries`; see [Development](development.md).
 
-## Verifying your install <a id="verifying"></a>
+## Troubleshooting <a id="troubleshooting"></a>
 
-```bash
-make doctor
-```
-Runs `./bin/yummi --doctor` if it exists, falling back to `scripts/doctor.sh`. It checks: Docker present and reachable, Docker Compose v2 available, your CPU architecture (flags non-arm64 as merely a soft "consider" note, not an error — this project's *own* diagnostic assumes ARM64 is increasingly the common case rather than the exception), the `~/.yummi/` directory tree, whether Ollama is reachable, whether your configured model is present, and whether more than one model is loaded simultaneously (VRAM contention warning).
-
-A healthy run ends with:
-```
-doctor: healthy
-```
-
----
-
-## First-run troubleshooting <a id="troubleshooting"></a>
-
-These are the specific errors people actually hit on a first install, in the order you're likely to hit them.
-
-**`cgo: C compiler "cc" not found`** -> You're missing a C compiler. See [the cgo callout](#cgo-requirement) above — this is not optional, and it is not checked automatically before you build.
- 
-**`go: go.mod requires go >= 1.24.2`** -> Your Go is too old for the *root* module even though it might be new enough for `orchestrator/`. See [the version-skew callout](#go-version-skew).
- 
-**`npm ci` fails with `EBADF`, or other file-descriptor errors that don't mention any of your actual code`** -> Check `node --version` before debugging anything else. See [the Node version callout](#node-version).
- 
-**Docker Compose can't reach Ollama; orchestrator logs show a connection failure to `host.docker.internal:11434`** -> On Linux, confirm `docker-compose.yml`'s orchestrator service still has the `extra_hosts: ["host.docker.internal:host-gateway"]` entry (it ships with it as of this writing) and that your Docker Engine is >= 20.10. On any platform, confirm Ollama is actually running on the host (`curl http://localhost:11434/api/tags` from your host, not from inside a container) before assuming it's a networking problem.
- 
-**`docker compose up` fails with a permission error on Linux, right after a fresh Docker install`** -> You were added to the `docker` group but haven't started a new login session yet. Log out and back in, or run `newgrp docker` in your current shell, then retry.
- 
-**Every chat message gets declined with a bilingual "the model is unavailable" reply`** -> The conductor has no rule-based fallback. `YUMMI_OLLAMA_URL` defaults to empty for a native orchestrator run, so set it explicitly (usually `http://127.0.0.1:11434`). Compose sets `http://host.docker.internal:11434`. Confirm Ollama is running and the configured URL matches where it is listening.
- 
-**A pentest command in chat gets refused with something that sounds like "I don't have permission," even for an ordinary target like a public hostname`** -> This is a **persona/UX issue that has already been fixed** in this repository's prompt design, not a gateway bug — the model is told explicitly not to pre-judge scope and to report a gateway block/approval-pending result factually rather than framing it as its own lack of permission. If you still see this behavior, check whether `persona/v0.1/safety_boundaries.yaml`'s `scope_enforcement` section and `orchestrator/internal/conductor/engine.go`'s `scopeSection` prompt text match what's described in [Security Model](security-model.md#egress-modes) — a stale or hand-edited persona file is the most likely cause.
- 
-**Gateway's own egress mode is `block` (the default) and every external target is refused, even though you expected it to just work`** -> This is fail-closed **by design** — see [Security Model § Egress modes](security-model.md#egress-modes). Set the mode to `allow` or `ask` from the UI's GATEWAY tab, or via `POST /api/v1/gateway/egress-mode`, and remember it **resets to `block` on every gateway restart** — it is not meant to be a "set once" switch.
+- **Old behavior after edits:** use `make start BUILD=1`; existing images are otherwise reused.
+- **Go version error:** all three modules require Go 1.27.2; check toolchain availability.
+- **Missing C compiler:** install host build tools for native orchestrator cgo builds.
+- **Ollama unavailable:** verify its daemon, selected model, and container-reachable listener. For native API development, set `YUMMI_OLLAMA_URL` explicitly; its native default is empty. An endpoint override replaces the model backend instead.
+- **External commands blocked:** inspect GATEWAY mode and scope. `block_all` denies forwarded egress including DNS even when allow rules exist, and returns on every gateway restart.
+- **Linux socket permission error:** confirm Docker daemon access and your current login's group membership; inspect SELinux policy where applicable.
+- **Engine forwarding errors:** compare the historical engine notes above with current configuration and packet evidence before attributing a timeout to the engine.

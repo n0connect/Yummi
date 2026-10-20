@@ -1,5 +1,7 @@
 # Live deployment verification — 2026-10-17
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 The source fixes from `05b8ab6` are now deployed to the actual five-service
 Compose stack. This supersedes the earlier isolated-only deployment status in
 [the remediation report](security-remediation-2026-10-17.md).

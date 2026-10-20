@@ -11,21 +11,19 @@ gateway is the Rust daemon that installs and manages the `nftables` policy betwe
 **Fail-closed by default.** On startup, gateway installs its `nftables` rules before spawning the IPC server. A normal daemon crash does not run cleanup, so those rules remain in the gateway container's network namespace.
 
 ```text
-   gateway starts ---> install DROP-all nftables rules ---> open IPC socket
-                                  |                              |
-                                  |  (if the gateway dies, the   |  add_temporary_rule
-                                  |   DROP rules persist) ---+   v
-                                  v                          |  evaluate target
-                                 DROP  <---------------------+-- always-blocked floor
-                             (Fail-closed)                       (loopback / link-local
-                                  ^                               / multicast / unspecified)
-              Block rule matches  |                              |
-              --------------------+                              | Allow rule + egress mode
-                                                                 v
-                                                          FORWARD + AUDIT
+gateway starts -> commit block_all rules -> open IPC
+operator selects mode / rules -> commit kernel update -> publish policy
+crash or shutdown -> retain last committed rules while namespace survives
+restart -> reinstall block_all before IPC
 ```
 
-The always-blocked floor (`is_always_blocked`) sits before every egress mode. It covers IPv4/IPv6 loopback, link-local, multicast, and unspecified addresses, including the link-local cloud-metadata address `169.254.169.254`. RFC1918 private ranges are not part of this unconditional floor; they are controlled by configured block rules and narrowly scoped manual overrides.
+A daemon crash is not automatic revocation of already-open destinations or an
+active `allow_all` mode. Timed kernel elements still expire; static/blanket allows
+can persist. Administrative `--cleanup` explicitly removes enforcement. A periodic
+reconciler repairs kernel state and attempts lockdown on repair failures; failure
+to commit lockdown is reported as inconsistent enforcement.
+
+The policy/API always-blocked floor (`is_always_blocked`) sits before every egress mode. The packet controller separately renders configured block CIDRs; it does not automatically mirror all address classes in that policy floor. It covers IPv4/IPv6 loopback, link-local, multicast, and unspecified addresses, including the link-local cloud-metadata address `169.254.169.254`. RFC1918 private ranges are not part of this unconditional floor; they are controlled by configured block rules. Manual overrides apply in policy evaluation only; the kernel still puts configured DROP rules ahead of dynamic allow sets.
 
 ---
 
@@ -71,7 +69,7 @@ The orchestrator communicates with gateway over a Unix domain socket (`/run/yumm
 
 | Method | Purpose |
 |---|---|
-| `check_scope` | Resolve an IP target to a verdict (`allow` / `block` / `needs_approval`). |
+| `check_scope` | Check an IP target (or apply mode-only semantics to an unresolved name) and return a verdict (`allow` / `block` / `needs_approval`). |
 | `check_hostname` | Name-level verdict (`allow` / `block` / `neutral`) against configured hostname patterns. |
 | `get_hostname_policy` | Configured plus runtime hostname allow/block patterns. |
 | `add_hostname_rule` / `remove_hostname_rule` | Edit hostname patterns in memory; resets on restart. |
@@ -92,7 +90,7 @@ The orchestrator communicates with gateway over a Unix domain socket (`/run/yumm
 The gateway enforces a 4-way master switch over the `nftables` FORWARD chain:
 - **`block_all`** (`block`): Default state. Drops gateway-forwarded sandbox egress, including DNS and packets on established connections, ignoring active allow rules.
 - **`block_all_except_rules`** (`block_except_rules`, `rules_only`): Default-drop, but permits destinations explicitly matched by active temporary allow rules or configured CIDRs.
-- **`allow_all`** (`allow`): Blanket allows outbound sandbox traffic to public destinations not explicitly blocked.
+- **`allow_all`** (`allow`): Blanket allows remaining routed sandbox traffic after configured packet blocks.
 - **`ask_every_time`** (`ask`): Prompts the operator for interactive authorization on each new destination IP/hostname.
 
 Egress mode resets to **`block_all`** on every gateway daemon restart (fail-closed by design).
@@ -126,7 +124,7 @@ Regular `cargo test` does not run the privileged test.
 
 ## Policy Engine
 
-Rules with a TTL expire automatically. Configured block rules normally beat allow rules; an operator-created manual allow may carve out an address only when it is at least as specific as the matching configured block. Agent-created temporary rules cannot override configured blocks. The unconditional address-class floor wins in all modes.
+Rules with a TTL expire automatically. In policy evaluation, configured blocks normally beat allows; a manual allow may override when its prefix is at least as specific as the matching configured block. Agent-created rules cannot do so. In the current kernel rules, configured DROP rules precede all dynamic allows, so even that manual policy override cannot make a blocked packet pass. The API address-class floor wins across policy modes; packet rules depend on the configured CIDRs.
 
 Network scope is configured in the gateway's own YAML config (`config/default.yaml`) — the gateway is the sole scope authority:
 
@@ -142,3 +140,5 @@ scope:
   hostname_block:
     - "*.facebook.com"    # Hard deny by name, overrides everything
 ```
+
+The policy engine defaults `policy.default_allow` to false when the allow list is empty. Setting it true changes policy evaluation but does not itself change `block_all` or install blanket packet acceptance; the kernel still enforces the selected mode/rules. Hostname policy is an application-layer check, not an nftables name filter. See the [security model](../docs/security-model.md#hostname-policy) for its coverage and limitations.

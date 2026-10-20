@@ -53,9 +53,9 @@ internal/
     store.go, task.go      SQLite task store + pub/sub; Task struct & status
     gate.go                Blocking operator-approval channel
     activity.go            Typed TRACE ActivityEvents
-    oracle.go, verdict.go  Active exploit proof verification (ActivePoC, DOM, OOB, Diff)
+    oracle.go, verdict.go  Output-based evidence heuristics (ActivePoC, DOM, OOB, Diff)
     evaluation.go          Objective quality metrics and assertion gates
-    eino/                  Cloud / Eino-driven ReAct agent backend (58 tools across 6 tiers including 7 persistent terminal verbs, 9 browser automation tools, and 2 web research tools)
+    eino/                  Local or configured remote Eino tool-calling backend; discovers sandbox schemas
   knowledge/             World model (LEAF pkg) — single owner of all structured knowledge
     store.go               targets, findings, procedural_memory, persistent_context, assets, scope_rules
     assets.go              Hierarchical Attack Surface Management (ASM) tree matrix
@@ -63,8 +63,8 @@ internal/
     procedural.go          target-scrubbed tactic recording (the learning loop)
     retrieval.go           RetrievalStrategy — structured SQL recall (excludes current-task cmds)
     semantic_retrieval.go  Local Ollama embeddings with structured fallback
-  report/                Multi-format Pentest & Bug Bounty Report Generator (H1, VRT, Exec, JSON, out-of-scope filter)
-  skill/                 Declarative skill registry (99 YAML playbooks, threat-scanned on load)
+  report/                Multi-format Pentest & Bug Bounty Report Generator (H1, VRT, Exec, JSON, program-scope warnings)
+  skill/                 Declarative YAML skill registry; threat-scanned on load
   skillcurator/          Autonomous skill creation from successful trajectories (quarantine store)
   security/              Content-layer fail-closed
     threatscan/            injection/exfil/C2/invisible-unicode scan + ANSI stripping
@@ -79,12 +79,12 @@ internal/
   execution/ executor/   Execution lifecycle store (rationale-aware) and processor (scope check -> sandbox)
   llm/                   Ollama HTTP client (+ Resilient: circuit breaker + tier-downgrade)
   sandbox/ gateway/      Docker exec bridge, IPC client to the gateway daemon
-  sandboxmcp/            Client & catalog for the sandbox-resident MCP server (58 tools across 6 tiers, browser automation & web research)
+  sandboxmcp/            Persistent Docker MCP client; discover installed tool schemas
   retention/             Background retention cleaner for aged session data
   session/ health/       SQLite session CRUD, ring-buffer health metrics
   api/                   REST routes, domain handlers (assets, scope rules, report, proxy), WS events/terminal
   mcp/                   JSON-RPC MCP client — DORMANT (host-exec; unimported by production)
-  tlsutil/ config/ ui/   mTLS certs, env config, embedded ui/dist
+  tlsutil/ config/       TLS scaffolding and environment config (UI is a separate deployable)
 ```
 
 ---
@@ -110,7 +110,7 @@ internal/
             +-------------------------------------------------------------+
                                      |
                                      v
-         task.status events over /ws/events; summary returned as chat reply
+         task.status events over /ws/events; summary persisted in session chat
 ```
 
 ### Chat -> Single Command:
@@ -124,7 +124,9 @@ internal/
 |---|---|---|
 | `YUMMI_ORCHESTRATOR_HOST` / `_PORT` | `127.0.0.1` / `9080` | Listen address / port |
 | `YUMMI_DB_PATH` | `~/.yummi/sessions.db` | SQLite database |
-| `YUMMI_OLLAMA_URL` | _(empty)_ | Ollama endpoint; empty = conductor declines gracefully |
+| `YUMMI_OLLAMA_URL` | _(empty)_ | Ollama endpoint; empty + no compatible endpoint override = conductor declines |
 | `YUMMI_OLLAMA_MODEL` | `gpt-oss:20b` | Explicit model tag; takes precedence over a tier |
 | `YUMMI_AGENT_BACKEND` | `graph` | Execution engine (`graph` state machine or `eino` tool calling) |
-| `YUMMI_DATA_RETENTION_DAYS` | `30` | Auto-pruning retention horizon for historical executions |
+| `YUMMI_DATA_RETENTION_DAYS` | `0` | Auto-pruning retention horizon for historical executions |
+
+See the [configuration reference](../docs/configuration.md) for model routing, native versus Compose defaults, settings not forwarded into containers and generated-skill storage.

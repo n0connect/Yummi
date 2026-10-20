@@ -11,7 +11,7 @@ This directory holds documentation screenshots. Pages only embed a path once the
 
 ## Captured (2026-10-10)
 
-All six below are real captures from a live, unmodified `minimax/minimax-m2.1` run that fully compromised the two-stage CVE lab (`lab-target/`) — CVE-2021-41773 RCE, a self-opened reverse-shell terminal, SUID-python3 GTFOBins privesc, both flags — except `bash-tab.png` and `desktop-tab.png`, which are from an earlier session (same UI, same sandbox identity).
+The seven entries below are real captures from a live, unmodified `minimax/minimax-m2.1` run that fully compromised the two-stage CVE lab (`lab-target/`) — CVE-2021-41773 RCE, a self-opened reverse-shell terminal, SUID-python3 GTFOBins privesc, both flags — except `bash-tab.png` and `desktop-tab.png`, which are from an earlier session (same UI, same sandbox identity).
 
 | Path | Referenced from | What's visible |
 |---|---|---|
@@ -31,10 +31,10 @@ All six below are real captures from a live, unmodified `minimax/minimax-m2.1` r
 | `usage-guide/logs-tab.png` | [usage-guide.md § Logs](../../usage-guide.md#tab-logs) | The live SSE debug log stream with a few real lines scrolled into view |
 | `usage-guide/health-tab.png` | [usage-guide.md § Health](../../usage-guide.md#tab-health) | The time-series charts (heap, Ollama latency, goroutines) plus the module status panel |
 | `usage-guide/command-approval.png` | [usage-guide.md § Approval flows](../../usage-guide.md#approval-flows) | The command-approval prompt: command text, rationale, risk level, approve/deny — `ask_permission` mode, not yet captured (everything above is from an `auto`-mode run) |
-| `usage-guide/threat-scan-hold.png` | [usage-guide.md § Approval flows](../../usage-guide.md#approval-flows) | A threat-scan hold: the flagged output banner and the approve-as-is / deny / redact options |
+| `usage-guide/threat-scan-hold.png` | [usage-guide.md § Approval flows](../../usage-guide.md#approval-flows) | A threat-scan hold: the flagged output banner and the approve/reject controls offered by the current UI (no assumed redact action) |
 | `usage-guide/egress-approval.png` | [usage-guide.md § Approval flows](../../usage-guide.md#approval-flows) | An Ask-mode egress approval prompt for a new destination |
 | `installation/doctor-healthy.png` | [installation.md § Verifying your install](../../installation.md#verifying) | Terminal output of `make doctor` ending in `doctor: healthy` |
 | `security-model/gateway-audit-rules.png` | [security-model.md § Rule sources](../../security-model.md#rule-sources) | The Gateway tab's **Audit** sub-view specifically, showing a few hash-chained rows (rule added, rule removed, hostname_blocked) — distinct from the Active Rules table already captured above |
 | `agent/pending-skill-approval.png` | [skills-and-subagents.md § Auto-skill-creation](../../agent/skills-and-subagents.md#auto-skill) | The Trace tab's Skills section with a **pending** curator-drafted skill and its approve/reject controls visible |
 
-9 shots still needed. None of the captured six show an `ask_permission`-mode approval prompt — if capturing more, that family (command-approval, threat-scan-hold, egress-approval) is the highest-value gap, since every current screenshot is from an unattended `auto`-mode run.
+Nine planned captures remain listed here; this catalog records the 2026-10-10 capture state, not a fresh UI verification. None of the captured seven show an `ask_permission`-mode approval prompt — if capturing more, that family (command-approval, threat-scan-hold, egress-approval) is the highest-value gap, since every current screenshot is from an unattended `auto`-mode run.

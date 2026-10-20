@@ -112,10 +112,11 @@ services:
     # exactly this class of bug.
     init: true
     # Resolve names via Cloudflare DNS (not Docker's embedded resolver), so the
-    # sandbox and the orchestrator (which resolves the same names through
-    # Cloudflare before opening a gateway rule) agree on the target IPs. DNS
+    # sandbox and the orchestrator (which resolves names before gateway checks)
+    # use matching resolver providers. Independent answers may still differ. DNS
     # itself is not the trust boundary — the query still egresses through the
-    # gateway (udp/53 is accepted), and the actual connection to the resolved IP
+    # gateway (UDP/53 is allowed outside block_all, after destination blocks),
+    # and the actual connection to the resolved IP
     # is gated by nftables. Resolution only maps name→IP; reachability is the
     # gateway's call.
     dns:
@@ -212,18 +213,10 @@ services:
       # (no override; a custom model still gets Standard's fixed 32K context/
       # no-thinking profile unless set here).
       YUMMI_OLLAMA_NUM_CTX: "${YUMMI_OLLAMA_NUM_CTX:-}"
-      # Optional: point ONLY the Eino agent backend's ReAct loop at a
-      # different OpenAI-compatible server/model than Ollama — e.g. a local
-      # LM Studio instance running a larger tool-calling model on the same
-      # host. All three blank by default, in which case the orchestrator
-      # derives the exact same target it always has (Ollama's own
-      # OpenAI-compat endpoint above) — purely additive, no behavior change
-      # until set. The host.docker.internal extra_hosts entry below already
-      # covers reaching a host-run server on any port, so no new networking
-      # is needed — just set the port your server actually listens on, e.g.
-      # YUMMI_EINO_MODEL_BASE_URL=http://host.docker.internal:1234/v1. When
-      # set, the conductor (chat/intent classification) and the agent loop both
-      # point to this cloud/override model, eliminating local Ollama usage entirely.
+      # An explicit compatible endpoint supplies conductor/graph chat as well
+      # as Eino tool calling. Blank derives the local Ollama endpoint. Include
+      # the endpoint path prefix, e.g. http://host.docker.internal:1234/v1.
+      # Hosted endpoints receive the supplied context; they are opt-in.
       YUMMI_EINO_MODEL_BASE_URL: "${YUMMI_EINO_MODEL_BASE_URL:-}"
       YUMMI_EINO_MODEL_NAME: "${YUMMI_EINO_MODEL_NAME:-}"
       YUMMI_EINO_MODEL_API_KEY: "${YUMMI_EINO_MODEL_API_KEY:-}"

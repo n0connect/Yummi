@@ -1,5 +1,7 @@
 # Changelog
 
+> Historical release/commit history. For current behavior and commands, use the [documentation index](docs/README.md).
+
 ## [Unreleased]
 
 ## [1.1.1b](https://github.com/n0connect/Yummi/compare/v1.1.0...v1.1.1b) (2026-10-14)

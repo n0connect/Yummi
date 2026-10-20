@@ -1,5 +1,7 @@
 # Browser and research implementation / QC ledger
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 Final handoff: `docs/agent/web-research-qc.md`. Operator requested ending the
 extended iteration. Three real MiniMax scenarios passed; full-desktop QC and
 two independent browser boundary review findings remain unresolved. This

@@ -40,8 +40,8 @@
 
 | Type | Go Struct | Target / Scope Value | Lifetime | Description |
 |---|---|---|---|---|
-| **Target** | `Target` | Explicit IP / Hostname | Session-scoped | In-scope boundary declared by operator or discovered. |
-| **Finding** | `Finding` | Linked via `TargetID` | Session-scoped | Verified vulnerability with severity, evidence, and PoC. |
+| **Target** | `Target` | Explicit IP / Hostname | Session-scoped | Declared/discovered target record; not a gateway allow rule. |
+| **Finding** | `Finding` | Linked via `TargetID` | Session-scoped | Recorded security claim, severity, evidence and optional PoC; storage alone does not verify exploitation. |
 | **AssetNode** | `AssetNode` | Domain / Endpoint / IP | Session-scoped | Node in hierarchical attack surface tree. |
 | **ScopeRule** | `ScopeRule` | Hostname glob pattern | Session-scoped | Bug bounty include/exclude directives for report gating. |
 | **PersistentContext** | `PersistentContext` | Session-specific | Session-scoped | Contextual facts persisted across prompt compaction. |
@@ -100,7 +100,7 @@ type ScopeRule struct {
 1. **Knowledge-Layer Only**: Program Scope Rules do not modify `nftables` or network packets (that remains the sole purview of the Rust gateway daemon). Instead, they classify assets and safeguard reporting.
 2. **Wildcard & Subdomain Matching**: `*.example.com` matches the apex domain (`example.com`) as well as any subdomain at any depth (`api.example.com`, `v1.dev.example.com`).
 3. **Precedence**: `exclude` rules take strict precedence over `include` rules.
-4. **Report Gate**: The multi-format report engine (`internal/report`) queries `ClassifyScope` for every asset and finding; out-of-scope items are automatically excluded from final deliverables.
+4. **Report Scope Classification & Warnings**: The report engine (`internal/report`) queries `ClassifyScope` for discovered host assets and renders in-scope/out-of-scope status in the report table, printing a prominent warning if out-of-scope hosts are detected. It does not automatically filter them out or modify network permissions.
 5. **Live Classifier API**: Operators and UI panels can evaluate any hostname or URL against active rules via `POST /api/v1/sessions/{sessionID}/scope-rules/classify`.
 
 ---
@@ -115,7 +115,7 @@ Target Scrubbing:     nmap -sV -p 443 <TARGET>
 Storage on Disk:      Tactic{CommandPattern: "nmap -sV -p 443 <TARGET>", Outcome: "worked"}
 ```
 
-Before saving to the `tactics` table, `scrubTarget()` converts all concrete IP addresses, CIDRs, and hostnames to the `<TARGET>` token. A tactic recorded on client A's engagement can safely assist the agent on client B's engagement without revealing client A's infrastructure.
+Before saving procedural memory, `scrubTarget()` replaces occurrences of the target returned by `scope.ExtractTarget` with `<TARGET>`; it skips a command if that extracted token cannot be removed. This is a single extracted-target scrub, not comprehensive anonymization of every address, secret, file path or argument in a compound command. Foreign template placeholders and threat patterns are rejected. Reuse across sessions must not be described as a blanket guarantee against engagement-data leakage. See `knowledge/procedural.go`.
 
 ---
 
@@ -134,7 +134,7 @@ Before saving to the `tactics` table, `scrubTarget()` converts all concrete IP a
         [StructuredRetrieval]                         [SemanticRetrieval]
                    |                                             |
    - Keyword overlap matching                    - Ollama Embedding (`nomic-embed-text`)
-   - Recency & frequency sorting                 - SQLite Cosine Similarity calculation
+   - Recency & frequency sorting                 - Go cosine-similarity calculation over SQLite-stored vectors
    - Zero model dependency (deterministic)       - Falls back gracefully to Structured
                    |                                             |
                    +----------------------+----------------------+
@@ -150,13 +150,16 @@ Before saving to the `tactics` table, `scrubTarget()` converts all concrete IP a
 Embeddings are stored directly in SQLite:
 ```sql
 CREATE TABLE embeddings (
+    id TEXT PRIMARY KEY,
     source_table TEXT NOT NULL,
     source_id    TEXT NOT NULL,
     model        TEXT NOT NULL,
     dim          INTEGER NOT NULL,
     vector       BLOB NOT NULL,
-    PRIMARY KEY (source_table, source_id)
+    created_at   INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX idx_embeddings_source
+    ON embeddings(source_table, source_id, model);
 ```
 
 ### Mathematical Scoring:
@@ -171,7 +174,8 @@ When ranking tactics, the system applies an outcome multiplier (successful tacti
 ## Persistent Context: The Never-Forget Layer <a id="persistent-context"></a>
 
 `PersistentContext` entries are written via the `REMEMBER` control tag during task execution:
-- Maximum size per entry: 64 KiB.
+- Limits: 200 Unicode code points per key and 65,536 per value (not 64 KiB in UTF-8 bytes).
 - Capped at 200 entries per session.
 - Scanned at `ScopeStrict` to prevent prompt injection persistence.
-- Survives task context compaction and is re-injected at the beginning of subsequent tasks.
+- Saves/updates by key; `REMEMBER` with an empty value deletes the note through shared `ApplyNote`.
+- Survives compaction/restarts and participates in later session prompt memory within retrieval/output bounds. The 200-note cap rejects new entries until a stale note is forgotten; updates to existing keys remain possible.

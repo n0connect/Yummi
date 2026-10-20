@@ -4,7 +4,7 @@
 
 For *why* gateway exists as a separate, minimal, memory-safe process, see [Architecture § Why separate processes](../architecture.md#why-separate-processes). For the *behavior* of everything it enforces, see [Security Model](../security-model.md). This page is the module map: which file owns which concern.
 
-`gateway/Cargo.toml` — edition 2021, binary name `yummi-gateway` (`gateway/src/main.rs`). Built via `make _build-gateway` (native) or as part of `make start`/`docker-build` (containerized — the only path where its enforcement is real, see [Installation § Platform support](../installation.md#platform-support)).
+`gateway/Cargo.toml` — edition 2021, binary name `yummi-gateway` (`gateway/src/main.rs`). Built via `make _build-gateway` (native) or as part of `make start`/`docker-build` (containerized — the standard cross-platform deployment path; direct native execution also requires Linux, nftables, and the necessary capabilities, see [Installation § Platform support](../installation.md#platform-support)).
 
 ## Table of contents
 
@@ -19,8 +19,8 @@ For *why* gateway exists as a separate, minimal, memory-safe process, see [Archi
 | Module | Owns |
 |---|---|
 | **`policy/`** | `mod.rs` — `PolicyEngine` (RwLock-protected rule state, TTL expiry, `is_always_blocked()` floor, `default_allow` switch); `rules.rs` — `PolicyRule`, `RuleAction`, `EgressMode`, `RuleSource`; `hostname.rs` — name-level allow/block glob matching, consulted by the orchestrator before DNS resolution |
-| **`ipc/`** | `mod.rs` — request dispatch (`check_scope`, `check_hostname`, `get_hostname_policy`, `get_status`, `ping`, `add_temporary_rule`, `remove_rule`, `set_egress_mode`/`get_egress_mode`, `list_rules`, `get_audit_log`, `add_manual_rule`); applies the configured `socket_mode` permission bits to the Unix socket right after bind (defense-in-depth — write ops are separately authorized by `SO_PEERCRED` UID regardless of socket mode); `protocol.rs` — the wire types, mirrored on the Go side by `orchestrator/internal/gateway/protocol.go`. Length-prefixed JSON framing (`[4-byte BE length][JSON body]`) |
-| **`network/`** | `nftables.rs` — the **only** concrete network controller (Linux/`nf_tables`-only by design; the old cross-platform trait and macOS no-op stub were removed — `mod.rs` says so explicitly). Owns the `FORWARD`/NAT chain build, TTL normalization, MAC randomization, and the blanket-accept rule inserted only in `allow_all` egress mode |
+| **`ipc/`** | `mod.rs` — request dispatch (`check_scope`, `check_hostname`, `get_hostname_policy`, runtime hostname edits, `get_status`, `ping`, `add_temporary_rule`, `remove_rule`, `set_egress_mode`/`get_egress_mode`, `list_rules`, `get_audit_log`, `add_manual_rule`); applies the configured `socket_mode` permission bits to the Unix socket right after bind (defense-in-depth — write ops are separately authorized by `SO_PEERCRED` UID regardless of socket mode); `protocol.rs` — the wire types, mirrored on the Go side by `orchestrator/internal/gateway/protocol.go`. Length-prefixed JSON framing (`[4-byte BE length][JSON body]`) |
+| **`network/`** | `nftables.rs` — the **only** concrete network controller (Linux/`nf_tables`-only by design; the old cross-platform trait and macOS no-op stub were removed — `mod.rs` says so explicitly). Owns atomic `FORWARD`/NAT ruleset updates/reconciliation, TTL-bounded destination sets, TTL normalization, MAC randomization, and the blanket-accept rule used in `allow_all` |
 | **`audit/`** | `mod.rs` — the SHA-256 hash-chained SQLite WAL audit log; `schema.sql` — its schema. See [Security Model § Audit](../security-model.md#layer-audit) |
 | **`observer/`** | Best-effort `/proc/net/{tcp,udp,tcp6}` diagnostic for sockets visible in gateway's network namespace. Forwarded packets do not necessarily create local socket rows, so this is not an enforcement or complete traffic-observation mechanism |
 | **`watchdog.rs`** | Writes a heartbeat file and enforces an RSS memory ceiling; on breach it flushes audit state, removes the heartbeat, and exits. See [Security Model § The watchdog](../security-model.md#watchdog) |
@@ -33,11 +33,11 @@ The order genuinely matters and is worth stating explicitly, since it's the conc
 ```
 1. Load config (gateway/config/default.yaml, or --config path)
 2. Install nftables DROP-all rules for the sandbox source IP  <- before step 3
-3. Spawn the policy-TTL cleanup, observer, IPC-server, and watchdog tasks
+3. Open audit state and spawn policy-TTL cleanup, firewall reconciliation, observer, IPC, and watchdog tasks
 4. The IPC task binds the Unix socket; the watchdog begins heartbeat/RSS checks
 ```
 
-Step 2 happening before step 3 is the whole point — there is no window where gateway can receive an IPC request but hasn't yet locked down traffic.
+The IPC task cannot receive requests before startup lockdown commits. Shutdown/crash retains the last committed kernel rules while the namespace survives; it does not automatically turn an active permissive mode into DROP-all. Restart reinstalls `block_all`. Reconciliation periodically repairs kernel state and reports inconsistent enforcement if emergency repair fails.
 
 ## The IPC protocol, at a glance <a id="ipc-protocol"></a>
 

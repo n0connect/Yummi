@@ -1,51 +1,44 @@
 # yummi-brain
 
-A frontier-model agent brain (LangGraph) that drives Yummi's fail-closed pentest substrate — the Rust gateway and Kali sandbox — over MCP, instead of the Go orchestrator's own local-model backends (`graph`/`eino`).
+The optional Python/LangGraph brain drives the operator REST API with an independent OpenAI-compatible model configuration. It is a separate client, not a `YUMMI_AGENT_BACKEND` value. Model requests run in this Python process; this is an explicit alternative to keeping inference local in Go/Ollama. Sandbox research HTTP/DNS and pentest command execution still belong in the gateway-routed sandbox.
 
----
-
-## Why This Exists
-
-The Go backends (`orchestrator/internal/agent`, `orchestrator/internal/agent/eino`) were built to make local models (`qwen3`, `gpt-oss`) reliably complete multi-part pentest goals. `yummi-brain` is the frontier alternative: instead of pushing a small local model to its reasoning ceiling, an external LangGraph supervisor/specialist multi-agent system powered by frontier models (Claude 3.5 Sonnet, GPT-4o, DeepSeek-V3) drives Yummi's core differentiator — the fail-closed gateway, single audited execution path, and Kali sandbox.
-
----
-
-## Architecture
+## Architecture and authority
 
 ```text
-LangGraph (supervisor + specialist roster, loaded from persona/v0.1/subagents/*.yaml)
-  recon / web / api-hunter / js-miner / auth-auditor / cloud-recon / osint / exploiter / source-analysis / reverser
-        |  MCP (stdio)
-        v
-mcp_server.py  -- yummi_exec, yummi_get_scope, yummi_request_egress,
-                  yummi_record_finding, yummi_list_findings,
-                  yummi_list_skills, yummi_list_tactics, yummi_get_context,
-                  yummi_read_gateway_audit, yummi_propose_skill
-        |  HTTP (existing REST API, unchanged)
-        v
-orchestrator (Go)  -- internal/executor.RunScopedCommand: the SAME
-                      fail-closed, gateway-authoritative execution path
-                      the graph/eino backends already use
-        v
-Rust gateway (nftables) ---> Kali sandbox
+LangGraph supervisor + specialist roster
+  -> src/yummi_brain/mcp_server.py (stdio MCP)
+  -> src/yummi_brain/rest_client.py (operator REST API)
+  -> orchestrator scoped shell executor -> Docker broker -> Kali sandbox
 ```
 
-This package never connects to the gateway socket or sandbox container directly. Every tool call is an authenticated REST call to the orchestrator's existing API (`/api/v1`) — zero new execution paths or attack surface.
+The client does not access the gateway socket or Docker directly. Its MCP tools include `yummi_exec`, `yummi_get_scope`, `yummi_request_egress`, finding list/write, skills/tactics/context reads, gateway audit reads and quarantined skill proposals. Specialist definitions are read from `persona/v0.1/subagents/*.yaml`.
 
-The MCP server (`mcp_server.py`) is a standalone artifact any MCP client can connect to — Claude Desktop, Cursor, Windsurf, OpenHands, Cline, or custom external agents.
+This client requires an operator-authorized API connection. The REST client does not add a bearer token or implement a login protocol: current Compose access is restricted by the actual socket peer and UI ingress policy. Host loopback `http://127.0.0.1:9080` reaches the UI nginx proxy. Do not point an untrusted MCP client at that operator surface.
 
----
+`yummi_exec` calls the blocking operator `POST /api/v1/sandbox/exec`. It reuses `executor.RunScopedCommand` and the UID1000 shell bridge, but it does not enqueue into `execution.Store`, create Go task steps, or wait on the graph/Eino command gate. The handler records session audit entries. Gateway denial remains enforced; this direct endpoint does not implement execution-store egress approval/retry cards.
+
+`yummi_request_egress` directly requests an operator temporary rule through `/gateway/rules` for a literal IP/CIDR. Its name does not imply a separate human approval wait. The gateway master mode remains authoritative: an added rule does not open `block_all`. Exposing this tool grants the client the corresponding operator rule-mutation authority. It cannot set the master egress mode through its current tool set.
+
+Findings remain recorded claims. Skill trajectories go to `/skills/propose` and the same quarantine/curator flow as Go trajectories; promotion still requires the operator pending-skill approval endpoint. The brain's MCP set has no raw persistent-context write or skill-promotion tool.
 
 ## Setup
 
 ```bash
 cd brain
 uv sync
-cp .env.example .env   # fill in YUMMI_BRAIN_MODEL_API_KEY
+cp .env.example .env
+# Configure YUMMI_BRAIN_MODEL_API_KEY and the desired endpoint/model.
 ```
 
-Python 3.14 is selected by `.python-version`; the package supports Python 3.11–3.14.
-The upper bound excludes Python 3.15 until native dependencies support it.
-`uv sync` and every `make brain-*` target use this project selection.
+`.python-version` selects Python 3.14; `pyproject.toml` supports `>=3.11,<3.15`. Every `make brain-*` target uses this project interpreter selection. Do not use Python 3.15 for the current dependency set.
 
-Requires orchestrator + gateway + sandbox running (`make start`).
+Start the Yummi substrate with `make start`, then from the repository root:
+
+```bash
+make brain-run GOAL="Inspect the authorized target and report captured evidence"
+make brain-mcp  # standalone stdio MCP server for an operator-authorized client
+```
+
+`YUMMI_ORCHESTRATOR_URL` defaults to `http://127.0.0.1:9080`. The independent `YUMMI_BRAIN_MODEL_BASE_URL`, `_NAME` and `_API_KEY` configure inference; a non-empty key is required by `config.load`. `YUMMI_BRAIN_SESSION_ID` defaults to `brain-default`; use a distinct session for each engagement. `YUMMI_BRAIN_CHECKPOINT_DB` selects the LangGraph checkpoint SQLite file, separate from orchestrator storage.
+
+See [agent overview](../docs/agent/overview.md), [architecture](../docs/architecture.md) and [quality/evaluation](../docs/agent/quality-and-evaluation.md) for the Go substrate and its different task lifecycle. Run package tests with `make _test-brain`; historical pass counts are snapshots, not current verification results.

@@ -1,5 +1,7 @@
 # Security boundary repair
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 Authorized scope: fix the concrete findings in `docs/agent/audit-2026-10-15.md`,
 preserve existing work, and verify the real execution paths. No new model
 provider or host research execution path is introduced.

@@ -40,11 +40,8 @@ export YUMMI_OLLAMA_MODEL := $(OLLAMA_MODEL)
 export YUMMI_OLLAMA_NUM_CTX
 export YUMMI_OLLAMA_THINKING
 export YUMMI_DATA_RETENTION_DAYS
-# Optional: point only the Eino agent backend at a different OpenAI-compatible
-# server/model than Ollama (e.g. a local LM Studio instance) — see
-# docker-compose.yml's orchestrator env block and config.Config's doc
-# comments. All blank by default: no effect unless set in the environment or
-# .yummi.conf.
+# Optional compatible endpoint for conductor/graph chat and Eino tool calling.
+# Blank keeps Ollama. See docs/configuration.md for endpoint/model precedence.
 export YUMMI_EINO_MODEL_BASE_URL
 export YUMMI_EINO_MODEL_NAME
 export YUMMI_EINO_MODEL_API_KEY
@@ -886,7 +883,7 @@ _ollama-ensure:
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
 
-docker-build: _check-deps _container-ensure ## Build all container images (gateway + sandbox + orchestrator + ui). CONTAINER_ENGINE=docker|podman
+docker-build: _check-deps _container-ensure ## Build all five container images (gateway + sandbox + orchestrator + ui + broker). CONTAINER_ENGINE=docker|podman
 	@$(call log_section,Docker Build)
 	@$(call log_info,$(CONTAINER_ENGINE),Building gateway sandbox orchestrator yummi-ui...)
 	@$(COMPOSE) $(COMPOSE_FILES) build gateway sandbox orchestrator yummi-ui docker-proxy || { $(call log_error,$(CONTAINER_ENGINE),Build failed.); exit 1; }
@@ -974,7 +971,7 @@ help:
 	@printf "$(DIM)  Privacy-first AI pentest conductor$(RESET)\n\n"
 	@printf "$(BOLD)  User commands$(RESET)\n"
 	@printf "  $(CYAN)make conf$(RESET)        Pick your container engine setup once (interactive, persists to .yummi.conf)\n"
-	@printf "  $(CYAN)make build$(RESET)       Build native binaries and UI (CLI + orchestrator + gateway + UI)\n"
+	@printf "  $(CYAN)make build$(RESET)       Legacy native aggregate (also host MCP build); use granular targets + Docker MCP\n"
 	@printf "  $(CYAN)make start$(RESET)       Start runtime services — UI on http://localhost:3000\n"
 	@printf "  $(CYAN)make rebase$(RESET)      Fast clean restart after a source change — Docker's own layer cache is reused\n"
 	@printf "  $(CYAN)make app$(RESET)         Alias for 'start'\n"
@@ -989,9 +986,9 @@ help:
 	@printf "    isolation as an engine-bug workaround, and requires typing a confirmation. Prefer OrbStack instead.$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_LANG=en|tr$(RESET)  $(DIM)default en — build-time UI language, baked into the UI at build time (no runtime switch)$(RESET)\n"
 	@printf "  $(CYAN)YUMMI_AGENT_BACKEND=graph|eino$(RESET)  $(DIM)default graph — which agentic engine to run (no rebuild needed to change)$(RESET)\n"
-	@printf "  $(CYAN)YUMMI_EINO_MODEL_BASE_URL/_NAME/_API_KEY/_PROVIDER/_NUM_CTX$(RESET)  $(DIM)optional — point ONLY the eino backend's\n"
-	@printf "    ReAct loop at a different OpenAI-compatible server (local LM Studio, or a cloud provider like OpenRouter/OpenAI with\n"
-	@printf "    _API_KEY set), independent of the conductor's own Ollama config. 'make conf' sets all of these interactively.$(RESET)\n"
+	@printf "  $(CYAN)YUMMI_EINO_MODEL_BASE_URL/_NAME/_API_KEY/_PROVIDER/_NUM_CTX$(RESET)  $(DIM)optional — configure conductor/graph and Eino\n"
+	@printf "    model calls through an OpenAI-compatible server (local or hosted; with\n"
+	@printf "    _API_KEY as needed). An explicit _BASE_URL overrides Ollama for these model calls. 'make conf' sets all of these interactively.$(RESET)\n"
 	@printf "\n$(BOLD)  Brain$(RESET)  $(DIM)(brain/ — a separate Python/LangGraph agent driving Yummi over MCP; see brain/README.md)$(RESET)\n"
 	@printf "  $(CYAN)make brain-install$(RESET)  Install brain/'s Python dependencies (uv sync)\n"
 	@printf "  $(CYAN)make brain-run$(RESET)      Run the brain against a goal — GOAL=\"...\" required, orchestrator must be running\n"

@@ -1,5 +1,7 @@
 # Browser-accessible Linux (Pwnbox-style) — engineering assessment
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 **Date:** 2026-09-01
 **Status:** BUILT AND LIVE-VERIFIED — both stages. Stage 1 (persistent
 tmux-backed terminal) and Stage 2 (full noVNC/XFCE desktop) are implemented,

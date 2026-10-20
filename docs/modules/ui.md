@@ -9,7 +9,7 @@ The web dashboard — the only piece of this repository built with Node/npm rath
 - [Directory structure](#directory-structure)
 - [Why `features/` and `pages/` are separate](#features-vs-pages)
 - [State management: no global store, one hook per data source](#state-management)
-- [The one "mock"-adjacent file](#legitimate-mocks)
+- [Test environment shims](#legitimate-mocks)
 
 ---
 
@@ -45,10 +45,10 @@ ui/src/
 |                   driven by YUMMI_LANG build time variable), lib/ (useTheme.ts light/dark
 |                   engine, operatorText.ts, activityPresentation.ts), reusable components
 |                   (YummiLogo, StatusBadge, ModuleCard, MetricRow, LogLine), assets
-`-- test/           setup.ts - see "the one mock-adjacent file" below (no mocks/ directory exists)
+`-- test/           setup.ts - see "test environment shims" below (no mocks/ directory exists)
 ```
 
-nginx serves this tree as a browser SPA (`ui/Dockerfile`) — the only production deployment shape; there is no alternative shell. `shared/api/runtime.ts`'s `apiURL`/`websocketURL` resolve same-origin by default, with an escape hatch (`VITE_YUMMI_API_ORIGIN`) for serving the UI from a different origin than the orchestrator. Every fetch/WebSocket call site in `features/*` goes through those two helpers rather than hardcoding a relative path.
+nginx serves this tree as a browser SPA (`ui/Dockerfile`) — the only production deployment shape; there is no alternative shell. `shared/api/runtime.ts`'s `apiURL`/`websocketURL` resolve same-origin by default, with an escape hatch (`VITE_YUMMI_API_ORIGIN`) for serving the UI from a different origin than the orchestrator. Feature HTTP/WebSocket clients use these helpers to construct backend URLs.
 
 ## Why `features/` and `pages/` are separate <a id="features-vs-pages"></a>
 
@@ -58,8 +58,8 @@ A `pages/*` component (e.g. `GatewayPage.tsx`) is presentation — layout, the t
 
 There's no Redux/Zustand/Context-based global store here — each `features/*` hook independently owns its slice of server state (usually via a combination of polling and the shared `/ws/events` WebSocket for push updates), and a page composes exactly the hooks it needs. This is a deliberate simplicity choice matching the actual complexity of the app: eight largely-independent tabs, each backed by its own REST/WS concern, don't benefit much from a shared client-side store the way a deeply cross-linked single-page app would — and it avoids the specific class of bug where an unrelated tab's state update triggers a re-render somewhere it shouldn't.
 
-## The one "mock"-adjacent file — and what it deliberately doesn't cover <a id="legitimate-mocks"></a>
+## Test environment shims and test boundaries <a id="legitimate-mocks"></a>
 
-**`ui/src/test/setup.ts`** contains two jsdom environment shims (`scrollIntoView`, `ResizeObserver`) for browser APIs that are absent in some test environments. They do not replace Yummi components. Individual unit tests may still script browser/network boundaries such as `fetch`; the component or hook being tested remains real.
+**`ui/src/test/setup.ts`** contains jsdom environment shims (`scrollIntoView` and `ResizeObserver`) for browser APIs that are absent in some test environments. They do not replace Yummi components. Individual unit tests may still script browser/network boundaries such as `fetch`; the component or hook being tested remains real.
 
 `TerminalPanel.tsx` currently has no dedicated jsdom test. Vitest disables CSS processing centrally (`css: false`), which is enough to keep xterm's stylesheet out of unrelated tests; no xterm shim is registered in `setup.ts`.

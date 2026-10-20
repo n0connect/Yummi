@@ -1,5 +1,7 @@
 # Controlled Web Research Implementation Plan
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 **SUSPENDED / SUPERSEDED — do not execute the steps below.**
 The operator prohibited all host-side execution and all mocks. The earlier
 steps incorrectly proposed host `go test`, injected resolvers, and a fake

@@ -82,4 +82,4 @@ cd orchestrator && go test ./internal/conductor -run TestPersonaGoldenFixtures
 ## Degradation on Load Failures <a id="load-failure"></a>
 
 - **Conductor Failure**: If conductor persona files fail to parse, `conductor.NewEngine` logs a warning and initializes with an empty fallback persona, keeping chat operational.
-- **Agent Failure**: If `agent.yaml` fails to load, `agent.Runner` refuses initialization, preventing unguided task execution.
+- **Agent Failure**: If `agent.yaml` fails to load in `cmd/orchestrator/main.go`, production startup leaves the task loop disabled. This is startup wiring, not a claim that every low-level `Runner` constructor loads or validates that file.

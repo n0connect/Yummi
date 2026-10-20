@@ -102,12 +102,13 @@ The UI communicates with orchestrator via:
 | `/api/v1/agent-terminals` | GET | List active persistent background tmux sessions |
 | `/api/v1/agent-terminals/{id}` | GET | Fetch terminal state and recent screen/scrollback lines |
 | `/api/v1/sessions/{sessionID}/assets` | GET | Retrieve ASM asset hierarchy (`format=tree` or `format=flat`) |
-| `/api/v1/sessions/{sessionID}/scope-rules` | GET/POST/DELETE | Manage bug-bounty in-scope/out-of-scope program rules |
+| `/api/v1/sessions/{sessionID}/scope-rules` | GET/POST | List/add program-scope rules |
+| `/api/v1/sessions/{sessionID}/scope-rules/{ruleID}` | DELETE | Remove one program-scope rule |
 | `/api/v1/sessions/{sessionID}/scope-rules/classify` | POST | Live hostname classification against program scope |
 | `/api/v1/sessions/{sessionID}/report` | GET | Generate exportable reports (HackerOne, Bugcrowd, Executive, JSON) |
 | `/api/v1/proxy/inject` | POST | Inject HTTP request/response flows into knowledge graph |
 | `/api/v1/operator/briefing` | GET | Surfaced tactics, skills, and findings for operator |
-| `/ws/events` | WS | Monotonic replayable event stream (execution, task, activity, gateway, skill, chat stream) |
+| `/ws/events` | WS | Event envelopes with bounded lifecycle replay; chat/output chunks are live-only |
 | `/ws/terminal` | WS | PTY terminal stream (Bash tab) |
 | `/ws/desktop` | WS | noVNC / websockify stream (Desktop tab) |
 | `/api/v1/system/web-search` | GET/POST | Query or toggle operator web-search capability |
@@ -116,5 +117,7 @@ The UI communicates with orchestrator via:
 ## State management
 
 - **Local React state** (`useState`) for component-local concerns
-- **Custom hooks** for WebSocket subscriptions (see `features/events/useExecutionEvents.ts`)
+- **Custom hooks** for WebSocket subscriptions (see `shared/api/runtime.ts` and feature-specific hooks)
 - No global store library — keep state close to where it's used
+
+Current JSON shapes and event envelopes are documented in the [API reference](../docs/api-reference.md). Desktop activation connects the viewer; it does not start/stop the container XFCE/VNC processes.

@@ -1,5 +1,7 @@
 # Security remediation verification — 2026-10-17
 
+> **Historical record —** This dated plan/report describes its recorded revision and environment. It is not current implementation or deployment verification. Use the [maintained documentation](../../docs/README.md) for current behavior. Original findings and results are preserved below.
+
 The concrete gateway, Docker control, operator API, browser and QC findings in
 [the independent audit](audit-2026-10-15.md) have source fixes. This follow-up
 records the additional compatibility and approval fixes and their verification

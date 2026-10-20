@@ -1,5 +1,7 @@
 # Sandbox execution confinement
 
+This page describes the current runtime-placement guard and records its original 13 October verification. Dated deployment statements below are historical snapshots. See the [17 October live report](live-deployment-2026-10-17.md) for the subsequent rebuilt topology and its remaining autonomous-browser quality limitation; no past report proves current container state.
+
 ## Root cause
 
 The browser driver previously searched for a system browser when
