@@ -108,6 +108,7 @@ RUN apt-get update && \
       gdb \
       git \
       gitleaks \
+      gnupg \
       gobuster \
       hashcat \
       hping3 \
@@ -263,7 +264,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip && 
 # above): rea.go's tests assert against real tool names from a live
 # tools/list (e.g. inspect_analysis_settings, list_adb_devices), which an
 # unpinned install could rename out from under them on a future major.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+# NodeSource's own convenience installer is `curl | bash` — piping a remote
+# script straight into a shell with no verification, purely for the sake of
+# saving the handful of steps it actually performs. Done manually instead:
+# import NodeSource's signing key (the one thing piped here is key material
+# into `gpg --dearmor`, not code into a shell) and register their repo with
+# `Signed-By` pointed at it, so apt verifies the nodejs package's signature
+# itself — the same trust path every other apt package in this image already
+# goes through, rather than a one-off trust mechanism for just this one.
+RUN mkdir -p /usr/share/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg && \
+    chmod 644 /usr/share/keyrings/nodesource.gpg && \
+    printf 'Types: deb\nURIs: https://deb.nodesource.com/node_22.x\nSuites: nodistro\nComponents: main\nArchitectures: %s\nSigned-By: /usr/share/keyrings/nodesource.gpg\n' "$(dpkg --print-architecture)" \
+      > /etc/apt/sources.list.d/nodesource.sources && \
+    printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' > /etc/apt/preferences.d/nodejs && \
+    apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/* && \
     npm install -g rea-agents@6.8.0 && \
@@ -288,8 +303,7 @@ RUN mkdir -p /opt/burp-mcp && \
     echo "c4011245ee7da0cb901b9c0435aba3d8458ab5b0e2078e1a87fd025ed93c7892  /opt/burp-mcp/burp-mcp-all.jar" | sha256sum -c - && \
     curl -fsSL -o /opt/burp-mcp/mcp-proxy-all.jar \
       https://raw.githubusercontent.com/PortSwigger/mcp-server/v1.3.0/libs/mcp-proxy-all.jar && \
-    [ "$(git hash-object /opt/burp-mcp/mcp-proxy-all.jar)" = "488e02ff9a72050dc5f3930171a1da0916ce7417" ] || \
-      { echo "mcp-proxy-all.jar checksum mismatch" >&2; exit 1; }
+    echo "b376b860f114f67e8301e50b06760f1edd23dd99e860c3646cbeac144ce7821a  /opt/burp-mcp/mcp-proxy-all.jar" | sha256sum -c -
 
 # PayloadsAllTheThings: curated collection of payloads and bypasses for Web, API,
 # Network, and PrivEsc engagements. Cloned into /opt and symlinked into user home.
