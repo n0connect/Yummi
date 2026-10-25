@@ -141,6 +141,10 @@ RUN apt-get update && \
       novnc \
       nuclei \
       onesixtyone \
+      # Headless JRE to run Burp Suite's own MCP extension's bundled stdio
+      # proxy (mcp-proxy-all.jar, fetched below) — burpsuite itself ships its
+      # own bundled runtime and never touches this one.
+      openjdk-21-jre-headless \
       openssh-client \
       patchelf \
       peass \
@@ -218,7 +222,7 @@ RUN apt-get update && \
       (command -v fdfind >/dev/null && [ ! -f /usr/local/bin/fd ] && ln -sf "$(command -v fdfind)" /usr/local/bin/fd || true) && \
       (command -v /usr/share/peass/linpeas/linpeas.sh >/dev/null && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas && ln -sf /usr/share/peass/linpeas/linpeas.sh /usr/local/bin/linpeas.sh || true) && \
       (command -v certipy-ad >/dev/null && [ ! -f /usr/local/bin/certipy ] && ln -sf "$(command -v certipy-ad)" /usr/local/bin/certipy || true) && \
-      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium feroxbuster commix masscan whois sslscan dnsrecon gitleaks ping hping3 fping searchsploit smbmap john hashcat wfuzz cewl ps less nano 7z unzip tree rsync dirsearch evil-winrm certipy coercer bat fzf traceroute mtr nxc netexec rlwrap penelope openvpn kinit msfconsole msfvenom; do command -v "$tool" >/dev/null || { echo "tool missing: $tool" >&2; exit 1; }; done && \
+      for tool in nmap curl ffuf gobuster nikto whatweb grep rg git tmux Xtigervnc websockify xfce4-session convert r2 radare2 gdb checksec binwalk strace ltrace file strings objdump readelf dig chromium feroxbuster commix masscan whois sslscan dnsrecon gitleaks ping hping3 fping searchsploit smbmap john hashcat wfuzz cewl ps less nano 7z unzip tree rsync dirsearch evil-winrm certipy coercer bat fzf traceroute mtr nxc netexec rlwrap penelope openvpn kinit msfconsole msfvenom java; do command -v "$tool" >/dev/null || { echo "tool missing: $tool" >&2; exit 1; }; done && \
       rm -rf /var/lib/apt/lists/*
 
 # GitHub-sourced Python pentest tools with no Kali apt package: jwt_tool,
@@ -248,6 +252,44 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip && 
     printf '#!/bin/sh\nexec python3 /opt/corsy/corsy.py "$@"\n' > /usr/local/bin/corsy && \
     chmod +x /usr/local/bin/jwt_tool /usr/local/bin/cloud_enum /usr/local/bin/graphql-cop /usr/local/bin/corsy && \
     for tool in jwt_tool cloud_enum graphql-cop corsy; do command -v "$tool" >/dev/null || { echo "git-sourced tool missing: $tool" >&2; exit 1; }; done
+
+# REA (https://github.com/morluto/rea) — binary/application analysis toolkit
+# bridged (not CLI-wrapped; see sandbox-mcp/rea.go) by the rea_list_tools/
+# rea_call_tool tools, via REA's own `rea --mcp` stdio server. Ships only as
+# an npm package and needs Node >=22.23.4 (rea-agents' own package.json
+# engines field), well ahead of whatever Kali rolling's apt nodejs currently
+# happens to track, so this pulls a specific Node 22.x line from NodeSource
+# instead of trusting apt. Version-pinned (not @latest, unlike recontools
+# above): rea.go's tests assert against real tool names from a live
+# tools/list (e.g. inspect_analysis_settings, list_adb_devices), which an
+# unpinned install could rename out from under them on a future major.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g rea-agents@6.8.0 && \
+    command -v rea >/dev/null || { echo "tool missing: rea" >&2; exit 1; }
+
+# Burp Suite's own official MCP extension (github.com/PortSwigger/mcp-server),
+# bridged by sandbox-mcp/burp_bridge.go's burp_list_tools/burp_call_tool
+# tools. Fetched as prebuilt release artifacts rather than built from source:
+# the v1.3.0 GitHub release already publishes burp-mcp-all.jar (the extension
+# itself, loaded into a running Burp via its Extensions tab — Burp has no
+# documented non-interactive/CLI way to load an extension, Community or Pro,
+# so that one load-it-once step happens through the sandbox's own desktop,
+# not here); the proxy jar it depends on (mcp-proxy-all.jar, a stdio<->SSE
+# bridge burp_bridge.go execs directly) isn't part of that release's assets
+# and is fetched straight from the matching tag instead. Both are pinned to
+# v1.3.0 and checksum-verified — a hash mismatch here means a tampered
+# download or an unexpected upstream change, either way worth failing the
+# build over rather than silently shipping.
+RUN mkdir -p /opt/burp-mcp && \
+    curl -fsSL -o /opt/burp-mcp/burp-mcp-all.jar \
+      https://github.com/PortSwigger/mcp-server/releases/download/v1.3.0/burp-mcp-all.jar && \
+    echo "c4011245ee7da0cb901b9c0435aba3d8458ab5b0e2078e1a87fd025ed93c7892  /opt/burp-mcp/burp-mcp-all.jar" | sha256sum -c - && \
+    curl -fsSL -o /opt/burp-mcp/mcp-proxy-all.jar \
+      https://raw.githubusercontent.com/PortSwigger/mcp-server/v1.3.0/libs/mcp-proxy-all.jar && \
+    [ "$(git hash-object /opt/burp-mcp/mcp-proxy-all.jar)" = "488e02ff9a72050dc5f3930171a1da0916ce7417" ] || \
+      { echo "mcp-proxy-all.jar checksum mismatch" >&2; exit 1; }
 
 # PayloadsAllTheThings: curated collection of payloads and bypasses for Web, API,
 # Network, and PrivEsc engagements. Cloned into /opt and symlinked into user home.

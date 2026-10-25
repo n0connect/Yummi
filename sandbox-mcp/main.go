@@ -23,6 +23,24 @@ func main() {
 			_ = driver.Close()
 		}
 	}()
+	defer func() {
+		globalBurp.mu.Lock()
+		session := globalBurp.client
+		globalBurp.client = nil
+		globalBurp.mu.Unlock()
+		if session != nil {
+			_ = session.Close()
+		}
+	}()
+	defer func() {
+		globalRea.mu.Lock()
+		session := globalRea.client
+		globalRea.client = nil
+		globalRea.mu.Unlock()
+		if session != nil {
+			_ = session.Close()
+		}
+	}()
 	registerTools(server)
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Println("yummi-sandbox-mcp exited:", err)

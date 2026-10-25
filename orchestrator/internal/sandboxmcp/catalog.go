@@ -14,34 +14,43 @@ type ToolSpec struct {
 }
 
 var catalog = map[string]ToolSpec{
-	"nmap_scan":           {TargetField: "target", Render: renderNmap},
-	"whatweb_scan":        {TargetField: "url", Render: renderWhatweb},
-	"curl_probe":          {TargetField: "url", Render: renderCurl},
-	"gobuster_dir":        {TargetField: "url", Render: renderGobuster},
-	"ffuf_fuzz":           {TargetField: "url", Render: renderFfuf},
-	"nikto_scan":          {TargetField: "host", Render: renderNikto},
-	"amass_enum":          {TargetField: "domain", Render: renderAmass},
-	"subfinder_enum":      {TargetField: "domain", Render: renderSubfinder},
-	"theharvester_scan":   {TargetField: "domain", Render: renderTheharvester},
-	"dnsenum_scan":        {TargetField: "domain", Render: renderDnsenum},
-	"enum4linux_scan":     {TargetField: "target", Render: renderEnum4linux},
-	"onesixtyone_scan":    {TargetField: "target", Render: renderOnesixtyone},
-	"wafw00f_scan":        {TargetField: "url", Render: renderWafw00f},
-	"wpscan_scan":         {TargetField: "url", Render: renderWpscan},
-	"nuclei_scan":         {TargetField: "target", Render: renderNuclei},
-	"sqlmap_scan":         {TargetField: "url", Render: renderSqlmap},
-	"hydra_bruteforce":    {TargetField: "target", Render: renderHydra},
-	"medusa_bruteforce":   {TargetField: "target", Render: renderMedusa},
-	"dirb_scan":           {TargetField: "url", Render: renderDirb},
-	"snmpwalk_enum":       {TargetField: "target", Render: renderSnmpwalk},
-	"httpx_probe":         {TargetField: "target", Render: renderHttpx},
-	"dnsx_resolve":        {TargetField: "domain", Render: renderDnsx},
-	"alterx_mutate":       {TargetField: "domain", Render: renderAlterx},
-	"gau_fetch":           {TargetField: "domain", Render: renderGau},
-	"katana_crawl":        {TargetField: "url", Render: renderKatana},
-	"dalfox_scan":         {TargetField: "url", Render: renderDalfox},
-	"checksec_audit":      {TargetField: "", Render: renderChecksec},
-	"radare2_disasm":      {TargetField: "", Render: renderRadare2},
+	"nmap_scan":         {TargetField: "target", Render: renderNmap},
+	"whatweb_scan":      {TargetField: "url", Render: renderWhatweb},
+	"curl_probe":        {TargetField: "url", Render: renderCurl},
+	"gobuster_dir":      {TargetField: "url", Render: renderGobuster},
+	"ffuf_fuzz":         {TargetField: "url", Render: renderFfuf},
+	"nikto_scan":        {TargetField: "host", Render: renderNikto},
+	"amass_enum":        {TargetField: "domain", Render: renderAmass},
+	"subfinder_enum":    {TargetField: "domain", Render: renderSubfinder},
+	"theharvester_scan": {TargetField: "domain", Render: renderTheharvester},
+	"dnsenum_scan":      {TargetField: "domain", Render: renderDnsenum},
+	"enum4linux_scan":   {TargetField: "target", Render: renderEnum4linux},
+	"onesixtyone_scan":  {TargetField: "target", Render: renderOnesixtyone},
+	"wafw00f_scan":      {TargetField: "url", Render: renderWafw00f},
+	"wpscan_scan":       {TargetField: "url", Render: renderWpscan},
+	"nuclei_scan":       {TargetField: "target", Render: renderNuclei},
+	"sqlmap_scan":       {TargetField: "url", Render: renderSqlmap},
+	"hydra_bruteforce":  {TargetField: "target", Render: renderHydra},
+	"medusa_bruteforce": {TargetField: "target", Render: renderMedusa},
+	"dirb_scan":         {TargetField: "url", Render: renderDirb},
+	"snmpwalk_enum":     {TargetField: "target", Render: renderSnmpwalk},
+	"httpx_probe":       {TargetField: "target", Render: renderHttpx},
+	"dnsx_resolve":      {TargetField: "domain", Render: renderDnsx},
+	"alterx_mutate":     {TargetField: "domain", Render: renderAlterx},
+	"gau_fetch":         {TargetField: "domain", Render: renderGau},
+	"katana_crawl":      {TargetField: "url", Render: renderKatana},
+	"dalfox_scan":       {TargetField: "url", Render: renderDalfox},
+	"checksec_audit":    {TargetField: "", Render: renderChecksec},
+	"radare2_disasm":    {TargetField: "", Render: renderRadare2},
+	// REA and Burp are both reached by bridging to their own MCP server
+	// (rea --mcp; Burp's extension via its bundled stdio<->SSE proxy) —
+	// same no-target reasoning as the browser_* verbs below: the gateway's
+	// packet-layer policy gates whatever either one dials out to,
+	// regardless of which in-sandbox process initiated it.
+	"rea_list_tools":      {TargetField: "", Render: func(a map[string]any) string { return renderNameFilter("rea_list_tools", a) }},
+	"rea_call_tool":       {TargetField: "", Render: func(a map[string]any) string { return renderCallTool("rea_call_tool", a) }},
+	"burp_list_tools":     {TargetField: "", Render: func(a map[string]any) string { return "burp_list_tools" }},
+	"burp_call_tool":      {TargetField: "", Render: func(a map[string]any) string { return renderCallTool("burp_call_tool", a) }},
 	"consolidate_hosts":   {TargetField: "", Render: renderConsolidate},
 	"passive_recon_batch": {TargetField: "domain", Render: renderPassiveReconBatch},
 	"arjun_scan":          {TargetField: "url", Render: renderArjun},
@@ -454,6 +463,22 @@ func renderRadare2(a map[string]any) string {
 		cmd = "aaa; afl"
 	}
 	return fmt.Sprintf("r2 -q -c %q %s", cmd, file)
+}
+
+// renderNameFilter and renderCallTool back the REA/Burp MCP bridge tools
+// (rea_list_tools, rea_call_tool, burp_call_tool), which all share the same
+// generic pass-through shape — see rea.go and burp_bridge.go.
+func renderNameFilter(tool string, a map[string]any) string {
+	filter, _ := a["name_filter"].(string)
+	if filter == "" {
+		return tool
+	}
+	return fmt.Sprintf("%s name_filter=%q", tool, filter)
+}
+
+func renderCallTool(tool string, a map[string]any) string {
+	name, _ := a["tool_name"].(string)
+	return tool + " tool=" + name
 }
 
 func renderConsolidate(a map[string]any) string {
