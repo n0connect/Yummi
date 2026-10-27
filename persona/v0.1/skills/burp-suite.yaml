@@ -1,0 +1,69 @@
+schema_version: 1
+version: 1.0.0
+name: burp-suite
+description: Burp Suite's own proxy, Repeater, Intruder, Scanner, and Organizer, bridged live via its official MCP extension — for manual request manipulation, replay, and intercepted-traffic analysis that curl/ffuf/katana don't cover.
+triggers:
+  - burp
+  - burp suite
+  - repeater
+  - intruder
+  - intercept
+  - proxy history
+  - web proxy
+  - mitm proxy
+  - replay request
+  - scanner
+  - organizer
+tools:
+  - burp_list_tools
+  - burp_call_tool
+knowledge: |
+  Burp Suite is bridged, not reimplemented: burp_call_tool passes straight through to
+  Burp's own official MCP extension (github.com/PortSwigger/mcp-server) running inside a
+  real Burp Suite instance on the sandbox desktop. Its exact tool list depends on the
+  installed Burp edition (Community/Pro) and that extension's own MCP-tab settings
+  (config-editing tools are opt-in there) — never guess a tool name or its arguments.
+
+  1. DISCOVER BEFORE CALLING:
+     - Always start with `burp_list_tools()`. On a fresh container this call itself launches
+       Burp Suite and may return an error instead of a list — see step 2 below, that is
+       expected, not a failure to work around.
+     - The response begins with Burp's own usage instructions for its MCP surface, followed
+       by the live tool list (proxy history, Repeater, Intruder, Scanner, Organizer, and
+       whatever else the current edition/settings expose). Read the instructions once; they
+       cover things a plain tool list can't, like how intercepted requests and Repeater tabs
+       are addressed across calls.
+     - Call a chosen tool with `burp_call_tool(tool_name="<exact name from the list>",
+       arguments={...})`, using the exact argument names that call reported.
+
+  2. ONE-TIME SETUP, NOT A TASK FAILURE:
+     - Burp Suite has no documented non-interactive way to load an extension, on any edition.
+       The first burp_list_tools/burp_call_tool call in a fresh container launches Burp on the
+       sandbox desktop and, if the extension isn't loaded yet, returns an error that spells out
+       exactly what to click: open the sandbox desktop, in Burp go to
+       Extensions > Add > Extension type: Java > select the reported jar path > Next.
+     - This is a ONE-TIME step for the container's current lifetime, not something to repeat
+       per call or per task. Tell the operator plainly what's needed and wait — don't retry
+       burp_call_tool in a loop hoping it resolves itself, and don't report the integration as
+       broken; it means exactly what the error says.
+     - Once loaded, every later burp_list_tools/burp_call_tool call in this same container
+       connects automatically; nothing about this repeats until the container itself is
+       recreated.
+
+  3. WHEN TO REACH FOR BURP OVER THE TYPED SCAN TOOLS:
+     - Manual request tampering and replay (Repeater): crafting one exact request by hand and
+       re-sending variants — the thing curl/ffuf automate badly and a human tester would
+       normally do by clicking "Send" repeatedly with small edits.
+     - Reviewing already-intercepted traffic (proxy history): what a browser session actually
+       sent/received, including requests ffuf/katana never generated because they weren't
+       crawling, they were a logged-in user clicking around (pair with browser_* tools: drive
+       the app through browser_open/browser_interact, then pull what Burp's proxy observed).
+     - Automated fuzzing across many requests with Burp's own payload/positions model
+       (Intruder) when ffuf's simpler FUZZ-keyword substitution isn't expressive enough.
+     - Anything the Scanner or Organizer tools expose, once burp_list_tools confirms they're
+       present for the current edition/settings.
+references:
+  - persona:burp-suite-v1
+provenance:
+  origin: builtin
+  source: persona/v0.1/skills/burp-suite.yaml

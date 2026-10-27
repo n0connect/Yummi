@@ -27,3 +27,4 @@ skills:
   - parameter-fuzzing
   - modern-xss-csp
   - cors-csrf
+  - burp-suite

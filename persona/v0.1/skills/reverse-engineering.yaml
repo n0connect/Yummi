@@ -19,6 +19,14 @@ triggers:
   - readelf
   - malware
   - elf
+  - rea
+  - android
+  - apk
+  - electron
+  - frida
+  - go binary
+  - rust binary
+  - wasm
 tools:
   - file
   - checksec
@@ -30,6 +38,8 @@ tools:
   - ltrace
   - binwalk
   - gdb
+  - rea_list_tools
+  - rea_call_tool
 knowledge: |
   Analyze native binaries and firmware methodically from static triage to deep disassembly and controlled dynamic tracing.
   Never execute an untrusted binary without sandbox isolation.
@@ -76,6 +86,27 @@ knowledge: |
      - Document exact virtual memory offsets (`0x08048450`), function names, or evidence strings.
      - Categorize findings: Hardcoded Secrets, Missing Stack Protections (No Canary / RWX Segments),
        Command Injection sinks, Memory Corruption risks, or Suspicious Network Communications.
+
+  7. EXTENDED ANALYSIS VIA REA (beyond native ELF — Android/APK, Electron/JS, Go/Rust
+     metadata, model files, WASM, EVM bytecode, firmware, and dynamic instrumentation):
+     - REA (morluto/rea) is bridged, not wrapped: it exposes ~230 of its own tools over its
+       own MCP server, far more than any one list here could stay accurate against as it
+       evolves. Always discover before calling — never guess a REA tool name or its argument
+       shape:
+       `rea_list_tools()` for the full catalog, or `rea_list_tools(name_filter="android")` /
+       `name_filter="frida"` / `name_filter="pe_"` etc. to narrow a ~230-tool list down to the
+       target's actual kind. The result also carries REA's own usage guidance (session model,
+       when to call its close_binary equivalent) — read it, don't skip it.
+     - Reach for REA specifically when the target isn't a plain native ELF this skill's other
+       tools already cover well: Android APKs, iOS/Electron/JS applications, Go/Rust binary
+       metadata, GGUF/safetensors model files, WASM modules, EVM bytecode, or firmware images
+       needing extraction before the steps above apply.
+     - Call the chosen tool with `rea_call_tool(tool_name="<name>", arguments={...})`, using
+       the exact argument names rea_list_tools reported for it.
+     - Full native decompilation/pseudocode through REA needs a configured engine (Ghidra,
+       Hopper, or IDA) that is NOT installed in this sandbox by default — a call that needs one
+       fails fast with a clear provider_unavailable error rather than hanging. For plain ELF
+       pseudocode without that, radare2_disasm above is already available and installed.
 references:
   - persona:reverse-engineering-v3
 provenance:
